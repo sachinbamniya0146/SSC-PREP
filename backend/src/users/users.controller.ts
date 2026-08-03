@@ -1,4 +1,7 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
+import type { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -6,8 +9,17 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get('me')
-  getProfile() {
-    // TODO(phase-2): protect with JwtAuthGuard; read userId from request.
-    return { message: 'Profile endpoint — protected by JWT in phase 2' };
+  getProfile(@CurrentUser() user: AuthenticatedUser) {
+    return this.usersService.getProfile(user.userId);
+  }
+
+  /**
+   * Admin-only: device/session history for a user (v1 §10 device monitoring).
+   * Protected by JwtAuthGuard + RolesGuard via @Roles('ADMIN', 'MODERATOR').
+   */
+  @Roles('ADMIN', 'MODERATOR')
+  @Get(':userId/sessions')
+  listUserSessions(@Param('userId') userId: string) {
+    return this.usersService.listActiveSessions(userId);
   }
 }

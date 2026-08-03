@@ -1,25 +1,84 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Public } from '../common/decorators/public.decorator';
+import type { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { AuthService } from './auth.service';
+import {
+  GoogleAuthDto,
+  LoginDto,
+  LogoutDto,
+  RefreshDto,
+  RequestOtpDto,
+  SignupDto,
+  VerifyOtpDto,
+} from './dto/auth.dto';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Post('signup')
-  signup(
-    @Body() body: { email: string; password: string; fullName: string },
-  ) {
-    return this.authService.signup(body.email, body.password, body.fullName);
+  signup(@Body() dto: SignupDto) {
+    return this.authService.signup(dto.email, dto.password, dto.fullName, dto.platform);
   }
 
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
-  login(
-    @Body() body: { email: string; password: string; platform?: 'WEB' | 'APP' },
-  ) {
+  @HttpCode(HttpStatus.OK)
+  login(@Body() dto: LoginDto) {
     return this.authService.login(
-      body.email,
-      body.password,
-      body.platform || 'WEB',
+      dto.email,
+      dto.password,
+      dto.platform || 'WEB',
+      dto.deviceId,
+      dto.userAgent,
     );
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('otp/request')
+  @HttpCode(HttpStatus.OK)
+  requestOtp(@Body() dto: RequestOtpDto) {
+    return this.authService.requestOtp(dto.email);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('otp/verify')
+  @HttpCode(HttpStatus.OK)
+  verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.loginWithOtp(dto.email, dto.otp);
+  }
+
+  @Public()
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  google(@Body() dto: GoogleAuthDto) {
+    return this.authService.googleLogin(dto.idToken, dto.platform || 'WEB');
+  }
+
+  @Public()
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  refresh(@Body() dto: RefreshDto) {
+    return this.authService.refresh(dto.refreshToken);
+  }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  logout(
+    @Body() dto: LogoutDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.authService.logout(dto.refreshToken, user.sessionId);
+  }
+
+  @Get('me')
+  me(@CurrentUser() user: AuthenticatedUser) {
+    return { user };
   }
 }

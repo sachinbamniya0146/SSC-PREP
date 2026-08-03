@@ -1,76 +1,377 @@
 import {
-  Injectable,
   ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import { OAuth2Client } from 'google-auth-library';
 import * as bcrypt from 'bcrypt';
+import { createHash, randomBytes } from 'crypto';
 import * as jwt from 'jsonwebtoken';
+import Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
+import { REDIS_CLIENT } from '../redis/redis.module';
+import { MailService } from './mail.service';
+import { OtpService } from './otp.service';
 
-const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'dev-access-secret';
-const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret';
-const ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
-const REFRESH_EXPIRY = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+}
 
+export interface AuthenticatedSession {
+  user: {
+    id: string;
+    email: string;
+    fullName: string;
+    role: string;
+  };
+  accessToken: string;
+  refreshToken: string;
+  sessionId: string;
+}
+
+export type Authenticated = AuthenticatedSession;
+
+const ACCESS_TTL_SECONDS_DEFAULT = 15 * 60;
+
+/**
+ * AuthService — signup/login/refresh/logout, email OTP login, Google OAuth,
+ * and single-device session enforcement (1 WEB + 1 APP session max).
+ */
 @Injectable()
-export class AuthService {
-  constructor(private prisma: PrismaService) {}
+export class AuthService implements OnModuleInit {
+  private readonly logger = new Logger(AuthService.name);
 
-  async signup(email: string, password: string, fullName: string) {
-    const existing = await this.prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      throw new ConflictException('Email already registered');
-    }
-    const passwordHash = await bcrypt.hash(password, 12);
-    const user = await this.prisma.user.create({
-      data: { email, fullName, passwordHash },
-      select: { id: true, email: true, fullName: true, role: true },
-    });
-    return { user, ...this.issueTokens(user.id) };
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly config: ConfigService,
+    private readonly mail: MailService,
+    private readonly otp: OtpService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.seedAdmin();
   }
 
-  async login(email: string, password: string, platform: 'WEB' | 'APP') {
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+  /** Seed the admin account from env (idempotent). */
+  private async seedAdmin(): Promise<void> {
+    const email = this.config.get<string>('ADMIN_DEFAULT_EMAIL');
+    const password = this.config.get<string>('ADMIN_DEFAULT_PASSWORD');
+    if (!email || !password) return;
+
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) return;
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await this.prisma.user.create({
+      data: {
+        email,
+        fullName: 'Platform Admin',
+        passwordHash,
+        role: 'ADMIN',
+        isEmailVerified: true,
+      },
+    });
+    this.logger.log(`Seeded admin account: ${email}`);
+  }
+
+  // ---------------------------------------------------------------- signup
+
+  async signup(
+    email: string,
+    password: string,
+    fullName: string,
+    platform: 'WEB' | 'APP' = 'WEB',
+  ): Promise<Authenticated> {
+    const normalized = email.toLowerCase().trim();
+    const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (existing) throw new ConflictException('Email already registered');
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await this.prisma.user.create({
+      data: { email: normalized, fullName, passwordHash },
+    });
+    return this.completeAuth(user, platform);
+  }
+
+  // ----------------------------------------------------------------- login
+
+  async login(
+    email: string,
+    password: string,
+    platform: 'WEB' | 'APP' = 'WEB',
+    deviceId?: string,
+    userAgent?: string,
+  ): Promise<Authenticated> {
+    const normalized = email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (!user || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException('Invalid email or password');
     }
-    // Session single-device enforcement: revoke previous active session for platform.
-    await this.prisma.deviceSession.updateMany({
-      where: { userId: user.id, platform, isActive: true },
-      data: { isActive: false },
+    return this.completeAuth(user, platform, deviceId, userAgent);
+  }
+
+  // ---------------------------------------------------------------- OTP login
+
+  async requestOtp(email: string): Promise<{ sent: boolean; devOtp?: string }> {
+    const normalized = email.toLowerCase().trim();
+    // Optionally create a placeholder user if none exists (email-first flow).
+    const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (!existing) {
+      // Ghost account so OTP login can complete; user's role stays STUDENT.
+      await this.prisma.user.create({
+        data: {
+          email: normalized,
+          fullName: normalized.split('@')[0] || 'User',
+          passwordHash: 'unset:' + randomBytes(24).toString('hex'),
+        },
+      });
+    }
+    return this.otp.issue(normalized);
+  }
+
+  async loginWithOtp(email: string, code: string): Promise<Authenticated> {
+    const normalized = email.toLowerCase().trim();
+    const ok = await this.otp.verify(normalized, code);
+    if (!ok) throw new UnauthorizedException('Invalid or expired OTP');
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    // OTP login proves possession of the inbox → mark verified.
+    if (!user.isEmailVerified) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { isEmailVerified: true },
+      });
+    }
+    return this.completeAuth(user, 'WEB');
+  }
+
+  // ------------------------------------------------------------------ Google
+
+  async googleLogin(
+    idToken: string,
+    platform: 'WEB' | 'APP' = 'WEB',
+  ): Promise<Authenticated> {
+    const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
+    const clientSecret = this.config.get<string>('GOOGLE_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      throw new ForbiddenException('Google login not configured on the server');
+    }
+    const client = new OAuth2Client(clientId, clientSecret);
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience: clientId,
     });
-    const session = await this.prisma.deviceSession.create({
-      data: { userId: user.id, platform, deviceId: `dev-${Date.now()}` },
+    const payload = ticket.getPayload();
+    if (!payload?.email) {
+      throw new UnauthorizedException('Google token missing email');
+    }
+    const email = payload.email.toLowerCase().trim();
+    let user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          fullName: payload.name || email.split('@')[0] || 'User',
+          passwordHash: 'oauth:' + randomBytes(24).toString('hex'),
+          isEmailVerified: payload.email_verified === true,
+          avatarUrl: payload.picture || null,
+        },
+      });
+    }
+    return this.completeAuth(user, platform);
+  }
+
+  // ------------------------------------------------------------------ refresh
+
+  async refresh(refreshToken: string): Promise<TokenPair> {
+    let payload: { sub: string; type: string; sid?: string; jwtid?: string };
+    try {
+      payload = await this.jwtService.verifyAsync(refreshToken, {
+        secret: this.config.get<string>('JWT_REFRESH_SECRET'),
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+    if (payload.type !== 'refresh' || !payload.sub || !payload.sid) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    // Verify the stored refresh token row is present & not revoked.
+    const hash = createHash('sha256').update(refreshToken).digest('hex');
+    const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
+    if (!stored || stored.revokedAt) {
+      throw new UnauthorizedException('Refresh token has been revoked');
+    }
+    if (new Date(stored.expiresAt) < new Date()) {
+      throw new UnauthorizedException('Refresh token expired');
+    }
+
+    // Rotation: revoke current, issue new pair bound to the same session.
+    await this.prisma.refreshToken.update({
+      where: { id: stored.id },
+      data: { revokedAt: new Date() },
     });
-    return {
-      user: {
-        id: user.id,
-        email: user.email,
-        fullName: user.fullName,
-        role: user.role,
+
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user) throw new UnauthorizedException('User no longer exists');
+
+    const pair = this.issueTokens(user.id, user.email, user.role, payload.sid);
+    const newHash = createHash('sha256').update(pair.refreshToken).digest('hex');
+    await this.prisma.refreshToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: newHash,
+        expiresAt: this.refreshExpiryDate(),
       },
-      ...this.issueTokens(user.id),
+    });
+    return pair;
+  }
+
+  // ------------------------------------------------------------------ logout
+
+  async logout(refreshToken: string, sessionId?: string): Promise<void> {
+    const hash = createHash('sha256').update(refreshToken).digest('hex');
+    await this.prisma.refreshToken.updateMany({
+      where: { tokenHash: hash, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    if (sessionId) {
+      await this.prisma.deviceSession.updateMany({
+        where: { id: sessionId, isActive: true },
+        data: { isActive: false },
+      });
+      const keys = await this.redis.keys(`session:*:${sessionId}`);
+      if (keys.length) await this.redis.del(...keys);
+    }
+  }
+
+  // ------------------------------------------------------------------ internals
+
+  private async completeAuth(
+    user: {
+      id: string;
+      email: string;
+      fullName: string;
+      role: string;
+    },
+    platform: 'WEB' | 'APP',
+    deviceId?: string,
+    userAgent?: string,
+  ): Promise<Authenticated> {
+    // Single-device enforcement: revoke previous active session for this
+    // user+platform, both in DB and Redis, then create the new one.
+    const old = await this.prisma.deviceSession.findFirst({
+      where: { userId: user.id, platform, isActive: true },
+    });
+    if (old) {
+      await this.prisma.deviceSession.update({
+        where: { id: old.id },
+        data: { isActive: false },
+      });
+      const oldKeys = await this.redis.keys(`user:${user.id}:*:${old.id}`);
+      if (oldKeys.length) await this.redis.del(...oldKeys);
+    }
+
+    const session = await this.prisma.deviceSession.create({
+      data: {
+        userId: user.id,
+        platform: platform as 'WEB' | 'APP',
+        deviceId: deviceId || `dev-${Date.now()}`,
+        userAgent: userAgent || null,
+      },
+    });
+
+    // Redis session registry keyed by user+platform so expiry can be probed.
+    await this.redis.setex(
+      `user:${user.id}:${platform}:${session.id}`,
+      ACCESS_TTL_SECONDS_DEFAULT,
+      '1',
+    );
+
+    const pair = this.issueTokens(user.id, user.email, user.role, session.id);
+    const tokenHash = createHash('sha256').update(pair.refreshToken).digest('hex');
+    await this.prisma.refreshToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt: this.refreshExpiryDate(),
+      },
+    });
+
+    return {
+      user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role },
+      ...pair,
       sessionId: session.id,
     };
   }
 
-  private issueTokens(userId: string) {
-    const accessSecret = ACCESS_SECRET as jwt.Secret;
-    const refreshSecret = REFRESH_SECRET as jwt.Secret;
-    const accessExpiry = ACCESS_EXPIRY as jwt.SignOptions["expiresIn"];
-    const refreshExpiry = REFRESH_EXPIRY as jwt.SignOptions["expiresIn"];
-
-    const accessToken = jwt.sign({ sub: userId, type: "access" }, accessSecret, {
-      expiresIn: accessExpiry,
-    });
-    const refreshToken = jwt.sign(
-      { sub: userId, type: "refresh" },
-      refreshSecret,
-      { expiresIn: refreshExpiry },
+  private issueTokens(
+    userId: string,
+    email: string,
+    role: string,
+    sid: string,
+  ): TokenPair {
+    const now = Math.floor(Date.now() / 1000);
+    const accessSec = this.parseAccessSeconds(
+      this.config.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m',
+      ACCESS_TTL_SECONDS_DEFAULT,
     );
-    return {
-      accessToken: accessToken as string,
-      refreshToken: refreshToken as string,
-    };
+    const accessSecret = this.config.get<string>('JWT_ACCESS_SECRET') as string;
+    const refreshSecret = this.config.get<string>('JWT_REFRESH_SECRET') as string;
+    const base = {
+      sub: userId,
+      email,
+      role,
+      sid,
+      iat: now,
+    } as object;
+    const accessToken = jwt.sign(
+      { ...base, type: 'access' } as object,
+      accessSecret,
+      { expiresIn: accessSec } as jwt.SignOptions,
+    );
+    const refreshToken = jwt.sign(
+      { ...base, type: 'refresh', jti: randomBytes(8).toString('hex') } as object,
+      refreshSecret,
+      {
+        expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d',
+      } as jwt.SignOptions,
+    );
+    return { accessToken, refreshToken };
+  }
+
+  private parseAccessSeconds(value: string, fallback: number): number {
+    const m = /^(\d+)\s*([smhd]?)$/.exec(value.trim());
+    if (!m) return fallback;
+    const n = parseInt(m[1], 10);
+    switch (m[2]) {
+      case 's': return n;
+      case 'm': return n * 60;
+      case 'h': return n * 3600;
+      case 'd': return n * 86400;
+      default: return n;
+    }
+  }
+
+  private refreshExpiryDate(): Date {
+    const v = this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d';
+    const days = v.endsWith('d')
+      ? parseInt(v, 10)
+      : v.endsWith('w')
+        ? parseInt(v, 10) * 7
+        : v.endsWith('h')
+          ? Math.floor(parseInt(v, 10) / 24)
+          : 7;
+    return new Date(Date.now() + days * 86400 * 1000);
   }
 }

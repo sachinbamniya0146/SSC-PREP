@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import helmet from 'helmet';
 import cors from 'cors';
 import { AppModule } from './app.module';
 
@@ -9,6 +10,7 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
   app.setGlobalPrefix('api/v1');
+  app.use(helmet());
   app.use(
     cors({
       origin: process.env.FRONTEND_URL?.split(',') || ['http://localhost:3000'],

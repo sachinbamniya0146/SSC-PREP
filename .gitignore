@@ -7,3 +7,4 @@ dist/
 coverage/
 .mobile/.dart_tool/
 .mobile/build/
+*.rdb

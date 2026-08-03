@@ -46,6 +46,11 @@ enum ExplanationSource {
   HUMAN_VERIFIED
 }
 
+enum TranslationStatus {
+  HUMAN_VERIFIED
+  AUTO_UNVERIFIED
+}
+
 enum ImportStatus {
   QUEUED
   PROCESSING
@@ -299,7 +304,9 @@ model Question {
   correctAnswer      String            // e.g. "A" / "B" / "C" / "D"
   
   explanation        String?
+  explanationHindi   String?
   explanationSource  ExplanationSource @default(PDF)
+  translationStatus  TranslationStatus @default(HUMAN_VERIFIED)
   isApproved         Boolean           @default(false)
   
   difficulty         Difficulty        @default(MEDIUM)
