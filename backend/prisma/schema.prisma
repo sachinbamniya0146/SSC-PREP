@@ -1,0 +1,514 @@
+// SSC Prep Hub — Prisma Database Schema
+// Database: PostgreSQL
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  STUDENT
+  ADMIN
+  MODERATOR
+}
+
+enum Platform {
+  WEB
+  APP
+}
+
+enum TestType {
+  CHAPTER
+  TOPIC
+  SUBJECT
+  MINI_MOCK
+  FULL_MOCK
+  PREVIOUS_YEAR
+  SHIFT_WISE
+  YEAR_WISE
+  CUSTOM
+  DAILY_PRACTICE
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum ExplanationSource {
+  PDF
+  AI_GENERATED
+  HUMAN_VERIFIED
+}
+
+enum ImportStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  PARTIAL
+}
+
+enum ChunkStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  AUTO_SUBMITTED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  PAUSED
+}
+
+// ================= USER & AUTHENTICATION =================
+
+model User {
+  id               String          @id @default(uuid())
+  email            String          @unique
+  phone            String?         @unique
+  fullName         String
+  passwordHash     String
+  role             Role            @default(STUDENT)
+  isEmailVerified  Boolean         @default(false)
+  avatarUrl        String?
+  
+  // Gamification & Daily Streaks
+  currentStreak    Int             @default(0)
+  longestStreak    Int             @default(0)
+  lastPracticeDate DateTime?
+  xp               Int             @default(0)
+  coins            Int             @default(0)
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  sessions         DeviceSession[]
+  refreshTokens    RefreshToken[]
+  subscriptions    Subscription[]
+  payments         Payment[]
+  testAttempts     TestAttempt[]
+  bookmarks        Bookmark[]
+  notes            UserNote[]
+  dailyPractices   DailyPracticeHistory[]
+  auditLogs        AuditLog[]
+
+  @@map("users")
+}
+
+model DeviceSession {
+  id           String   @id @default(uuid())
+  userId       String
+  platform     Platform
+  deviceId     String
+  ipAddress    String?
+  userAgent    String?
+  location     String?
+  isActive     Boolean  @default(true)
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, platform, isActive])
+  @@map("device_sessions")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+// ================= TAXONOMY & QUESTION BANK =================
+
+model Exam {
+  id        String   @id @default(uuid())
+  name      String   @unique // e.g. "SSC CGL", "SSC CHSL"
+  slug      String   @unique
+  code      String   @unique // e.g. "CGL", "CHSL"
+  isActive  Boolean  @default(true)
+  
+  questions Question[]
+  sourcePdfs SourcePdf[]
+
+  @@map("exams")
+}
+
+model Subject {
+  id        String    @id @default(uuid())
+  name      String    @unique // e.g. "Reasoning", "Quantitative Aptitude"
+  slug      String    @unique
+  chapters  Chapter[]
+  questions Question[]
+  sourcePdfs SourcePdf[]
+
+  @@map("subjects")
+}
+
+model Chapter {
+  id        String     @id @default(uuid())
+  subjectId String
+  name      String
+  slug      String
+  topics    Topic[]
+  questions Question[]
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, slug])
+  @@map("chapters")
+}
+
+model Topic {
+  id        String     @id @default(uuid())
+  chapterId String
+  name      String
+  slug      String
+  subTopics SubTopic[]
+  questions Question[]
+
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@unique([chapterId, slug])
+  @@map("topics")
+}
+
+model SubTopic {
+  id        String     @id @default(uuid())
+  topicId   String
+  name      String
+  slug      String
+  questions Question[]
+
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@map("sub_topics")
+}
+
+// ================= PDF IMPORT & QUESTION PIPELINE =================
+
+model SourcePdf {
+  id               String        @id @default(uuid())
+  filename         String
+  originalUrl      String
+  fileSize         Int
+  uploadedByUserId String
+  
+  subjectId        String?
+  examId           String?
+  bookName         String?
+  publisher        String?
+  language         String        @default("Hindi/English")
+  year             Int?
+  shift            String?
+  paperCode        String?
+
+  createdAt        DateTime      @default(now())
+
+  exam             Exam?         @relation(fields: [examId], references: [id])
+  subject          Subject?      @relation(fields: [subjectId], references: [id])
+  importBatches    ImportBatch[]
+  questions        Question[]
+
+  @@map("source_pdfs")
+}
+
+model ImportBatch {
+  id              String        @id @default(uuid())
+  sourcePdfId     String
+  status          ImportStatus  @default(QUEUED)
+  totalChunks     Int           @default(0)
+  completedChunks Int           @default(0)
+  failedChunks    Int           @default(0)
+  errorMessage    String?
+  
+  createdAt       DateTime      @default(now())
+  completedAt     DateTime?
+
+  sourcePdf       SourcePdf     @relation(fields: [sourcePdfId], references: [id], onDelete: Cascade)
+  chunks          ImportChunk[]
+  questions       Question[]
+
+  @@map("import_batches")
+}
+
+model ImportChunk {
+  id            String      @id @default(uuid())
+  importBatchId String
+  chunkIndex    Int
+  startPage     Int
+  endPage       Int
+  status        ChunkStatus @default(PENDING)
+  errorMessage  String?
+  processedAt   DateTime?
+
+  batch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  @@unique([importBatchId, chunkIndex])
+  @@map("import_chunks")
+}
+
+model Question {
+  id                 String            @id @default(uuid())
+  sourcePdfId        String?
+  importBatchId      String?
+  
+  subjectId          String
+  chapterId          String?
+  topicId            String?
+  subTopicId         String?
+  examId             String?
+  
+  year               Int?
+  shift              String?
+  paperCode          String?
+
+  questionText       String
+  questionTextHindi  String?
+  optionsJson        Json              // Array of { key: "A", text: "...", isCorrect: boolean }
+  correctAnswer      String            // e.g. "A" / "B" / "C" / "D"
+  
+  explanation        String?
+  explanationSource  ExplanationSource @default(PDF)
+  isApproved         Boolean           @default(false)
+  
+  difficulty         Difficulty        @default(MEDIUM)
+  marks              Float             @default(2.0)
+  negativeMarks      Float             @default(0.5)
+  
+  searchHash         String?
+  isActive           Boolean           @default(true)
+
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  sourcePdf          SourcePdf?        @relation(fields: [sourcePdfId], references: [id])
+  importBatch        ImportBatch?      @relation(fields: [importBatchId], references: [id])
+  subject            Subject           @relation(fields: [subjectId], references: [id])
+  chapter            Chapter?          @relation(fields: [chapterId], references: [id])
+  topic              Topic?            @relation(fields: [topicId], references: [id])
+  subTopic           SubTopic?         @relation(fields: [subTopicId], references: [id])
+  exam               Exam?             @relation(fields: [examId], references: [id])
+  
+  versions           QuestionVersion[]
+  answers            AttemptAnswer[]
+  bookmarks          Bookmark[]
+  notes              UserNote[]
+
+  @@index([subjectId, examId, year, shift])
+  @@index([searchHash])
+  @@index([isApproved, isActive])
+  @@map("questions")
+}
+
+model QuestionVersion {
+  id             String   @id @default(uuid())
+  questionId     String
+  editedByUserId String
+  previousText   String
+  previousOptions Json
+  previousAnswer String
+  reason         String?
+  createdAt      DateTime @default(now())
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("question_versions")
+}
+
+// ================= TEST ENGINE & ATTEMPTS =================
+
+model TestTemplate {
+  id               String        @id @default(uuid())
+  title            String
+  description      String?
+  type             TestType
+  durationMinutes  Int           @default(60)
+  totalQuestions   Int           @default(100)
+  totalMarks       Float         @default(200.0)
+  isPremium        Boolean       @default(false)
+  isActive         Boolean       @default(true)
+  
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  attempts         TestAttempt[]
+
+  @@map("test_templates")
+}
+
+model TestAttempt {
+  id               String        @id @default(uuid())
+  userId           String
+  testTemplateId   String
+  status           AttemptStatus @default(IN_PROGRESS)
+  
+  score            Float         @default(0.0)
+  totalCorrect     Int           @default(0)
+  totalWrong       Int           @default(0)
+  totalSkipped     Int           @default(0)
+  accuracyPercent  Float         @default(0.0)
+  rank             Int?
+  percentile       Float?
+  
+  startedAt        DateTime      @default(now())
+  submittedAt      DateTime?
+
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testTemplate     TestTemplate  @relation(fields: [testTemplateId], references: [id])
+  answers          AttemptAnswer[]
+
+  @@index([userId, status])
+  @@map("test_attempts")
+}
+
+model AttemptAnswer {
+  id                 String      @id @default(uuid())
+  testAttemptId     String
+  questionId         String
+  selectedOption     String?     // "A", "B", "C", "D" or null if skipped
+  isCorrect          Boolean     @default(false)
+  timeSpentSeconds   Int         @default(0)
+  isMarkedForReview Boolean     @default(false)
+
+  testAttempt TestAttempt @relation(fields: [testAttemptId], references: [id], onDelete: Cascade)
+  question    Question    @relation(fields: [questionId], references: [id])
+
+  @@unique([testAttemptId, questionId])
+  @@map("attempt_answers")
+}
+
+// ================= SUBSCRIPTIONS & PAYMENTS =================
+
+model Plan {
+  id             String   @id @default(uuid())
+  name           String   // e.g. "Monthly Pass (1 Month)", "Super Pass (24 Months)"
+  durationMonths Int
+  priceInr       Float
+  isActive       Boolean  @default(true)
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id        String             @id @default(uuid())
+  userId    String
+  planId    String
+  status    SubscriptionStatus @default(ACTIVE)
+  startsAt  DateTime           @default(now())
+  endsAt    DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id])
+  payments Payment[]
+
+  @@index([userId, status])
+  @@map("subscriptions")
+}
+
+model Payment {
+  id               String        @id @default(uuid())
+  userId           String
+  subscriptionId   String?
+  razorpayOrderId  String        @unique
+  razorpayPaymentId String?      @unique
+  amountInr        Float
+  status           PaymentStatus @default(PENDING)
+  invoiceUrl       String?
+  createdAt        DateTime      @default(now())
+
+  user         User          @relation(fields: [userId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@map("payments")
+}
+
+// ================= USER ACTIVITY & AUDIT =================
+
+model DailyPracticeHistory {
+  id                String   @id @default(uuid())
+  userId            String
+  date              DateTime @db.Date
+  questionsAnswered Int      @default(0)
+  score             Float    @default(0.0)
+  xpEarned          Int      @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@map("daily_practice_history")
+}
+
+model Bookmark {
+  id         String   @id @default(uuid())
+  userId     String
+  questionId String
+  createdAt  DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, questionId])
+  @@map("bookmarks")
+}
+
+model UserNote {
+  id         String   @id @default(uuid())
+  userId     String
+  questionId String
+  noteText   String
+  updatedAt  DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, questionId])
+  @@map("user_notes")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String?
+  action       String   // e.g. "USER_LOGIN", "IMPORT_BATCH_CREATED", "QUESTION_EDITED"
+  targetEntity String
+  entityId     String?
+  metadataJson Json?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}

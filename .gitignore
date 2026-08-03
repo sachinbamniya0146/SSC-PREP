@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.next/
+.env
+*.log
+.DS_Store
+coverage/
+.mobile/.dart_tool/
+.mobile/build/
