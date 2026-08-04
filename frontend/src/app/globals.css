@@ -10,9 +10,20 @@
     --card-foreground: 222 47% 11%;
     --primary: 262 83% 58%;
     --primary-foreground: 0 0% 100%;
+    --accent: 330 90% 60%;
+    --accent-foreground: 0 0% 100%;
     --muted: 210 40% 96%;
     --muted-foreground: 215 16% 47%;
     --border: 214 32% 91%;
+    --ring: 262 83% 58%;
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --danger: 0 72% 51%;
+    --danger-foreground: 0 0% 100%;
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
   }
 
   .dark {
@@ -22,8 +33,62 @@
     --card-foreground: 210 40% 98%;
     --primary: 258 90% 66%;
     --primary-foreground: 0 0% 100%;
+    --accent: 330 90% 68%;
+    --accent-foreground: 0 0% 100%;
     --muted: 217 33% 15%;
     --muted-foreground: 215 20% 65%;
     --border: 217 33% 17%;
+    --ring: 258 90% 66%;
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 217 33% 10%;
+    --danger: 0 72% 55%;
+    --danger-foreground: 0 0% 100%;
+    --info: 199 89% 55%;
+    --info-foreground: 217 33% 10%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  }
+  /* Devanagari text falls back to Noto Sans Devanagari */
+  .font-hindi {
+    font-family: var(--font-noto-devanagari), var(--font-inter), sans-serif;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors;
+  }
+  .btn-primary {
+    @apply bg-primary text-primary-foreground hover:opacity-90;
+  }
+  .btn-outline {
+    @apply border border-border bg-card text-foreground hover:bg-muted;
+  }
+  .card {
+    @apply rounded-2xl border border-border bg-card;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold;
+  }
+  .badge-success {
+    @apply bg-success/15 text-success;
+  }
+  .badge-warning {
+    @apply bg-warning/15 text-warning;
+  }
+  .badge-danger {
+    @apply bg-danger/15 text-danger;
+  }
+  .badge-info {
+    @apply bg-info/15 text-info;
   }
 }

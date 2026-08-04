@@ -121,3 +121,30 @@ Pending user confirmation before Phase implementation starts:
 - Question CRUD admin API + Meilisearch + filters; guards on question-bank module; OpenAPI docs; unit tests for services (Phase 1 DoD test coverage is e2e-only so far).
 
 
+
+
+---
+
+## 9. v4 Amendments (2026-08-04) — Frontend & PYQ Search Overhaul
+
+Spec saved to `docs/ssc-prep-hub-hermes-prompt-v4.md` (Sections 29–35). Adds a frontend UI overhaul + Hermes-driven PYQ ingestion on top of v1–v3.
+
+### 9.1 §29 Rendering bug — ROOT CAUSE + FIX (verified live)
+- **Root cause:** `frontend/postcss.config.*` was MISSING. Tailwind PostCSS plugin never ran, so `@tailwind base/components/utilities` passed through literally (524-byte CSS). Browser ignored them → whole site unstyled (browser-serif headings, blue links).
+- **Fix:** created `frontend/postcss.config.mjs` `{tailwindcss:{},autoprefixer:{}}`, rebuilt, restarted :3000. CSS now 19,669 bytes; computed-style verify: H1=sans-serif, 0 blue links, bg-primary applied. **FIXED & confirmed.**
+
+### 9.2 §30–33 Frontend design system & screens (P0-sequential)
+- Design system: Inter/Manrope + Noto Sans Devanagari, brand color tokens, 8px grid, shadcn-style components, Framer Motion (in deps).
+- Real-exam test-taking UI (§31), results/analysis (§32), discovery+PYQ library UI (§33) — wired to existing bank (831 verified PYQ / 818 seeded).
+- Follow §35 order; ship incrementally, deploy after each step.
+
+### 9.3 §34 PYQ auto-fetch — EXTENDS v3 §22 review-gate, NOT a bypass
+- Admin-triggered job searches candidates (official ssc first, reputable secondary as candidates). Nothing auto-publishes; same review → ingestion pipeline as uploads.
+- Never ingest competitor copyrighted explanations/proprietary content — only source paper/answer key (public commission material).
+- SearchMiss demand signal + coverage dashboard per exam.
+
+### 9.4 new open decisions this pass
+1. Test-language lock (§31): comprehension locks at selection; others per user pick — spec as-written.
+2. Pause per test type: mocks disallow, practice allow — admin-configurable field on TestTemplate (new column).
+3. Proctoring (webcam, §31) — Phase-9+, not this pass.
+4. Cut-off (§32) — admin-set or historically derived, real data, never placeholder.

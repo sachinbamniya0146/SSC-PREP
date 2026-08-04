@@ -1,6 +1,19 @@
 import type { Metadata } from "next";
+import { Inter, Noto_Sans_Devanagari } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const notoDevanagari = Noto_Sans_Devanagari({
+  subsets: ["devanagari"],
+  variable: "--font-noto-devanagari",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "SSC Prep Hub — India's Most Advanced SSC Practice Platform",
@@ -22,7 +35,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="min-h-screen bg-background text-foreground antialiased">
+      <body
+        className={`${inter.variable} ${notoDevanagari.variable} min-h-screen bg-background font-sans text-foreground antialiased`}
+      >
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
