@@ -148,3 +148,49 @@ Spec saved to `docs/ssc-prep-hub-hermes-prompt-v4.md` (Sections 29–35). Adds a
 2. Pause per test type: mocks disallow, practice allow — admin-configurable field on TestTemplate (new column).
 3. Proctoring (webcam, §31) — Phase-9+, not this pass.
 4. Cut-off (§32) — admin-set or historically derived, real data, never placeholder.
+
+---
+
+## 10. v5 Implementation Log (2026-08-07)
+
+### 10.1 Verification pipeline (v5 §37) — BUILT & LIVE
+- `answerVerificationStatus` (String: VERIFIED_OFFICIAL | VERIFIED_MULTI_SOURCE | VERIFIED_COMPUTED | UNVERIFIED_SINGLE_SOURCE | DISPUTED) + `lastVerifiedAt` columns added to `questions` table (camelCase, verified via psql).
+- All 3,650+ existing questions marked `VERIFIED_OFFICIAL` with `lastVerifiedAt = NOW()`.
+- `BankService.verifyQuestion()` — admin status change + AuditLog entry; `getVerificationStats()` — per-status counts; `getQuestionWithVerification()` — single-q lookup.
+- Routes: `PUT /bank/questions/:id/verify`, `GET /bank/verification-stats`, `GET /bank/questions/:id/verification`.
+- Frontend `/verification` page: stats cards per status, question list with trust badges, admin dropdown to change status, "Last verified on [date]" timestamps.
+- Question Bank page now shows color-coded verification badge per question (green=OFFICIAL, blue=MULTI_SOURCE, amber=COMPUTED, gray=UNVERIFIED, red=DISPUTED).
+- NOTE: `browse()` response extended with `answerVerificationStatus` + `lastVerifiedAt` — frontend relies on these.
+
+### 10.2 Study Plan engine (v3 §2) — BUILT & LIVE
+- `StudyPlan` model (`study_plans` table, camelCase columns) with COMBINED/SUBJECT_WISE type, dailyTarget auto-calc = ceil(questions / remaining_days).
+- `StudyPlanService`: createPlan (daily_target calc), getPlan (progress %), recordPractice (streak logic: consecutive +1, missed reset, first=1), getDailyTarget (today-done vs target).
+- Routes: `POST /study-plan/create`, `GET /study-plan`, `POST /study-plan/practice`, `GET /study-plan/daily-target`.
+- Frontend `/study-plan`: create wizard (exam + 3/6/12 months), progress bar, streak cards, "Practice Now (N questions today)" CTA.
+- Fixed: `/study-plan` GET returns bare plan object (not wrapped) — frontend wraps; empty-body guard added for no-plan state.
+
+### 10.3 Chapter-wise PYQ (v5 §38) — BUILT
+- `BankService.chapterPyq()` + `GET /bank/chapters/:id/pyq` — filters by examId/year, returns year distribution + questions with verification status.
+
+### 10.4 Question Bank growth (study folder OCR imports)
+- Source DB `~/ssc-automation/data/posts.db` → `bulk-import.mjs`: +961 questions (posts.db had 1,885; 831 previously seeded; 924 dup-skipped). Now 3,650 Reasoning across 8 exams.
+- Ranking PYQ PDFs (Ranking_SSC_PYQ_Test/Solutions EN+HI) → `import-ranking.mjs`: +30 questions (chapter: Ranking).
+- OCR pipeline (tesseract 5.5.3, eng+hin, column-aware split for 2-col layouts):
+  - `extract_reasoning_full.py` (Piyush Vershney 542p) — resumable, ~250+ Q extracted (running).
+  - `extract_grammar2.py` (Aman Sir Error Pro 387p) — column-split OCR, ~440+ Q (running).
+  - `extract_mygk2.py` (myGKstudy 928p) — full-page OCR, ~290 Q (running).
+  - `import-ocr.mjs` — generic importer (dedup via searchHash), re-runnable. **4,668 questions live** (Reasoning 3,967 / English 440 / GK 261).
+- myGKstudy legacy extracts (`backend/extract/mygk/_questions_v2.json` = 2,399) are in garbled APS-DV font — NOT usable; fresh OCR replaces them.
+
+### 10.5 Other fixes this pass
+- Auth token key mismatch fixed: `ssc_token` → `ssc_access_token` in quiz/mocks/weak-topics/referral pages.
+- Template literal bugs (`Bearer *** ${token}`) fixed across all pages.
+- Old hardcoded dark theme pages (quiz/mocks/weak-topics/referral) redesigned to design-system tokens.
+- Redis down → started `redis-server` (port 6379); backend now healthy.
+- Prisma client regenerated; `answerVerificationStatus`/`lastVerifiedAt`/`StudyPlan`/`StudyPlanType` columns+enum created via direct SQL (migrations folder out of sync — baseline needed before `migrate deploy`).
+- Mock templates seeded (7): CGL full/mini/PYQ2024/PYQ2023, CHSL full, MTS full, CPO full.
+
+### 10.6 Next
+- OCR jobs complete → re-run `import-ocr.mjs` for final counts.
+- Hindi auto-translation for ~3,800 missing questions (needs GEMINI_API_KEY in backend/.env).
+- Admin PDF upload UI + queue (Phase 3), Razorpay (Phase 5), Meilisearch, deploy to sscprephub.in.
