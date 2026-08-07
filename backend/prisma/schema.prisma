@@ -107,6 +107,11 @@ model User {
   xp               Int             @default(0)
   coins            Int             @default(0)
 
+  // Referral
+  referralCode     String?         @unique
+  referredByCode   String?         // referral code user signed up with
+  freeSubFromReferral Boolean      @default(false)
+
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
@@ -119,6 +124,12 @@ model User {
   notes            UserNote[]
   dailyPractices   DailyPracticeHistory[]
   auditLogs        AuditLog[]
+  dailyQuizAttempts DailyQuizAttempt[]
+  weakTopicReports  WeakTopicReport[]
+  mockAccesses      MockAccess[]
+  referralsMade     Referral[]      @relation("Referrer")
+  referralsReceived Referral[]      @relation("Referee")
+  studyPlans        StudyPlan[]
 
   @@map("users")
 }
@@ -165,6 +176,7 @@ model Exam {
   
   questions Question[]
   sourcePdfs SourcePdf[]
+  studyPlans       StudyPlan[]
 
   @@map("exams")
 }
@@ -176,6 +188,7 @@ model Subject {
   chapters  Chapter[]
   questions Question[]
   sourcePdfs SourcePdf[]
+  studyPlans       StudyPlan[]
 
   @@map("subjects")
 }
@@ -187,6 +200,7 @@ model Chapter {
   slug      String
   topics    Topic[]
   questions Question[]
+  weakTopicReports WeakTopicReport[]
 
   subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
 
@@ -307,6 +321,8 @@ model Question {
   explanationHindi   String?
   explanationSource  ExplanationSource @default(PDF)
   translationStatus  TranslationStatus @default(HUMAN_VERIFIED)
+  answerVerificationStatus String @default("UNVERIFIED_SINGLE_SOURCE") // VERIFIED_OFFICIAL, VERIFIED_MULTI_SOURCE, VERIFIED_COMPUTED, UNVERIFIED_SINGLE_SOURCE, DISPUTED
+  lastVerifiedAt DateTime?
   isApproved         Boolean           @default(false)
   
   difficulty         Difficulty        @default(MEDIUM)
@@ -518,4 +534,150 @@ model AuditLog {
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@map("audit_logs")
+}
+
+// ================= REFERRAL =================
+// Only PAID purchases by referees count toward a referrer's reward tally.
+model Referral {
+  id              String   @id @default(uuid())
+  referrerId      String
+  refereeId       String
+  status          ReferralStatus @default(PENDING) // PENDING -> PAID -> REWARDED
+  purchasesCount  Int      @default(0) // number of PAID purchases by referee
+  rewardedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  referrer User @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referee  User @relation("Referee", fields: [refereeId], references: [id], onDelete: Cascade)
+
+  @@unique([referrerId, refereeId])
+  @@index([referrerId])
+  @@index([refereeId])
+  @@map("referrals")
+}
+
+enum ReferralStatus {
+  PENDING
+  PAIDED
+  REWARDED
+}
+
+// ================= DAILY QUIZ =================
+model DailyQuiz {
+  id            String   @id @default(uuid())
+  date          DateTime @db.Date
+  title         String
+  subjectId     String?
+  examId        String?
+  questionsJson Json     @default("[]") // array of question ids
+  createdAt     DateTime @default(now())
+
+  attempts DailyQuizAttempt[]
+
+  @@unique([date])
+  @@map("daily_quizzes")
+}
+
+model DailyQuizAttempt {
+  id            String   @id @default(uuid())
+  userId        String
+  dailyQuizId   String
+  score         Float    @default(0.0)
+  totalCorrect  Int      @default(0)
+  totalWrong    Int      @default(0)
+  totalSkipped  Int      @default(0)
+  startedAt     DateTime @default(now())
+  submittedAt   DateTime?
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailyQuiz DailyQuiz @relation(fields: [dailyQuizId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dailyQuizId])
+  @@index([userId])
+  @@map("daily_quiz_attempts")
+}
+
+// ================= WEAK TOPIC ANALYSIS =================
+model WeakTopicReport {
+  id             String   @id @default(uuid())
+  userId         String
+  chapterId      String
+  subjectId      String
+  topicId        String?
+  attemptsMade   Int      @default(0)
+  correctCount   Int      @default(0)
+  accuracyPercent Float   @default(0.0)
+  strengthScore  Float    @default(0.0) // 0=weak, 100=strong
+  isWeak         Boolean  @default(false)
+  maxAttempts    Int      @default(25) // target 25 questions per weak chapter
+  updatedAt      DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, chapterId])
+  @@index([userId, strengthScore])
+  @@index([userId, isWeak])
+  @@map("weak_topic_reports")
+}
+
+// ================= MOCK GATING & PRICING =================
+model MockAccess {
+  id            String   @id @default(uuid())
+  userId        String
+  testTemplateId String
+  freeMocksAllowed Int   @default(2) // 2 free mocks per test
+  mocksUsed     Int      @default(0)
+  paidPacksPurchased Int @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, testTemplateId])
+  @@index([userId])
+  @@map("mock_accesses")
+}
+
+model PricePack {
+  id         String   @id @default(uuid())
+  name       String   // e.g. "Mock Access Pack", "10-Day Offer"
+  examId     String?
+  mocksIncluded Int   @default(5)
+  priceInr   Float
+  durationDays Int
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@map("price_packs")
+}
+
+// ================= STUDY PLANS (v3 Engine) =================
+enum StudyPlanType {
+  COMBINED
+  SUBJECT_WISE
+}
+
+model StudyPlan {
+  id              String         @id @default(uuid())
+  userId          String
+  examId          String
+  subjectId       String?
+  type            StudyPlanType
+  startDate       DateTime       @db.Date
+  targetDate      DateTime       @db.Date
+  dailyTarget     Int            @default(0) // questions per day
+  currentStreak   Int            @default(0)
+  longestStreak   Int            @default(0)
+  lastPracticeDate DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exam            Exam           @relation(fields: [examId], references: [id])
+  subject         Subject?       @relation(fields: [subjectId], references: [id])
+
+  @@index([userId])
+  @@index([userId, examId])
+  @@map("study_plans")
 }

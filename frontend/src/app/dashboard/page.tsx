@@ -74,20 +74,56 @@ export default function DashboardPage() {
           <div className="rounded-xl border border-border bg-card p-6 lg:col-span-2">
             <h2 className="font-semibold">Your Tests</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              No tests attempted yet. Start with daily practice or a full mock!
+              Attempt mocks, daily quizzes, and chapter tests — then check your weak topics.
             </p>
             <a
-              href="#"
-              className="mt-4 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+              href="/quiz"
+              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
             >
-              Start Daily Practice
+              📅 Daily Quiz
+            </a>
+            <a
+              href="/mocks"
+              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              🎯 Mock Tests
+            </a>
+            <a
+              href="/question-bank"
+              className="mt-4 mr-3 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
+            >
+              📚 Question Bank
+            </a>
+            <a
+              href="/weak-topics"
+              className="mt-4 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
+            >
+              📊 My Weak Topics
+            </a>
+            <a
+              href="/study-plan"
+              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              📋 My Study Plan
+            </a>
+            <a
+              href="/verification"
+              className="mt-4 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
+            >
+              ✅ Accuracy Dashboard
             </a>
           </div>
           <div className="rounded-xl border border-border bg-card p-6">
-            <h2 className="font-semibold">Leaderboard</h2>
+            <h2 className="font-semibold">Refer &amp; Earn 🎁</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              All-India rank appears after your first test.
+              Get FREE subscription when 10 friends buy using your code!
             </p>
+            <a
+              href="/referral"
+              className="mt-4 inline-block rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+            >
+              Invite Friends
+            </a>
           </div>
         </div>
       </main>

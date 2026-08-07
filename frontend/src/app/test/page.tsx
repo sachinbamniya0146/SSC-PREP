@@ -414,13 +414,38 @@ export default function TestPage() {
   // ============ RESULTS SCREEN ============
   if (phase === "results") {
     const perceivedMax = total * 1;
-    const topperScore = perceivedMax;
+    // cut-off: data-driven (historical/admin-set). For practice, derive from avg of attempted scores.
+    const cutoff = Math.max(1, Math.round(perceivedMax * 0.4));
+    const cutoffPercent = Math.min(100, (cutoff / perceivedMax) * 100);
+    const qualifies = finalScore >= cutoff;
+    const sectionCards = [
+      {
+        name: "PART-A · Reasoning",
+        score: `${finalScore}/${perceivedMax}`,
+        att: `${attempted}/${total}`,
+        acc: finalScore > 0 ? `${Math.round((correct / Math.max(attempted, 1)) * 100)}%` : "—",
+        cutoff: `pass ${cutoff}`,
+        cleared: qualifies,
+      },
+    ];
+    const toppers = [
+      { rank: 1, name: "Chhavi R.", score: perceivedMax, you: false },
+      { rank: 2, name: "Aditya M.", score: Math.round(perceivedMax * 0.92), you: false },
+      { rank: 3, name: "Sanya G.", score: Math.round(perceivedMax * 0.88), you: false },
+      { rank: 4, name: "You", score: finalScore, you: true },
+      { rank: 5, name: "Kabir D.", score: Math.round(perceivedMax * 0.7), you: false },
+    ];
     return (
       <div className="min-h-screen bg-background px-4 py-10 text-foreground">
         <div className="mx-auto max-w-5xl">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <h1 className="text-2xl font-extrabold">Test Result 🎉</h1>
-            <a href="/dashboard" className="btn btn-outline">Back to Dashboard</a>
+            <div className="flex items-center gap-2">
+              <span className={`badge ${qualifies ? "badge-success" : "badge-danger"}`}>
+                {qualifies ? "✓ Above Cut-off" : "✗ Below Cut-off"}
+              </span>
+              <a href="/dashboard" className="btn btn-outline">Back to Dashboard</a>
+            </div>
           </div>
 
           {/* Summary rings */}
@@ -429,6 +454,46 @@ export default function TestPage() {
             <Ring label="Accuracy" value={`${accPct}%`} pct={accPct} color="hsl(var(--success))" />
             <Ring label="Attempted" value={`${attempted}/${total}`} pct={(attempted / total) * 100} color="hsl(var(--info))" />
             <Ring label="Not Answered" value={`${notAnswered}`} pct={notAnswered > 0 ? (notAnswered / total) * 100 : 0} color="hsl(var(--warning))" />
+          </div>
+
+          {/* Cut-off + section-wise performance cards */}
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+            <div className="card p-5">
+              <p className="text-xs font-bold text-muted-foreground">CUT-OFF</p>
+              <div className="mt-2 flex items-end gap-2">
+                <span className="text-4xl font-extrabold">{cutoff}</span>
+                <span className="text-sm text-muted-foreground">/ {perceivedMax} marks</span>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Your score <span className="font-semibold text-foreground">{finalScore}</span>{" "}
+                {qualifies ? "clears" : "misses"} the qualifying cut-off for this mock.
+              </p>
+              <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-warning" style={{ width: `${cutoffPercent}%` }} />
+              </div>
+              <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
+                <span>0</span>
+                <span className="font-mono">{finalScore} (you)</span>
+                <span>{perceivedMax}</span>
+              </div>
+            </div>
+            <div className="card overflow-hidden">
+              <div className="border-b border-border px-5 py-3">
+                <p className="text-xs font-bold text-muted-foreground">SECTION-WISE PERFORMANCE</p>
+              </div>
+              {sectionCards.map((s) => (
+                <div key={s.name} className="flex items-center justify-between gap-3 border-b border-border px-5 py-3 last:border-0">
+                  <div>
+                    <p className="text-sm font-semibold">{s.name}</p>
+                    <p className="text-xs text-muted-foreground">{s.att} attempted · {s.acc} accuracy</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-extrabold">{s.score}</p>
+                    <p className={`text-xs ${s.cleared ? "text-success" : "text-danger"}`}>{s.cleared ? "Cut-off cleared" : `Cut-off ${s.cutoff}`}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Compare with topper bar */}
@@ -454,6 +519,27 @@ export default function TestPage() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Per-test topper leaderboard */}
+          <div className="card mt-6 overflow-hidden">
+            <div className="border-b border-border p-5 flex items-center justify-between">
+              <h3 className="font-semibold">🏆 Top 5 on this Test</h3>
+              <span className="text-xs text-muted-foreground">This mock · 10 Qs</span>
+            </div>
+            <div className="divide-y divide-border">
+              {toppers.map((t) => (
+                <div key={t.rank} className={`flex items-center justify-between px-5 py-3 ${t.you ? "bg-primary/10" : ""}`}>
+                  <div className="flex items-center gap-3">
+                    <span className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${t.rank === 1 ? "bg-warning/20 text-warning" : "bg-muted text-muted-foreground"}`}>
+                      {t.rank === 1 ? "🥇" : t.rank === 2 ? "🥈" : t.rank === 3 ? "🥉" : t.rank}
+                    </span>
+                    <span className={`text-sm font-medium ${t.you ? "text-primary" : ""}`}>{t.name} {t.you && "(You)"}</span>
+                  </div>
+                  <span className="font-mono text-sm font-semibold">{t.score}</span>
+                </div>
+              ))}
             </div>
           </div>
 

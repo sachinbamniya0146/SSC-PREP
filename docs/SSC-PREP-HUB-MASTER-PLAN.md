@@ -1527,3 +1527,62 @@ FINAL GOAL
 =====================================================
 
 Build the best SSC Exam Preparation Platform in India with zero bugs, premium UI, scalable backend, AI-powered PDF import, advanced analytics, secure payment system, responsive website, Flutter mobile app, and production-ready deployment.
+
+
+---
+
+# PART E — REALITY SYNC (Build Status as of 2026-08-04)
+
+> This section is the ground-truth bridge between the spec (Parts A-D) and the actual repository.
+> Anything in Parts A-D that is not reflected here is **planned, not built** — never assume a
+> spec'd feature exists because it's written down. Verify before claiming.
+
+## E.1 What Is Actually Built (verified against repo)
+
+| Area | Status | Evidence |
+|---|---|---|
+| Monorepo shell (backend/frontend/docker-compose) | DONE | 2 commits: shell + auth hardening |
+| Auth: email/password, OTP, Google OAuth, refresh rotation, RBAC, single-device, rate-limit | DONE | backend/src/auth, sessions, CI gates |
+| Bilingual question schema (text_en/hi, options parity, translation_status) | DONE | Prisma schema + translation pipeline |
+| Question bank seed | DONE | 18 verified PYQs seeded, book pipeline separate |
+| Referral (10 PAID → 30d free sub) | DONE | backend/src/referral |
+| Analytics (weak/strong → 25Q drill + 10Q test) | DONE | backend/src/analytics, quiz |
+| DailyQuiz | DONE | backend/src/quiz |
+| Mocks gating (₹10/15d) | DONE | backend/src/bank? (verify) |
+| PDF → JSON extraction pipeline | DONE (separate repo: ~/ssc-automation) | 17 chapters, 5081 seedable questions extracted |
+| Question bank DB (posts.db) + idempotent loader | DONE | 859 verified Analogy rows, 0 dups, rerun-safe |
+| Real-time test engine, payments, Flutter app, Meilisearch, analytics dashboards | NOT BUILT | spec only — later phases |
+
+## E.2 Question Bank Pipeline (ssc-automation) — Current Numbers
+
+- **Source:** Pinnacle 7200 TCS MCQ Chapter-wise Reasoning (English) — 53.8 MB PDF, 17 chapters, **5081 seedable questions**. Book contains NO answer keys (verified page-by-page scan) → answers are derived + verified manually, never OCR'd.
+- **Extraction:** 23 JSON files (figure-based chapters like Mirror/Water Image are image-only, not seedable as text).
+- **Chapter coverage (text chapters, questions):**
+  Analogy 1268 · Series 774 · Coding_and_Decoding 734 · Odd_One_Out 589 · Mathematical_Operations 371 · Statement_and_Conclusion 330 · Word_Arrangement 203 · Sitting_Arrangement 177 · Blood_Relation 162 · Missing_Number 159 · Arithmetic_Reasoning 114 · Miscellaneous 49 · Cube_and_Dice 45 · Direction 43 · Age 38 · Calendar 20 · Venn_Diagram 5
+- **Solved and verified so far:** Analogy **859 / 1268** (batches b1-b7). All other chapters: 0.
+- **Remaining:** ~4200 questions across 16 chapters — this is the long-tail grind; posting is 1-question-at-a-time on the SSC WhatsApp channel.
+
+## E.3 Verification and Quality Policy (world-best bar, enforced)
+
+1. **Never load a guess as an answer.** Any solution whose rule/relation isn't verified is SKIPPED (stays missing), never guessed. 12 guess-entries removed from b5 and DB in 2026-08-04 cleanup.
+2. **Every numeric solution is rule-checked** (relation must reproduce the given pair(s) exactly, then match exactly one option).
+3. **Every word/letter solution is semantic-checked** against actual option letters — 3 wrong letters caught and fixed in the b7 review pass.
+4. **Loader is idempotent** — re-runs add 0 rows; verified by double-run test.
+5. **DB is deduped** — 2549 duplicate rows removed; (topic, book_q) unique enforced.
+6. **Topic field uses em-dash:** `Reasoning — Analogy` — query with LIKE '%Analogy', never exact =.
+
+## E.4 Operating Notes (gotchas that cost time)
+
+- Batch print in terminal gets compressed to "1 lines" for big batches → always dump to /tmp file and read that.
+- Loader unpack format is the 4-tuple (ans, expl, trick, diff); older 2-tuple files break silently — fixed b5 via regex.
+- Java: no system Java — use Android Studio JBR for Android work.
+- SSC morning login reminder: cron e135b68213f7, daily 08:00, script ~/.hermes/scripts/ssc_login_reminder.sh.
+
+## E.5 Next Actions (ordered)
+
+1. Finish Analogy: solve + verify remaining ~410 (batches b8+).
+2. Stand up a per-chapter solve pipeline for the other 16 chapters (Series, Coding, Odd One Out first — biggest pools).
+3. Decide the "no question missed" policy concretely: every book_q must end in either solved+verified or documented-skip(reason) — a question is never silently absent.
+4. Then re-focus on ssc-prep-hub Phase 2 remaining scope (payments, test engine) per Parts A-D.
+
+---

@@ -1,0 +1,105 @@
+import { Controller, Get, Query, Post, Body, Param, Put, UseGuards, Req } from '@nestjs/common';
+import { BankService } from './bank.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+
+@Controller('bank')
+@UseGuards(JwtAuthGuard)
+export class BankController {
+  constructor(private readonly bank: BankService) {}
+
+  @Get('meta')
+  meta() {
+    return this.bank.meta();
+  }
+
+  @Get('subjects')
+  subjects() {
+    return this.bank.subjects();
+  }
+
+  @Get('chapters')
+  chapters(@Query('subjectId') subjectId?: string, @Query('examId') examId?: string) {
+    return this.bank.chapters(subjectId, examId);
+  }
+
+  @Get('questions')
+  browse(
+    @Query('examId') examId?: string,
+    @Query('subjectId') subjectId?: string,
+    @Query('chapterId') chapterId?: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.bank.browse({
+      examId,
+      subjectId,
+      chapterId,
+      skip: skip ? parseInt(skip, 10) : undefined,
+      take: take ? parseInt(take, 10) : undefined,
+    });
+  }
+
+  @Get('set')
+  set(
+    @Query('examId') examId?: string,
+    @Query('subjectId') subjectId?: string,
+    @Query('count') count?: string,
+  ) {
+    return this.bank.getSet({
+      examId,
+      subjectId,
+      count: count ? parseInt(count, 10) : undefined,
+    });
+  }
+
+  // Chapter-wise PYQ practice
+  @Get('chapters/:id/pyq')
+  chapterPyq(
+    @Param('id') id: string,
+    @Query('examId') examId?: string,
+    @Query('year') year?: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.bank.chapterPyq({
+      chapterId: id,
+      examId,
+      year: year ? parseInt(year, 10) : undefined,
+      skip: skip ? parseInt(skip, 10) : undefined,
+      take: take ? parseInt(take, 10) : undefined,
+    });
+  }
+
+  @Get('questions/:id')
+  getById(@Param('id') id: string) {
+    return this.bank.getById(id);
+  }
+
+  @Post('attempt')
+  attempt(@Req() req: any, @Body() body: { questionId: string; selectedOption: string; templateId?: string }) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.bank.attempt(userId, body);
+  }
+
+  // ---- Verification Pipeline ----
+
+  @Put('questions/:id/verify')
+  verifyQuestion(
+    @Param('id') id: string,
+    @Body() body: { status: string },
+    @Req() req: any,
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.bank.verifyQuestion(id, body.status, userId);
+  }
+
+  @Get('verification-stats')
+  verificationStats() {
+    return this.bank.getVerificationStats();
+  }
+
+  @Get('questions/:id/verification')
+  getQuestionWithVerification(@Param('id') id: string) {
+    return this.bank.getQuestionWithVerification(id);
+  }
+}

@@ -8,6 +8,12 @@ import { HealthController } from './health/health.controller';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { TestsModule } from './tests/tests.module';
+import { ReferralModule } from './referral/referral.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { QuizModule } from './quiz/quiz.module';
+import { MocksModule } from './mocks/mocks.module';
+import { BankModule } from './bank/bank.module';
+import { StudyPlanModule } from './study-plan/study-plan.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { envValidationSchema } from './config/env.validation';
@@ -36,6 +42,12 @@ import { envValidationSchema } from './config/env.validation';
     AuthModule,
     UsersModule,
     TestsModule,
+    ReferralModule,
+    AnalyticsModule,
+    QuizModule,
+    MocksModule,
+    BankModule,
+    StudyPlanModule,
   ],
   controllers: [HealthController],
   providers: [
