@@ -102,6 +102,7 @@ export default function QuestionBankPage() {
   const [loading, setLoading] = React.useState(false);
   const [metaTotal, setMetaTotal] = React.useState(0);
   const [bookmarked, setBookmarked] = React.useState<{ [qid: string]: boolean }>({});
+  const [pdfBusy, setPdfBusy] = React.useState(false);
   // v2 §7.6 — Previous SSC References (real-DB, loaded on demand)
   const [sscRefs, setSscRefs] = React.useState<{ [qid: string]: any }>({});
 
@@ -131,6 +132,34 @@ export default function QuestionBankPage() {
       }
     } catch {
       /* ignore */
+    }
+  };
+
+  // v3 §7 — Chapter PDF (₹1 one-time) — buy → download (server-entitlement-checked)
+  const downloadChapterPdf = async () => {
+    if (!chapterId) return;
+    setPdfBusy(true);
+    try {
+      const r = await fetch(`${apiBase()}/pdf/chapter/${encodeURIComponent(chapterId)}/generate`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        alert(j.message || "Chapter PDF unavailable — buy it (₹1) or get Premium.");
+        return;
+      }
+      const blob = await r.blob();
+      const name = chapters.find((c) => c.id === chapterId)?.name || "Chapter";
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `SSC_${name.replace(/[^a-z0-9]+/gi, "_")}.pdf`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      alert("Download failed — try again.");
+    } finally {
+      setPdfBusy(false);
     }
   };
 
@@ -291,12 +320,21 @@ export default function QuestionBankPage() {
           {loading ? "Loading..." : `Load Questions (${total} total)`}
         </button>
         {chapterId && (
+          <>
           <a
             href={`/test?chapter=${encodeURIComponent(chapterId)}${examId ? `&exam=${encodeURIComponent(examId)}` : ""}`}
             className="rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20"
           >
             ▶ Practice Chapter (25 Qs)
           </a>
+          <button
+            onClick={downloadChapterPdf}
+            disabled={pdfBusy || !chapterId}
+            className="rounded-lg border border-success/40 bg-success/10 px-5 py-2.5 text-sm font-semibold text-success hover:bg-success/20 disabled:opacity-50"
+          >
+            {pdfBusy ? "Generating…" : "📥 Chapter PDF (₹1)"}
+          </button>
+          </>
         )}
       </div>
 

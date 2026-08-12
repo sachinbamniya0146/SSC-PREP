@@ -21,6 +21,49 @@ export default function LoginPage() {
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
 
+  // Google Sign-In (Google Identity Services) — visible only when the server
+  // has GOOGLE_CLIENT_ID configured (NEXT_PUBLIC_GOOGLE_CLIENT_ID).
+  const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+
+  const handleGoogleCredential = React.useCallback(async (credential: string) => {
+    setError(""); setLoading(true);
+    try {
+      const data = await api<AuthResponse>("/auth/google", {
+        method: "POST",
+        body: JSON.stringify({ idToken: credential, platform: "WEB" }),
+      });
+      localStorage.setItem("ssc_access_token", data.accessToken);
+      localStorage.setItem("ssc_refresh_token", data.refreshToken);
+      localStorage.setItem("ssc_user", JSON.stringify(data.user));
+      window.location.href = "/dashboard";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google login failed");
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!googleClientId) return;
+    const existing = document.getElementById("gsi-script");
+    if (existing) return;
+    const s = document.createElement("script");
+    s.id = "gsi-script";
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true;
+    s.onload = () => {
+      const g = (window as any).google;
+      if (!g?.accounts?.id) return;
+      g.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: (resp: any) => handleGoogleCredential(resp?.credential ?? ""),
+        auto_select: false,
+      });
+      const el = document.getElementById("google-signin-btn");
+      if (el) g.accounts.id.renderButton(el, { theme: "outline", size: "large", width: 320, shape: "pill" });
+    };
+    document.head.appendChild(s);
+  }, [googleClientId, handleGoogleCredential]);
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -159,7 +202,16 @@ export default function LoginPage() {
         )}
 
         {mode === "login" && (
-          <form onSubmit={handleLogin} className="space-y-4">
+          <>
+            {googleClientId && (
+              <>
+                <div className="mb-4 flex justify-center" id="google-signin-btn" />
+                <div className="mb-4 flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="h-px flex-1 bg-border" /> or <span className="h-px flex-1 bg-border" />
+                </div>
+              </>
+            )}
+            <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="mb-1.5 block text-sm font-medium">Email</label>
               <input
@@ -190,6 +242,7 @@ export default function LoginPage() {
               {loading ? "Signing in…" : "Login"}
             </button>
           </form>
+          </>
         )}
 
         {mode === "otp" && (

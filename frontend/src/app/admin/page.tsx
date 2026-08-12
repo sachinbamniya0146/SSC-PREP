@@ -201,6 +201,159 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
   DISPUTED: { label: "Disputed", color: "bg-danger" },
 };
 
+/** v1 §7.1 — PDF Ingestion tab: upload a paper → extraction worker → review queue. */
+function ImportPdfTab() {
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+  const headers = (): Record<string, string> => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+  const [exams, setExams] = React.useState<any[]>([]);
+  const [subjects, setSubjects] = React.useState<any[]>([]);
+  const [file, setFile] = React.useState<File | null>(null);
+  const [examId, setExamId] = React.useState("");
+  const [subjectId, setSubjectId] = React.useState("");
+  const [year, setYear] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
+  const [batches, setBatches] = React.useState<any[]>([]);
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const [m, sc] = await Promise.all([
+          fetch(`${apiBase}/bank/meta`, { headers: headers() }).then((r) => r.json()),
+          fetch(`${apiBase}/bank/subjects`, { headers: headers() }).then((r) => r.json()),
+        ]);
+        setExams(Array.isArray(m?.exams) ? m.exams.filter((e: any) => e.count > 0) : []);
+        setSubjects(Array.isArray(sc) ? sc : []);
+      } catch {}
+    })();
+    loadBatches();
+  }, []);
+
+  const loadBatches = async () => {
+    try {
+      const r = await fetch(`${apiBase}/admin/pdf-ingestion/batches?limit=8`, { headers: headers() });
+      if (r.ok) {
+        const d = await r.json();
+        setBatches(d?.data || []);
+      }
+    } catch {}
+  };
+
+  const upload = async () => {
+    if (!file) { setMsg({ ok: false, text: "Choose a PDF file first." }); return; }
+    if (!subjectId) { setMsg({ ok: false, text: "Select the subject of these questions." }); return; }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("subjectId", subjectId);
+      if (examId) fd.append("examId", examId);
+      if (year) fd.append("year", year);
+      const r = await fetch(`${apiBase}/admin/pdf-ingestion/upload-file`, {
+        method: "POST",
+        headers: headers(),
+        body: fd,
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg({ ok: false, text: j.message || "Upload failed" }); return; }
+      setMsg({ ok: true, text: `Uploaded! Batch created — extraction worker is processing. Questions land in the review queue as AI_DRAFT.` });
+      setFile(null);
+      loadBatches();
+      // poll batch status updates
+      const bid = j?.batch?.id;
+      if (bid) {
+        for (let i = 0; i < 20; i++) {
+          await new Promise((res) => setTimeout(res, 3000));
+          const br = await fetch(`${apiBase}/admin/pdf-ingestion/batches/${bid}`, { headers: headers() });
+          const b = await br.json().catch(() => ({}));
+          if (b?.status === "COMPLETED" || b?.status === "PARTIAL") {
+            setMsg({ ok: true, text: `Batch ${b.status}: ${b.completedChunks}/${b.totalChunks} chunks done. ${b.errorMessage || "Questions → review queue."}` });
+            break;
+          }
+        }
+        loadBatches();
+      }
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message || "Upload failed" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <h1 className="text-2xl font-bold">Import PDF</h1>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Upload a question paper — text extraction (pdfjs) + LLM fallback → AI_DRAFT review queue with confidence scores.
+      </p>
+
+      <div className="card mt-6 p-6">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">Subject (required)</label>
+            <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)}
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+              <option value="">— select subject —</option>
+              {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">Exam (optional)</label>
+            <select value={examId} onChange={(e) => setExamId(e.target.value)}
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+              <option value="">— any —</option>
+              {exams.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="mt-4">
+          <label className="mb-1.5 block text-sm font-medium">Year (optional)</label>
+          <input type="number" value={year} onChange={(e) => setYear(e.target.value)} placeholder="e.g. 2024"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
+        </div>
+        <div className="mt-4">
+          <label className="mb-1.5 block text-sm font-medium">PDF file</label>
+          <input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] || null)}
+            className="w-full text-sm" />
+        </div>
+        <button onClick={upload} disabled={busy}
+          className="mt-5 w-full rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50">
+          {busy ? "Uploading + processing…" : "📤 Upload PDF & Extract"}
+        </button>
+        {msg && (
+          <p className={`mt-3 rounded-lg border p-3 text-sm ${msg.ok ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700" : "border-red-500/30 bg-red-500/10 text-red-700"}`}>
+            {msg.text}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-8">
+        <h2 className="text-lg font-bold">Recent batches</h2>
+        <div className="mt-3 space-y-2">
+          {batches.length === 0 && <p className="text-sm text-muted-foreground">No uploads yet.</p>}
+          {batches.map((b) => (
+            <div key={b.id} className="card flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+              <div className="min-w-0">
+                <p className="font-semibold">{b.sourcePdf?.filename || b.id.slice(0, 8)}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {b.status} · {b.completedChunks}/{b.totalChunks} chunks · {b.errorMessage ? `（${b.errorMessage}）` : ""}
+                </p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-bold ${b.status === "COMPLETED" ? "bg-success/20 text-success" : b.status === "PARTIAL" ? "bg-warning/20 text-warning" : "bg-muted text-muted-foreground"}`}>
+                {b.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AccuracyDashboardTab() {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
   const headers = (): Record<string, string> => {
@@ -927,19 +1080,7 @@ export default function AdminPage() {
             </div>
           )}
 
-          {tab === "import" && (
-            <div>
-              <h1 className="text-2xl font-bold">Import PDF</h1>
-              <p className="mt-1 text-sm text-muted-foreground">Upload PDFs to extract questions</p>
-              <div className="card mt-6 p-8 text-center">
-                <p className="text-4xl">📄</p>
-                <p className="mt-3 font-semibold">PDF Ingestion Pipeline</p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Coming in Phase 3. For now, questions are imported via the seed script.
-                </p>
-              </div>
-            </div>
-          )}
+          {tab === "import" && <ImportPdfTab />}
 
           {tab === "video" && <VideoSolutionTab />}
           {tab === "accuracy" && <AccuracyDashboardTab />}
