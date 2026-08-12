@@ -22,12 +22,15 @@ type ReviewQuestion = {
   subject: string | null;
   year?: number | null;
   shift?: string | null;
+  difficulty?: string | null;
   marks: number;
   negativeMarks: number;
 };
 
 type AttemptDetail = {
   id: string;
+  userId?: string;
+  testTemplateId?: string;
   score: number;
   totalCorrect: number;
   totalWrong: number;
@@ -59,6 +62,8 @@ export default function AttemptReviewPage() {
   const [error, setError] = React.useState("");
   const [filter, setFilter] = React.useState<Filter>("all");
   const [lang, setLang] = React.useState<"en" | "both">("both");
+  // v6 §6 — per-template stats (real cutoff P90 + top-5 toppers)
+  const [stats, setStats] = React.useState<any>(null);
 
   React.useEffect(() => {
     if (!params?.attemptId) return;
@@ -69,7 +74,15 @@ export default function AttemptReviewPage() {
           setError(r.status === 401 ? "Login required" : `Failed to load attempt (${r.status})`);
           return;
         }
-        setDetail(await r.json());
+        const d = await r.json();
+        setDetail(d);
+        // best-effort stats fetch (real cutoff + toppers for this template)
+        if (d?.testTemplateId) {
+          fetch(`${apiBase()}/tests/stats/${d.testTemplateId}`, { headers: authHeaders() })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((s) => s && setStats(s))
+            .catch(() => null);
+        }
       } catch {
         setError("Network error — backend unreachable");
       } finally {
@@ -184,6 +197,64 @@ export default function AttemptReviewPage() {
                 {Math.max(0, Number((Number(detail.topper.score) - detail.score).toFixed(1)))} marks
               </p>
             </div>
+          </div>
+        )}
+
+        {/* v6 §6 — real stats: cutoff (P90, data-driven) + top-5 toppers */}
+        {stats && stats.attempts > 0 && (
+          <div className="card mt-4 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-bold">📈 Real Stats — {stats.title}</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {stats.attempts} attempts · avg score <b>{stats.avgScore}</b> · avg accuracy{" "}
+                  <b>{stats.avgAccuracy}%</b>
+                </p>
+              </div>
+              <div className="rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-right">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Cutoff (90th percentile)
+                </p>
+                <p className="text-xl font-extrabold text-primary">{stats.cutoffScore}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {stats.cutoffLabel}{detail.score >= stats.cutoffScore && stats.hasEnoughData ? " · ✅ you crossed it" : ""}
+                </p>
+              </div>
+            </div>
+            {stats.toppers.length > 0 && (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="pb-1.5 pr-3 font-semibold">#</th>
+                      <th className="pb-1.5 pr-3 font-semibold">Student</th>
+                      <th className="pb-1.5 pr-3 font-semibold">Score</th>
+                      <th className="pb-1.5 pr-3 font-semibold">Accuracy</th>
+                      <th className="pb-1.5 font-semibold">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.toppers.map((t: any, i: number) => {
+                      const isYou = t.userId === detail.userId;
+                      return (
+                        <tr key={i} className={isYou ? "bg-primary/10 font-semibold" : ""}>
+                          <td className="py-1.5 pr-3">{i + 1}</td>
+                          <td className="py-1.5 pr-3">{isYou ? `${t.fullName} (you)` : t.fullName}</td>
+                          <td className="py-1.5 pr-3">{t.score}</td>
+                          <td className="py-1.5 pr-3">{t.accuracyPercent}%</td>
+                          <td className="py-1.5">{fmtTime(t.durationSec)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {!stats.hasEnoughData && (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Cutoff needs ≥10 attempts to be meaningful — keep practicing, more data is coming in.
+              </p>
+            )}
           </div>
         )}
 
@@ -344,6 +415,23 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
         </p>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">⏱ {fmtTime(q.timeSpentSeconds || 0)}</span>
+          {/* v5 §40 — fast-wrong / slow-wrong / guess analysis (real timing) */}
+          {!q.isSkipped && q.timeSpentSeconds != null && q.timeSpentSeconds > 0 && (
+            q.isCorrect && q.timeSpentSeconds < 10 ? (
+              <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold text-sky-600">⚡ fast</span>
+            ) : !q.isCorrect && q.timeSpentSeconds >= 120 ? (
+              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-600">🐢 slow-wrong</span>
+            ) : !q.isCorrect && q.timeSpentSeconds < 10 ? (
+              <span className="rounded-full bg-fuchsia-500/10 px-2 py-0.5 text-[10px] font-bold text-fuchsia-600">🎲 guess</span>
+            ) : null
+          )}
+          {q.difficulty && (
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+              q.difficulty === "EASY" ? "bg-success/10 text-success" : q.difficulty === "HARD" ? "bg-danger/10 text-danger" : "bg-muted text-muted-foreground"
+            }`}>
+              {q.difficulty}
+            </span>
+          )}
           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${badge.cls}`}>{badge.text}</span>
         </div>
       </div>

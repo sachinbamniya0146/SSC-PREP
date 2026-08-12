@@ -1,10 +1,14 @@
-import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Query, Param } from '@nestjs/common';
 import { TestsService } from './tests.service';
+import { TestStatsService } from './test-stats.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('tests')
 export class TestsController {
-  constructor(private readonly testsService: TestsService) {}
+  constructor(
+    private readonly testsService: TestsService,
+    private readonly statsService: TestStatsService,
+  ) {}
 
   @Get()
   list() {
@@ -37,6 +41,22 @@ export class TestsController {
   @Get('attempts/:attemptId/remaining')
   attemptRemaining(@CurrentUser() user: { userId: string }, @Param('attemptId') attemptId: string) {
     return this.testsService.attemptRemaining(user.userId, attemptId);
+  }
+
+  // v4 §31 — autosave partial answers mid-attempt (debounced client-side)
+  @Put('attempts/:attemptId/answers')
+  saveAnswers(
+    @CurrentUser() user: { userId: string },
+    @Param('attemptId') attemptId: string,
+    @Body() body: { answers: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; timeSpentByQuestion?: Record<string, number> },
+  ) {
+    return this.testsService.saveAnswers(user.userId, attemptId, body);
+  }
+
+  // v6 §6 — per-template stats: attempts, averages, real cutoff (P90), toppers
+  @Get('stats/:templateId')
+  stats(@Param('templateId') templateId: string) {
+    return this.statsService.getStats(templateId);
   }
 
   // P1 — student results history

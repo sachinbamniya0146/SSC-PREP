@@ -136,6 +136,7 @@ export default function TestPage() {
 
   // student answers + status
   const [answers, setAnswers] = React.useState<{ [qid: string]: string }>({});
+  const [attemptId, setAttemptId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<{ [qid: string]: QStatus }>({});
   const [visited, setVisited] = React.useState<{ [qid: string]: boolean }>({});
   const [timeLeft, setTimeLeft] = React.useState(0);
@@ -201,6 +202,7 @@ export default function TestPage() {
         qs = Array.isArray(dd?.questions) ? dd.questions : [];
         durationSec = dd?.durationSec || 0;
         attemptId = dd?.attemptId ?? null;
+        setAttemptId(attemptId);
         if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
       }
       // v6 §2a — full shift paper: /test?template=<id> composes the template's paper
@@ -247,7 +249,19 @@ export default function TestPage() {
           });
           const ad = await ar.json();
           attemptId = ad.id ?? null;
+          setAttemptId(attemptId);
           if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
+          // v4 §31 — resumed attempt (refresh/revisit): hydrate persisted autosaves
+          if (Array.isArray(ad.answers) && ad.answers.length) {
+            const savedMap: { [qid: string]: string } = {};
+            for (const a of ad.answers) if (a.selectedOption) savedMap[a.questionId] = a.selectedOption;
+            setAnswers(savedMap);
+            setStatus((p) => {
+              const n = { ...p };
+              for (const qid of Object.keys(savedMap)) n[qid] = "answered";
+              return n;
+            });
+          }
         } catch {
           attemptId = null;
         }
@@ -339,6 +353,63 @@ export default function TestPage() {
       [qid]: wasMarked ? "answered-marked" : "answered",
     }));
   };
+
+  // ---- v4 §31 — AUTOSAVE: debounced persist of answers mid-attempt. What's
+  // saved here is exactly what an auto-submit-at-expiry scores (lossless). ----
+  const autosaveTimer = React.useRef<any>(null);
+  React.useEffect(() => {
+    if (!attemptId || phase !== "exam" || Object.keys(answers).length === 0) return;
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(async () => {
+      try {
+        const payload = Object.entries(answers).map(([questionId, selectedOption]) => ({
+          questionId,
+          selectedOption,
+        }));
+        await fetch(`${apiBase()}/tests/attempts/${attemptId}/answers`, {
+          method: "PUT",
+          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ answers: payload }),
+        });
+      } catch {
+        /* autosave is best-effort — the submit payload is authoritative */
+      }
+    }, 2500);
+    return () => {
+      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    };
+  }, [answers, attemptId, phase]);
+
+  // ---- v4 §31 — keyboard shortcuts (real exam feel) ----
+  React.useEffect(() => {
+    if (phase !== "exam" || paused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && ["1", "2", "3", "4"].includes(e.key)) {
+        e.preventDefault();
+        const q = questions[idx];
+        if (q) chooseOption(q.id, String.fromCharCode(64 + Number(e.key)));
+        return;
+      }
+      if (e.key === " " && !e.shiftKey) {
+        e.preventDefault();
+        saveAndNext();
+        return;
+      }
+      if (e.key === " " && e.shiftKey) {
+        e.preventDefault();
+        if (idx > 0) markVisited(idx - 1, questions[idx - 1].id);
+        return;
+      }
+      if (e.key.toLowerCase() === "p") {
+        setPaletteOpen((p) => !p);
+        return;
+      }
+      if (e.key === "Escape") setPaletteOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, paused, idx, questions, answers, status]);
 
   const markForReview = () => {
     const q = questions[idx];

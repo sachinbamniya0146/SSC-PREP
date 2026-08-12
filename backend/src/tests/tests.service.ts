@@ -42,25 +42,41 @@ export class TestsService {
     if (!template) throw new BadRequestException('Test template not found');
     await this.assertMockEntitled(userId, template);
 
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + (template.durationMinutes || 60) * 60 * 1000);
-  const attempt = await this.prisma.testAttempt.create({
-    data: {
-      userId,
-      testTemplateId,
-      status: 'IN_PROGRESS',
-      startedAt: now,
-      expiresAt,
-    },
-    select: { id: true, startedAt: true, expiresAt: true, status: true },
-  });
-  return attempt;
-}
+    // v4 §31 — resume-first: an unexpired in-progress attempt for this template
+    // is RETURNED (with its autosaved answers) instead of opening a duplicate.
+    // Makes refresh/relogin mid-test lossless and prevents restart-cheating.
+    const existing = await this.prisma.testAttempt.findFirst({
+      where: { userId, testTemplateId, status: 'IN_PROGRESS', expiresAt: { gt: new Date() } },
+      select: { id: true, startedAt: true, expiresAt: true, status: true },
+    });
+    if (existing) {
+      const saved = await this.prisma.attemptAnswer.findMany({
+        where: { testAttemptId: existing.id },
+        select: { questionId: true, selectedOption: true, timeSpentSeconds: true },
+      });
+      return { ...existing, resumed: true, answers: saved };
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + (template.durationMinutes || 60) * 60 * 1000);
+    const attempt = await this.prisma.testAttempt.create({
+      data: {
+        userId,
+        testTemplateId,
+        status: 'IN_PROGRESS',
+        startedAt: now,
+        expiresAt,
+      },
+      select: { id: true, startedAt: true, expiresAt: true, status: true },
+    });
+    return { ...attempt, resumed: false, answers: [] };
+  }
 
 // Score and finalize an in-progress attempt. Server-authoritative:
 //  - only the owning user may submit
 //  - a second submit is rejected (one attempt per instance)
-//  - answers after expiresAt are dropped (auto-submit at expiry)
+//  - answers after expiresAt are dropped (auto-submit at expiry scores the
+//    answers ALREADY PERSISTED via autosave — a late client payload is ignored)
 //  - scoring recomputes everything from the DB answer key
 async submitAttempt(
   userId: string,
@@ -77,11 +93,32 @@ async submitAttempt(
 
   const now = new Date();
   const expired = attempt.expiresAt != null && now > attempt.expiresAt;
-  // Server-authoritative auto-submit: whatever the client sends after the
-  // deadline is ignored — the attempt is scored as of expiry with the
-  // answers already persisted (none here, since we never autosaved) → the
-  // client's late payload is capped to an empty submit.
-  const answers = expired ? [] : (input.answers ?? []);
+
+  // Base = answers already persisted by AUTOSAVE (v4 §31). Client payload is
+  // merged on top when the attempt is still live; when expired it is dropped
+  // entirely — the deadline is authoritative.
+  const saved = await this.prisma.attemptAnswer.findMany({
+    where: { testAttemptId: attemptId },
+    select: { questionId: true, selectedOption: true, timeSpentSeconds: true },
+  });
+  const merged = new Map<string, { questionId: string; selectedOption: string | null; timeSpentSeconds: number }>();
+  for (const s of saved) {
+    merged.set(s.questionId, {
+      questionId: s.questionId,
+      selectedOption: s.selectedOption,
+      timeSpentSeconds: s.timeSpentSeconds,
+    });
+  }
+  if (!expired) {
+    for (const a of input.answers ?? []) {
+      merged.set(a.questionId, {
+        questionId: a.questionId,
+        selectedOption: a.selectedOption ?? null,
+        timeSpentSeconds: Number(a.timeSpentSeconds) || 0,
+      });
+    }
+  }
+  const answers = Array.from(merged.values());
 
   // Re-score against DB answer key (identical rules to saveAttempt).
   let score = 0;
@@ -128,7 +165,9 @@ async submitAttempt(
       totalSkipped,
       accuracyPercent,
       submittedAt: now,
-      answers: scoredAnswers.length ? { create: scoredAnswers } : undefined,
+      answers: scoredAnswers.length
+        ? { createMany: { data: scoredAnswers, skipDuplicates: true } } // autosaved rows already exist
+        : undefined,
     },
     include: {
       testTemplate: { select: { id: true, title: true, totalQuestions: true, totalMarks: true } },
@@ -150,6 +189,11 @@ async attemptRemaining(userId: string, attemptId: string) {
   if (!attempt) throw new BadRequestException('Attempt not found');
   const now = Date.now();
   const expiresMs = attempt.expiresAt ? new Date(attempt.expiresAt).getTime() : null;
+  // v4 §31 — persisted autosaves returned so a resumed session hydrates exactly
+  const savedAnswers = await this.prisma.attemptAnswer.findMany({
+    where: { testAttemptId: attempt.id },
+    select: { questionId: true, selectedOption: true, timeSpentSeconds: true },
+  });
   return {
     attemptId: attempt.id,
     status: attempt.status,
@@ -157,8 +201,62 @@ async attemptRemaining(userId: string, attemptId: string) {
     expiresAt: attempt.expiresAt,
     remainingMs: expiresMs != null ? Math.max(0, expiresMs - now) : null,
     expired: expiresMs != null && now > expiresMs,
+    answers: savedAnswers,
   };
+}
+
+// v4 §31 — AUTOSAVE: persist partial answers + per-question time mid-attempt
+// (debounced by the client). Autosaved answers are what an auto-submit-at-expiry
+// scores, and they make resumed tests (refresh/relogin) lossless.
+async saveAnswers(
+  userId: string,
+  attemptId: string,
+  input: {
+    answers: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[];
+    timeSpentByQuestion?: Record<string, number>;
+  },
+) {
+  const attempt = await this.prisma.testAttempt.findFirst({
+    where: { id: attemptId, userId },
+    select: { id: true, status: true },
+  });
+  if (!attempt) throw new BadRequestException('Attempt not found');
+  if (attempt.status !== 'IN_PROGRESS') throw new BadRequestException('Attempt is not in progress');
+
+  const answers = input.answers ?? [];
+  if (!answers.length) return { saved: 0 };
+
+  const questions = await this.prisma.question.findMany({
+    where: { id: { in: answers.map((a) => a.questionId) } },
+    select: { id: true, correctAnswer: true },
+  });
+  const qmap = new Map(questions.map((q) => [q.id, q]));
+
+  let saved = 0;
+  for (const a of answers) {
+    const q = qmap.get(a.questionId);
+    if (!q) continue;
+    const selected = a.selectedOption ?? null;
+    const time = Math.max(0, Math.floor(Number(a.timeSpentSeconds ?? input.timeSpentByQuestion?.[a.questionId]) || 0));
+    await this.prisma.attemptAnswer.upsert({
+      where: { testAttemptId_questionId: { testAttemptId: attempt.id, questionId: a.questionId } },
+      create: {
+        testAttemptId: attempt.id,
+        questionId: a.questionId,
+        selectedOption: selected,
+        isCorrect: selected != null && selected === q.correctAnswer,
+        timeSpentSeconds: time,
+      },
+      update: {
+        selectedOption: selected,
+        isCorrect: selected != null && selected === q.correctAnswer,
+        ...(time > 0 ? { timeSpentSeconds: time } : {}),
+      },
+    });
+    saved++;
   }
+  return { saved };
+}
 
   async listAvailable() {
     const cached = cacheGet<any>('tests:list');
@@ -310,6 +408,7 @@ async attemptRemaining(userId: string, attemptId: string) {
                 shift: true,
                 marks: true,
                 negativeMarks: true,
+                difficulty: true,
               },
             },
           },
@@ -372,11 +471,13 @@ async attemptRemaining(userId: string, attemptId: string) {
         shift: q.shift,
         marks: q.marks,
         negativeMarks: q.negativeMarks,
+        difficulty: q.difficulty ?? null,
       };
     });
 
     return {
       ...attempt,
+      testTemplateId: attempt.testTemplateId,
       rank,
       percentile,
       topper: {

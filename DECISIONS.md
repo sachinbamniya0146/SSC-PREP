@@ -284,3 +284,28 @@ Import PDF tab (subject/exam/year + file + batch list polling).
 accumulate images → postgres PANIC "No space left on device" (unhealthy). Fix:
 `docker image prune -af` (13GB reclaimed), `docker compose start postgres`,
 `docker compose start backend frontend`.
+
+## 13. 2026-08-12 — Test system upgrades (v3 §6.4 / v4 §31 / v5 §40 / v6 §6)
+
+- **ExamPattern model + seeds** (5 real blueprints: CGL/CHSL/CPO/MTS/GD with section
+  subjectSlugs, per-section Qs/marks/duration). Daily Test now composes
+  section-proportionally (subject pools) + scales duration from the pattern
+  (CGL 40Q → 24 min). Seed: `docker cp scripts/seed-patterns.mjs ssc-backend:/app/
+  && docker exec ssc-backend node seed-patterns.mjs` (image has no scripts/ dir).
+- **Autosave (v4 §31)**: `PUT /tests/attempts/:attemptId/answers` upserts
+  AttemptAnswer (selectedOption + isCorrect + timeSpentSeconds). submitAttempt
+  MERGES persisted autosaves + live payload (expired → payload dropped, saved
+  answers scored — auto-submit is lossless now). `createMany skipDuplicates` at
+  submit (autosaved rows exist). remaining returns persisted answers.
+- **startAttempt resume-first**: unexpired IN_PROGRESS attempt for the same
+  template is returned (resumed:true + answers) — refresh/relogin lossless,
+  restart-cheat blocked. FE hydrates answers/status on resume.
+- **Test UI**: keyboard shortcuts (Alt+1-4 option, Space next, Shift+Space prev,
+  P palette, Esc close) + debounced (2.5s) autosave on answers change.
+- **TestAttemptStats + GET /tests/stats/:templateId**: lazy aggregation with 5min
+  TTL cache → attempts, avgScore, avgAccuracy, P90 cutoff (real, data-driven),
+  top-5 toppers (fullName/score/accuracy/duration). Results page: "Real Stats"
+  card (cutoff box + toppers table, your-row highlighted), fast⚡/slow-wrong🐢/
+  guess🎲 chips (real per-question time), difficulty chips.
+- Verified live: resume same-attempt+answers, autosave persist, submit merge
+  (score -0.5 for 2 wrong+1 skip), stats after submit, detail difficulty/time.

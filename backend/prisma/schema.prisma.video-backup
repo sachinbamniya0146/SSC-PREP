@@ -51,13 +51,6 @@ enum TranslationStatus {
   AUTO_UNVERIFIED
 }
 
-enum VideoSource {
-  YOUTUBE
-  VIMEO
-  S3_R2
-  CUSTOM
-}
-
 enum ImportStatus {
   QUEUED
   PROCESSING
@@ -113,7 +106,6 @@ model User {
   lastPracticeDate DateTime?
   xp               Int             @default(0)
   coins            Int             @default(0)
-  hintQuota        Int             @default(3)
 
   // Referral
   referralCode     String?         @unique
@@ -135,40 +127,11 @@ model User {
   dailyQuizAttempts DailyQuizAttempt[]
   weakTopicReports  WeakTopicReport[]
   mockAccesses      MockAccess[]
-  chapterPurchases  ChapterPurchase[]
   referralsMade     Referral[]      @relation("Referrer")
   referralsReceived Referral[]      @relation("Referee")
   studyPlans        StudyPlan[]
-  telegram          TelegramUser?
-  reviewCards       ReviewCard[]
-  errorReports      QuestionErrorReport[]
-  searchMisses      SearchMiss[]
 
   @@map("users")
-}
-
-// ================= SPACED REPETITION =================
-// SM-2 inspired review queue: wrong/weak answers schedule a card,
-// correct answers space it out (1d → 3d → 7d → 14d → 30d).
-model ReviewCard {
-  id            String   @id @default(uuid())
-  userId        String
-  questionId    String
-  easeFactor    Float    @default(2.5)   // SM-2 ease factor
-  repetitions   Int      @default(0)     // consecutive correct reps
-  intervalDays  Int      @default(1)
-  dueAt         DateTime @default(now()) // when next review is due
-  lapses        Int      @default(0)     // times card was forgotten
-  suspended     Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  question       Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, questionId])
-  @@index([userId, dueAt, suspended])
-  @@map("review_cards")
 }
 
 model DeviceSession {
@@ -214,7 +177,6 @@ model Exam {
   questions Question[]
   sourcePdfs SourcePdf[]
   studyPlans       StudyPlan[]
-  examPatterns ExamPattern[]
 
   @@map("exams")
 }
@@ -239,7 +201,6 @@ model Chapter {
   topics    Topic[]
   questions Question[]
   weakTopicReports WeakTopicReport[]
-  purchases ChapterPurchase[]
 
   subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
 
@@ -362,9 +323,6 @@ model Question {
   translationStatus  TranslationStatus @default(HUMAN_VERIFIED)
   answerVerificationStatus String @default("UNVERIFIED_SINGLE_SOURCE") // VERIFIED_OFFICIAL, VERIFIED_MULTI_SOURCE, VERIFIED_COMPUTED, UNVERIFIED_SINGLE_SOURCE, DISPUTED
   lastVerifiedAt DateTime?
-  verificationEvidence String? // solver derivation / multi-source notes backing the status
-  aiConfidenceScore Float? // v1 §7.3 — extraction-model confidence (0-1); below threshold → review queue
-  reviewStatus String @default("APPROVED") // v1 §7.4 — AI_DRAFT → IN_REVIEW → APPROVED / REJECTED (gate before PUBLISHED)
   isApproved         Boolean           @default(false)
   
   difficulty         Difficulty        @default(MEDIUM)
@@ -373,21 +331,6 @@ model Question {
   
   searchHash         String?
   isActive           Boolean           @default(true)
-
-  // v5 §37.4 — Report Error loop: auto soft-suspend after threshold
-  errorReportCount   Int               @default(0)
-  autoSuspended      Boolean           @default(false)
-  suspendedAt        DateTime?
-
-  // Video Solution Fields
-  videoUrl           String?
-  videoSource        VideoSource?
-  videoTitle         String?
-  videoDescription   String?
-  videoDurationSeconds Int?
-  videoLanguage      String?   // e.g. \"Hindi\", \"English\", \"Hinglish\"
-  videoUploadedAt    DateTime?
-  videoUploadedBy    String?   // userId of admin who added
 
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
@@ -404,14 +347,10 @@ model Question {
   answers            AttemptAnswer[]
   bookmarks          Bookmark[]
   notes              UserNote[]
-  reviewCards        ReviewCard[]
-  errorReports       QuestionErrorReport[]
 
   @@index([subjectId, examId, year, shift])
   @@index([searchHash])
   @@index([isApproved, isActive])
-  @@index([errorReportCount])
-  @@index([examId, subjectId, isApproved, isActive]) // CGL/compose hot path
   @@map("questions")
 }
 
@@ -447,36 +386,8 @@ model TestTemplate {
   updatedAt        DateTime      @updatedAt
 
   attempts         TestAttempt[]
-  pdfExports       TestPdfExport[]
-  attemptStats     TestAttemptStats?
 
   @@map("test_templates")
-}
-
-// v6 §7 — Test paper + Answer-key PDF export with mandatory 4-pass QA gate.
-// PDFs stored as bytea (no volume config needed); binary data never exposed via API JSON.
-model TestPdfExport {
-  id               String     @id @default(uuid())
-  testTemplateId   String     @unique
-  testTemplate     TestTemplate @relation(fields: [testTemplateId], references: [id], onDelete: Cascade)
-
-  paperPdf         Bytes?     // test paper (bilingual)
-  answerKeyPdf     Bytes?     // answer key + solutions (bilingual)
-  questionSnapshot Json?      // canonical QID list at generation time (pass-4 regression diff base)
-
-  // 4-pass QA gate (v6 §7 — sab passes hone par hi publish):
-  pass1Field       Boolean    @default(false) // automated: PDF marked-correct === DB correct_index
-  pass2Structural  Boolean    @default(false) // automated: PDF option list === live option list 1:1
-  pass3SpotCheck   Boolean    @default(false) // admin sampled review
-  pass4Regression  Boolean    @default(false) // pre-publish re-compare vs canonical source
-  isPublished      Boolean    @default(false)
-  publishedAt      DateTime?
-  lastGeneratedAt  DateTime?
-
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
-
-  @@map("test_pdf_exports")
 }
 
 model TestAttempt {
@@ -495,22 +406,12 @@ model TestAttempt {
   
   startedAt        DateTime      @default(now())
   submittedAt      DateTime?
-  // Server-authoritative deadline: expiresAt = startedAt + template duration.
-  // Clients may display a countdown from this, but the server enforces it:
-  // a submit after expiresAt is treated as auto-submit at expiry (no extra time).
-  expiresAt        DateTime?
 
   user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   testTemplate     TestTemplate  @relation(fields: [testTemplateId], references: [id])
   answers          AttemptAnswer[]
 
-  // v3 §6.4 Daily Test / v6 §2a — stable per-attempt question composition
-  // (question ids in order; server composes from this, so a mid-test refresh
-  // returns the identical paper instead of re-sampling the pool).
-  questionSnapshot Json?
-
   @@index([userId, status])
-  @@index([testTemplateId, status]) // rank/percentile + leaderboard hot path
   @@map("test_attempts")
 }
 
@@ -544,38 +445,6 @@ model Plan {
   @@map("plans")
 }
 
-// P2 — discount coupons (percentage or flat), optional single-use per user
-model Coupon {
-  id            String    @id @default(uuid())
-  code          String    @unique
-  description   String?
-  discountPct   Float?    // percentage discount (0–100)
-  discountInr   Float?    // flat discount in ₹ (mutually exclusive with discountPct)
-  maxUses       Int       @default(1)
-  usesCount     Int       @default(0)
-  expiresAt     DateTime?
-  isActive      Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-
-  @@map("coupons")
-}
-
-// P2 — ₹1 chapter PDF purchase (unlocks a chapter's PDF export)
-model ChapterPurchase {
-  id         String   @id @default(uuid())
-  userId     String
-  chapterId  String
-  amountInr  Float    @default(1.0)
-  status     PaymentStatus @default(SUCCESS)
-  createdAt  DateTime @default(now())
-
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, chapterId])
-  @@map("chapter_purchases")
-}
-
 model Subscription {
   id        String             @id @default(uuid())
   userId    String
@@ -601,7 +470,6 @@ model Payment {
   amountInr        Float
   status           PaymentStatus @default(PENDING)
   invoiceUrl       String?
-  metadataJson     Json?         // P2: { kind: 'PLAN'|'CHAPTER', planId?, chapterId?, couponCode?, discount }
   createdAt        DateTime      @default(now())
 
   user         User          @relation(fields: [userId], references: [id])
@@ -812,144 +680,4 @@ model StudyPlan {
   @@index([userId])
   @@index([userId, examId])
   @@map("study_plans")
-}
-
-// ================= TELEGRAM =================
-model TelegramUser {
-  id           String   @id @default(uuid())
-  userId       String   @unique
-  chatId       BigInt   @unique
-  username     String?
-  firstName    String?
-  lastName     String?
-  languageCode String?  @default("en")
-  isActive     Boolean  @default(true)
-  registeredAt DateTime @default(now())
-  lastActiveAt DateTime?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  subscriptions TelegramSubscription[]
-
-  @@map("telegram_users")
-}
-
-model TelegramSubscription {
-  id        String   @id @default(uuid())
-  userId    String
-  chatId    BigInt
-  type      String   // "daily_practice", "mock_results", "leaderboard", "announcements"
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-
-  user TelegramUser @relation(fields: [chatId], references: [chatId], onDelete: Cascade)
-
-  @@unique([chatId, type])
-  @@map("telegram_subscriptions")
-}
-
-model TelegramBot {
-  id            String   @id @default(uuid())
-  botToken      String   @unique
-  botUsername   String   @unique
-  webhookUrl    String?
-  isActive      Boolean  @default(true)
-  allowedUpdates String[]
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@map("telegram_bots")
-}
-
-// v5 §37.4 — Report Error: students flag suspected wrong answers; auto soft-suspend past threshold
-model QuestionErrorReport {
-  id          String   @id @default(uuid())
-  questionId  String
-  userId      String
-  description String
-  category    ErrorReportCategory @default(OTHER) // v5 §40 — error-type classification
-  status      ErrorReportStatus @default(OPEN) // OPEN, REVIEWING, CONFIRMED, REJECTED
-  resolvedAt  DateTime?
-  resolvedBy  String?
-  createdAt   DateTime @default(now())
-
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
-
-  @@index([questionId, status])
-  @@index([status])
-  @@index([category, status])
-  @@map("question_error_reports")
-}
-
-enum ErrorReportCategory {
-  WRONG_ANSWER
-  WRONG_OPTION
-  WRONG_EXPLANATION
-  TRANSLATION
-  TYPO
-  MISSING_OPTION
-  DUPLICATE
-  OTHER
-}
-
-enum ErrorReportStatus {
-  OPEN
-  REVIEWING
-  CONFIRMED
-  REJECTED
-}
-
-// v4 §18 / v6 §8 — SearchMiss: user searched and found nothing → demand log
-// feeding the PYQ auto-fetch coverage backlog.
-model SearchMiss {
-  id        String   @id @default(uuid())
-  query     String
-  exam      String?
-  userId    String?
-  createdAt DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([query])
-  @@index([createdAt])
-  @@map("search_misses")
-}
-
-// v3 §6.4 — ExamPattern: real-exam blueprint (sections, marks, per-section
-// timing, negative marking). Drives Daily Test composition/duration and is the
-// source of truth for mock realism (replaces hardcoded CGL shapes).
-model ExamPattern {
-  id              String   @id @default(uuid())
-  examId          String
-  name            String // e.g. "SSC CGL Tier 1" (unique per exam)
-  totalQuestions  Int
-  totalMarks      Int
-  durationMinutes Int
-  negativeMarks   Float    @default(0.25)
-  sections        Json // [{name, subjectSlug?, questions, marks, durationMinutes}]
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-
-  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
-
-  @@unique([examId, name])
-  @@map("exam_patterns")
-}
-
-// v6 §6 — scheduled/on-demand per-template stats: attempts, averages, P90
-// cutoff and top-5 toppers. Rank/percentile in results read these instead of
-// re-scanning all attempts every view.
-model TestAttemptStats {
-  testTemplateId String   @id
-  attempts       Int      @default(0)
-  avgScore       Float    @default(0)
-  avgAccuracy    Float    @default(0)
-  cutoffScore    Float    @default(0) // score at 90th percentile (real cutoff proxy)
-  toppers        Json // [{ userId, fullName, score, accuracyPercent, durationSec, submittedAt }]
-  updatedAt      DateTime @updatedAt
-
-  testTemplate TestTemplate @relation(fields: [testTemplateId], references: [id], onDelete: Cascade)
-
-  @@map("test_attempt_stats")
 }

@@ -115,16 +115,55 @@ export class DailyTestService {
     if (!plan) throw new BadRequestException('No study plan found.');
 
     const N = Math.min(Math.max(plan.dailyTarget || 15, 5), 40);
-    const ids = await this.composeIds(plan.examId, plan.subjectId ?? undefined, N);
-    if (ids.length < 5) {
+
+    // v3 §6.4 — ExamPattern-driven composition: real-exam section proportions
+    // (subject-wise) + scaled duration, instead of whole-pool random.
+    const pattern = await this.prisma.examPattern.findFirst({
+      where: { examId: plan.examId, isActive: true },
+    });
+    let picked: string[] = [];
+    let sectionLabels: string[] = [];
+    if (pattern) {
+      const sections = (pattern.sections as any[]) || [];
+      const subjectBySlug = new Map(
+        (await this.prisma.subject.findMany({ select: { id: true, slug: true } })).map((s) => [s.slug, s.id]),
+      );
+      for (const sec of sections) {
+        const target = Math.max(1, Math.round(N * ((sec.questions || 0) / (pattern.totalQuestions || 100))));
+        const sid = sec.subjectSlug ? subjectBySlug.get(sec.subjectSlug) : undefined;
+        if (sid) {
+          const ids = await this.composeIds(plan.examId, sid, target);
+          if (ids.length >= Math.max(1, Math.floor(target / 2))) {
+            picked.push(...ids.slice(0, target));
+            sectionLabels.push(sec.name);
+            continue;
+          }
+        }
+        picked.push(...(await this.composeIds(plan.examId, undefined, target)).slice(0, target));
+      }
+      if (picked.length < 5) {
+        // section pools too thin — fall back to whole-exam composition
+        picked = (await this.composeIds(plan.examId, undefined, N)).slice(0, N);
+        sectionLabels = [];
+      }
+      // dedupe keeping order, then trim to N
+      picked = [...new Set(picked)].slice(0, N);
+    } else {
+      picked = (await this.composeIds(plan.examId, plan.subjectId ?? undefined, N)).slice(0, N);
+    }
+    if (picked.length < 5) {
       throw new BadRequestException(
-        `Only ${ids.length} bilingual 4-option questions available for this exam yet — the pool is still growing. Try Daily Practice instead.`,
+        `Only ${picked.length} bilingual 4-option questions available for this exam yet — the pool is still growing. Try Daily Practice instead.`,
       );
     }
-    const picked = ids.slice(0, N);
 
-    // proportional short paper: ~0.6 min/question (CGL 60min/100Q), min 5 min
-    const durationMinutes = Math.min(Math.max(Math.round(N * 0.6), 5), 60);
+    // proportional short paper: real-exam scale when a pattern exists
+    let durationMinutes: number;
+    if (pattern) {
+      durationMinutes = Math.min(Math.max(Math.round((pattern.durationMinutes * N) / (pattern.totalQuestions || 100)), 5), 120);
+    } else {
+      durationMinutes = Math.min(Math.max(Math.round(N * 0.6), 5), 60);
+    }
     const tpl = await this.templateFor(plan.exam.name, N, durationMinutes);
 
     const now = new Date();
