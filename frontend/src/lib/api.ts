@@ -1,5 +1,16 @@
+// API base resolution (2026-08-12 fix — phone/LAN access):
+// 1. explicit env (NEXT_PUBLIC_API_BASE_URL, baked at build) wins;
+// 2. otherwise, when served from a non-localhost host (phone via LAN IP),
+//    derive the API from the SAME host on :4000 — works for any LAN IP
+//    without a rebuild (compose had the wrong env name NEXT_PUBLIC_API_URL);
+// 3. localhost fallback for local dev.
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000/api/v1";
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  (typeof window !== "undefined" &&
+  window.location.hostname &&
+  !["localhost", "127.0.0.1"].includes(window.location.hostname)
+    ? `${window.location.protocol}//${window.location.hostname}:4000/api/v1`
+    : "http://localhost:4000/api/v1");
 
 /**
  * API helper with automatic token refresh on 401.

@@ -25,7 +25,9 @@ async function bootstrap() {
   );
   app.use(
     cors({
-      origin: process.env.FRONTEND_URL?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
+      // 2026-08-12: reflect the request origin (phone/LAN access). Tighten to
+      // a fixed allow-list at launch; dev needs any-LAN-IP access.
+      origin: true,
       credentials: true,
     }),
   );
