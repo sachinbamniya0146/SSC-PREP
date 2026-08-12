@@ -135,6 +135,16 @@ export class PdfIngestionController {
     return this.service.rollbackBatch(id, req.user.id);
   }
 
+  @Get('translation-queue')
+  translationQueue(@Query('examId') examId?: string, @Query('subjectId') subjectId?: string, @Query('chapterId') chapterId?: string, @Query('take') take?: string) {
+    return this.service.translationQueue({ examId, subjectId, chapterId, take: take ? Number(take) : undefined });
+  }
+
+  @Get('translation-stats')
+  translationStats() {
+    return this.service.translationStats();
+  }
+
   @Get('stats')
   @ApiOperation({ summary: 'Get ingestion pipeline stats' })
   async getStats() {

@@ -10,6 +10,19 @@ export default function DashboardPage() {
     email: string;
   } | null>(null);
   const [gami, setGami] = React.useState<{ currentStreak: number; longestStreak: number; xp: number; coins: number; hintQuota: number; rank: number } | null>(null);
+  // v7 §2 — pattern label comes from ExamPattern (meta), never hardcoded
+  const [cglPattern, setCglPattern] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/bank/meta`);
+        const d = await r.json();
+        const cgl = (Array.isArray(d?.exams) ? d.exams : []).find((e: any) => e.slug === "cgl");
+        if (cgl?.pattern?.name) setCglPattern(cgl.pattern.name.replace(/^SSC\s*/, "").replace(/\((\d{4})\)/, "($1 Pattern)"));
+      } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     const raw = localStorage.getItem("ssc_user");
@@ -112,7 +125,7 @@ export default function DashboardPage() {
               href="/cgl-test"
               className="mt-4 mr-3 inline-block rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
             >
-              🏆 CGL Tier 1 Exam (2025 Pattern)
+              🏆 CGL Tier 1 {cglPattern ? `(${cglPattern})` : "Exam (2025 Pattern)"}
             </a>
             <a
               href="/sectional"

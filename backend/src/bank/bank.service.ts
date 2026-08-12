@@ -33,7 +33,7 @@ export class BankService {
   async meta() {
     const cached = cacheGet<any>('bank:meta');
     if (cached) return cached;
-    const [exams, subjects, total, totalHi] = await Promise.all([
+    const [exams, subjects, total, totalHi, patterns] = await Promise.all([
       this.prisma.$queryRaw`
         SELECT e.id, e.name, e.slug, COUNT(q.id)::int AS count
         FROM exams e LEFT JOIN questions q ON q."examId" = e.id AND q."isApproved" = true
@@ -43,11 +43,22 @@ export class BankService {
         FROM subjects s LEFT JOIN questions q ON q."subjectId" = s.id AND q."isApproved" = true
         GROUP BY s.id ORDER BY s.name;`,
       this.prisma.question.count({ where: { isApproved: true } }),
+      // v7 §5 — Hindi = non-empty; the DB stores '' not NULL for missing Hindi
       this.prisma.question.count({
-        where: { isApproved: true, questionTextHindi: { not: null } },
+        where: { isApproved: true, questionTextHindi: { not: '' } },
+      }),
+      this.prisma.examPattern.findMany({
+        where: { isActive: true },
+        select: { examId: true, name: true, totalQuestions: true, totalMarks: true, durationMinutes: true },
       }),
     ]);
-    const out = { exams, subjects, totalQuestions: total, approxHindiCovered: totalHi };
+    const patternByExam = new Map(patterns.map((p: any) => [p.examId, p]));
+    // v7 §2 — exam rows carry their live ExamPattern (no hardcoded year labels)
+    const examRows = (exams as any[]).map((e) => {
+      const p = patternByExam.get(e.id);
+      return p ? { ...e, pattern: { name: p.name, totalQuestions: p.totalQuestions, totalMarks: p.totalMarks, durationMinutes: p.durationMinutes } } : e;
+    });
+    const out = { exams: examRows, subjects, totalQuestions: total, approxHindiCovered: totalHi };
     cacheSet('bank:meta', out, 300_000);
     return out;
   }

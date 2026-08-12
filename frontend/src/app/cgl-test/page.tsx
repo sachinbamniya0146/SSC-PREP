@@ -1,5 +1,5 @@
-import { fetchAuth } from "@/lib/api";
 "use client";
+import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
 import {

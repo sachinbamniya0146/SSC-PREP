@@ -26,6 +26,9 @@ export class AnalyticsService {
     >();
 
     for (const a of answers) {
+      // v7 §4 — accuracy = wrong-answer rate on ATTEMPTED questions only;
+      // skipped (no selection) questions are not evidence of weakness.
+      if (!a.selectedOption) continue;
       const ch = a.question.chapter;
       if (!ch) continue; // questions without a chapter are skipped
       const key = ch.id;
@@ -113,7 +116,7 @@ export class AnalyticsService {
 
     const chapterAnswers = attempts
       .flatMap((t) => t.answers)
-      .filter((a) => a.question.chapterId === chapterId);
+      .filter((a) => a.question.chapterId === chapterId && a.selectedOption != null); // v7 §4 — attempted only
 
     const total = chapterAnswers.length;
     const correct = chapterAnswers.filter((a) => a.isCorrect).length;
@@ -158,7 +161,7 @@ export class AnalyticsService {
   async getWeakChapterDrill(userId: string, chapterId: string) {
     void userId;
     const questions = await this.prisma.question.findMany({
-      where: { chapterId, isActive: true },
+      where: { chapterId, isApproved: true, isActive: true }, // v7 §4 — approved only (never AI_DRAFT)
       take: 35,
       orderBy: { id: 'asc' },
     });
@@ -173,6 +176,8 @@ export class AnalyticsService {
         id: q.id,
         q: q.questionText,
         opts: opts.map((o) => `${o.key}. ${o.text}`),
+        answer: q.correctAnswer ?? null,
+        explanation: q.explanation ?? q.explanationHindi ?? null,
       };
     };
     return {

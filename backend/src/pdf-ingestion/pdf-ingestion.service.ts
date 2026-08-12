@@ -454,6 +454,58 @@ export class PdfIngestionService {
     return { rolledBack: batch.questions.length };
   }
 
+  async translationStats() {
+    // v7 §5 — audit of missing-Hindi approved rows ('' not NULL — the DB
+    // convention), per exam/subject, so the translation grind is visible.
+    const byExam: any = await this.prisma.$queryRaw`
+      SELECT e.name AS exam, COUNT(q.id)::int AS needing_hindi,
+             COUNT(q.id) FILTER (WHERE q."questionTextHindi" <> '')::int AS covered
+      FROM exams e
+      LEFT JOIN questions q ON q."examId" = e.id AND q."isApproved" = true
+      GROUP BY e.id, e.name ORDER BY e.name;`;
+    const bySubject: any = await this.prisma.$queryRaw`
+      SELECT s.name AS subject, COUNT(q.id)::int AS needing_hindi
+      FROM subjects s
+      LEFT JOIN questions q ON q."subjectId" = s.id AND q."isApproved" = true
+           AND (q."questionTextHindi" IS NULL OR q."questionTextHindi" = '')
+      WHERE q.id IS NOT NULL
+      GROUP BY s.id, s.name ORDER BY needing_hindi DESC LIMIT 12;`;
+    return { byExam, bySubject };
+  }
+
+  async translationQueue(f: { examId?: string; subjectId?: string; chapterId?: string; take?: number }) {
+    const take = Math.min(f.take ?? 25, 50);
+    const where: any = { isApproved: true, OR: [{ questionTextHindi: null }, { questionTextHindi: '' }] };
+    if (f.examId) where.examId = f.examId;
+    if (f.chapterId) where.chapterId = f.chapterId;
+    else if (f.subjectId) where.subjectId = f.subjectId;
+    const [total, rows] = await Promise.all([
+      this.prisma.question.count({ where }),
+      this.prisma.question.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take,
+        select: {
+          id: true,
+          questionText: true,
+          chapter: { select: { name: true } },
+          exam: { select: { name: true } },
+          createdAt: true,
+        },
+      }),
+    ]);
+    return {
+      total,
+      data: rows.map((r: any) => ({
+        id: r.id,
+        questionText: r.questionText,
+        chapter: r.chapter?.name ?? null,
+        exam: r.exam?.name ?? null,
+        createdAt: r.createdAt,
+      })),
+    };
+  }
+
   async getPipelineStats() {
     const [batches, chunks, questions, sources] = await Promise.all([
       this.prisma.importBatch.groupBy({ by: ['status'], _count: true }),
