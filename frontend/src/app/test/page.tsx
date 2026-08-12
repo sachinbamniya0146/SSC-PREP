@@ -147,6 +147,11 @@ export default function TestPage() {
   const [result, setResult] = React.useState<{ [qid: string]: Attempt }>({});
   const [finalScore, setFinalScore] = React.useState(0);
   const [reviewOpen, setReviewOpen] = React.useState(false);
+  // v7 §1.1 — results-screen state MUST live at component top level
+  // (hooks inside the `phase === "results"` branch changed hook count on
+  // submit → React #310 "rendered more hooks" → the submit crash).
+  const [reviewTab, setReviewTab] = React.useState<"all" | "wrong" | "skipped" | "correct">("all");
+  const [navQ, setNavQ] = React.useState<number | null>(null); // navigator selection
 
   const [paused, setPaused] = React.useState(false);
 
@@ -720,7 +725,6 @@ export default function TestPage() {
     const wwPct = total ? (wrong / total) * 100 : 0;
     const swPct = total ? (skipped / total) * 100 : 0;
     // per-question review tabs (v6 §6: All / Wrong / Skipped / Correct)
-    const [reviewTab, setReviewTab] = React.useState<"all" | "wrong" | "skipped" | "correct">("all");
     const reviewQs = questions
       .map((q, i) => ({ q, i }))
       .filter(({ q }) =>
@@ -729,8 +733,7 @@ export default function TestPage() {
           : reviewTab === "wrong" ? (result[q.id] && !result[q.id].correct)
           : !result[q.id]
       );
-    const [navQ, setNavQ] = React.useState<number | null>(null); // navigator selection
-    return (
+      return (
       <div className="min-h-screen bg-background px-4 py-10 text-foreground">
         <div className="mx-auto max-w-5xl">
           <div className="flex items-center justify-between gap-3">
