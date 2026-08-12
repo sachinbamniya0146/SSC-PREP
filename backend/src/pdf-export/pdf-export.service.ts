@@ -199,5 +199,86 @@ export class PdfExportService {
       lastGeneratedAt: row.lastGeneratedAt,
     };
   }
+
+  // ---- v3 §7 Chapter PDF (₹1 one-time purchase) ----
+
+  /**
+   * Generate a printable chapter PDF for a user who bought it (ChapterPurchase
+   * SUCCESS) or holds an ACTIVE subscription. Same canonical bilingual question
+   * pool as the live bank; automated answer + option QA runs BEFORE delivery
+   * (zero-error rule — a mismatch never ships).
+   */
+  async generateChapterPdf(userId: string, chapterId: string): Promise<{ buffer: Buffer; filename: string }> {
+    const chapter = await this.prisma.chapter.findUnique({ where: { id: chapterId } });
+    if (!chapter) throw new NotFoundException('Chapter not found');
+
+    const [purchase, sub] = await Promise.all([
+      this.prisma.chapterPurchase.findUnique({
+        where: { userId_chapterId: { userId, chapterId } },
+        select: { status: true },
+      }),
+      this.prisma.subscription.findFirst({
+        where: { userId, status: 'ACTIVE', endsAt: { gt: new Date() } },
+        select: { id: true },
+      }),
+    ]);
+    if (!(purchase?.status === 'SUCCESS' || sub)) {
+      throw new BadRequestException('Buy this chapter (₹1, one-time) or get Premium to download the PDF.');
+    }
+
+    const rows: any[] = await this.prisma.question.findMany({
+      where: { isApproved: true, chapterId, questionTextHindi: { not: '' } },
+      include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
+      orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
+      take: 150,
+    });
+    const valid = rows.filter(
+      (r) => Array.isArray(r.optionsJson) && r.optionsJson.length === 4 && r.optionsJson.every((o: any) => o?.text),
+    );
+    if (valid.length === 0) {
+      throw new BadRequestException('No bilingual 4-option questions available for this chapter yet.');
+    }
+
+    const questions: PdfQuestion[] = valid.map((r: any) => ({
+      id: r.id,
+      q: r.questionText,
+      qh: r.questionTextHindi,
+      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+      correctAnswer: r.correctAnswer,
+      explanation: r.explanation ?? '',
+      explanationHindi: r.explanationHindi ?? '',
+      chapter: r.chapter?.name ?? '',
+      examName: r.exam?.name ?? '',
+      year: r.year ?? null,
+      shift: r.shift ?? null,
+      marks: r.marks ?? 1,
+      negativeMarks: r.negativeMarks ?? 0.25,
+    }));
+
+    // Zero-error QA before delivery: answer + option-set must match the live DB 1:1.
+    for (const q of questions) {
+      const db = await this.prisma.question.findUnique({ where: { id: q.id } });
+      if (!db) throw new BadRequestException('Question vanished during generation — aborting.');
+      if (db.correctAnswer !== q.correctAnswer) {
+        throw new BadRequestException(`QA fail (answer mismatch on ${q.id}) — not shipping.`);
+      }
+      const dbKeys = ((db.optionsJson as any[]) || []).map((o: any) => o.key).join(',');
+      const pdfKeys = q.options.map((o) => o.key).join(',');
+      if (dbKeys !== pdfKeys) {
+        throw new BadRequestException(`QA fail (option drift on ${q.id}) — not shipping.`);
+      }
+    }
+
+    const meta: PdfTestMeta = {
+      title: `${chapter.name} — SSC Prep Hub`,
+      examLabel: questions[0].examName || 'SSC',
+      durationMinutes: Math.max(1, Math.round(questions.length * 0.6)),
+      totalMarks: questions.reduce((s, q) => s + (q.marks || 1), 0),
+    };
+    const html = buildPaperHtml(meta, questions, true);
+    const buffer = await this.renderer.htmlToPdf(html);
+    const safe = chapter.name.replace(/[^a-z0-9]+/gi, '_');
+    return { buffer, filename: `SSC_${safe}_${questions.length}Q.pdf` };
+  }
 }
 

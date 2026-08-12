@@ -238,3 +238,49 @@ reported). Verified live: English-only approve → 400.
 
 **11.7 Deferred (user order)**: PDF AI extraction pipeline (#1), Razorpay
 webhook + chapter ₹1 PDF (#5/#6) — next batches.
+
+## 12. 2026-08-12 — Auth/email ready + P0 batch 3 (webhook, chapter PDF, real extraction)
+
+**12.1 Auth flows — all live-verified:** email OTP login (request→verify→token),
+forgot password (forgot→OTP→reset→login with new password). Login page has
+Password/OTP/Forgot tabs. Google Sign-In button added (GIS script) — renders
+only when `NEXT_PUBLIC_GOOGLE_CLIENT_ID` is set (compose) + backend GOOGLE_CLIENT_ID/
+GOOGLE_CLIENT_SECRET in backend/.env. MailService (nodemailer) is SMTP-ready:
+SMTP_HOST/PORT/USER/PASS/FROM; dev fallback logs `[DEV-MAIL] OTP for <email> = N`
+to container logs (verified end-to-end). Admin login: token expires in 15m —
+re-login in verify scripts.
+
+**12.2 Razorpay webhook (v3 §1)**: `POST /payments/webhook` (@Public) — HMAC-SHA256
+over RAW body with RAZORPAY_WEBHOOK_SECRET (timing-safe), payment.captured →
+fulfill (shared with verifyPayment), idempotent (SUCCESS → ack duplicate),
+payment.failed → FAILED, unknown order → ack-and-ignore. main.ts now keeps
+req.rawBody (bodyParser verify).
+
+**12.3 Chapter PDF (v3 §7)**: `POST /pdf/chapter/:chapterId/generate` (auth) —
+entitlement = ChapterPurchase SUCCESS or ACTIVE subscription; bilingual
+4-option chapter questions → buildPaperHtml → puppeteer PDF; Pass-1/2 QA
+(answer + option-set must match DB 1:1) before delivery. FE: "📥 Chapter PDF (₹1)"
+button on question-bank chapter header.
+
+**12.4 PDF extraction pipeline (v1 §7.1-7.3) — REAL now**: `upload-file`
+(multipart) stores bytes (S3/R2 when creds set — note: compose does NOT pass
+S3_* vars and .env values are placeholders; local fallback `files/pdf/` under
+/backend cwd works free). Worker: pdfjs-dist LEGACY build (pdf-parse v2 crashes
+in container — needs @napi-rs/canvas native; "DOMMatrix is not defined" —
+polyfilled minimal 2D DOMMatrix in pdf-ingestion/pdf-text.ts BEFORE import) →
+per-line text (hasEOL) → block split (`Q.1`/`1.` + newline) → line option parse
+(`(A) 20 (B) 26` or `A. 20`; dot-form avoids "Ans:" false positives) → answer
+key in text = deterministic build conf 0.95, else OpenAI-compatible LLM
+structuring (opencode-zen) with confidence → searchHash dedupe → insert
+AI_DRAFT + aiConfidenceScore + sourcePdfId/importBatchId provenance (isApproved
+false) → enqueue question-review. E2E verified: 10-question digital PDF →
+10 extracted (0 LLM), re-upload → dup=10, reviewStatus APPROVED (0.95≥0.9
+auto), publish still blocked (VERIFIED+bilingual gates). Chunk 0 does the work;
+later chunks ack (text is one pass). Scanned PDFs → SUCCESS reason
+no_text_layer_ocr_needed (honest, OCR = documented future step). Admin UI:
+Import PDF tab (subject/exam/year + file + batch list polling).
+
+**12.5 colima disk-full recovery**: repeated `docker compose up -d --build`
+accumulate images → postgres PANIC "No space left on device" (unhealthy). Fix:
+`docker image prune -af` (13GB reclaimed), `docker compose start postgres`,
+`docker compose start backend frontend`.

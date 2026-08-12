@@ -1,25 +1,66 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { v4 as uuidv4 } from 'uuid';
+import * as fs from 'fs';
+import * as path from 'path';
 import { S3Service } from '../s3/s3.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { Readable } from 'stream';
+import { extractPdfText } from './pdf-text';
 
 @Injectable()
 export class PdfIngestionService {
   private readonly logger = new Logger(PdfIngestionService.name);
-  
+  private readonly localDir: string;
+
   constructor(
     private prisma: PrismaService,
     private s3: S3Service,
     private audit: AuditLogService,
+    private config: ConfigService,
     @InjectQueue('pdf-extraction') private extractionQueue: Queue,
     @InjectQueue('question-review') private reviewQueue: Queue,
     @InjectQueue('explanation-generation') private explanationQueue: Queue,
     @InjectQueue('meilisearch-index') private indexQueue: Queue,
-  ) {}
+  ) {
+    this.localDir = this.config.get<string>('PDF_STORAGE_DIR') || 'files/pdf';
+  }
+
+  // ---- storage: S3/R2 when configured, local-disk fallback (free, no creds) ----
+
+  s3Configured(): boolean {
+    const key = this.config.get<string>('S3_ACCESS_KEY') || '';
+    const ep = this.config.get<string>('S3_ENDPOINT') || '';
+    return !!(ep && key && !key.includes('Your') && !key.includes('placeholder'));
+  }
+
+  async storePdf(key: string, buf: Buffer) {
+    if (this.s3Configured()) {
+      await this.s3.putObject(key, buf, 'application/pdf');
+      return;
+    }
+    const p = path.join(process.cwd(), this.localDir, key.replace(/^uploads\//, ''));
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, buf);
+  }
+
+  async readPdf(key: string): Promise<Buffer> {
+    if (this.s3Configured()) {
+      const obj = await this.s3.getObject(key);
+      const body = obj.Body as any;
+      if (!body) throw new Error('Empty S3 object');
+      if (typeof body.transformToByteArray === 'function') return Buffer.from(await body.transformToByteArray());
+      const chunks: Buffer[] = [];
+      for await (const c of body) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+      return Buffer.concat(chunks);
+    }
+    const p = path.join(process.cwd(), this.localDir, key.replace(/^uploads\//, ''));
+    if (!fs.existsSync(p)) throw new Error(`PDF not found on disk: ${p}`);
+    return fs.readFileSync(p);
+  }
 
   async createUpload(dto: any, userId: string) {
     const sourcePdf = await this.prisma.sourcePdf.create({
@@ -40,7 +81,8 @@ export class PdfIngestionService {
     });
 
     // Create ImportBatch with chunks (25 pages per chunk)
-    const pageCount = await this.estimatePageCount(dto.s3Key);
+    const buf = await this.readPdf(dto.s3Key);
+    const pageCount = await this.estimatePageCount(buf);
     const chunkSize = 25;
     const totalChunks = Math.ceil(pageCount / chunkSize);
 
@@ -98,9 +140,14 @@ export class PdfIngestionService {
     return { sourcePdf, batch };
   }
 
-  private async estimatePageCount(s3Key: string): Promise<number> {
-    const obj = await this.s3.headObject(s3Key);
-    const sizeKb = (obj.ContentLength || 0) / 1024;
+  private async estimatePageCount(pdfBuf: Buffer): Promise<number> {
+    try {
+      const { numpages } = await extractPdfText(pdfBuf);
+      if (numpages && numpages > 0) return numpages;
+    } catch {
+      /* fall through to size heuristic */
+    }
+    const sizeKb = pdfBuf.length / 1024;
     return Math.max(1, Math.ceil(sizeKb / 50));
   }
 

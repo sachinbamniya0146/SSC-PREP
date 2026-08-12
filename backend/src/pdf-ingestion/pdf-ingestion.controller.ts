@@ -9,10 +9,13 @@ import {
   Param,
   Query,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
   Req,
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -45,9 +48,38 @@ export class PdfIngestionController {
   ) {}
 
   @Post('upload')
-  @ApiOperation({ summary: 'Upload PDF for ingestion (creates SourcePdf + ImportBatch + chunks)' })
-  async uploadPdf(@Body() dto: UploadPdfDto, @Req() req: any) {
-    return this.service.createUpload(dto, req.user.id);
+  @ApiOperation({ summary: 'Register a PDF already stored in S3 (presigned upload path)' })
+  async upload(@Body() dto: UploadPdfDto, @Req() req: any) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.service.createUpload(dto, userId);
+  }
+
+  // v1 §7.1 — direct multipart upload (works with local-disk fallback when S3
+  // is not configured — zero-cost pipeline). Stores bytes, then runs the same
+  // batch/chunk/review flow as the S3 path.
+  @Post('upload-file')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024 } }))
+  @ApiOperation({ summary: 'Upload PDF file directly (multipart) — stores to S3/R2 or local disk' })
+  async uploadFile(@UploadedFile() file: any, @Body() dto: any, @Req() req: any) {
+    if (!file) throw new BadRequestException('Multipart field "file" (PDF) is required');
+    if (!dto.subjectId) throw new BadRequestException('subjectId is required (which subject do these questions belong to?)');
+    const key = `uploads/${Date.now()}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    await this.service.storePdf(key, file.buffer);
+    const userId = req.user?.userId ?? req.user?.id;
+    // multipart fields arrive as strings — coerce numeric/metadata types
+    const meta = {
+      ...dto,
+      year: dto.year ? Number(dto.year) || undefined : undefined,
+      fileSize: Number(dto.fileSize) || file.size,
+    };
+    return this.service.createUpload(
+      {
+        ...meta,
+        filename: file.originalname,
+        s3Key: key,
+      },
+      userId,
+    );
   }
 
   @Get('batches')

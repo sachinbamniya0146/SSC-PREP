@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Headers, Req, UseGuards } from '@nestjs/common';
 import { MonetizationService } from './monetization.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Public } from '../common/decorators/public.decorator';
 
 @Controller('payments')
 export class MonetizationController {
@@ -40,5 +41,12 @@ export class MonetizationController {
     @Body() body: { razorpayOrderId: string; razorpayPaymentId: string; razorpaySignature: string },
   ) {
     return this.service.verifyPayment(user.userId, body);
+  }
+
+  // v3 §1 — Razorpay server webhook (signature-verified, idempotent).
+  @Public()
+  @Post('webhook')
+  webhook(@Req() req: any, @Headers('x-razorpay-signature') signature: string) {
+    return this.service.handleWebhook(req.rawBody, signature);
   }
 }

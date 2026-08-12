@@ -134,6 +134,68 @@ export class MonetizationService {
     const expected = crypto.createHmac('sha256', secret).update(body).digest('hex');
     if (expected !== input.razorpaySignature) throw new BadRequestException('Invalid payment signature');
 
+    await this.fulfill(payment, input.razorpayPaymentId);
+    return { ok: true };
+  }
+
+  /**
+   * v3 §1 — Razorpay webhook (server-confirmed payments). The client success
+   * callback is forgeable; only a signature-verified webhook writes the
+   * ChapterPurchase/Subscription/MockAccess rows. Idempotent: already-SUCCESS
+   * payments are acked without re-fulfilling (Razorpay retries on non-2xx).
+   */
+  async handleWebhook(rawBody: Buffer | string | undefined, signature: string | undefined) {
+    const crypto = await import('crypto');
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
+    if (!secret) throw new BadRequestException('Webhook secret not configured on server');
+
+    const bodyStr = typeof rawBody === 'string' ? rawBody : (rawBody as Buffer | undefined)?.toString('utf8') ?? '';
+    if (!bodyStr) throw new BadRequestException('Empty webhook body');
+
+    const expected = crypto.createHmac('sha256', secret).update(bodyStr).digest('hex');
+    const sigOk = signature && expected.length === signature.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+    if (!sigOk) throw new BadRequestException('Invalid webhook signature');
+
+    let event: any;
+    try {
+      event = JSON.parse(bodyStr);
+    } catch {
+      throw new BadRequestException('Malformed webhook payload');
+    }
+    const eventName = event?.event || '';
+    const entity = event?.payload?.payment?.entity ?? null;
+
+    if (eventName === 'payment.captured' && entity) {
+      const orderId: string = entity.order_id || '';
+      const paymentId: string = entity.id || '';
+      if (!orderId) return { ok: true, ignored: true, reason: 'no_order_id' };
+
+      const payment = await this.prisma.payment.findUnique({ where: { razorpayOrderId: orderId } });
+      if (!payment) {
+        // Unknown order — ack so Razorpay stops retrying; nothing to fulfill.
+        return { ok: true, ignored: true, reason: 'unknown_order' };
+      }
+      if (payment.status === 'SUCCESS') {
+        return { ok: true, duplicate: true };
+      }
+      await this.fulfill(payment, paymentId);
+      return { ok: true, fulfilled: true, kind: (payment.metadataJson as any)?.kind ?? null };
+    }
+
+    if (eventName === 'payment.failed' && entity) {
+      await this.prisma.payment.updateMany({
+        where: { razorpayOrderId: entity.order_id || '' },
+        data: { status: 'FAILED' },
+      });
+      return { ok: true, ignored: false, failed: true };
+    }
+
+    return { ok: true, ignored: true, reason: 'unhandled_event' };
+  }
+
+  /** Shared fulfillment: Payment PENDING → Subscription / ChapterPurchase / MockAccess. */
+  private async fulfill(payment: any, razorpayPaymentId: string) {
+    const userId = payment.userId;
     const meta = (payment.metadataJson as any) || {};
     if (meta.kind === 'PLAN') {
       const plan = await this.prisma.plan.findUnique({ where: { id: meta.planId } });
@@ -159,7 +221,7 @@ export class MonetizationService {
 
     await this.prisma.payment.update({
       where: { id: payment.id },
-      data: { razorpayPaymentId: input.razorpayPaymentId, status: 'SUCCESS' },
+      data: { razorpayPaymentId, status: 'SUCCESS' },
     });
     // consume coupon if any
     if (meta.couponCode) {
@@ -168,7 +230,6 @@ export class MonetizationService {
         data: { usesCount: { increment: 1 } },
       });
     }
-    return { ok: true };
   }
 
   // ---- Chapter purchases ----
