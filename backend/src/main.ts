@@ -31,6 +31,9 @@ async function bootstrap() {
         const allowList = [
           process.env.FRONTEND_URL || 'http://localhost:3000',
           process.env.FRONTEND_URL?.replace('localhost', '127.0.0.1') || 'http://127.0.0.1:3000',
+          // Docker maps frontend 3000->3001, so allow both
+          'http://localhost:3001',
+          'http://127.0.0.1:3001',
         ];
         // Allow non-browser clients (curl, mobile apps) with no origin
         if (!origin) return callback(null, true);
