@@ -309,3 +309,42 @@ accumulate images → postgres PANIC "No space left on device" (unhealthy). Fix:
   guess🎲 chips (real per-question time), difficulty chips.
 - Verified live: resume same-attempt+answers, autosave persist, submit merge
   (score -0.5 for 2 wrong+1 skip), stats after submit, detail difficulty/time.
+
+## 14. 2026-08-12 — v7 production QA round (§1-§7) — commits 3e0644b, 5c2b83a, c2bec7e
+
+- **§1.1 submit crash — ROOT: React #310.** reviewTab/navQ useState declared INSIDE the
+  `phase === "results"` branch switched the hook count on submit → "Rendered more hooks
+  than during the previous render" → Next error boundary. Hoisted both to component top.
+  Reproduced live via browser (start→answer→submit → Application error), fixed, re-verified
+  (results screen, ZERO console errors). Also 401-token-expiry wedge: raw fetches had no
+  refresh — added `fetchAuth` (auto refresh+retry) in lib/api.ts and swapped 11 pages /
+  45+ sites (test, qbank, results, admin, verification, mocks-adjacent, cgl-test, sectional,
+  bookmarks, discover). Prelude: mv auth.e2e-spec.ts → .disabled (meilisearch ESM fails
+  ts-jest — never green).
+- **§1.2 invisible text**: qbank option/answer classes were bg-red-50/bg-emerald-50 (LIGHT
+  pastels) + inherited WHITE foreground in dark theme → blank rows. Replaced with
+  /10-tint + explicit text-* (border-red-500 bg-red-500/10 text-red-600 dark:text-red-400 etc).
+  Verified live via computed style (red text on red/10, luminance OK).
+- **§1.3 Hindi toggle**: qbank option text was `showHi ? o.text : o.text` (no-op) — now
+  `showHi && o.textHi ? o.textHi : o.text` (stem already worked).
+- **§1.4 count integrity**: chapters()/subjects() counts were ALL-EXAM while Load Questions
+  filters by examId → mismatch (e.g. Reasoning 9622 all vs 4497 CGL). subjects() now
+  accepts examId (per-exam cache key); FE forwards examId for chapters + a useEffect
+  reloads subjects when the exam changes. Verified live: Analogy dropdown (183) == Load
+  (183 total).
+- **§2**: /bank/meta now @Public + carries each exam's live ExamPattern (name/qs/marks/
+  duration) — dashboard CGL label renders "(2025 Pattern)" from data, never hardcoded.
+  Meta Hindi coverage uses `{ not: '' }` (DB stores '' for missing Hindi, not NULL).
+- **§4**: weak-topics accuracy = ATTEMPTED questions only (skipped no longer deflates);
+  drill query adds isApproved + returns correctAnswer/explanation (solutions).
+- **§5**: admin endpoints translation-stats + translation-queue (approved rows with empty
+  Hindi, per exam/subject counts) — visibility for the v3 §3 auto_unverified grind.
+- **§6**: backend/scripts/qa-site.mjs — full pass across every exam×subject×chapter:
+  3,987 defective rows UNPUBLISHED across 11 exams (2-option rows, garbled legacy-font
+  Hindi, missing answer keys), approved 56,966→53,062; report → docs/qa-report-v7.json.
+- **§7**: backend/test/regression-v7.e2e-spec.ts (4 named tests: §1.1 flow, §1.4 count
+  integrity, §5 queue, §4 drill) — `npm test` green. Live walkthrough (login→qbank
+  counts→toggle→mock start→answer→submit→results) executed with zero errors.
+- **§3 (partial)**: scripts/self_source_pyqs.py — Hermes auto-fetch capability (v5 §34);
+  Career Power URLs 404'd, web_search unconfigured (Firecrawl) → the multi-exam sweep is
+  the known next campaign (translation grind too). Pipeline ingestion E2E-verified earlier.
