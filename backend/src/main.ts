@@ -25,9 +25,23 @@ async function bootstrap() {
   );
   app.use(
     cors({
-      // 2026-08-12: reflect the request origin (phone/LAN access). Tighten to
-      // a fixed allow-list at launch; dev needs any-LAN-IP access.
-      origin: true,
+      // 2026-08-12: restrict to allow-list. Dev allows LAN IPs for phone testing.
+      // Production: set FRONTEND_URL env var to your domain.
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        const allowList = [
+          process.env.FRONTEND_URL || 'http://localhost:3000',
+          process.env.FRONTEND_URL?.replace('localhost', '127.0.0.1') || 'http://127.0.0.1:3000',
+        ];
+        // Allow non-browser clients (curl, mobile apps) with no origin
+        if (!origin) return callback(null, true);
+        // Check exact match
+        if (allowList.includes(origin)) return callback(null, true);
+        // Allow LAN CIDR ranges for phone hotspot testing (common ranges)
+        const lanPrefixes = ['192.168.', '10.', '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.'];
+        const isLan = lanPrefixes.some((prefix) => origin.startsWith(`http://${prefix}`) || origin.startsWith(`https://${prefix}`));
+        if (isLan) return callback(null, true);
+        callback(new Error('Not allowed by CORS'), false);
+      },
       credentials: true,
     }),
   );
