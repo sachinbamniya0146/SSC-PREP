@@ -7,8 +7,16 @@ type UgQ = {
   id: string;
   questionText: string;
   questionTextHindi?: string | null;
-  options: { key: string; text: string }[];
+  options: { key: string; text: string; textHi?: string | null }[];
   chapter: string;
+  examName?: string | null;
+  year?: number | null;
+  shift?: string | null;
+  marks?: number;
+  negativeMarks?: number;
+  correctAnswer?: string | null;
+  explanation?: string | null;
+  explanationHindi?: string | null;
 };
 
 type Attempt = {
@@ -116,7 +124,6 @@ export default function TestPage() {
   const [phase, setPhase] = React.useState<
     "instructions" | "exam" | "results"
   >("instructions");
-  const [lang, setLang] = React.useState<"en" | "hi">("en");
   const [agreed, setAgreed] = React.useState(false);
   const [zoom, setZoom] = React.useState(100);
   const [fullscreen, setFullscreen] = React.useState(false);
@@ -141,6 +148,28 @@ export default function TestPage() {
 
   const [paused, setPaused] = React.useState(false);
 
+  // practice-mode aids (v6 §5: Show Answer + AI Hint, hint capped at 3/session)
+  const [showAns, setShowAns] = React.useState<{ [qid: string]: boolean }>({});
+  const [hintUsed, setHintUsed] = React.useState<{ [qid: string]: boolean }>({});
+  const [hintQuota, setHintQuota] = React.useState(3);
+  const [paletteOpen, setPaletteOpen] = React.useState(false);
+
+  // ---- per-question pacing (v6 §6: avg time/question, rushing/balanced/slow) ----
+  const [qEnterRef] = React.useState<{ qid: string; at: number }>({ qid: "", at: 0 });
+  const [timeSpent, setTimeSpent] = React.useState<{ [qid: string]: number }>({});
+  React.useEffect(() => {
+    if (phase !== "exam" || !questions[idx]) return;
+    qEnterRef.qid = questions[idx].id;
+    qEnterRef.at = Date.now();
+  }, [idx, phase, questions, qEnterRef]);
+  const markQuestionTime = (qid: string) => {
+    if (qEnterRef.qid === qid && qEnterRef.at > 0) {
+      const spent = Math.round((Date.now() - qEnterRef.at) / 1000);
+      setTimeSpent((p) => ({ ...p, [qid]: (p[qid] || 0) + Math.max(spent, 0) }));
+      qEnterRef.at = Date.now();
+    }
+  };
+
   const startClock = React.useCallback((total: number) => {
     setTimeLeft(total);
     setRunning(true);
@@ -151,12 +180,89 @@ export default function TestPage() {
     setStarting(true);
     setLoading(true);
     try {
-      // Fetch a random 10-question set from the approved bank (Reasoning/all exams).
-      const r = await fetch(`${apiBase()}/bank/set?count=10`, {
-        headers: getAuthHeaders(),
-      });
-      const d = await r.json();
-      const qs: UgQ[] = Array.isArray(d?.questions) ? d.questions : [];
+      // v6 §2a — full shift paper: /test?template=<id> composes the template's paper
+      // server-side (real exam blueprint, no answer key) + opens a server-authoritative
+      // timed attempt.
+      const tplId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("template") : null;
+      let qs: UgQ[] = [];
+      let durationSec = 0;
+      let attemptId: string | null = null;
+      if (tplId) {
+        const pr = await fetch(`${apiBase()}/tests/paper/${encodeURIComponent(tplId)}`, {
+          headers: getAuthHeaders(),
+        });
+        if (!pr.ok) {
+          const err = await pr.json().catch(() => ({}));
+          alert(`⚠️ ${err?.message || "Could not load this mock."}`);
+          setLoading(false);
+          setStarting(false);
+          return;
+        }
+        const paper = await pr.json();
+        qs = Array.isArray(paper?.sections)
+          ? paper.sections.flatMap((s: any) =>
+              (s.questions || []).map((qq: any) => ({
+                id: qq.id,
+                questionText: qq.questionText,
+                questionTextHindi: qq.questionTextHindi,
+                options: qq.options,
+                chapter: qq.chapter || "",
+                examName: qq.examName,
+                year: qq.year,
+                shift: qq.shift,
+                marks: qq.marks,
+                negativeMarks: qq.negativeMarks,
+                explanation: qq.explanation,
+                explanationHindi: qq.explanationHindi,
+              })),
+            )
+          : [];
+        durationSec = (paper?.durationMinutes || 60) * 60;
+        // server-authoritative timed attempt
+        try {
+          const ar = await fetch(`${apiBase()}/tests/attempts/start`, {
+            method: "POST",
+            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify({ testTemplateId: tplId }),
+          });
+          const ad = await ar.json();
+          attemptId = ad.id ?? null;
+          if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
+        } catch {
+          attemptId = null;
+        }
+      }
+      // v6 §2c — sectional test: composed set stashed by /sectional page
+      if (qs.length === 0) {
+        const sectionalRaw = sessionStorage.getItem("ssc_sectional_set");
+        if (sectionalRaw) {
+          const d = JSON.parse(sectionalRaw);
+          qs = Array.isArray(d?.questions) ? d.questions : [];
+          sessionStorage.removeItem("ssc_sectional_set");
+        }
+      }
+      // v5 §36 — chapter-wise PYQ practice: /test?chapter=<id>&exam=<id>
+      if (qs.length === 0) {
+        const chapId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("chapter") : null;
+        if (chapId) {
+          const qp = new URLSearchParams({ take: "25" });
+          const eid = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("exam") : null;
+          if (eid) qp.append("examId", eid);
+          const cr = await fetch(`${apiBase()}/bank/chapters/${encodeURIComponent(chapId)}/pyq?${qp}`, {
+            headers: getAuthHeaders(),
+          });
+          const cd = await cr.json();
+          qs = Array.isArray(cd?.questions) ? cd.questions : Array.isArray(cd) ? cd : [];
+        }
+      }
+      if (qs.length === 0) {
+        // Default: random bilingual set from the approved bank
+        const r = await fetch(`${apiBase()}/bank/set?count=10`, {
+          headers: getAuthHeaders(),
+        });
+        const d = await r.json();
+        qs = Array.isArray(d?.questions) ? d.questions : [];
+      }
       setQuestions(qs);
       if (qs.length === 0) {
         alert("⚠️ No approved questions available yet. Try later.");
@@ -169,8 +275,8 @@ export default function TestPage() {
       setStatus({});
       setVisited({ [qs[0].id]: true });
       // server-authoritative style: compute end from now + duration
-      const durationSec = Math.max(60, qs.length * 30); // ~30s/question, min 1 min
-      startClock(durationSec);
+      const durationSecFinal = durationSec > 0 ? durationSec : Math.max(60, qs.length * 30); // ~30s/question, min 1 min
+      startClock(durationSecFinal);
       setPhase("exam");
     } catch (e) {
       console.error(e);
@@ -196,6 +302,7 @@ export default function TestPage() {
 
   const markVisited = (i: number, qid: string) => {
     setVisited((p) => ({ ...p, [qid]: true }));
+    if (questions[idx]) markQuestionTime(questions[idx].id);
     setIdx(i);
     setStatus((p) => ({
       ...p,
@@ -288,14 +395,73 @@ export default function TestPage() {
           scoreDelta: Number(d.scoreDelta || 0),
         };
         res[q.id] = a;
-        score += a.correct ? Math.max(a.scoreDelta, 1) : 0;
+        score += a.scoreDelta; // server-side: correct→+marks, wrong→−negativeMarks
       } catch {
         // if scoring endpoint fails mid-test, keep going
       }
     }
     setResult(res);
     setFinalScore(score);
+    if (qs[idx]) markQuestionTime(qs[idx].id); // finalize last question time
     setPhase("results");
+
+    // P1 — best-effort save to results history (never blocks results view)
+    try {
+      const activeAttempt =
+        typeof window !== "undefined" ? sessionStorage.getItem("ssc_active_attempt") : null;
+      if (activeAttempt) {
+        // P0: server-authoritative timed attempt — submit to the open attempt.
+        const answersPayload = [];
+        for (const q of qs) {
+          const a = res[q.id];
+          answersPayload.push({
+            questionId: q.id,
+            selectedOption: a ? a.selectedOption : null,
+            timeSpentSeconds: timeSpent[q.id] || 0,
+          });
+        }
+        await fetch(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
+          method: "POST",
+          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ answers: answersPayload }),
+        });
+        sessionStorage.removeItem("ssc_active_attempt");
+        return;
+      }
+      let correct = 0;
+      let wrong = 0;
+      let skipped = 0;
+      const answersPayload = [];
+      for (const q of qs) {
+        const a = res[q.id];
+        if (!a) { skipped++; continue; }
+        if (a.correct) correct++;
+        else wrong++;
+        answersPayload.push({
+          questionId: q.id,
+          selectedOption: a.selectedOption,
+          isCorrect: a.correct,
+          timeSpentSeconds: timeSpent[q.id] || 0,
+        });
+      }
+      const total = qs.length;
+      const acc = total ? Math.round(((correct + 0) / total) * 100) : 0;
+      await fetch(`${apiBase()}/tests/attempts`, {
+        method: "POST",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          testTemplateId: "tpl-mock-live",
+          score,
+          totalCorrect: correct,
+          totalWrong: wrong,
+          totalSkipped: skipped,
+          accuracyPercent: acc,
+          answers: answersPayload,
+        }),
+      });
+    } catch {
+      // history save is best-effort — ignore failures
+    }
   };
 
   const togglePause = () => {
@@ -314,11 +480,50 @@ export default function TestPage() {
   };
 
   // ---- Results computation ----
+  const total = questions.length;
   const attempted = Object.keys(answers).length;
   const correct = Object.values(result).filter((a) => a.correct).length;
+  const wrong = attempted - correct;
+  const skipped = total - attempted;
   const accPct = attempted ? Math.round((correct / attempted) * 100) : 0;
-  const total = questions.length;
   const notAnswered = total - attempted;
+
+  // pacing (v6 §6): avg sec/question on ATTEMPTED questions + rushing/balanced/slow
+  const spentList = questions
+    .map((q) => timeSpent[q.id] || 0)
+    .filter((t) => t > 0);
+  const avgSec = spentList.length
+    ? Math.round(spentList.reduce((a, b) => a + b, 0) / spentList.length)
+    : 0;
+  const paceLabel = avgSec === 0 ? "—" : avgSec < 40 ? "Rushing ⚡" : avgSec <= 90 ? "Balanced ✅" : "Slow 🐢";
+
+  // topic breakdown weakest-first (chapter tags from v6 §2/§3 — real DB data)
+  const topicMap: { [ch: string]: { total: number; correct: number } } = {};
+  questions.forEach((q) => {
+    const t = q.chapter || "General";
+    topicMap[t] = topicMap[t] || { total: 0, correct: 0 };
+    topicMap[t].total += 1;
+    if (result[q.id]?.correct) topicMap[t].correct += 1;
+  });
+  const topicRows = Object.entries(topicMap)
+    .map(([name, v]) => ({
+      name,
+      total: v.total,
+      correct: v.correct,
+      pct: v.total ? Math.round((v.correct / v.total) * 100) : 0,
+    }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => a.pct - b.pct); // weakest first
+
+  // what-to-do-next (v6 §6)
+  const nextAction =
+    attempted === 0
+      ? "Is test me koi answer nahi kiya — pehle 5 questions attempt karke aao."
+      : accPct < 60
+        ? "Accuracy 60% se kam hai — weak topics review karke wapas try karo."
+        : skipped > 0
+          ? "Bach gaye " + skipped + " skipped questions — ab unhe attempt karna seekho, speed par kaam karo."
+          : "Achhi accuracy! Ab naya test try karke speed badhao.";
 
   const timelineColor =
     timeLeft > 120 ? "text-success" : timeLeft > 60 ? "text-warning" : "text-danger";
@@ -339,47 +544,47 @@ export default function TestPage() {
           <h1 className="mt-10 text-3xl font-extrabold">SSC CGL Tier I — Practice Mock Test</h1>
           <p className="mt-1 text-sm text-muted-foreground">Bilingual · Full Mock Experience</p>
 
-          {/* Instructions table */}
+          {/* Instructions table — real values, no hardcode (v6 §1) */}
           <div className="card mt-8 divide-y divide-border overflow-hidden">
-            {[
-              ["Duration", "10 minutes"],
-              ["Total Questions", `${total || 10} Questions`],
-              ["Max Marks", `${(total || 10) * 1} Marks`],
-              ["Negative Marking", "−0.5 per wrong answer"],
-            ].map(([k, v]) => (
-              <div key={k} className="flex items-center justify-between px-5 py-3">
-                <span className="text-sm text-muted-foreground">{k}</span>
-                <span className="text-sm font-semibold">{v}</span>
-              </div>
-            ))}
+            {(() => {
+              const durSec = Math.max(60, (total || 10) * 30);
+              const durMin = durSec / 60;
+              const maxMarks = questions.reduce((s, q) => s + (q.marks ?? 1), 0);
+              const negM = questions[0]?.negativeMarks ?? 0.25;
+              const posM = questions[0]?.marks ?? 1;
+              return [
+                ["Duration", `${durMin % 1 === 0 ? durMin : durMin.toFixed(1)} minutes`],
+                ["Total Questions", `${total || 10} Questions`],
+                ["Max Marks", `${maxMarks} Marks`],
+                ["Negative Marking", `−${negM} per wrong answer`],
+                ["Marking", `+${posM} per correct answer`],
+              ].map(([k, v]) => (
+                <div key={k} className="flex items-center justify-between px-5 py-3">
+                  <span className="text-sm text-muted-foreground">{k}</span>
+                  <span className="text-sm font-semibold">{v}</span>
+                </div>
+              ));
+            })()}
           </div>
 
           {/* Bilingual language rule note */}
           <div className="card mt-6 border-info/30 bg-info/5 p-5 text-sm">
-            <p className="font-semibold text-info">📘 Exam Language Rules</p>
+            <p className="font-semibold text-info">📘 Bilingual Questions</p>
             <p className="mt-2 text-muted-foreground">
-              Select your test language below. Your chosen language applies to the
-              reading questions. A section&apos;s language is locked once you make your
-              selection — matching the real SSC behaviour.
+              Har question English <b>aur</b> हिंदी dono mein ek saath dikhta hai
+              — kisi language toggle ki zaroorat nahi. Options bhi bilingual hain.
+              Matching the real SSC bilingual paper experience.
             </p>
           </div>
 
           <div className="card mt-6 p-5">
-            <label className="text-sm font-semibold">Select Test Language</label>
+            <label className="text-sm font-semibold">Exam Format</label>
             <div className="mt-3 flex gap-3">
-              {(["en", "hi"] as const).map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setLang(l)}
-                  className={`flex-1 rounded-xl border px-4 py-3 text-sm font-semibold transition ${
-                    lang === l
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-card text-muted-foreground hover:bg-muted"
-                  }`}
-                >
-                  {l === "en" ? "English" : "हिंदी (Hindi)"}
-                </button>
-              ))}
+              <button
+                className="flex-1 rounded-xl border border-primary bg-primary/10 px-4 py-3 text-sm font-semibold text-primary"
+              >
+                Bilingual (EN + हिंदी)
+              </button>
             </div>
             <label className="mt-5 flex items-start gap-3 text-sm">
               <input
@@ -413,28 +618,26 @@ export default function TestPage() {
 
   // ============ RESULTS SCREEN ============
   if (phase === "results") {
-    const perceivedMax = total * 1;
+    const perceivedMax = questions.reduce((s, q) => s + (q.marks ?? 1), 0);
     // cut-off: data-driven (historical/admin-set). For practice, derive from avg of attempted scores.
     const cutoff = Math.max(1, Math.round(perceivedMax * 0.4));
     const cutoffPercent = Math.min(100, (cutoff / perceivedMax) * 100);
     const qualifies = finalScore >= cutoff;
-    const sectionCards = [
-      {
-        name: "PART-A · Reasoning",
-        score: `${finalScore}/${perceivedMax}`,
-        att: `${attempted}/${total}`,
-        acc: finalScore > 0 ? `${Math.round((correct / Math.max(attempted, 1)) * 100)}%` : "—",
-        cutoff: `pass ${cutoff}`,
-        cleared: qualifies,
-      },
-    ];
-    const toppers = [
-      { rank: 1, name: "Chhavi R.", score: perceivedMax, you: false },
-      { rank: 2, name: "Aditya M.", score: Math.round(perceivedMax * 0.92), you: false },
-      { rank: 3, name: "Sanya G.", score: Math.round(perceivedMax * 0.88), you: false },
-      { rank: 4, name: "You", score: finalScore, you: true },
-      { rank: 5, name: "Kabir D.", score: Math.round(perceivedMax * 0.7), you: false },
-    ];
+    // colour-coded correct/wrong/skipped bar (v6 §6)
+    const cwPct = total ? (correct / total) * 100 : 0;
+    const wwPct = total ? (wrong / total) * 100 : 0;
+    const swPct = total ? (skipped / total) * 100 : 0;
+    // per-question review tabs (v6 §6: All / Wrong / Skipped / Correct)
+    const [reviewTab, setReviewTab] = React.useState<"all" | "wrong" | "skipped" | "correct">("all");
+    const reviewQs = questions
+      .map((q, i) => ({ q, i }))
+      .filter(({ q }) =>
+        reviewTab === "all" ? true
+          : reviewTab === "correct" ? !!result[q.id]?.correct
+          : reviewTab === "wrong" ? (result[q.id] && !result[q.id].correct)
+          : !result[q.id]
+      );
+    const [navQ, setNavQ] = React.useState<number | null>(null); // navigator selection
     return (
       <div className="min-h-screen bg-background px-4 py-10 text-foreground">
         <div className="mx-auto max-w-5xl">
@@ -479,105 +682,165 @@ export default function TestPage() {
             </div>
             <div className="card overflow-hidden">
               <div className="border-b border-border px-5 py-3">
-                <p className="text-xs font-bold text-muted-foreground">SECTION-WISE PERFORMANCE</p>
+                <p className="text-xs font-bold text-muted-foreground">CORRECT / WRONG / SKIPPED</p>
               </div>
-              {sectionCards.map((s) => (
-                <div key={s.name} className="flex items-center justify-between gap-3 border-b border-border px-5 py-3 last:border-0">
-                  <div>
-                    <p className="text-sm font-semibold">{s.name}</p>
-                    <p className="text-xs text-muted-foreground">{s.att} attempted · {s.acc} accuracy</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-lg font-extrabold">{s.score}</p>
-                    <p className={`text-xs ${s.cleared ? "text-success" : "text-danger"}`}>{s.cleared ? "Cut-off cleared" : `Cut-off ${s.cutoff}`}</p>
-                  </div>
+              <div className="px-5 py-4">
+                <div className="flex h-3 w-full overflow-hidden rounded-full">
+                  {correct > 0 && <div className="h-full bg-success" style={{ width: `${cwPct}%` }} title={`${correct} correct`} />}
+                  {wrong > 0 && <div className="h-full bg-danger" style={{ width: `${wwPct}%` }} title={`${wrong} wrong`} />}
+                  {skipped > 0 && <div className="h-full bg-muted-foreground/30" style={{ width: `${swPct}%` }} title={`${skipped} skipped`} />}
                 </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Compare with topper bar */}
-          <div className="card mt-6 p-6">
-            <h3 className="font-semibold">Compare with Topper</h3>
-            <div className="mt-4 space-y-3">
-              {[
-                ["Correct", correct, total],
-                ["Wrong", attempted - correct, attempted],
-                ["Accuracy", accPct, 100],
-              ].map(([label, val, max]) => {
-                const you = Number(val);
-                const maxV = Number(max);
-                return (
-                  <div key={label as string}>
-                    <div className="mb-1 flex justify-between text-xs font-medium text-muted-foreground">
-                      <span>{label} — You</span>
-                      <span>{you} / {maxV}</span>
-                    </div>
-                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
-                      <div className="h-full rounded-full bg-primary" style={{ width: `${(you / Math.max(maxV, 1)) * 100}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Per-test topper leaderboard */}
-          <div className="card mt-6 overflow-hidden">
-            <div className="border-b border-border p-5 flex items-center justify-between">
-              <h3 className="font-semibold">🏆 Top 5 on this Test</h3>
-              <span className="text-xs text-muted-foreground">This mock · 10 Qs</span>
-            </div>
-            <div className="divide-y divide-border">
-              {toppers.map((t) => (
-                <div key={t.rank} className={`flex items-center justify-between px-5 py-3 ${t.you ? "bg-primary/10" : ""}`}>
-                  <div className="flex items-center gap-3">
-                    <span className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${t.rank === 1 ? "bg-warning/20 text-warning" : "bg-muted text-muted-foreground"}`}>
-                      {t.rank === 1 ? "🥇" : t.rank === 2 ? "🥈" : t.rank === 3 ? "🥉" : t.rank}
-                    </span>
-                    <span className={`text-sm font-medium ${t.you ? "text-primary" : ""}`}>{t.name} {t.you && "(You)"}</span>
-                  </div>
-                  <span className="font-mono text-sm font-semibold">{t.score}</span>
+                <div className="mt-2 flex flex-wrap justify-center gap-x-5 gap-y-1 text-xs">
+                  <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-success" /> {correct} Correct</span>
+                  <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-danger" /> {wrong} Wrong</span>
+                  <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-muted-foreground/30" /> {skipped} Skipped</span>
                 </div>
-              ))}
+              </div>
             </div>
           </div>
 
-          {/* Answers review table */}
+          {/* Topic breakdown weakest-first (real DB chapter tags) */}
           <div className="card mt-6 overflow-hidden">
             <div className="border-b border-border p-5">
-              <h3 className="font-semibold">Answer Review</h3>
+              <p className="text-xs font-bold text-muted-foreground">WHAT IT LOOKED AT — TOPIC BREAKDOWN (weakest first)</p>
+            </div>
+            {topicRows.length === 0 ? (
+              <div className="px-5 py-4 text-sm text-muted-foreground">Koi attempt nahi — topics analyze nahi ho sake.</div>
+            ) : (
+              topicRows.map((t) => (
+                <div key={t.name} className="flex items-center gap-3 border-b border-border px-5 py-3 last:border-0">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{t.name}</p>
+                    <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={`h-full rounded-full ${t.pct >= 70 ? "bg-success" : t.pct >= 40 ? "bg-warning" : "bg-danger"}`}
+                        style={{ width: `${Math.max(t.pct, 3)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="w-24 shrink-0 text-right">
+                    <p className="text-sm font-extrabold">{t.pct}%</p>
+                    <p className="text-[11px] text-muted-foreground">{t.correct}/{t.total} correct</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Pacing analysis (v6 §6) */}
+          <div className="card mt-6 p-6">
+            <h3 className="font-semibold">⏱ Pacing Analysis</h3>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-muted/50 p-3 text-center">
+                <p className="text-2xl font-extrabold">{avgSec || "—"}<span className="text-xs font-normal text-muted-foreground"> sec</span></p>
+                <p className="text-[11px] text-muted-foreground">avg per question</p>
+              </div>
+              <div className="rounded-xl bg-muted/50 p-3 text-center">
+                <p className="text-2xl font-extrabold">{paceLabel}</p>
+                <p className="text-[11px] text-muted-foreground">pace on attempted</p>
+              </div>
+              <div className="rounded-xl bg-muted/50 p-3 text-center">
+                <p className="text-2xl font-extrabold">{spentList.length}<span className="text-xs font-normal text-muted-foreground">/ {total}</span></p>
+                <p className="text-[11px] text-muted-foreground">timed questions</p>
+              </div>
+            </div>
+            <div className="mt-4 rounded-xl border border-info/20 bg-info/5 p-4 text-sm">
+              <p className="font-semibold text-info">💡 Instant Diagnosis</p>
+              <p className="mt-1 text-muted-foreground">{nextAction}</p>
+            </div>
+          </div>
+
+          {/* What to do next (v6 §6) */}
+          <div className="card mt-6 flex flex-wrap items-center justify-between gap-3 p-5">
+            <div>
+              <h3 className="font-semibold">📌 What to do next</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Practice with another 10-question set, phir review mistakes.</p>
+            </div>
+            <div className="flex gap-2">
+              <a href="/test" className="btn btn-primary">New Test →</a>
+              <a href="/question-bank" className="btn btn-outline">Question Bank</a>
+            </div>
+          </div>
+
+          {/* Answers review — v6 §6: tabs + topic/year + time spent + navigator */}
+          <div className="card mt-6 overflow-hidden">
+            <div className="border-b border-border p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-semibold">Answer Review</h3>
+                {/* filter tabs */}
+                <div className="flex gap-1 rounded-lg bg-muted p-1 text-xs font-semibold">
+                  {([["all", `All (${total})`], ["wrong", `Wrong (${wrong})`], ["skipped", `Skipped (${skipped})`], ["correct", `Correct (${correct})`]] as const).map(([k, label]) => (
+                    <button
+                      key={k}
+                      onClick={() => { setReviewTab(k); setNavQ(null); }}
+                      className={`rounded-md px-2.5 py-1 transition ${reviewTab === k ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Legend: <span className="text-success">answered</span> ·{" "}
-                <span className="text-danger">wrong</span>
+                Legend: <span className="text-success">correct</span> ·{" "}
+                <span className="text-danger">wrong</span> ·{" "}
+                <span className="text-muted-foreground">skipped</span>
               </p>
             </div>
+
+            {/* question navigator — color-coded jump grid (v6 §6) */}
+            <div className="border-b border-border px-5 py-3">
+              <p className="text-xs font-bold text-muted-foreground">JUMP TO QUESTION</p>
+              <div className="mt-2 grid grid-cols-10 gap-1.5">
+                {questions.map((qq, i) => {
+                  const st = result[qq.id]?.correct ? "bg-success text-white" : result[qq.id] ? "bg-danger text-white" : "bg-muted text-muted-foreground";
+                  return (
+                    <button
+                      key={qq.id}
+                      onClick={() => { setNavQ(i); setReviewTab("all"); }}
+                      className={`flex h-8 w-8 items-center justify-center rounded-md text-xs font-bold ${st} ${navQ === i ? "ring-2 ring-[hsl(var(--ring))]" : ""}`}
+                    >
+                      {i + 1}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="divide-y divide-border">
-              {questions.map((q, i) => {
+              {(navQ !== null ? questions.map((q, i) => ({ q, i })).filter(({ i }) => i === navQ) : reviewQs).map(({ q, i }) => {
                 const a = result[q.id];
                 const ansText = answers[q.id] ? q.options.find((o) => o.key === answers[q.id])?.text : "—";
+                const spent = timeSpent[q.id] || 0;
                 return (
                   <div key={q.id} className="flex items-start gap-3 px-5 py-4">
                     <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${a?.correct ? "bg-success/15 text-success" : a ? "bg-danger/15 text-danger" : "bg-muted text-muted-foreground"}`}>
                       {i + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium line-clamp-2">{q.questionText}</p>
+                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                        {q.chapter && <span className="rounded bg-muted px-1.5 py-0.5 font-semibold text-muted-foreground">{q.chapter}</span>}
+                        {q.examName && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-semibold text-amber-600">{q.examName}{q.year ? ` ${q.year}` : ""}{q.shift ? ` · ${q.shift}` : ""}</span>}
+                        {spent > 0 && <span className="text-muted-foreground">⏱ {spent}s</span>}
+                      </div>
+                      <p className="mt-1 text-sm font-medium line-clamp-2">{q.questionText}</p>
                       <p className="mt-1 text-xs text-muted-foreground">
                         Your answer: <span className="font-semibold">{ansText}</span>
                         {!a?.correct && <span> · Correct: <span className="font-semibold text-success">{q.options.find((o) => o.key === (a?.correctAnswer))?.text || "(see solution)"}</span></span>}
                       </p>
                     </div>
                     {a?.correct ? (
-                      <span className="shrink-0 rounded-full bg-success/15 px-2.5 py-0.5 text-xs font-bold text-success">+1</span>
+                      <span className="shrink-0 rounded-full bg-success/15 px-2.5 py-0.5 text-xs font-bold text-success">+{(q.marks ?? 1).toFixed(2).replace(/\.?0+$/, "")}</span>
                     ) : a ? (
-                      <span className="shrink-0 rounded-full bg-danger/15 px-2.5 py-0.5 text-xs font-bold text-danger">−0.5</span>
+                      <span className="shrink-0 rounded-full bg-danger/15 px-2.5 py-0.5 text-xs font-bold text-danger">−{(q.negativeMarks ?? 0.25).toFixed(2).replace(/\.?0+$/, "")}</span>
                     ) : (
                       <span className="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">Skip</span>
                     )}
                   </div>
                 );
               })}
+              {reviewQs.length === 0 && navQ === null && (
+                <div className="px-5 py-6 text-center text-sm text-muted-foreground">Is tab me koi question nahi.</div>
+              )}
             </div>
           </div>
         </div>
@@ -594,6 +857,10 @@ export default function TestPage() {
       <div className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur-lg">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
+            {/* Mobile palette toggle (drawer) */}
+            <button onClick={() => setPaletteOpen(true)} className="rounded-lg border border-border px-2.5 py-1 text-xs lg:hidden" aria-label="Open question palette">
+              ☰ Palette
+            </button>
             {/* Zoom */}
             <div className="flex items-center gap-1 rounded-lg border border-border p-1 text-xs">
               <button onClick={() => setZoom((z) => Math.max(90, z - 5))} aria-label="Zoom out" className="rounded px-1.5 hover:bg-muted">−</button>
@@ -607,7 +874,12 @@ export default function TestPage() {
 
           <div className="text-center">
             <p className="text-sm font-bold leading-tight">SSC CGL Tier I — Practice Mock</p>
-            <p className="text-[11px] text-muted-foreground">Candidate: SS★0@#24</p>
+            <div className="mt-0.5 flex items-center justify-center gap-2">
+              <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-bold text-success">
+                +{questions[0]?.marks ?? 1} / −{questions[0]?.negativeMarks ?? 0.25}
+              </span>
+              <p className="text-[11px] text-muted-foreground">Candidate · Practice</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
@@ -630,14 +902,25 @@ export default function TestPage() {
             <motion.div key={q.id} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.2 }} className="card p-6">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-bold text-primary">PART-A</span>
-                  <span className="text-xs text-muted-foreground">Question {idx + 1}</span>
+                  <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-bold text-primary">{q.chapter || "General"}</span>
+                  <span className="text-xs text-muted-foreground">Question {idx + 1} of {questions.length}</span>
+                  {q.examName && (
+                    <span className="rounded-md bg-amber-500/10 px-2 py-0.5 text-xs font-bold text-amber-600">
+                      {q.examName}{q.year ? ` ${q.year}` : ""}{q.shift ? ` · Shift ${q.shift}` : ""}
+                    </span>
+                  )}
+                  <span className="rounded-md bg-success/15 px-2 py-0.5 text-xs font-bold text-success">+{q.marks ?? 1} / −{q.negativeMarks ?? 0.25}</span>
                 </div>
-                <span className="badge badge-info">{lang === "hi" ? "हिंदी" : "English"}</span>
+                <span className="badge badge-info">EN + हिंदी</span>
               </div>
-              <h2 className={`mt-4 text-base font-semibold leading-relaxed ${lang === "hi" ? "font-hindi text-lg" : ""}`}>
-                {lang === "hi" && q.questionTextHindi ? q.questionTextHindi : q.questionText}
+              <h2 className="mt-4 text-base font-semibold leading-relaxed">
+                {q.questionText}
               </h2>
+              {q.questionTextHindi && (
+                <p className="mt-2 border-l-2 border-primary/40 pl-3 text-[15px] font-hindi leading-relaxed text-muted-foreground">
+                  {q.questionTextHindi}
+                </p>
+              )}
               <div className="mt-5 space-y-2.5">
                 {q.options.map((o) => {
                   const active = answers[q.id] === o.key;
@@ -646,13 +929,20 @@ export default function TestPage() {
                       key={o.key}
                       onClick={() => chooseOption(q.id, o.key)}
                       className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm transition ${
-                        active ? "border-primary bg-primary/10 font-semibold" : "border-border bg-card hover:bg-muted"
+                        active ? "border-primary bg-primary text-white shadow-md" : "border-border bg-card hover:bg-muted"
                       }`}
                     >
-                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${active ? "border-primary text-primary" : "border-border"}`}>
+                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${active ? "border-white bg-white text-primary" : "border-border"}`}>
                         {o.key}
                       </span>
-                      <span className={lang === "hi" ? "font-hindi" : ""}>{o.text}</span>
+                      <span className="min-w-0 flex-1">
+                        <span>{o.text}</span>
+                        {o.textHi && (
+                          <span className="ml-3 border-l-2 border-border pl-3 font-hindi text-muted-foreground">
+                            {o.textHi}
+                          </span>
+                        )}
+                      </span>
                     </button>
                   );
                 })}
@@ -664,11 +954,46 @@ export default function TestPage() {
                   ⚑ Mark for Review
                 </button>
                 <button onClick={clearAnswer} className="btn btn-outline">Clear Response</button>
+                {q.correctAnswer && (
+                  <button
+                    onClick={() => setShowAns((p) => ({ ...p, [q.id]: !p[q.id] }))}
+                    className={`btn ${showAns[q.id] ? "btn-success" : "btn-outline"}`}
+                  >
+                    {showAns[q.id] ? "✓ Answer Shown" : "Show Answer"}
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    if (hintUsed[q.id] || hintQuota <= 0) return;
+                    setHintUsed((p) => ({ ...p, [q.id]: true }));
+                    setHintQuota((n) => n - 1);
+                  }}
+                  disabled={hintUsed[q.id] || hintQuota <= 0}
+                  className="btn btn-outline disabled:opacity-40"
+                  title="Free AI Hint (3 per session)"
+                >
+                  {hintUsed[q.id] ? "Hint shown ✓" : hintQuota <= 0 ? "Hint used all (3/3)" : `💡 AI Hint (${hintQuota} left)`}
+                </button>
                 <div className="flex-1" />
                 <button onClick={saveAndNext} className="btn btn-primary">
                   Save &amp; Next →
                 </button>
               </div>
+
+              {/* Show Answer / Hint panel — real DB data, no fabrication */}
+              {(showAns[q.id] || hintUsed[q.id]) && (
+                <div className="mt-4 rounded-xl border border-success/30 bg-success/5 p-4">
+                  <p className="text-xs font-bold text-success">Correct Answer: {q.correctAnswer}</p>
+                  {hintUsed[q.id] && (
+                    <p className="mt-1 text-xs italic text-muted-foreground">
+                      Hint: {q.explanation ? q.explanation.slice(0, 120) + (q.explanation.length > 120 ? "…" : "") : "Explanation available in solution."}
+                    </p>
+                  )}
+                  {showAns[q.id] && q.explanation && (
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{q.explanation}</p>
+                  )}
+                </div>
+              )}
               <div className="mt-3 flex justify-between text-xs text-muted-foreground">
                 <button onClick={() => idx > 0 && markVisited(idx - 1, questions[idx - 1].id)} className="hover:text-foreground">← Previous</button>
                 <button onClick={() => idx < questions.length - 1 && markVisited(idx + 1, questions[idx + 1].id)} className="hover:text-foreground">Next →</button>
@@ -712,7 +1037,7 @@ export default function TestPage() {
 
             {/* live per-section analysis */}
             <div className="mt-4 border-t border-border pt-3">
-              <p className="text-xs font-bold text-muted-foreground">PART-A ANALYSIS</p>
+              <p className="text-xs font-bold text-muted-foreground">LIVE ANALYSIS</p>
               <div className="mt-2 grid grid-cols-2 gap-2 text-center text-xs">
                 <div className="rounded-lg bg-success/10 p-2"><div className="text-base font-extrabold text-success">{countOf(status, "answered") + countOf(status, "answered-marked")}</div><div className="text-muted-foreground">Answered</div></div>
                 <div className="rounded-lg bg-danger/10 p-2"><div className="text-base font-extrabold text-danger">{countOf(status, "not-answered")}</div><div className="text-muted-foreground">Not Answered</div></div>
@@ -726,6 +1051,54 @@ export default function TestPage() {
           </div>
         </aside>
       </div>
+
+      {/* MOBILE QUESTION PALETTE DRAWER */}
+      {paletteOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setPaletteOpen(false)} />
+          <div className="absolute bottom-0 left-0 right-0 max-h-[80vh] overflow-y-auto rounded-t-2xl border-t border-border bg-background p-4 pb-6">
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-muted" />
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold">Question Palette</h3>
+              <button onClick={() => setPaletteOpen(false)} className="rounded-lg border border-border px-2.5 py-1 text-xs">✕ Close</button>
+            </div>
+            {/* palette grid */}
+            <div className="mt-3 grid grid-cols-6 gap-1.5">
+              {questions.map((qq, i) => {
+                const st: QStatus =
+                  (status[qq.id] as QStatus | undefined) ??
+                  (visited[qq.id] ? "not-answered" : "not-visited");
+                return (
+                  <button
+                    key={qq.id}
+                    onClick={() => { markVisited(i, qq.id); setPaletteOpen(false); }}
+                    className={`flex h-10 w-full items-center justify-center rounded-md border text-xs font-bold ${paletteBg[st]} ${i === idx ? "ring-2 ring-offset-1 ring-[hsl(var(--ring))]" : ""}`}
+                  >
+                    {i === idx ? "▶" : i + 1}
+                  </button>
+                );
+              })}
+            </div>
+            {/* legend */}
+            <div className="mt-4 space-y-1.5 border-t border-border pt-3">
+              {legendItems.map((l) => (
+                <div key={l.s} className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <span className={`h-3.5 w-3.5 rounded border ${paletteBg[l.s as QStatus].split(" ").slice(0, 2).join(" ")}`} />
+                  {l.label}
+                </div>
+              ))}
+            </div>
+            {/* live per-section analysis */}
+            <div className="mt-4 grid grid-cols-2 gap-2 text-center text-xs">
+              <div className="rounded-lg bg-success/10 p-2"><div className="text-base font-extrabold text-success">{countOf(status, "answered") + countOf(status, "answered-marked")}</div><div className="text-muted-foreground">Answered</div></div>
+              <div className="rounded-lg bg-danger/10 p-2"><div className="text-base font-extrabold text-danger">{countOf(status, "not-answered")}</div><div className="text-muted-foreground">Not Answered</div></div>
+            </div>
+            <button onClick={() => { setReviewOpen(true); setPaletteOpen(false); }} className="btn btn-primary mt-4 w-full">
+              Submit Test
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* REVIEW BEFORE SUBMIT MODAL */}
       {reviewOpen && (
@@ -748,7 +1121,7 @@ export default function TestPage() {
                 </thead>
                 <tbody>
                   <tr className="border-t border-border">
-                    <td className="px-3 py-2 font-medium">PART-A (Reasoning)</td>
+                    <td className="px-3 py-2 font-medium">Full Paper ({questions.length} Qs)</td>
                     <td className="px-3 py-2 text-right">{countOf(status, "answered") + countOf(status, "answered-marked")}</td>
                     <td className="px-3 py-2 text-right">{countOf(status, "not-answered")}</td>
                     <td className="px-3 py-2 text-right">{countOf(status, "marked")}</td>

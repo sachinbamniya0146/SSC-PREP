@@ -76,6 +76,26 @@ export class VerifyOtpDto {
   otp!: string;
 }
 
+export class ForgotPasswordDto {
+  @IsEmail({}, { message: 'Valid email required' })
+  email!: string;
+}
+
+export class ResetPasswordDto {
+  @IsEmail({}, { message: 'Valid email required' })
+  email!: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(6)
+  otp!: string;
+
+  @IsString()
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(72)
+  newPassword!: string;
+}
+
 export class GoogleAuthDto {
   @IsString()
   @IsNotEmpty()

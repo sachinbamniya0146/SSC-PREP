@@ -18,6 +18,7 @@ export class UsersService {
         longestStreak: true,
         xp: true,
         coins: true,
+        hintQuota: true,
         createdAt: true,
       },
     });

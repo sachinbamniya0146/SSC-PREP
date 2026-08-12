@@ -1,12 +1,15 @@
 "use client";
 
 import * as React from "react";
+import { ThemeContext } from "@/components/theme-provider";
 
 export default function DashboardPage() {
+  const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [user, setUser] = React.useState<{
     fullName: string;
     email: string;
   } | null>(null);
+  const [gami, setGami] = React.useState<{ currentStreak: number; longestStreak: number; xp: number; coins: number; hintQuota: number; rank: number } | null>(null);
 
   React.useEffect(() => {
     const raw = localStorage.getItem("ssc_user");
@@ -17,13 +20,23 @@ export default function DashboardPage() {
         /* ignore */
       }
     }
+    // v1 Phase 6 — live streak/XP from the gamification service
+    const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
+    if (token) {
+      fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/gamification/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d && setGami(d))
+        .catch(() => undefined);
+    }
   }, []);
 
   const stats = [
-    { label: "Tests Attempted", value: "0" },
-    { label: "Questions Solved", value: "0" },
-    { label: "Avg. Accuracy", value: "—" },
-    { label: "Study Streak", value: "0 days" },
+    { label: "Your Rank", value: gami ? `#${gami.rank}` : "—" },
+    { label: "XP Points", value: gami ? `${gami.xp}` : "—" },
+    { label: "Study Streak", value: gami ? `🔥 ${gami.currentStreak} days` : "—" },
+    { label: "Best Streak", value: gami ? `${gami.longestStreak} days` : "—" },
   ];
 
   return (
@@ -34,6 +47,13 @@ export default function DashboardPage() {
             SSC<span className="text-primary">PrepHub</span>
           </span>
           <div className="flex items-center gap-3 text-sm">
+            <button
+              onClick={toggleTheme}
+              aria-label="Toggle theme"
+              className="rounded-lg border border-border p-2 text-sm"
+            >
+              {theme === "dark" ? "☀️" : "🌙"}
+            </button>
             <span className="hidden font-medium sm:block">
               {user?.fullName || "Student"}
             </span>
@@ -89,6 +109,24 @@ export default function DashboardPage() {
               🎯 Mock Tests
             </a>
             <a
+              href="/cgl-test"
+              className="mt-4 mr-3 inline-block rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+            >
+              🏆 CGL Tier 1 Exam (2025 Pattern)
+            </a>
+            <a
+              href="/sectional"
+              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              📚 Sectional Tests
+            </a>
+            <a
+              href="/pricing"
+              className="mt-4 inline-block rounded-lg bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+            >
+              💎 Premium
+            </a>
+            <a
               href="/question-bank"
               className="mt-4 mr-3 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
             >
@@ -101,6 +139,12 @@ export default function DashboardPage() {
               📊 My Weak Topics
             </a>
             <a
+              href="/review"
+              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              🔁 Review Queue
+            </a>
+            <a
               href="/study-plan"
               className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
             >
@@ -111,6 +155,30 @@ export default function DashboardPage() {
               className="mt-4 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
             >
               ✅ Accuracy Dashboard
+            </a>
+            <a
+              href="/results"
+              className="mt-4 mr-3 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
+            >
+              📊 Results History
+            </a>
+            <a
+              href="/bookmarks"
+              className="mt-4 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
+            >
+              🔖 Bookmarks
+            </a>
+          </div>
+          <div className="rounded-xl border border-border bg-card p-6">
+            <h2 className="font-semibold">🏆 Leaderboard</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Climb the ranks — earn XP from tests & daily quizzes, keep your streak alive!
+            </p>
+            <a
+              href="/leaderboard"
+              className="mt-4 inline-block rounded-lg bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+            >
+              View Leaderboard
             </a>
           </div>
           <div className="rounded-xl border border-border bg-card p-6">

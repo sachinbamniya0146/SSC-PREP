@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /results
+Disallow: /api/
+
+Sitemap: https://sscprephub.in/sitemap.xml

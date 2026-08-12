@@ -1,6 +1,8 @@
-import { Controller, Get, Query, Post, Body, Param, Put, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Query, Post, Body, Param, Put, Delete, UseGuards, Req } from '@nestjs/common';
 import { BankService } from './bank.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @Controller('bank')
 @UseGuards(JwtAuthGuard)
@@ -10,6 +12,13 @@ export class BankController {
   @Get('meta')
   meta() {
     return this.bank.meta();
+  }
+
+  // v4 §18 — SearchMiss demand log: user searched, nothing matched.
+  @Post('search-miss')
+  searchMiss(@Req() req: any, @Body() body: { query: string; exam?: string }) {
+    const userId = req.user?.userId ?? req.user?.id ?? null;
+    return this.bank.logSearchMiss(body?.query, body?.exam, userId);
   }
 
   @Get('subjects')
@@ -81,9 +90,46 @@ export class BankController {
     return this.bank.attempt(userId, body);
   }
 
-  // ---- Verification Pipeline ----
+  // ---- Video Solution Endpoints ----
 
+  @Post('questions/:id/video')
+  @UseGuards(JwtAuthGuard)
+  addVideoSolution(
+    @Param('id') id: string,
+    @Body() dto: { 
+      videoUrl: string; 
+      videoSource?: string; 
+      videoTitle?: string; 
+      videoDescription?: string; 
+      videoDurationSeconds?: number;
+      videoLanguage?: string;
+    },
+    @Req() req: any,
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.bank.addVideoSolution(id, dto, userId);
+  }
+
+  @Get('questions/:id/video')
+  @UseGuards(JwtAuthGuard)
+  getVideoSolution(
+    @Param('id') id: string,
+  ) {
+    return this.bank.getVideoSolution(id);
+  }
+
+  @Delete('questions/:id/video')
+  @UseGuards(JwtAuthGuard)
+  removeVideoSolution(
+    @Param('id') id: string,
+    @Req() req: any,
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.bank.removeVideoSolution(id, userId);
+  }
   @Put('questions/:id/verify')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
   verifyQuestion(
     @Param('id') id: string,
     @Body() body: { status: string },
@@ -101,5 +147,12 @@ export class BankController {
   @Get('questions/:id/verification')
   getQuestionWithVerification(@Param('id') id: string) {
     return this.bank.getQuestionWithVerification(id);
+  }
+
+  @Get('topic-weightage')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  topicWeightage(@Query('examId') examId?: string) {
+    return this.bank.getTopicWeightage(examId);
   }
 }

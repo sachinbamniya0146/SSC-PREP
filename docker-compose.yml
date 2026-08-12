@@ -1,18 +1,22 @@
-# SSC Prep Hub — Local Infrastructure (PostgreSQL + Redis + Meilisearch)
-version: "3.9"
+version: '3.8'
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: sscprephub-postgres
+    container_name: ssc-postgres
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: sscprephub
+      POSTGRES_DB: ssc_prep_hub
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -21,24 +25,104 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: sscprephub-redis
+    container_name: ssc-redis
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
     ports:
       - "6379:6379"
-    volumes:
-      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   meilisearch:
-    image: getmeili/meilisearch:v1.6
-    container_name: sscprephub-meilisearch
-    environment:
-      MEILI_MASTER_KEY: "MasterKeyForSearch123"
+    image: getmeili/meilisearch:v1.12
+    container_name: ssc-meilisearch
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: meilisearch --no-analytics
+    volumes:
+      - meilisearch_data:/meili_data
     ports:
       - "7700:7700"
-    volumes:
-      - meilidata:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ssc-backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ssc_prep_hub_v2?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MEILISEARCH_HOST: http://meilisearch:7700
+      MEILISEARCH_API_KEY: ""
+      JWT_SECRET: ${JWT_SECRET:-super-secret-change-in-production}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-${JWT_SECRET:-super-secret-change-in-production}}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-super-secret-refresh-change-in-production}
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      JWT_EXPIRES_IN: 7d
+      ADMIN_DEFAULT_EMAIL: ${ADMIN_DEFAULT_EMAIL}
+      ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://opencode.ai/zen/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-v4-flash-free}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ssc-frontend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+    ports:
+      - "3001:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
 
 volumes:
-  pgdata:
-  redisdata:
-  meilidata:
+  postgres_data:
+  redis_data:
+  meilisearch_data:

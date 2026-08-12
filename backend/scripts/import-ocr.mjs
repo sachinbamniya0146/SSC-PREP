@@ -47,7 +47,8 @@ async function importFile(filePath, subjectName, chapterName, examName) {
     if (!qText || qText.length < 15) { skipped++; continue; }
     const optKeys = Object.keys(opts).filter(k => 'ABCD'.includes(k) && (opts[k] || '').length > 1);
     if (optKeys.length < 2) { skipped++; continue; }
-    if (!'ABCD'.includes(ans)) { noAns++; continue; }
+    // NOTE: 'ABCD'.includes('') is TRUE in JS — empty answer must be explicitly rejected.
+    if (!ans || !['A','B','C','D'].includes(ans)) { noAns++; continue; }
     
     const optionsJson = ['A','B','C','D']
       .filter(k => (opts[k] || '').length > 1)

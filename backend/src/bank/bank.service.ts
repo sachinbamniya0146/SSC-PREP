@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AttemptStatus } from '@prisma/client';
+import { cacheGet, cacheSet } from '../common/cache';
 
 export interface QuestionCard {
   id: string;
@@ -18,8 +19,20 @@ export interface QuestionCard {
 export class BankService {
   constructor(private prisma: PrismaService) {}
 
-  // ---- Meta: exams, subjects, chapters ----
+  // ---- v4 §18 — SearchMiss demand log (user searched, nothing matched) ----
+  async logSearchMiss(query?: string, exam?: string, userId?: string | null) {
+    const q = (query ?? '').trim();
+    if (!q) return { ok: false };
+    await this.prisma.searchMiss.create({
+      data: { query: q.slice(0, 200), exam: exam ? String(exam).slice(0, 100) : null, userId: userId ?? null },
+    });
+    return { ok: true };
+  }
+
+  // ---- Meta: exams, subjects, chapters ---- (cached 5 min — read-heavy, rarely changes)
   async meta() {
+    const cached = cacheGet<any>('bank:meta');
+    if (cached) return cached;
     const [exams, subjects, total, totalHi] = await Promise.all([
       this.prisma.$queryRaw`
         SELECT e.id, e.name, e.slug, COUNT(q.id)::int AS count
@@ -34,17 +47,23 @@ export class BankService {
         where: { isApproved: true, questionTextHindi: { not: null } },
       }),
     ]);
-    return { exams, subjects, totalQuestions: total, approxHindiCovered: totalHi };
+    const out = { exams, subjects, totalQuestions: total, approxHindiCovered: totalHi };
+    cacheSet('bank:meta', out, 300_000);
+    return out;
   }
 
   async subjects() {
-    return this.prisma.$queryRaw`
+    const cached = cacheGet<any>('bank:subjects');
+    if (cached) return cached;
+    const out = await this.prisma.$queryRaw`
       SELECT s.id, s.name, s.slug,
              COUNT(q.id)::int AS "questionCount",
              COUNT(DISTINCT q."chapterId")::int AS "chapterCount"
       FROM subjects s
       LEFT JOIN questions q ON q."subjectId" = s.id AND q."isApproved" = true
       GROUP BY s.id ORDER BY s.name;`;
+    cacheSet('bank:subjects', out, 300_000);
+    return out;
   }
 
   async chapters(subjectId?: string, examId?: string) {
@@ -80,7 +99,7 @@ export class BankService {
       id: r.id,
       questionText: r.questionText,
       questionTextHindi: r.questionTextHindi,
-      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text })),
+      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
       optionsHi: null,
       chapter: r.chapter?.name ?? '',
       answerVerificationStatus: r.answerVerificationStatus ?? 'UNVERIFIED_SINGLE_SOURCE',
@@ -101,7 +120,7 @@ export class BankService {
       id: q.id,
       questionText: q.questionText,
       questionTextHindi: q.questionTextHindi,
-      options: (q.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text })),
+      options: (q.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
       correctAnswer: q.correctAnswer,
       explanation: q.explanation,
       explanationHindi: q.explanationHindi,
@@ -169,6 +188,9 @@ export class BankService {
       selectedOption: option,
       explanation: q.explanation,
       explanationHindi: q.explanationHindi,
+      videoUrl: q.videoUrl,
+      videoSource: q.videoSource,
+      videoTitle: q.videoTitle,
       scoreDelta: correct ? q.marks : -q.negativeMarks,
     };
   }
@@ -201,7 +223,7 @@ export class BankService {
         id: r.id,
         questionText: r.questionText,
         questionTextHindi: r.questionTextHindi,
-        options: (r.optionsJson as any[]).map(o => ({ key: o.key, text: o.text })),
+        options: (r.optionsJson as any[]).map(o => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
         correctAnswer: r.correctAnswer,
         explanation: r.explanation,
         explanationHindi: r.explanationHindi,
@@ -277,7 +299,7 @@ export class BankService {
       id: q.id,
       questionText: q.questionText,
       questionTextHindi: q.questionTextHindi,
-      options: (q.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text })),
+      options: (q.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
       correctAnswer: q.correctAnswer,
       explanation: q.explanation,
       explanationHindi: q.explanationHindi,
@@ -291,12 +313,13 @@ export class BankService {
 
   async getSet(f: { examId?: string; subjectId?: string; count?: number }) {
     const takeN = Math.min(f.count ?? 10, 25);
-    const where: any = { isApproved: true };
+    const where: any = { isApproved: true, questionTextHindi: { not: '' } }; // bilingual gate (v3 §3): empty/NULL dono exclude
     if (f.examId) where.examId = f.examId;
+    else where.examId = { not: null }; // spec §3: exam badge har question par
     if (f.subjectId) where.subjectId = f.subjectId;
     const rows = await this.prisma.question.findMany({
       where,
-      include: { chapter: { select: { name: true } } },
+      include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
       orderBy: { createdAt: 'asc' },
       take: 1000,
     });
@@ -307,9 +330,199 @@ export class BankService {
         id: r.id,
         questionText: r.questionText,
         questionTextHindi: r.questionTextHindi,
-        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text })),
+        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
         chapter: r.chapter?.name ?? '',
+        examName: r.exam?.name ?? null,
+        year: r.year ?? null,
+        shift: r.shift ?? null,
+        marks: r.marks ?? 1,
+        negativeMarks: r.negativeMarks ?? 0.25,
+        correctAnswer: r.correctAnswer ?? null,
+        explanation: r.explanation ?? null,
+        explanationHindi: r.explanationHindi ?? null,
       })),
     };
+  }
+
+  // ---- Video Solution Methods ----
+
+  async addVideoSolution(
+    questionId: string,
+    dto: {
+      videoUrl: string;
+      videoSource?: string;
+      videoTitle?: string;
+      videoDescription?: string;
+      videoDurationSeconds?: number;
+      videoLanguage?: string;
+    },
+    userId: string,
+  ) {
+    // Validate that the question exists and is approved
+    const question = await this.prisma.question.findUnique({
+      where: { id: questionId },
+    });
+
+    if (!question) {
+      throw new NotFoundException('Question not found');
+    }
+
+    // Update the question with video metadata
+    const updated = await this.prisma.question.update({
+      where: { id: questionId },
+      data: {
+        videoUrl: dto.videoUrl,
+        videoSource: dto.videoSource as any, // Prisma will validate enum
+        videoTitle: dto.videoTitle,
+        videoDescription: dto.videoDescription,
+        videoDurationSeconds: dto.videoDurationSeconds,
+        videoLanguage: dto.videoLanguage,
+        videoUploadedAt: new Date(),
+        videoUploadedBy: userId,
+      },
+    });
+
+    // Create AuditLog entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'VIDEO_SOLUTION_ADDED',
+        targetEntity: 'Question',
+        entityId: questionId,
+        metadataJson: {
+          videoUrl: dto.videoUrl,
+          videoSource: dto.videoSource,
+          videoTitle: dto.videoTitle,
+        },
+      } as any,
+    });
+
+    return {
+      id: updated.id,
+      videoUrl: updated.videoUrl,
+      videoSource: updated.videoSource,
+      videoTitle: updated.videoTitle,
+      videoUploadedAt: updated.videoUploadedAt,
+    };
+  }
+
+  async getVideoSolution(questionId: string) {
+    const question = await this.prisma.question.findUnique({
+      where: { id: questionId },
+      select: {
+        id: true,
+        videoUrl: true,
+        videoSource: true,
+        videoTitle: true,
+        videoDescription: true,
+        videoDurationSeconds: true,
+        videoLanguage: true,
+        videoUploadedAt: true,
+        videoUploadedBy: true,
+      },
+    });
+
+    if (!question) {
+      throw new NotFoundException('Question not found');
+    }
+
+    return question;
+  }
+
+  async removeVideoSolution(
+    questionId: string,
+    userId: string,
+  ) {
+    // Validate that the question exists
+    const question = await this.prisma.question.findUnique({
+      where: { id: questionId },
+    });
+
+    if (!question) {
+      throw new NotFoundException('Question not found');
+    }
+
+    // Clear video fields
+    const updated = await this.prisma.question.update({
+      where: { id: questionId },
+      data: {
+        videoUrl: null,
+        videoSource: null,
+        videoTitle: null,
+        videoDescription: null,
+        videoDurationSeconds: null,
+        videoLanguage: null,
+        videoUploadedAt: null,
+        videoUploadedBy: null,
+      },
+    });
+
+    // Create AuditLog entry
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'VIDEO_SOLUTION_REMOVED',
+        targetEntity: 'Question',
+        entityId: questionId,
+        metadataJson: {
+          previousVideoUrl: question.videoUrl,
+        },
+      } as any,
+    });
+
+    return {
+      id: updated.id,
+      videoUrl: updated.videoUrl,
+    };
+  }
+
+  /** v5 §40 — Topic weightage analytics: question counts by exam × subject × chapter. */
+  async getTopicWeightage(examId?: string) {
+    const where: any = { isApproved: true, isActive: true };
+    if (examId) where.examId = examId;
+
+    const rows = await this.prisma.question.groupBy({
+      by: ['examId', 'subjectId', 'chapterId'],
+      where,
+      _count: { _all: true },
+    });
+
+    const [exams, subjects, chapters] = await Promise.all([
+      this.prisma.exam.findMany({ select: { id: true, name: true } }),
+      this.prisma.subject.findMany({ select: { id: true, name: true } }),
+      this.prisma.chapter.findMany({ select: { id: true, name: true } }),
+    ]);
+    const examMap = new Map(exams.map((e) => [e.id, e.name]));
+    const subjMap = new Map(subjects.map((s) => [s.id, s.name]));
+    const chapMap = new Map(chapters.map((c) => [c.id, c.name]));
+
+    const byExam = new Map<string, { examId: string; examName: string; total: number; subjects: Map<string, { subjectId: string; subjectName: string; total: number; chapters: { chapterId: string; chapterName: string; count: number }[] }> }>();
+    for (const r of rows) {
+      const eid = r.examId ?? 'unknown';
+      const sid = r.subjectId ?? 'unknown';
+      const cid = r.chapterId ?? 'unknown';
+      let exam = byExam.get(eid);
+      if (!exam) {
+        exam = { examId: eid, examName: examMap.get(eid) ?? 'Unknown', total: 0, subjects: new Map() };
+        byExam.set(eid, exam);
+      }
+      exam.total += r._count._all;
+      let subj = exam.subjects.get(sid);
+      if (!subj) {
+        subj = { subjectId: sid, subjectName: subjMap.get(sid) ?? 'Unknown', total: 0, chapters: [] };
+        exam.subjects.set(sid, subj);
+      }
+      subj.total += r._count._all;
+      subj.chapters.push({ chapterId: cid, chapterName: chapMap.get(cid) ?? 'Uncategorized', count: r._count._all });
+    }
+
+    return [...byExam.values()].map((e) => ({
+      examId: e.examId,
+      examName: e.examName,
+      total: e.total,
+      subjects: [...e.subjects.values()]
+        .sort((a, b) => b.total - a.total)
+        .map((s) => ({ ...s, chapters: s.chapters.sort((a, b) => b.count - a.count) })),
+    })).sort((a, b) => b.total - a.total);
   }
 }

@@ -23,8 +23,8 @@ export const envValidationSchema = Joi.object({
   REDIS_PASSWORD: Joi.string().allow('').default(''),
 
   // JWT
-  JWT_ACCESS_SECRET: Joi.string().min(32).required().messages({
-    'any.required': 'JWT_ACCESS_SECRET is required (min 32 chars)',
+  JWT_SECRET: Joi.string().min(32).default('').description('Unified JWT secret (min 32 chars)'),
+  JWT_ACCESS_SECRET: Joi.string().min(32).default('').messages({
     'string.min': 'JWT_ACCESS_SECRET must be at least 32 characters',
   }),
   JWT_REFRESH_SECRET: Joi.string().min(32).required().messages({

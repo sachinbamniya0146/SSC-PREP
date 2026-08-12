@@ -5,11 +5,13 @@ import { Public } from '../common/decorators/public.decorator';
 import type { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { AuthService } from './auth.service';
 import {
+  ForgotPasswordDto,
   GoogleAuthDto,
   LoginDto,
   LogoutDto,
   RefreshDto,
   RequestOtpDto,
+  ResetPasswordDto,
   SignupDto,
   VerifyOtpDto,
 } from './dto/auth.dto';
@@ -19,6 +21,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('signup')
   signup(@Body() dto: SignupDto) {
     return this.authService.signup(dto.email, dto.password, dto.fullName, dto.platform);
@@ -47,11 +50,27 @@ export class AuthController {
   }
 
   @Public()
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
   verifyOtp(@Body() dto: VerifyOtpDto) {
     return this.authService.loginWithOtp(dto.email, dto.otp);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('password/forgot')
+  @HttpCode(HttpStatus.OK)
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('password/reset')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.email, dto.otp, dto.newPassword);
   }
 
   @Public()

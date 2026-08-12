@@ -43,7 +43,34 @@ interface Attempt {
   selectedOption: string;
   explanation?: string | null;
   explanationHindi?: string | null;
+  videoUrl?: string | null;
+  videoSource?: string | null;
+  videoTitle?: string | null;
   scoreDelta: number;
+}
+
+// Render a YouTube/Vimeo/S3 video URL in an iframe player
+function VideoPlayer({ url, title }: { url: string; title?: string | null }) {
+  let src = url;
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtu")) {
+      const v = u.searchParams.get("v") || u.pathname.split("/").filter(Boolean).pop();
+      src = v ? `https://www.youtube.com/embed/${v}` : url;
+    } else if (u.hostname.includes("vimeo")) {
+      const id = u.pathname.split("/").filter(Boolean).pop();
+      src = id ? `https://player.vimeo.com/video/${id}` : url;
+    }
+  } catch {
+    src = url;
+  }
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-border">
+      <iframe src={src} title={title || "Video Solution"} className="aspect-video w-full"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowFullScreen />
+    </div>
+  );
 }
 
 function getAuthHeaders(): { [k: string]: string } {
@@ -74,6 +101,24 @@ export default function QuestionBankPage() {
   const [showHi, setShowHi] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [metaTotal, setMetaTotal] = React.useState(0);
+  const [bookmarked, setBookmarked] = React.useState<{ [qid: string]: boolean }>({});
+
+  const toggleBookmark = async (questionId: string) => {
+    const token = localStorage.getItem("ssc_access_token");
+    if (!token) return;
+    try {
+      const r = await fetch(`${apiBase()}/bookmarks/${questionId}/toggle`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setBookmarked((prev) => ({ ...prev, [questionId]: d.bookmarked }));
+      }
+    } catch {
+      /* ignore */
+    }
+  };
 
   // Load meta
   React.useEffect(() => {
@@ -108,6 +153,36 @@ export default function QuestionBankPage() {
   const loadQuestions = async () => {
     setLoading(true);
     try {
+      // v4 §18 — typo-tolerant search: when the user lands with ?q=, route to
+      // Meilisearch (typo/proximity ranking) instead of exact SQL filters.
+      const searchQ =
+        typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("q") : null;
+      if (searchQ) {
+        const r = await fetch(`${apiBase()}/search?q=${encodeURIComponent(searchQ)}&limit=20`, {
+          headers: getAuthHeaders(),
+        });
+        const d = await r.json();
+        const hits = Array.isArray(d?.hits) ? d.hits : [];
+        setQuestions(
+          hits.map((h: any) => ({
+            id: h.id,
+            questionText: h.questionText || "",
+            questionTextHindi: h.questionTextHindi || null,
+            options: Array.isArray(h.optionsJson) ? h.optionsJson : [],
+            chapter: h.chapter?.name || "",
+            examName: h.exam?.name || null,
+            year: h.year ?? null,
+            answerVerificationStatus: h.answerVerificationStatus ?? "UNVERIFIED_SINGLE_SOURCE",
+            lastVerifiedAt: h.lastVerifiedAt ?? null,
+            explanation: h.explanation || null,
+            explanationHindi: h.explanationHindi || null,
+          })),
+        );
+        setTotal(hits.length);
+        setSel({});
+        setResult({});
+        return;
+      }
       const params = new URLSearchParams();
       params.append("take", "20");
       if (examId) params.append("examId", examId);
@@ -196,10 +271,20 @@ export default function QuestionBankPage() {
         </div>
       </div>
 
-      <button onClick={loadQuestions} disabled={loading}
-        className="mb-6 w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50">
-        {loading ? "Loading..." : `Load Questions (${total} total)`}
-      </button>
+      <div className="mb-6 flex gap-2">
+        <button onClick={loadQuestions} disabled={loading}
+          className="flex-1 rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50">
+          {loading ? "Loading..." : `Load Questions (${total} total)`}
+        </button>
+        {chapterId && (
+          <a
+            href={`/test?chapter=${encodeURIComponent(chapterId)}${examId ? `&exam=${encodeURIComponent(examId)}` : ""}`}
+            className="rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20"
+          >
+            ▶ Practice Chapter (25 Qs)
+          </a>
+        )}
+      </div>
 
       {/* Questions */}
       {questions.length === 0 && !loading && (
@@ -220,6 +305,12 @@ export default function QuestionBankPage() {
                     {q.answerVerificationStatus === "VERIFIED_OFFICIAL" ? "✅" : ""} {q.answerVerificationStatus.replace(/_/g, " ")}
                   </span>
                 )}
+                <button
+                  onClick={() => toggleBookmark(q.id)}
+                  className="ml-auto shrink-0 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-amber-400 hover:text-amber-500"
+                >
+                  {bookmarked[q.id] ? "🔖 Saved" : "🔖 Save"}
+                </button>
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {q.options.map((o) => {
@@ -243,7 +334,17 @@ export default function QuestionBankPage() {
                   <p className="font-semibold">
                     {a.correct ? "✅ Correct ! " : "❌ Wrong. "}Correct Answer: {a.correctAnswer} ({a.scoreDelta > 0 ? "+" : ""}{a.scoreDelta})
                   </p>
-                  {a.explanation && <p className="mt-1">{a.explanation}</p>}
+                  {a.videoUrl && <VideoPlayer url={a.videoUrl} title={a.videoTitle} />}
+                  {(a.explanation || a.explanationHindi) && (
+                    <div className="mt-2 space-y-1">
+                      {a.explanation && <p className="whitespace-pre-line">📖 {a.explanation}</p>}
+                      {a.explanationHindi && (
+                        <p className="whitespace-pre-line border-t border-emerald-200 pt-1">
+                          🇮🇳 {a.explanationHindi}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

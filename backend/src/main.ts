@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import helmet from 'helmet';
 import cors from 'cors';
+import compression from 'compression';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -11,9 +12,10 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api/v1');
   app.use(helmet());
+  app.use(compression()); // gzip all API responses — fast
   app.use(
     cors({
-      origin: process.env.FRONTEND_URL?.split(',') || ['http://localhost:3000'],
+      origin: process.env.FRONTEND_URL?.split(',') || ['http://localhost:3000', 'http://localhost:3001'],
       credentials: true,
     }),
   );

@@ -122,7 +122,7 @@ export default function MocksPage() {
                 </div>
                 {m.free ? (
                   <a
-                    href="/test"
+                    href={`/test?template=${encodeURIComponent(m.id)}`}
                     className="btn bg-success text-success-foreground hover:opacity-90"
                   >
                     Start Mock

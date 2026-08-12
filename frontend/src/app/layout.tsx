@@ -21,6 +21,16 @@ export const metadata: Metadata = {
     "SSC CGL, CHSL, CPO, MTS, GD mock tests, PYQ papers, daily practice, AI analytics and study material in Hindi & English.",
   keywords:
     "SSC CGL mock test, SSC CHSL PYQ, SSC practice, SSC mock test free, SSC CGL previous year paper",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "SSC Prep Hub",
+    statusBarStyle: "black-translucent",
+  },
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
+  },
   openGraph: {
     title: "SSC Prep Hub",
     description: "India's Most Advanced SSC Practice Platform",

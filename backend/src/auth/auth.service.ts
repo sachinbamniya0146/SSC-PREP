@@ -30,6 +30,7 @@ export interface AuthenticatedSession {
     email: string;
     fullName: string;
     role: string;
+    hintQuota?: number;
   };
   accessToken: string;
   refreshToken: string;
@@ -155,6 +156,36 @@ export class AuthService implements OnModuleInit {
     return this.completeAuth(user, 'WEB');
   }
 
+  // ------------------------------------------------------- password reset (OTP)
+
+  /** Step 1: send a reset OTP to the user's email (account must exist). */
+  async forgotPassword(email: string): Promise<{ sent: boolean; devOtp?: string }> {
+    const normalized = email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (!user) {
+      // Do not leak which emails have accounts — same response either way.
+      return { sent: true };
+    }
+    return this.otp.issue(normalized);
+  }
+
+  /** Step 2: verify OTP + set a new password. OTP is single-use. */
+  async resetPassword(email: string, code: string, newPassword: string): Promise<{ ok: true }> {
+    const normalized = email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    const ok = await this.otp.verify(normalized, code);
+    if (!ok) throw new UnauthorizedException('Invalid or expired OTP');
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
+    return { ok: true };
+  }
+
   // ------------------------------------------------------------------ Google
 
   async googleLogin(
@@ -263,6 +294,7 @@ export class AuthService implements OnModuleInit {
       email: string;
       fullName: string;
       role: string;
+      hintQuota?: number;
     },
     platform: 'WEB' | 'APP',
     deviceId?: string,
@@ -309,7 +341,13 @@ export class AuthService implements OnModuleInit {
     });
 
     return {
-      user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        hintQuota: user.hintQuota ?? 3,
+      },
       ...pair,
       sessionId: session.id,
     };
@@ -326,7 +364,7 @@ export class AuthService implements OnModuleInit {
       this.config.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m',
       ACCESS_TTL_SECONDS_DEFAULT,
     );
-    const accessSecret = this.config.get<string>('JWT_ACCESS_SECRET') as string;
+    const accessSecret = this.config.get<string>('JWT_ACCESS_SECRET') || this.config.get<string>('JWT_SECRET') || '';
     const refreshSecret = this.config.get<string>('JWT_REFRESH_SECRET') as string;
     const base = {
       sub: userId,

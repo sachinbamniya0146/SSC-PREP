@@ -1,9 +1,17 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ReviewService } from '../review/review.service';
+import { GamificationService } from '../gamification/gamification.service';
 
 @Injectable()
 export class QuizService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(QuizService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private review: ReviewService,
+    private gamification: GamificationService,
+  ) {}
 
   /** Get today's daily quiz (10 questions across subjects). Auto-creates if none. */
   async getToday() {
@@ -31,13 +39,20 @@ export class QuizService {
     }
 
     const qids: string[] = Array.isArray(quiz.questionsJson) ? (quiz.questionsJson as unknown as string[]) : [];
-    const questionRecords = await this.prisma.question.findMany({ where: { id: { in: qids } } });
+    const questionRecords = await this.prisma.question.findMany({
+      where: { id: { in: qids } },
+      include: { exam: true },
+    });
     const fmt = (q: (typeof questionRecords)[number]) => ({
       id: q.id,
       q: q.questionText,
+      qh: q.questionTextHindi,
       opts: ((q.optionsJson as Array<{ key: string; text: string }>) ?? []).map(
         (o) => `${o.key}. ${o.text}`,
       ),
+      examName: q.exam?.name ?? null,
+      year: q.year,
+      shift: q.shift,
       marks: q.marks,
       negativeMarks: q.negativeMarks,
     });
@@ -60,7 +75,10 @@ export class QuizService {
     const qids: string[] = Array.isArray(quiz.questionsJson)
       ? (quiz.questionsJson as unknown as string[])
       : (JSON.parse((quiz.questionsJson as unknown as string) || '[]') as string[]);
-    const questions = await this.prisma.question.findMany({ where: { id: { in: qids } } });
+    const questions = await this.prisma.question.findMany({
+      where: { id: { in: qids } },
+      include: { exam: true },
+    });
     const byId = new Map(questions.map((q) => [q.id, q]));
 
     let totalCorrect = 0;
@@ -90,6 +108,24 @@ export class QuizService {
       update: { score, totalCorrect, totalWrong, totalSkipped, submittedAt: new Date() },
     });
 
+    // v1 Phase 6 — daily quiz XP (8/correct) + streak check-in
+    this.gamification
+      .awardTestXp(userId, totalCorrect, 'daily')
+      .catch(() => undefined);
+
+    // Spaced repetition: queue every wrong/skipped question for review
+    for (const ans of answers) {
+      const q = byId.get(ans.questionId);
+      if (!q) continue;
+      const submitted = ans.selectedOption?.trim().toUpperCase();
+      const isCorrect = submitted && submitted === q.correctAnswer.trim().toUpperCase();
+      if (!isCorrect) {
+        await this.review.schedule(userId, q.id, submitted ? 'wrong' : 'skipped').catch((e) => {
+          this.logger.warn(`review.schedule failed for ${q.id}: ${e.message}`);
+        });
+      }
+    }
+
     // Build answer key + full solutions for the student's review (teacher-grade)
     const review = questions.map((q) => {
       const submitted = answers.find((a) => a.questionId === q.id)?.selectedOption ?? null;
@@ -99,6 +135,9 @@ export class QuizService {
         questionId: q.id,
         question: q.questionText,
         questionHindi: q.questionTextHindi,
+        examName: (q as any).exam?.name ?? null,
+        year: q.year,
+        shift: q.shift,
         options: (q.optionsJson as Array<{ key: string; text: string }>) ?? [],
         correctAnswer: q.correctAnswer,
         submittedAnswer: submitted,
@@ -106,6 +145,9 @@ export class QuizService {
         wasSkipped: !submitted,
         explanation: q.explanation,
         explanationHindi: q.explanationHindi,
+        videoUrl: q.videoUrl,
+        videoSource: q.videoSource,
+        videoTitle: q.videoTitle,
         topicId: q.topicId,
       };
     });
