@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -108,7 +109,7 @@ export default function QuestionBankPage() {
 
   const loadSscRefs = async (questionId: string) => {
     try {
-      const r = await fetch(`${apiBase()}/bank/questions/${questionId}`, { headers: getAuthHeaders() });
+      const r = await fetchAuth(`${apiBase()}/bank/questions/${questionId}`, { headers: getAuthHeaders() });
       if (r.ok) {
         const d = await r.json();
         setSscRefs((prev) => ({ ...prev, [questionId]: d }));
@@ -122,7 +123,7 @@ export default function QuestionBankPage() {
     const token = localStorage.getItem("ssc_access_token");
     if (!token) return;
     try {
-      const r = await fetch(`${apiBase()}/bookmarks/${questionId}/toggle`, {
+      const r = await fetchAuth(`${apiBase()}/bookmarks/${questionId}/toggle`, {
         method: "POST",
         headers: getAuthHeaders(),
       });
@@ -140,7 +141,7 @@ export default function QuestionBankPage() {
     if (!chapterId) return;
     setPdfBusy(true);
     try {
-      const r = await fetch(`${apiBase()}/pdf/chapter/${encodeURIComponent(chapterId)}/generate`, {
+      const r = await fetchAuth(`${apiBase()}/pdf/chapter/${encodeURIComponent(chapterId)}/generate`, {
         method: "POST",
         headers: getAuthHeaders(),
       });
@@ -184,11 +185,29 @@ export default function QuestionBankPage() {
     })();
   }, []);
 
+  // v7 §1.4 — count integrity: when the exam changes, subjects/chapters counts
+  // must come from the SAME query Load Questions runs (exam-scoped).
+  React.useEffect(() => {
+    if (!examId) return;
+    let alive = true;
+    (async () => {
+      try {
+        const sc = await fetchAuth(`${apiBase()}/bank/subjects?examId=${encodeURIComponent(examId)}`, {
+          headers: getAuthHeaders(),
+        }).then((r) => r.json());
+        if (alive) setSubjects(Array.isArray(sc) ? sc : []);
+      } catch {}
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [examId]);
+
   const loadChapters = async (sid: string) => {
     setChapterId("");
     setChapters([]);
     try {
-      const r = await fetch(`${apiBase()}/bank/chapters?subjectId=${sid}`, { headers: getAuthHeaders() });
+      const r = await fetchAuth(`${apiBase()}/bank/chapters?subjectId=${sid}${examId ? `&examId=${encodeURIComponent(examId)}` : ""}`, { headers: getAuthHeaders() });
       setChapters(await r.json());
     } catch {}
   };
@@ -201,7 +220,7 @@ export default function QuestionBankPage() {
       const searchQ =
         typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("q") : null;
       if (searchQ) {
-        const r = await fetch(`${apiBase()}/search?q=${encodeURIComponent(searchQ)}&limit=20`, {
+        const r = await fetchAuth(`${apiBase()}/search?q=${encodeURIComponent(searchQ)}&limit=20`, {
           headers: getAuthHeaders(),
         });
         const d = await r.json();
@@ -231,7 +250,7 @@ export default function QuestionBankPage() {
       if (examId) params.append("examId", examId);
       if (chapterId) params.append("chapterId", chapterId);
       else if (subjectId) params.append("subjectId", subjectId);
-      const r = await fetch(`${apiBase()}/bank/questions?${params}`, { headers: getAuthHeaders() });
+      const r = await fetchAuth(`${apiBase()}/bank/questions?${params}`, { headers: getAuthHeaders() });
       const d = await r.json();
       setQuestions(d.data || []);
       setTotal(d.total || 0);
@@ -247,7 +266,7 @@ export default function QuestionBankPage() {
   const pickOption = async (qid: string, key: string) => {
     setSel((p) => ({ ...p, [qid]: key }));
     try {
-      const r = await fetch(`${apiBase()}/bank/attempt`, {
+      const r = await fetchAuth(`${apiBase()}/bank/attempt`, {
         method: "POST",
         headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ questionId: qid, selectedOption: key }),
@@ -399,21 +418,22 @@ export default function QuestionBankPage() {
                   const isSel = selKey === o.key;
                   const isCorrect = showAnswer && a.correctAnswer === o.key;
                   const wrong = showAnswer && isSel && o.key !== a.correctAnswer;
-                  const cls = wrong ? "border-red-500 bg-red-50"
-                    : isCorrect ? "border-emerald-500 bg-emerald-50"
-                    : isSel ? "border-primary bg-muted"
-                    : "border-border hover:bg-muted";
+                  const cls = wrong ? "border-red-500 bg-red-500/10 text-red-600 dark:text-red-400"
+                    : isCorrect ? "border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                    : isSel ? "border-primary bg-primary/10 text-primary"
+                    : "border-border hover:bg-muted text-foreground";
                   return (
                     <button key={o.key} onClick={() => pickOption(q.id, o.key)} disabled={Boolean(a)}
                       className={`rounded-lg border px-3 py-2 text-left text-sm transition ${cls} disabled:cursor-default`}>
-                      <span className="font-semibold">{o.key})</span> {showHi && q.questionTextHindi ? o.text : o.text}
+                      <span className="font-semibold">{o.key})</span>{" "}
+                      {showHi && (o as any).textHi ? (o as any).textHi : o.text}
                     </button>
                   );
                 })}
               </div>
               {showAnswer && (
-                <div className={`mt-3 rounded-lg border p-3 text-sm ${a.correct ? "border-emerald-300 bg-emerald-50" : "border-red-300 bg-red-50"}`}>
-                  <p className="font-semibold">
+                <div className={`mt-3 rounded-lg border p-3 text-sm ${a.correct ? "border-success/40 bg-success/10" : "border-danger/40 bg-danger/10"}`}>
+                  <p className={`font-semibold ${a.correct ? "text-success" : "text-danger"}`}>
                     {a.correct ? "✅ Correct ! " : "❌ Wrong. "}Correct Answer: {a.correctAnswer} ({a.scoreDelta > 0 ? "+" : ""}{a.scoreDelta})
                   </p>
                   {a.videoUrl && <VideoPlayer url={a.videoUrl} title={a.videoTitle} />}
@@ -421,7 +441,7 @@ export default function QuestionBankPage() {
                     <div className="mt-2 space-y-1">
                       {a.explanation && <p className="whitespace-pre-line">📖 {a.explanation}</p>}
                       {a.explanationHindi && (
-                        <p className="whitespace-pre-line border-t border-emerald-200 pt-1">
+                        <p className="whitespace-pre-line border-t border-border pt-1">
                           🇮🇳 {a.explanationHindi}
                         </p>
                       )}

@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -38,7 +39,7 @@ function VideoSolutionTab() {
               videoLanguage: videoLanguage || null,
             }
           : undefined;
-      const r = await fetch(`${apiBase}/bank/questions/${questionId}/video`, {
+      const r = await fetchAuth(`${apiBase}/bank/questions/${questionId}/video`, {
         method,
         headers: { ...headers(), "Content-Type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
@@ -222,8 +223,8 @@ function ImportPdfTab() {
     (async () => {
       try {
         const [m, sc] = await Promise.all([
-          fetch(`${apiBase}/bank/meta`, { headers: headers() }).then((r) => r.json()),
-          fetch(`${apiBase}/bank/subjects`, { headers: headers() }).then((r) => r.json()),
+          fetchAuth(`${apiBase}/bank/meta`, { headers: headers() }).then((r) => r.json()),
+          fetchAuth(`${apiBase}/bank/subjects`, { headers: headers() }).then((r) => r.json()),
         ]);
         setExams(Array.isArray(m?.exams) ? m.exams.filter((e: any) => e.count > 0) : []);
         setSubjects(Array.isArray(sc) ? sc : []);
@@ -234,7 +235,7 @@ function ImportPdfTab() {
 
   const loadBatches = async () => {
     try {
-      const r = await fetch(`${apiBase}/admin/pdf-ingestion/batches?limit=8`, { headers: headers() });
+      const r = await fetchAuth(`${apiBase}/admin/pdf-ingestion/batches?limit=8`, { headers: headers() });
       if (r.ok) {
         const d = await r.json();
         setBatches(d?.data || []);
@@ -253,7 +254,7 @@ function ImportPdfTab() {
       fd.append("subjectId", subjectId);
       if (examId) fd.append("examId", examId);
       if (year) fd.append("year", year);
-      const r = await fetch(`${apiBase}/admin/pdf-ingestion/upload-file`, {
+      const r = await fetchAuth(`${apiBase}/admin/pdf-ingestion/upload-file`, {
         method: "POST",
         headers: headers(),
         body: fd,
@@ -268,7 +269,7 @@ function ImportPdfTab() {
       if (bid) {
         for (let i = 0; i < 20; i++) {
           await new Promise((res) => setTimeout(res, 3000));
-          const br = await fetch(`${apiBase}/admin/pdf-ingestion/batches/${bid}`, { headers: headers() });
+          const br = await fetchAuth(`${apiBase}/admin/pdf-ingestion/batches/${bid}`, { headers: headers() });
           const b = await br.json().catch(() => ({}));
           if (b?.status === "COMPLETED" || b?.status === "PARTIAL") {
             setMsg({ ok: true, text: `Batch ${b.status}: ${b.completedChunks}/${b.totalChunks} chunks done. ${b.errorMessage || "Questions → review queue."}` });
@@ -370,13 +371,13 @@ function AccuracyDashboardTab() {
   const load = async () => {
     try {
       const [rv, rr, rc] = await Promise.all([
-        fetch(`${apiBase}/bank/verification-stats`, { headers: headers() }).then((r) =>
+        fetchAuth(`${apiBase}/bank/verification-stats`, { headers: headers() }).then((r) =>
           r.ok ? r.json() : null,
         ),
-        fetch(`${apiBase}/report-error`, { headers: headers() })
+        fetchAuth(`${apiBase}/report-error`, { headers: headers() })
           .then((r) => (r.ok ? r.json() : { reports: [] }))
           .catch(() => ({ reports: [] })),
-        fetch(`${apiBase}/report-error/stats/categories`, { headers: headers() })
+        fetchAuth(`${apiBase}/report-error/stats/categories`, { headers: headers() })
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
       ]);
@@ -394,7 +395,7 @@ function AccuracyDashboardTab() {
     setBusy(true);
     setMsg(null);
     try {
-      const r = await fetch(`${apiBase}/report-error/${id}/resolve`, {
+      const r = await fetchAuth(`${apiBase}/report-error/${id}/resolve`, {
         method: "POST",
         headers: { ...headers(), "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
@@ -588,7 +589,7 @@ function PdfExportTab() {
     const tid = (id ?? templateId).trim();
     if (!tid) return;
     try {
-      const r = await fetch(`${apiBase}/tests/${tid}/pdf/status`, { headers: headers() });
+      const r = await fetchAuth(`${apiBase}/tests/${tid}/pdf/status`, { headers: headers() });
       if (r.ok) setStatus(await r.json());
     } catch {}
   };
@@ -599,7 +600,7 @@ function PdfExportTab() {
     setBusy(true);
     setMsg(null);
     try {
-      const r = await fetch(`${apiBase}/tests/${tid}/pdf/${action}`, {
+      const r = await fetchAuth(`${apiBase}/tests/${tid}/pdf/${action}`, {
         method: "POST",
         headers: headers(),
       });
@@ -747,7 +748,7 @@ function RevenueTab() {
   const load = async () => {
     setBusy(true);
     try {
-      const r = await fetch(`${apiBase}/admin/revenue?days=${days}`, { headers: headers() });
+      const r = await fetchAuth(`${apiBase}/admin/revenue?days=${days}`, { headers: headers() });
       if (r.ok) setData(await r.json());
     } catch {}
     setBusy(false);
@@ -846,7 +847,7 @@ function AuditLogTab() {
   const load = async () => {
     setBusy(true);
     try {
-      const r = await fetch(`${apiBase}/admin/audit-log?page=${page}&limit=50`, { headers: headers() });
+      const r = await fetchAuth(`${apiBase}/admin/audit-log?page=${page}&limit=50`, { headers: headers() });
       if (r.ok) {
         const d = await r.json();
         setLogs(Array.isArray(d?.logs) ? d.logs : []);

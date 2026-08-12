@@ -22,8 +22,8 @@ export class BankController {
   }
 
   @Get('subjects')
-  subjects() {
-    return this.bank.subjects();
+  subjects(@Query('examId') examId?: string) {
+    return this.bank.subjects(examId);
   }
 
   @Get('chapters')

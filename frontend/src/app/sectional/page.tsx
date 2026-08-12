@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -21,7 +22,7 @@ export default function SectionalPage() {
   React.useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${apiBase()}/tests/sectional/subjects`, { headers: authHeaders() });
+        const r = await fetchAuth(`${apiBase()}/tests/sectional/subjects`, { headers: authHeaders() });
         if (!r.ok) {
           setError(r.status === 401 ? "Login required" : "Failed to load subjects");
           return;
@@ -44,7 +45,7 @@ export default function SectionalPage() {
     setStarting(true);
     try {
       // fetch the composed set to validate (and keep it cached for the test page)
-      const r = await fetch(`${apiBase()}/tests/sectional?subjectId=${selected}&count=${count}`, {
+      const r = await fetchAuth(`${apiBase()}/tests/sectional?subjectId=${selected}&count=${count}`, {
         headers: authHeaders(),
       });
       if (!r.ok) {

@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -73,7 +74,7 @@ export default function CglTestPage() {
     setLoading(true);
     setError("");
     try {
-      const r = await fetch(`${apiBase()}/tests/sectional/cgl`, { headers: authHeaders() });
+      const r = await fetchAuth(`${apiBase()}/tests/sectional/cgl`, { headers: authHeaders() });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         setError(`Failed to load exam: ${d.message || r.status}`);
@@ -91,7 +92,7 @@ export default function CglTestPage() {
       setPhase("exam");
       // P0: open a server-authoritative attempt — server stamps the deadline.
       try {
-        const ar = await fetch(`${apiBase()}/tests/attempts/start`, {
+        const ar = await fetchAuth(`${apiBase()}/tests/attempts/start`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({ testTemplateId: "tpl-cgl-pyq-2024" }),

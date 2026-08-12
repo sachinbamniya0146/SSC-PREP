@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -66,8 +67,8 @@ export default function VerificationPage() {
   const loadAll = async () => {
     try {
       const [s, q] = await Promise.all([
-        fetch(`${apiBase}/bank/verification-stats`, { headers: headers() }).then(r => r.ok ? r.json() : null),
-        fetch(`${apiBase}/bank/questions?take=20`, { headers: headers() }).then(r => r.ok ? r.json() : null),
+        fetchAuth(`${apiBase}/bank/verification-stats`, { headers: headers() }).then(r => r.ok ? r.json() : null),
+        fetchAuth(`${apiBase}/bank/questions?take=20`, { headers: headers() }).then(r => r.ok ? r.json() : null),
       ]);
       setStats(s);
       setQuestions(q?.data || []);
@@ -77,7 +78,7 @@ export default function VerificationPage() {
 
   const updateStatus = async (qid: string, status: string) => {
     try {
-      const r = await fetch(`${apiBase}/bank/questions/${qid}/verify`, {
+      const r = await fetchAuth(`${apiBase}/bank/questions/${qid}/verify`, {
         method: "PUT",
         headers: { ...headers(), "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
@@ -89,7 +90,7 @@ export default function VerificationPage() {
   // v1 §7.4 — human review gate control (admin only)
   const setReviewStatus = async (qid: string, reviewStatus: string) => {
     try {
-      const r = await fetch(`${apiBase}/admin/pdf-ingestion/questions/${qid}/review-status`, {
+      const r = await fetchAuth(`${apiBase}/admin/pdf-ingestion/questions/${qid}/review-status`, {
         method: "PUT",
         headers: { ...headers(), "Content-Type": "application/json" },
         body: JSON.stringify({ reviewStatus }),
@@ -102,7 +103,7 @@ export default function VerificationPage() {
   // v5 §37.2 — deterministic re-derivation (VERIFIED_COMPUTED), admin-only
   const rederive = async (qid: string) => {
     try {
-      const r = await fetch(`${apiBase}/admin/solver/recompute/${qid}`, {
+      const r = await fetchAuth(`${apiBase}/admin/solver/recompute/${qid}`, {
         method: "POST",
         headers: headers(),
       });
@@ -123,7 +124,7 @@ export default function VerificationPage() {
     const ok = confirm("Run batch re-derivation on unverified/disputed approved questions (max 200)? Verified ones are skipped.");
     if (!ok) return;
     try {
-      const r = await fetch(`${apiBase}/admin/solver/recompute-batch`, {
+      const r = await fetchAuth(`${apiBase}/admin/solver/recompute-batch`, {
         method: "POST",
         headers: { ...headers(), "Content-Type": "application/json" },
         body: JSON.stringify({ limit: 200 }),

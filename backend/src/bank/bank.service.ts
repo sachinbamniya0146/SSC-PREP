@@ -52,8 +52,9 @@ export class BankService {
     return out;
   }
 
-  async subjects() {
-    const cached = cacheGet<any>('bank:subjects');
+  async subjects(examId?: string) {
+    const cacheKey = examId ? `bank:subjects:${examId}` : 'bank:subjects';
+    const cached = cacheGet<any>(cacheKey);
     if (cached) return cached;
     const out = await this.prisma.$queryRaw`
       SELECT s.id, s.name, s.slug,
@@ -61,8 +62,9 @@ export class BankService {
              COUNT(DISTINCT q."chapterId")::int AS "chapterCount"
       FROM subjects s
       LEFT JOIN questions q ON q."subjectId" = s.id AND q."isApproved" = true
+           AND (${examId}::text IS NULL OR q."examId" = ${examId})
       GROUP BY s.id ORDER BY s.name;`;
-    cacheSet('bank:subjects', out, 300_000);
+    cacheSet(cacheKey, out, 300_000);
     return out;
   }
 

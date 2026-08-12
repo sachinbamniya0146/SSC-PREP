@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -32,7 +33,7 @@ export default function BookmarksPage() {
   React.useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${apiBase()}/bookmarks`, { headers: authHeaders() });
+        const r = await fetchAuth(`${apiBase()}/bookmarks`, { headers: authHeaders() });
         if (!r.ok) {
           setError(r.status === 401 ? "Login required" : "Failed to load bookmarks");
           return;
@@ -48,7 +49,7 @@ export default function BookmarksPage() {
   }, []);
 
   const remove = async (id: string) => {
-    const r = await fetch(`${apiBase()}/bookmarks/${id}/toggle`, {
+    const r = await fetchAuth(`${apiBase()}/bookmarks/${id}/toggle`, {
       method: "POST",
       headers: authHeaders(),
     });

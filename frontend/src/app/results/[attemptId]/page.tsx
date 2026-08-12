@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -69,7 +70,7 @@ export default function AttemptReviewPage() {
     if (!params?.attemptId) return;
     (async () => {
       try {
-        const r = await fetch(`${apiBase()}/tests/attempts/${params.attemptId}`, { headers: authHeaders() });
+        const r = await fetchAuth(`${apiBase()}/tests/attempts/${params.attemptId}`, { headers: authHeaders() });
         if (!r.ok) {
           setError(r.status === 401 ? "Login required" : `Failed to load attempt (${r.status})`);
           return;
@@ -78,7 +79,7 @@ export default function AttemptReviewPage() {
         setDetail(d);
         // best-effort stats fetch (real cutoff + toppers for this template)
         if (d?.testTemplateId) {
-          fetch(`${apiBase()}/tests/stats/${d.testTemplateId}`, { headers: authHeaders() })
+          fetchAuth(`${apiBase()}/tests/stats/${d.testTemplateId}`, { headers: authHeaders() })
             .then((r) => (r.ok ? r.json() : null))
             .then((s) => s && setStats(s))
             .catch(() => null);

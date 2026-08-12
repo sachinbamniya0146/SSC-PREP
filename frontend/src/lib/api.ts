@@ -80,3 +80,22 @@ export function authHeaders(): { [k: string]: string } {
   const token = localStorage.getItem("ssc_access_token") || "";
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
+
+/** v7 §1.1 fix — raw-fetch equivalent of api() with automatic token refresh:
+ *  attaches Bearer, and on 401 tries the refresh token once before giving up.
+ *  Pages using raw fetch (test/question-bank/results/admin/...) must call this
+ *  instead of plain fetch so an expired access token can't wedge the UI. */
+export async function fetchAuth(path: string, init: RequestInit = {}, _retried = false): Promise<Response> {
+  const headers = new Headers(init.headers || {});
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("ssc_access_token") || "";
+    if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+  }
+  const res = await fetch(path, { ...init, headers });
+  if (res.status === 401 && !_retried && typeof window !== "undefined") {
+    const refreshed = await tryRefresh();
+    if (refreshed) return fetchAuth(path, init, true);
+  }
+  return res;
+}
+

@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -29,7 +30,7 @@ export default function ResultsPage() {
   React.useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${apiBase()}/tests/attempts`, { headers: authHeaders() });
+        const r = await fetchAuth(`${apiBase()}/tests/attempts`, { headers: authHeaders() });
         if (!r.ok) {
           setError(r.status === 401 ? "Login required" : "Failed to load history");
           return;

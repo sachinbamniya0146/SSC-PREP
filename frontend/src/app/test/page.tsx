@@ -1,3 +1,4 @@
+import { fetchAuth } from "@/lib/api";
 "use client";
 
 import * as React from "react";
@@ -188,7 +189,7 @@ export default function TestPage() {
       let durationSec = 0;
       let attemptId: string | null = null;
       if (isDaily) {
-        const dr = await fetch(`${apiBase()}/tests/daily-test/start`, {
+        const dr = await fetchAuth(`${apiBase()}/tests/daily-test/start`, {
           method: "POST",
           headers: getAuthHeaders(),
         });
@@ -210,7 +211,7 @@ export default function TestPage() {
       // timed attempt.
       const tplId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("template") : null;
       if (tplId) {
-        const pr = await fetch(`${apiBase()}/tests/paper/${encodeURIComponent(tplId)}`, {
+        const pr = await fetchAuth(`${apiBase()}/tests/paper/${encodeURIComponent(tplId)}`, {
           headers: getAuthHeaders(),
         });
         if (!pr.ok) {
@@ -242,7 +243,7 @@ export default function TestPage() {
         durationSec = (paper?.durationMinutes || 60) * 60;
         // server-authoritative timed attempt
         try {
-          const ar = await fetch(`${apiBase()}/tests/attempts/start`, {
+          const ar = await fetchAuth(`${apiBase()}/tests/attempts/start`, {
             method: "POST",
             headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
             body: JSON.stringify({ testTemplateId: tplId }),
@@ -282,7 +283,7 @@ export default function TestPage() {
           const qp = new URLSearchParams({ take: "25" });
           const eid = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("exam") : null;
           if (eid) qp.append("examId", eid);
-          const cr = await fetch(`${apiBase()}/bank/chapters/${encodeURIComponent(chapId)}/pyq?${qp}`, {
+          const cr = await fetchAuth(`${apiBase()}/bank/chapters/${encodeURIComponent(chapId)}/pyq?${qp}`, {
             headers: getAuthHeaders(),
           });
           const cd = await cr.json();
@@ -291,7 +292,7 @@ export default function TestPage() {
       }
       if (qs.length === 0) {
         // Default: random bilingual set from the approved bank
-        const r = await fetch(`${apiBase()}/bank/set?count=10`, {
+        const r = await fetchAuth(`${apiBase()}/bank/set?count=10`, {
           headers: getAuthHeaders(),
         });
         const d = await r.json();
@@ -366,7 +367,7 @@ export default function TestPage() {
           questionId,
           selectedOption,
         }));
-        await fetch(`${apiBase()}/tests/attempts/${attemptId}/answers`, {
+        await fetchAuth(`${apiBase()}/tests/attempts/${attemptId}/answers`, {
           method: "PUT",
           headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({ answers: payload }),
@@ -469,7 +470,7 @@ export default function TestPage() {
       const ans = answers[q.id];
       if (!ans) continue;
       try {
-        const r = await fetch(`${apiBase()}/bank/attempt`, {
+        const r = await fetchAuth(`${apiBase()}/bank/attempt`, {
           method: "POST",
           headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -511,7 +512,7 @@ export default function TestPage() {
             timeSpentSeconds: timeSpent[q.id] || 0,
           });
         }
-        await fetch(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
+        await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
           method: "POST",
           headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({ answers: answersPayload }),
@@ -537,7 +538,7 @@ export default function TestPage() {
       }
       const total = qs.length;
       const acc = total ? Math.round(((correct + 0) / total) * 100) : 0;
-      await fetch(`${apiBase()}/tests/attempts`, {
+      await fetchAuth(`${apiBase()}/tests/attempts`, {
         method: "POST",
         headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({
