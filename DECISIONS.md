@@ -194,3 +194,47 @@ Spec saved to `docs/ssc-prep-hub-hermes-prompt-v4.md` (Sections 29–35). Adds a
 - OCR jobs complete → re-run `import-ocr.mjs` for final counts.
 - Hindi auto-translation for ~3,800 missing questions (needs GEMINI_API_KEY in backend/.env).
 - Admin PDF upload UI + queue (Phase 3), Razorpay (Phase 5), Meilisearch, deploy to sscprephub.in.
+
+## 11. 2026-08-12 — P0 Audit Remediation (v1/v2/v3/v5 gaps from 6-way parallel audit)
+
+**11.1 VERIFIED_COMPUTED solver (v5 §37)** — `backend/src/solver/`.
+Deterministic (never LLM) re-derivation engine: safe arithmetic evaluator +
+10 pattern families (arithmetic, %, chained %, ratio, number/letter series,
+coding-decoding, average, linear equation, SI). Option-matching requires a
+UNIQUE option — ambiguity → honest decline. Self-test: 26/26
+(`node --experimental-strip-types scripts/solver-self-test.ts`).
+`POST /admin/solver/recompute/:id` + `recompute-batch` (auto target:
+approved + UNVERIFIED/DISPUTED). Verified live: "20% of 45% of 800" → 72
+(option D) → VERIFIED_COMPUTED with `verificationEvidence`.
+
+**11.2 Daily Test (v3 §6.4)** — `backend/src/tests/daily-test.*`.
+One plan-based timed test/day: compose bilingual 4-option pool, round-robin
+by year, N = min(max(dailyTarget,5),40); duration ~0.6 min/Q (CGL scale);
+`questionSnapshot` (JSONB) on TestAttempt → paper stable across refresh;
+resume unexpired in-progress; single submission/day; server-authoritative
+timer via existing expiresAt/auto-submit. UI: /test?daily=1 + mocks card.
+
+**11.3 Entitlement (v2 §16)** — free plan: 100 bookmarks cap enforced
+server-side (toggle), `/auth/me` returns entitlements (plan, bookmarks
+used/limit, daily quiz state) for upsell. Daily quiz stays free (10 Qs/day).
+
+**11.4 Review gate (v1 §7.3-7.4)** — Question gains `aiConfidenceScore`
+(Float?) + `reviewStatus` (String default APPROVED; existing 57k
+grandfathered). question-review.worker now real: score ≥ threshold
+(REVIEW_AUTO_APPROVE_THRESHOLD, default 0.9) → APPROVED else IN_REVIEW;
+approval ≠ publish (VERIFIED_* gate still applies). Admin:
+`PUT /admin/pdf-ingestion/questions/:id/review-status` + verification-page
+dropdown.
+
+**11.5 Previous SSC References (v2 §7.6)** — real-DB, computed at read:
+same exam+chapter across years (count, prior years, acrossYears) +
+expected frequency (last-5y count). Shown via "📚 SSC Refs" chip in
+question-bank (fetches /bank/questions/:id). Honest "not enough data"
+fallback.
+
+**11.6 Bilingual hard publish gate (v3 §6.3)** — approveQuestion 400s
+listing missing Hindi fields; bulkApprove skips non-bilingual rows (count
+reported). Verified live: English-only approve → 400.
+
+**11.7 Deferred (user order)**: PDF AI extraction pipeline (#1), Razorpay
+webhook + chapter ₹1 PDF (#5/#6) — next batches.

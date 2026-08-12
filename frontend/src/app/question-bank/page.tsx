@@ -102,6 +102,20 @@ export default function QuestionBankPage() {
   const [loading, setLoading] = React.useState(false);
   const [metaTotal, setMetaTotal] = React.useState(0);
   const [bookmarked, setBookmarked] = React.useState<{ [qid: string]: boolean }>({});
+  // v2 §7.6 — Previous SSC References (real-DB, loaded on demand)
+  const [sscRefs, setSscRefs] = React.useState<{ [qid: string]: any }>({});
+
+  const loadSscRefs = async (questionId: string) => {
+    try {
+      const r = await fetch(`${apiBase()}/bank/questions/${questionId}`, { headers: getAuthHeaders() });
+      if (r.ok) {
+        const d = await r.json();
+        setSscRefs((prev) => ({ ...prev, [questionId]: d }));
+      }
+    } catch {
+      /* ignore */
+    }
+  };
 
   const toggleBookmark = async (questionId: string) => {
     const token = localStorage.getItem("ssc_access_token");
@@ -306,12 +320,42 @@ export default function QuestionBankPage() {
                   </span>
                 )}
                 <button
+                  onClick={() => loadSscRefs(q.id)}
+                  className="shrink-0 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-primary hover:text-primary"
+                  title="Previous SSC references (real data)"
+                >
+                  📚 SSC Refs
+                </button>
+                <button
                   onClick={() => toggleBookmark(q.id)}
                   className="ml-auto shrink-0 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-amber-400 hover:text-amber-500"
                 >
                   {bookmarked[q.id] ? "🔖 Saved" : "🔖 Save"}
                 </button>
               </div>
+              {sscRefs[q.id] && (
+                <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
+                  <p className="font-semibold text-primary">
+                    📚 Previous SSC References ({sscRefs[q.id].previousSscRefs?.count ?? 0} in bank ·{" "}
+                    {sscRefs[q.id].previousSscRefs?.acrossYears ?? 0} across years)
+                  </p>
+                  {(sscRefs[q.id].previousSscRefs?.years ?? []).length > 0 && (
+                    <p className="mt-1">Prior years: {(sscRefs[q.id].previousSscRefs.years as number[]).join(", ")}</p>
+                  )}
+                  {sscRefs[q.id].expectedFrequency?.askedTimes != null && (
+                    <p className="mt-1">
+                      Expected frequency: asked{" "}
+                      {sscRefs[q.id].expectedFrequency.askedTimes}× in the last 5 years
+                      {sscRefs[q.id].expectedFrequency.yearsCovered
+                        ? ` (${sscRefs[q.id].expectedFrequency.yearsCovered} yearly questions in bank)`
+                        : ""}
+                    </p>
+                  )}
+                  {(sscRefs[q.id].expectedFrequency?.askedTimes == null || sscRefs[q.id].previousSscRefs?.count === 0) && (
+                    <p className="mt-1">Not enough yearly data yet — this chapter is still being backfilled.</p>
+                  )}
+                </div>
+              )}
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {q.options.map((o) => {
                   const isSel = selKey === o.key;

@@ -27,6 +27,7 @@ import { AuditLogModule } from './audit-log/audit-log.module';
 import { AdminModule } from './admin/admin.module';
 import { SearchModule } from './search/search.module';
 import { TelegramModule } from './telegram/telegram.module';
+import { SolverModule } from './solver/solver.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { envValidationSchema } from './config/env.validation';
@@ -78,6 +79,7 @@ import { envValidationSchema } from './config/env.validation';
     MonetizationModule,
     S3Module,
     AuditLogModule,
+    SolverModule,
     AdminModule,
     SearchModule,
     TelegramModule,

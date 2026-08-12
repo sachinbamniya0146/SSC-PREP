@@ -97,7 +97,9 @@ export class AuthController {
   }
 
   @Get('me')
-  me(@CurrentUser() user: AuthenticatedUser) {
-    return { user };
+  async me(@CurrentUser() user: AuthenticatedUser) {
+    // v2 §16 — entitlement summary for upsell + client gating hints
+    const entitlements = await this.authService.entitlements(user.userId);
+    return { user, entitlements };
   }
 }

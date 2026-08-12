@@ -91,6 +91,24 @@ export default function MocksPage() {
           </div>
         )}
 
+        {/* v3 §6.4 — Daily Test (Live mode): one timed plan-based test per day */}
+        {!loading && (
+          <div className="card mt-6 flex flex-wrap items-center justify-between gap-3 border-primary/30 bg-primary/5 p-5">
+            <div>
+              <p className="font-semibold text-primary">🎯 Daily Test (Live Mode)</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                One timed test per day from your study plan — exam-style, server-timed, auto-submit at zero. Missed days stack up as backlog.
+              </p>
+            </div>
+            <a
+              href="/test?daily=1"
+              className="btn bg-primary text-primary-foreground hover:opacity-90"
+            >
+              Start Daily Test
+            </a>
+          </div>
+        )}
+
         {!loading && (
           <div className="mt-6 space-y-4">
             {mocks.length === 0 && (

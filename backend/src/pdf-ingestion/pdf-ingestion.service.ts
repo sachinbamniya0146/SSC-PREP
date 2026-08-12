@@ -200,6 +200,20 @@ export class PdfIngestionService {
       );
     }
 
+    // v3 §6.3 — bilingual hard publish gate: both languages must be complete
+    // before a question can leave the review queue / enter the live pool.
+    const finalTextHindi = (dto.questionTextHindi ?? question.questionTextHindi ?? '').toString().trim();
+    const finalExpHindi = (dto.explanationHindi ?? question.explanationHindi ?? '').toString().trim();
+    const missing: string[] = [];
+    if (!finalTextHindi) missing.push('questionTextHindi');
+    if (!finalExpHindi) missing.push('explanationHindi');
+    if (missing.length) {
+      throw new BadRequestException(
+        `Bilingual publish gate (v3 §6.3): missing Hindi fields — ${missing.join(', ')}. ` +
+          `Translate first, or flag as AI_DRAFT for the review queue.`,
+      );
+    }
+
     // Create version history
     await this.prisma.questionVersion.create({
       data: {
@@ -234,6 +248,8 @@ export class PdfIngestionService {
         translationStatus: dto.translationStatus ?? question.translationStatus,
         answerVerificationStatus: targetStatus,
         lastVerifiedAt: new Date(),
+        aiConfidenceScore: dto.aiConfidenceScore ?? question.aiConfidenceScore,
+        reviewStatus: 'APPROVED', // human/admin gate passed
         isApproved: true,
       },
     });
@@ -258,10 +274,14 @@ export class PdfIngestionService {
     });
 
     // v5 §37.1 — publish gate: only VERIFIED_* statuses may be bulk-published.
-    // UNVERIFIED/DISPUTED rows are left untouched so they stay in the review queue.
-    const eligible = questions.filter((q) =>
-      PdfIngestionService.VERIFIED_STATUSES.has(q.answerVerificationStatus ?? ''),
-    );
+    // v3 §6.3 — bilingual gate: Hindi question + explanation required too.
+    // UNVERIFIED/DISPUTED or non-bilingual rows are left untouched (stay in queue).
+    const eligible = questions.filter((q) => {
+      if (!PdfIngestionService.VERIFIED_STATUSES.has(q.answerVerificationStatus ?? '')) return false;
+      const textHi = (q.questionTextHindi ?? '').toString().trim();
+      const expHi = (q.explanationHindi ?? '').toString().trim();
+      return textHi.length > 0 && expHi.length > 0;
+    });
     const skipped = questions.length - eligible.length;
     const eligibleIds = eligible.map((q) => q.id);
     if (eligibleIds.length === 0) {

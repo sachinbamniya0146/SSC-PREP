@@ -18,6 +18,24 @@ export class BookmarksService {
       await this.prisma.bookmark.delete({ where: { userId_questionId: { userId, questionId } } });
       return { bookmarked: false };
     }
+
+    // v2 §16 — entitlement guard: free users get 100 bookmarks; premium unlimited.
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true, subscriptions: { where: { status: 'ACTIVE' }, select: { endsAt: true }, take: 1 } },
+    });
+    const isPremium =
+      user?.role === 'ADMIN' ||
+      (user?.subscriptions?.[0] != null && new Date(user.subscriptions[0].endsAt) > new Date());
+    if (!isPremium) {
+      const count = await this.prisma.bookmark.count({ where: { userId } });
+      if (count >= 100) {
+        throw new BadRequestException(
+          'Free plan: 100 bookmarks max. Remove some, or upgrade to Premium for unlimited bookmarks.',
+        );
+      }
+    }
+
     await this.prisma.bookmark.create({ data: { userId, questionId } });
     return { bookmarked: true };
   }

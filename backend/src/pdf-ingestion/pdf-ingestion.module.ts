@@ -9,12 +9,14 @@ import { ExplanationGenerationWorker } from './workers/explanation-generation.wo
 import { QuestionReviewWorker } from './workers/question-review.worker';
 import { S3Module } from '../s3/s3.module';
 import { RedisModule } from '../redis/redis.module';
+import { AuditLogModule } from '../audit-log/audit-log.module';
 
 @Module({
   imports: [
     PrismaModule,
     S3Module,
     RedisModule,
+    AuditLogModule,
     BullModule.registerQueue(
       { name: 'pdf-extraction' },
       { name: 'question-review' },

@@ -180,13 +180,33 @@ export default function TestPage() {
     setStarting(true);
     setLoading(true);
     try {
+      // v3 §6.4 — Daily Test (Live mode): /test?daily=1 → server composes the
+      // plan-based paper, snapshots it and opens a server-authoritative timed attempt
+      const isDaily = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("daily") === "1" : false;
+      let qs: UgQ[] = [];
+      let durationSec = 0;
+      let attemptId: string | null = null;
+      if (isDaily) {
+        const dr = await fetch(`${apiBase()}/tests/daily-test/start`, {
+          method: "POST",
+          headers: getAuthHeaders(),
+        });
+        const dd = await dr.json().catch(() => ({}));
+        if (!dr.ok) {
+          alert(`⚠️ ${dd?.message || "Daily Test unavailable — create a study plan first."}`);
+          setLoading(false);
+          setStarting(false);
+          return;
+        }
+        qs = Array.isArray(dd?.questions) ? dd.questions : [];
+        durationSec = dd?.durationSec || 0;
+        attemptId = dd?.attemptId ?? null;
+        if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
+      }
       // v6 §2a — full shift paper: /test?template=<id> composes the template's paper
       // server-side (real exam blueprint, no answer key) + opens a server-authoritative
       // timed attempt.
       const tplId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("template") : null;
-      let qs: UgQ[] = [];
-      let durationSec = 0;
-      let attemptId: string | null = null;
       if (tplId) {
         const pr = await fetch(`${apiBase()}/tests/paper/${encodeURIComponent(tplId)}`, {
           headers: getAuthHeaders(),

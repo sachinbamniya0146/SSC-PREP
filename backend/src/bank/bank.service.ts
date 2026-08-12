@@ -116,6 +116,35 @@ export class BankService {
       include: { chapter: { select: { name: true } } },
     });
     if (!q) throw new NotFoundException('Question not found');
+
+    // v2 §7.6 — Previous SSC References: real-DB computation, never static text.
+    // Same exam + same chapter across the other years in the bank.
+    let prevRefs = { count: 0, years: [] as number[], acrossYears: 0 };
+    if (q.chapterId) {
+      const refs = await this.prisma.question.findMany({
+        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, isApproved: true, id: { not: q.id } },
+        select: { year: true },
+        take: 500,
+      });
+      const years = [...new Set(refs.map((r) => r.year).filter((y): y is number => y != null))].sort((a, b) => b - a);
+      const across = q.year != null ? years.filter((y) => y !== q.year).length : years.length;
+      prevRefs = { count: refs.length, years: years.slice(0, 10), acrossYears: across };
+    }
+
+    // Expected frequency: how many times this chapter's questions appear in the
+    // bank for the last 5 years (proxy for "asked N times in recent papers").
+    const now = new Date().getFullYear();
+    let expectedFrequency: { askedTimes: number | null; lastFiveYearsCount: number; yearsCovered: number } | null = null;
+    if (q.chapterId) {
+      const last5 = await this.prisma.question.count({
+        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, isApproved: true, year: { gte: now - 5 } },
+      });
+      const covered = await this.prisma.question.count({
+        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, isApproved: true, year: { not: null } },
+      });
+      expectedFrequency = { askedTimes: last5 > 0 ? last5 : null, lastFiveYearsCount: last5, yearsCovered: covered };
+    }
+
     return {
       id: q.id,
       questionText: q.questionText,
@@ -126,6 +155,11 @@ export class BankService {
       explanationHindi: q.explanationHindi,
       chapter: q.chapter?.name ?? '',
       year: q.year,
+      shift: q.shift,
+      answerVerificationStatus: q.answerVerificationStatus,
+      reviewStatus: q.reviewStatus,
+      previousSscRefs: prevRefs,
+      expectedFrequency,
     };
   }
 
@@ -230,6 +264,8 @@ export class BankService {
         exam: r.exam?.name,
         year: r.year,
         verificationStatus: r.answerVerificationStatus,
+        reviewStatus: r.reviewStatus,
+        aiConfidenceScore: r.aiConfidenceScore,
         difficulty: r.difficulty,
       })),
     };

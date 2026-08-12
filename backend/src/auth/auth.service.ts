@@ -270,6 +270,46 @@ export class AuthService implements OnModuleInit {
 
   // ------------------------------------------------------------------ logout
 
+  /**
+   * v2 §16 — entitlement summary for the client (upsell + gating hints).
+   * Free tier: 10 daily quiz questions/day (1 quiz), 100 bookmarks, basic
+   * analytics. Premium (ACTIVE subscription): everything unlimited.
+   */
+  async entitlements(userId: string) {
+    const [user, bookmarkCount, todayQuiz] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { role: true, subscriptions: { where: { status: 'ACTIVE' }, select: { endsAt: true }, take: 1 } },
+      }),
+      this.prisma.bookmark.count({ where: { userId } }),
+      (async () => {
+        const t = new Date();
+        t.setHours(0, 0, 0, 0);
+        const q = await this.prisma.dailyQuiz.findUnique({ where: { date: t } });
+        if (!q) return null;
+        const a = await this.prisma.dailyQuizAttempt.findUnique({
+          where: { userId_dailyQuizId: { userId, dailyQuizId: q.id } },
+          select: { id: true, score: true },
+        });
+        return a ? { taken: true, score: a.score } : { taken: false };
+      })(),
+    ]);
+
+    const isPremium =
+      user?.role === 'ADMIN' ||
+      (user?.subscriptions?.[0] != null && new Date(user.subscriptions[0].endsAt) > new Date());
+
+    return {
+      isPremium,
+      plan: isPremium ? (user?.role === 'ADMIN' ? 'ADMIN' : 'PREMIUM') : 'FREE',
+      bookmarks: { used: bookmarkCount, limit: isPremium ? null : 100 },
+      dailyQuiz: todayQuiz ?? { taken: false },
+      message: isPremium
+        ? undefined
+        : 'Upgrade to Premium for unlimited bookmarks, all mocks and deeper analytics.',
+    };
+  }
+
   async logout(refreshToken: string, sessionId?: string): Promise<void> {
     const hash = createHash('sha256').update(refreshToken).digest('hex');
     await this.prisma.refreshToken.updateMany({

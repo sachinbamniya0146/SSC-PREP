@@ -361,6 +361,9 @@ model Question {
   translationStatus  TranslationStatus @default(HUMAN_VERIFIED)
   answerVerificationStatus String @default("UNVERIFIED_SINGLE_SOURCE") // VERIFIED_OFFICIAL, VERIFIED_MULTI_SOURCE, VERIFIED_COMPUTED, UNVERIFIED_SINGLE_SOURCE, DISPUTED
   lastVerifiedAt DateTime?
+  verificationEvidence String? // solver derivation / multi-source notes backing the status
+  aiConfidenceScore Float? // v1 §7.3 — extraction-model confidence (0-1); below threshold → review queue
+  reviewStatus String @default("APPROVED") // v1 §7.4 — AI_DRAFT → IN_REVIEW → APPROVED / REJECTED (gate before PUBLISHED)
   isApproved         Boolean           @default(false)
   
   difficulty         Difficulty        @default(MEDIUM)
@@ -498,6 +501,11 @@ model TestAttempt {
   user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   testTemplate     TestTemplate  @relation(fields: [testTemplateId], references: [id])
   answers          AttemptAnswer[]
+
+  // v3 §6.4 Daily Test / v6 §2a — stable per-attempt question composition
+  // (question ids in order; server composes from this, so a mid-test refresh
+  // returns the identical paper instead of re-sampling the pool).
+  questionSnapshot Json?
 
   @@index([userId, status])
   @@index([testTemplateId, status]) // rank/percentile + leaderboard hot path

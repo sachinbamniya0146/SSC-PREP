@@ -12,6 +12,9 @@ type QRow = {
   questionText: string;
   answerVerificationStatus: string;
   lastVerifiedAt?: string | null;
+  verificationEvidence?: string | null;
+  reviewStatus?: string | null;
+  aiConfidenceScore?: number | null;
 };
 
 const STATUS_META: Record<string, { label: string; cls: string; badge: string }> = {
@@ -83,6 +86,55 @@ export default function VerificationPage() {
     } catch (e) { console.error(e); }
   };
 
+  // v1 §7.4 — human review gate control (admin only)
+  const setReviewStatus = async (qid: string, reviewStatus: string) => {
+    try {
+      const r = await fetch(`${apiBase}/admin/pdf-ingestion/questions/${qid}/review-status`, {
+        method: "PUT",
+        headers: { ...headers(), "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewStatus }),
+      });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.message || "Review status update failed"); }
+      loadAll();
+    } catch (e) { console.error(e); }
+  };
+
+  // v5 §37.2 — deterministic re-derivation (VERIFIED_COMPUTED), admin-only
+  const rederive = async (qid: string) => {
+    try {
+      const r = await fetch(`${apiBase}/admin/solver/recompute/${qid}`, {
+        method: "POST",
+        headers: headers(),
+      });
+      const j = await r.json();
+      if (!r.ok) { alert(j.message || "Re-derivation failed"); return; }
+      if (j.solved && j.matchesStored) {
+        alert(`✅ Verified by computation — option ${j.optionKey} (${j.optionText})\n\n${j.evidence}`);
+      } else if (j.solved && !j.matchesStored) {
+        alert(`⚠️ Computation disagrees!\n\nComputed: option ${j.computedOptionKey} (${j.computedText})\nStored:  option ${j.storedAnswerKey} (${j.storedAnswerText})\n\n${j.warning}`);
+      } else {
+        alert(`Could not re-derive this question deterministically (${j.reason}).\nNo status change was made.`);
+      }
+      loadAll();
+    } catch (e) { console.error(e); }
+  };
+
+  const rederiveBatch = async () => {
+    const ok = confirm("Run batch re-derivation on unverified/disputed approved questions (max 200)? Verified ones are skipped.");
+    if (!ok) return;
+    try {
+      const r = await fetch(`${apiBase}/admin/solver/recompute-batch`, {
+        method: "POST",
+        headers: { ...headers(), "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 200 }),
+      });
+      const j = await r.json();
+      if (!r.ok) { alert(j.message || "Batch failed"); return; }
+      alert(`Batch done: ${j.processed} processed · ${j.verified} verified by computation · ${j.mismatch} mismatch · ${j.unsolved} unsolved`);
+      loadAll();
+    } catch (e) { console.error(e); }
+  };
+
   if (loading) return (
     <div className="flex min-h-screen items-center justify-center bg-background">
       <p className="text-muted-foreground">Loading verification data...</p>
@@ -127,7 +179,14 @@ export default function VerificationPage() {
         <div className="mt-10">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold">Recent Questions &amp; Verification Status</h2>
-            <span className="text-xs text-muted-foreground">{questions.length} shown</span>
+            <span className="flex items-center gap-3 text-xs text-muted-foreground">
+              {user?.role === "ADMIN" && (
+                <button onClick={rederiveBatch} className="btn btn-outline px-3 py-1.5 text-xs">
+                  🛠 Batch re-derive (max 200)
+                </button>
+              )}
+              {questions.length} shown
+            </span>
           </div>
 
           <div className="mt-4 space-y-3">
@@ -142,16 +201,46 @@ export default function VerificationPage() {
                     <p className="line-clamp-2 text-sm font-medium">{q.questionText}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {meta.badge} · Last verified: {q.lastVerifiedAt ? new Date(q.lastVerifiedAt).toLocaleDateString() : "Never"}
+                      {q.reviewStatus && q.reviewStatus !== "APPROVED" && (
+                        <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                          Review: {q.reviewStatus.replace(/_/g, " ")}
+                        </span>
+                      )}
+                      {q.aiConfidenceScore != null && (
+                        <span className="ml-2 text-[10px] text-muted-foreground">
+                          AI confidence: {Math.round(q.aiConfidenceScore * 100)}%
+                        </span>
+                      )}
                     </p>
+                    {q.verificationEvidence && (
+                      <p className="mt-1 text-[11px] font-mono text-warning/80 line-clamp-2">{q.verificationEvidence}</p>
+                    )}
                   </div>
                   {user?.role === "ADMIN" ? (
-                    <select
-                      value={q.answerVerificationStatus}
-                      onChange={e => updateStatus(q.id, e.target.value)}
-                      className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold"
-                    >
-                      {Object.keys(STATUS_META).map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={q.reviewStatus || "APPROVED"}
+                        onChange={e => setReviewStatus(q.id, e.target.value)}
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold"
+                        title="v1 §7.4 — human review gate: AI_DRAFT → IN_REVIEW → APPROVED / REJECTED"
+                      >
+                        {["AI_DRAFT", "IN_REVIEW", "APPROVED", "REJECTED"].map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <select
+                        value={q.answerVerificationStatus}
+                        onChange={e => updateStatus(q.id, e.target.value)}
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold"
+                      >
+                        {Object.keys(STATUS_META).map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <button
+                        onClick={() => rederive(q.id)}
+                        className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs font-bold text-warning hover:bg-warning/20"
+                        title="Deterministically re-derive the answer (never LLM-guessed)"
+                      >
+                        🛠 Re-derive
+                      </button>
+                    </div>
                   ) : (
                     <span className={`rounded-full border px-3 py-1 text-xs font-bold ${meta.cls}`}>
                       {q.answerVerificationStatus.replace(/_/g, " ")}
