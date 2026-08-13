@@ -2,9 +2,16 @@ node_modules/
 dist/
 .next/
 .env
+.env.*
 *.log
 .DS_Store
 coverage/
 .mobile/.dart_tool/
 .mobile/build/
 *.rdb
+.hermes/
+.hermes-track/
+backups/
+files/
+frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo
