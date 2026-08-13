@@ -58,7 +58,7 @@ export class PdfIngestionController {
   // is not configured — zero-cost pipeline). Stores bytes, then runs the same
   // batch/chunk/review flow as the S3 path.
   @Post('upload-file')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 500 * 1024 * 1024 } }))  // 500MB for large PDFs
   @ApiOperation({ summary: 'Upload PDF file directly (multipart) — stores to S3/R2 or local disk' })
   async uploadFile(@UploadedFile() file: any, @Body() dto: any, @Req() req: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (PDF) is required');

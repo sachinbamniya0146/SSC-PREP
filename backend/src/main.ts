@@ -18,11 +18,13 @@ async function bootstrap() {
   // HMAC must be computed over the exact bytes received.
   app.use(
     bodyParser.json({
+      limit: '500mb',  // Increased for very large PDFs (365MB+)
       verify: (req: any, _res: any, buf: Buffer) => {
         req.rawBody = buf;
       },
     }),
   );
+  app.use(bodyParser.urlencoded({ limit: '500mb', extended: true }));
   app.use(
     cors({
       // 2026-08-12: restrict to allow-list. Dev allows LAN IPs for phone testing.

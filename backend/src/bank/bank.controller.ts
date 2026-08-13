@@ -1,4 +1,5 @@
 import { Controller, Get, Query, Post, Body, Param, Put, Delete, UseGuards, Req } from '@nestjs/common';
+import { Public } from '../common/decorators/public.decorator';
 import { BankService } from './bank.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -10,6 +11,7 @@ export class BankController {
   constructor(private readonly bank: BankService) {}
 
   @Get('meta')
+  @Public()
   meta() {
     return this.bank.meta();
   }

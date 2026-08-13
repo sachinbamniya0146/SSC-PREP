@@ -18,7 +18,10 @@ export default function DashboardPage() {
         const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/bank/meta`);
         const d = await r.json();
         const cgl = (Array.isArray(d?.exams) ? d.exams : []).find((e: any) => e.slug === "cgl");
-        if (cgl?.pattern?.name) setCglPattern(cgl.pattern.name.replace(/^SSC\s*/, "").replace(/\((\d{4})\)/, "($1 Pattern)"));
+                if (cgl?.pattern?.name) {
+                  const m = cgl.pattern.name.match(/\((\d{4})\)/);
+                  setCglPattern(m ? `${m[1]} Pattern` : cgl.pattern.name);
+                }
       } catch {}
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

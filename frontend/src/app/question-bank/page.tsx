@@ -171,8 +171,8 @@ export default function QuestionBankPage() {
         setLoading(true);
         const base = apiBase();
         const [m, sc] = await Promise.all([
-          fetch(`${base}/bank/meta`, { headers: getAuthHeaders() }).then((r) => r.json()),
-          fetch(`${base}/bank/subjects`, { headers: getAuthHeaders() }).then((r) => r.json()),
+          fetchAuth(`${base}/bank/meta`, { headers: getAuthHeaders() }).then((r) => r.json()),
+          fetchAuth(`${base}/bank/subjects`, { headers: getAuthHeaders() }).then((r) => r.json()),
         ]);
         setExams(Array.isArray(m?.exams) ? m.exams.filter((e: Exam) => e.count > 0) : []);
         setSubjects(Array.isArray(sc) ? sc : []);

@@ -1,4 +1,5 @@
 "use client";
+import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
 import { motion } from "framer-motion";
@@ -97,8 +98,8 @@ export default function DiscoveryPage() {
       try {
         const base = apiBase();
         const [m, c] = await Promise.all([
-          fetch(`${base}/bank/meta`, { headers: getAuthHeaders() }).then((r) => r.json()),
-          fetch(`${base}/bank/chapters`, { headers: getAuthHeaders() }).then((r) => r.json()),
+          fetchAuth(`${base}/bank/meta`, { headers: getAuthHeaders() }).then((r) => r.json()),
+          fetchAuth(`${base}/bank/chapters`, { headers: getAuthHeaders() }).then((r) => r.json()),
         ]);
         setExams(Array.isArray(m?.exams) ? m.exams.filter((e: Exam) => e.count > 0) : []);
         setTotal(Number(m?.totalQuestions) || 0);
