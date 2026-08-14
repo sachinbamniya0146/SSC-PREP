@@ -23,7 +23,7 @@ ssc-prep-hub/
 ├── mobile/           # Flutter app (Android/iOS)
 ├── shared/           # Shared TS types & OpenAPI contracts
 ├── docker-compose.yml
-└── DECISIONS.md      # Engineering decisions & trade-offs
+��── DECISIONS.md      # Engineering decisions & trade-offs
 ```
 
 ## Local Development
@@ -60,16 +60,16 @@ npm run dev                  # http://localhost:3000
 
 ## Features Delivered So Far (Phase 1)
 
-- ✅ Monorepo structure + DECISIONS.md
-- ✅ Full Prisma schema (users, sessions, exam taxonomy, questions, imports, attempts, subscriptions, payments, audit)
-- ✅ NestJS backend shell with working Auth (signup/login, bcrypt, JWT access+refresh, single-device session enforcement)
-- ✅ Health endpoint
-- ✅ Next.js frontend: modern landing page, login & signup wired to real API, dashboard shell, dark/light theme
-- ✅ docker-compose (Postgres 16 + Redis 7 + Meilisearch)
-- ⏳ Phase 2: JWT guards, email OTP, admin RBAC
-- ⏳ Phase 3: PDF import pipeline (resumable chunks, OCR, AI extraction)
-- ⏳ Phase 4: Test engine + real SSC exam UI
-- ⏳ Phase 5: Payments (Razorpay), analytics, Flutter app, load testing
+- �� Monorepo structure + DECISIONS.md
+- �� Full Prisma schema (users, sessions, exam taxonomy, questions, imports, attempts, subscriptions, payments, audit)
+- �� NestJS backend shell with working Auth (signup/login, bcrypt, JWT access+refresh, single-device session enforcement)
+- �� Health endpoint
+- �� Next.js frontend: modern landing page, login & signup wired to real API, dashboard shell, dark/light theme
+- �� docker-compose (Postgres 16 + Redis 7 + Meilisearch)
+- ��� Phase 2: JWT guards, email OTP, admin RBAC
+- ��� Phase 3: PDF import pipeline (resumable chunks, OCR, AI extraction)
+- ��� Phase 4: Test engine + real SSC exam UI
+- ��� Phase 5: Payments (Razorpay), analytics, Flutter app, load testing
 
 ## Rules (from the build spec)
 
