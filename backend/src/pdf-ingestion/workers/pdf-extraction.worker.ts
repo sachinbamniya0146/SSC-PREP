@@ -61,7 +61,9 @@ interface StructuredQ {
  * Chunk 0 does the extraction; later chunks ack SUCCESS (text layer is one
  * pass) so batch completion logic stays intact.
  */
-@Processor('pdf-extraction')
+@Processor('pdf-extraction', {
+  lockDuration: 600000, // 10 minutes - OCR can take a long time
+})
 @Injectable()
 export class PdfExtractionWorker extends WorkerHost {
   private readonly logger = new Logger(PdfExtractionWorker.name);
@@ -119,6 +121,7 @@ export class PdfExtractionWorker extends WorkerHost {
       let skippedNoSubject = 0;
       let llmUsed = 0;
       let llmFailed = 0;
+      let llmSkipped = 0;
 
       for (const block of blocks) {
         this.logger.debug(`Processing block (first 100 chars): ${JSON.stringify(block.slice(0, 100))}`);
@@ -131,39 +134,39 @@ export class PdfExtractionWorker extends WorkerHost {
 
         let structured: StructuredQ;
         if (parsed.answerKey) {
-          // Normalize answer key: convert Hindi numerals to English, handle 1-9
-          let normalizedAnswer = parsed.answerKey;
-          const hindiToEnglish: Record<string, string> = {
-            '०': '0', '१': '1', '२': '2', '३': '3', '४': '4',
-            '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'
-          };
-          normalizedAnswer = normalizedAnswer.replace(/[०-९]/g, (m) => hindiToEnglish[m] || m);
-          
-          // If answer is numeric (1-9), convert to A-I (1->A, 2->B, 3->C, 4->D, 5->E, 6->F, 7->G, 8->H, 9->I)
-          if (/^[1-9]$/.test(normalizedAnswer)) {
-            const num = parseInt(normalizedAnswer, 10);
-            if (num >= 1 && num <= 9) {
-              normalizedAnswer = String.fromCharCode(64 + num); // 1->A, 2->B, ..., 9->I
-            } else {
-              normalizedAnswer = '';
-            }
-          }
-          
-          this.logger.debug(`Raw answerKey: ${parsed.answerKey} -> normalized: ${normalizedAnswer}`);
-          
-          structured = {
-            questionText: parsed.questionText,
-            options: parsed.options,
-            correctAnswer: normalizedAnswer,
-            confidence: normalizedAnswer ? 0.95 : 0.5, // answer read directly from the paper text
-            explanation: '',
-          };
-        } else {
-          const llm = await this.structureWithLlm(parsed.questionText, parsed.options);
-          if (!llm) { llmFailed++; continue; }
-          structured = llm;
-          llmUsed++;
-        }
+                  // Normalize answer key: convert Hindi numerals to English, handle 1-9
+                  let normalizedAnswer = parsed.answerKey;
+                  const hindiToEnglish: Record<string, string> = {
+                    '०': '0', '१': '1', '२': '2', '३': '3', '४': '4',
+                    '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'
+                  };
+                  normalizedAnswer = normalizedAnswer.replace(/[०-९]/g, (m) => hindiToEnglish[m] || m);
+
+                  // If answer is numeric (1-9), convert to A-I (1->A, 2->B, 3->C, 4->D, 5->E, 6->F, 7->G, 8->H, 9->I)
+                  if (/^[1-9]$/.test(normalizedAnswer)) {
+                    const num = parseInt(normalizedAnswer, 10);
+                    if (num >= 1 && num <= 9) {
+                      normalizedAnswer = String.fromCharCode(64 + num); // 1->A, 2->B, ..., 9->I
+                    } else {
+                      normalizedAnswer = '';
+                    }
+                  }
+
+                  this.logger.debug(`Raw answerKey: ${parsed.answerKey} -> normalized: ${normalizedAnswer}`);
+
+                  structured = {
+                    questionText: parsed.questionText,
+                    options: parsed.options,
+                    correctAnswer: normalizedAnswer,
+                    confidence: normalizedAnswer ? 0.95 : 0.5, // answer read directly from the paper text
+                    explanation: '',
+                  };
+                } else {
+                  // Skip questions without explicit answer key in PDF - LLM structuring not available
+                  this.logger.debug(`Skipping block: no explicit answer key found in PDF text`);
+                  llmSkipped++;
+                  continue;
+                }
 
         const optionsJson = structured.options.slice(0, 9).map((text, i) => ({
           key: String.fromCharCode(65 + i),
@@ -212,9 +215,9 @@ export class PdfExtractionWorker extends WorkerHost {
         });
       }
 
-      await this.markSuccess(data, extracted, `llm_used=${llmUsed} llm_failed=${llmFailed} dup=${skippedDup} no_subject=${skippedNoSubject}`);
+      await this.markSuccess(data, extracted, `llm_used=${llmUsed} llm_failed=${llmFailed} llm_skipped=${llmSkipped} dup=${skippedDup} no_subject=${skippedNoSubject}`);
       await this.checkBatchComplete(data.batchId);
-      return { extracted, llmUsed, llmFailed, skippedDup, skippedNoSubject };
+      return { extracted, llmUsed, llmFailed, llmSkipped, skippedDup, skippedNoSubject };
     } catch (error: any) {
       this.logger.error(`Chunk ${data.chunkId} failed:`, error);
       await this.prisma.importChunk.update({

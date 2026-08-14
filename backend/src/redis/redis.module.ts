@@ -23,7 +23,7 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
           port,
           password: password || undefined,
           lazyConnect: false,
-          maxRetriesPerRequest: 3,
+          maxRetriesPerRequest: null,
           retryStrategy: (times) => Math.min(times * 200, 2000),
         });
         client.on('error', (err) => {
