@@ -73,29 +73,36 @@ services:
           max-size: "10m"
           max-file: "3"
       environment:
-        NODE_ENV: production
-        PORT: 4000
-        DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ssc_prep_hub_v2?schema=public
-        REDIS_HOST: redis
-        REDIS_PORT: 6379
-        MEILISEARCH_HOST: http://meilisearch:7700
-        MEILISEARCH_API_KEY: ""
-        JWT_SECRET: ${JWT_SECRET:-super-secret-change-in-production}
-        JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-${JWT_SECRET:-super-secret-change-in-production}}
-        JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-super-secret-refresh-change-in-production}
-        JWT_ACCESS_EXPIRES_IN: 15m
-        JWT_REFRESH_EXPIRES_IN: 7d
-        JWT_EXPIRES_IN: 7d
-        ADMIN_DEFAULT_EMAIL: ${ADMIN_DEFAULT_EMAIL}
-        ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD}
-        OPENAI_API_KEY: ${OPENAI_API_KEY}
-        OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://opencode.ai/zen/v1}
-        OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-v4-flash-free}
-        TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-        RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
-        RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
-        RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-ssc-dev-webhook-secret}
-        PDF_STORAGE_DIR: ${PDF_STORAGE_DIR:-files/pdf}
+              NODE_ENV: production
+              PORT: 4000
+              DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ssc_prep_hub_v2?schema=public
+              REDIS_HOST: redis
+              REDIS_PORT: 6379
+              MEILISEARCH_HOST: http://meilisearch:7700
+              MEILISEARCH_API_KEY: ""
+              JWT_SECRET: ${JWT_SECRET:-super-secret-change-in-production}
+              JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-${JWT_SECRET:-super-secret-change-in-production}}
+              JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-super-secret-refresh-change-in-production}
+              JWT_ACCESS_EXPIRES_IN: 15m
+              JWT_REFRESH_EXPIRES_IN: 7d
+              JWT_EXPIRES_IN: 7d
+              ADMIN_DEFAULT_EMAIL: ${ADMIN_DEFAULT_EMAIL}
+              ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD}
+              OPENAI_API_KEY: ${OPENAI_API_KEY}
+              OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://opencode.ai/zen/v1}
+              OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-v4-flash-free}
+              TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+              RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+              RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+              RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-ssc-dev-webhook-secret}
+              PDF_STORAGE_DIR: ${PDF_STORAGE_DIR:-files/pdf}
+              GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+              GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+              SMTP_HOST: ${SMTP_HOST}
+              SMTP_PORT: ${SMTP_PORT}
+              SMTP_USER: ${SMTP_USER}
+              SMTP_PASS: ${SMTP_PASS}
+              SMTP_FROM: ${SMTP_FROM}
       ports:
         - "4000:4000"
       volumes:
