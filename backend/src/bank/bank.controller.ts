@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Controller, Get, Query, Post, Body, Param, Put, Delete, UseGuards, Req } from '@nestjs/common';
 import { Public } from '../common/decorators/public.decorator';
 import { BankService } from './bank.service';

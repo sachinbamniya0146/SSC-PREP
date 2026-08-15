@@ -1,7 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 // Use synchronous require for ESM package - avoids __importStar wrapper issue
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const MeiliSearchClass = require('meilisearch').Meilisearch;
 
 @Injectable()

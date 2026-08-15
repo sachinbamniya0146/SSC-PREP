@@ -41,7 +41,7 @@ import { envValidationSchema } from './config/env.validation';
     }),
     ThrottlerModule.forRootAsync({
       inject: [ConfigService, Reflector],
-      useFactory: (config: ConfigService, reflector: Reflector) => ({
+      useFactory: (_config: ConfigService, _reflector: Reflector) => ({
         // NOTE: no skipIf — even @Public() routes are throttled (global 60/min).
         // Auth routes get stricter per-route @Throttle overrides (signup 5/min, login 10/min).
         throttlers: [

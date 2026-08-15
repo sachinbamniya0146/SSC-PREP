@@ -137,6 +137,7 @@ export class OcrPipeline {
 
   /** Vision LLM fallback: use GPT-4V to read a page image and return structured text */
   static async visionOcr(pageImgPath: string, apiKey: string, baseUrl: string): Promise<string> {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const OpenAI = require('openai').OpenAI;
     const client = new OpenAI({ apiKey, baseURL: baseUrl });
     const imgB64 = fs.readFileSync(pageImgPath).toString('base64');

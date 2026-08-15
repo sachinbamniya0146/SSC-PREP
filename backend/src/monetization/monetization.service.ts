@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // P2 — monetization service: Razorpay orders, coupons, subscription plans, chapter purchases.
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -248,7 +249,8 @@ export class MonetizationService {
       // No keys configured → local fallback (dev mode): accept any signature via mock.
       throw new BadRequestException('Payments not configured — Razorpay keys missing');
     }
-    const Razorpay = require('razorpay');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+const Razorpay = require('razorpay');
     return new Razorpay({ key_id: keyId, key_secret: keySecret });
   }
 }

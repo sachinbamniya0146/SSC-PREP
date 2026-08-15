@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Text-layer extraction via pdfjs-dist legacy build (pure JS — no canvas
  * native deps, works on alpine). pdf-parse v2 pulls @napi-rs/canvas which
@@ -105,7 +106,6 @@ if (typeof (globalThis as any).DOMMatrix === 'undefined') {
 }
 
 export async function extractPdfText(buf: Buffer): Promise<{ text: string; numpages: number }> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const doc: any = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
   try {

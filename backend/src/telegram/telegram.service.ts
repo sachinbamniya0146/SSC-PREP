@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -154,7 +155,7 @@ export class TelegramService {
         data: { isActive: false },
       });
       return { ok: true as const };
-    } catch (e) {
+    } catch {
       return { ok: false as const, error: 'Subscription not found' };
     }
   }

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Job, Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -360,7 +361,7 @@ export class PdfExtractionWorker extends WorkerHost {
         // Try Hindi numerals १-९
         options = ['१', '२', '३', '४', '५', '६', '७', '८', '९'].map((k) => optsMap.get(k)).filter((t): t is string => !!t && t.length > 0);
       }
-      this.logger.debug(`Options found (after all attempts): ${options.length} - ${JSON.stringify(options.map((o, i) => o.slice(0, 50)))}`);
+      this.logger.debug(`Options found (after all attempts): ${options.length} - ${JSON.stringify(options.map((o, _i) => o.slice(0, 50)))}`);
       if (options.length < 2) return null;
 
       // Answer key: "Ans. A" / "Answer: B" / "उत्तर- (A)" / "उत्तर: 1" / "उत्तर- १" / "उत्तर-(5)" / "उत्तर-छ)" / "उत्तर-(8)" / "उत्तर-(छ])" / "उत्तर-(५)"
@@ -392,7 +393,8 @@ export class PdfExtractionWorker extends WorkerHost {
     const apiKey = this.config.get<string>('OPENAI_API_KEY') || '';
     if (!apiKey) return null;
     try {
-      const OpenAI = require('openai').OpenAI;
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+const OpenAI = require('openai').OpenAI;
       const client = new OpenAI({
         apiKey,
         baseURL: this.config.get<string>('OPENAI_BASE_URL') || 'https://opencode.ai/zen/v1',

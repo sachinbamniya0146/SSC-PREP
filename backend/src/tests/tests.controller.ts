@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Controller, Get, Post, Put, Body, Query, Param } from '@nestjs/common';
 import { TestsService } from './tests.service';
 import { TestStatsService } from './test-stats.service';

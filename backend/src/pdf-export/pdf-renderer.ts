@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // v6 §7 — Chromium PDF renderer (puppeteer-core). Uses system/container Chrome.
 import { Injectable } from '@nestjs/common';
 import * as fs from 'fs';
@@ -19,7 +20,8 @@ export class PdfRenderer {
   }
 
   async htmlToPdf(html: string): Promise<Buffer> {
-    const puppeteer = require('puppeteer-core');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+const puppeteer = require('puppeteer-core');
     const browser = await puppeteer.launch({
       executablePath: this.resolveChrome(),
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],

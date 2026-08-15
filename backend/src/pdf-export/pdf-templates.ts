@@ -23,7 +23,8 @@ export interface PdfTestMeta {
   totalMarks: number;
 }
 
-const FONT_CSS = '';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _FONT_CSS = '';
 // font injected separately (base64) by the service
 
 function esc(s: string): string {
@@ -39,7 +40,8 @@ function optionRow(o: { key: string; text: string; textHi: string | null }, hi: 
   return `<div class="opt"><span class="opt-key">${esc(o.key)}.</span> <span>${esc(t)}</span></div>`;
 }
 
-function questionBlock(q: PdfQuestion, n: number, hi: boolean, showAnswer: boolean): string {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _questionBlock(q: PdfQuestion, n: number, hi: boolean, showAnswer: boolean): string {
   const stem = hi ? q.qh || q.q : q.q;
   const parts: string[] = [];
   parts.push(

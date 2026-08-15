@@ -25,7 +25,7 @@ export class JwtAuthGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    console.log('[JwtAuthGuard] handler:', context.getHandler()?.name, 'class:', context.getClass()?.name, 'isPublic:', isPublic);
+    // console.log('[JwtAuthGuard] handler:', context.getHandler()?.name, 'class:', context.getClass()?.name, 'isPublic:', isPublic);
     if (isPublic) return true;
 
     const request = context.switchToHttp().getRequest();

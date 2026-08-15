@@ -1,10 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   Controller,
   Post,
   Get,
   Put,
-  Patch,
-  Delete,
   Body,
   Param,
   Query,
@@ -16,7 +15,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -184,7 +183,7 @@ export class PdfIngestionController {
     const question = await this.prisma.question.findUnique({ where: { id } });
     if (!question) throw new NotFoundException('Question not found');
 
-    const updated = await this.prisma.question.update({
+    await this.prisma.question.update({
       where: { id },
       data: {
         reviewStatus,

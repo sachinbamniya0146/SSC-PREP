@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Headers, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, Req } from '@nestjs/common';
 import { MonetizationService } from './monetization.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
@@ -46,7 +46,8 @@ export class MonetizationController {
   // v3 §1 — Razorpay server webhook (signature-verified, idempotent).
   @Public()
   @Post('webhook')
-  webhook(@Req() req: any, @Headers('x-razorpay-signature') signature: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    webhook(@Req() req: any, @Headers('x-razorpay-signature') signature: string) {
     return this.service.handleWebhook(req.rawBody, signature);
   }
 }

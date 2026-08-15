@@ -119,7 +119,7 @@ export class StudyPlanService {
     userId: string,
     planId: string,
     questionsAttempted: number,
-    correct: number,
+    _correct: number,
   ) {
     const plan = await this.prisma.studyPlan.findUnique({ where: { id: planId } });
     if (!plan) throw new NotFoundException('Study plan not found');

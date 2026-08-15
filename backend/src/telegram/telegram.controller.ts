@@ -1,5 +1,5 @@
-import { Controller, Post, Body, Get, Query, Param, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { Controller, Post, Body, Get, Param, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { TelegramService, TelegramWebhookUpdate } from './telegram.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -24,7 +24,6 @@ export class TelegramController {
 
     const chatId = msg.chat.id;
     const text = update.message?.text || update.callback_query?.data || '';
-    const from = update.message?.from || update.callback_query?.from;
 
     // Handle /start command - link account
     if (text === '/start') {

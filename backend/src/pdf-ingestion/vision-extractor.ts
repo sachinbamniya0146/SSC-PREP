@@ -34,7 +34,7 @@ export class VisionExtractor {
     pdfBuf: Buffer,
     startPage: number,
     endPage: number,
-    subjectId?: string
+    _subjectId?: string
   ): Promise<ExtractedQuestion[]> {
     const tmpDir = `/tmp/vision-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     await fs.promises.mkdir(tmpDir, { recursive: true });
@@ -64,7 +64,8 @@ export class VisionExtractor {
         throw new Error('No API key configured for vision extraction');
       }
 
-      const OpenAI = require('openai').OpenAI;
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+const OpenAI = require('openai').OpenAI;
       const client = new OpenAI({ apiKey, baseURL: baseUrl });
 
       const allQuestions: ExtractedQuestion[] = [];
@@ -144,10 +145,13 @@ RULES:
               }
             }
           } catch (parseErr: unknown) {
+            // eslint-disable-next-line no-console
             console.error(`Failed to parse vision response for page ${pageNum}:`, (parseErr as Error).message);
+            // eslint-disable-next-line no-console
             console.error(`Raw response (first 500 chars):`, raw.slice(0, 500));
           }
         } catch (apiErr: unknown) {
+          // eslint-disable-next-line no-console
           console.error(`Vision API error for page ${pageNum}:`, (apiErr as Error).message);
         }
       }
