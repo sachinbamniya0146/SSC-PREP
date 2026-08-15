@@ -15,7 +15,7 @@ ENV NODE_ENV=production
 # Rebuild native modules for Linux + install openssl for Prisma + Chromium for PDF export (v6 §7)
 # + poppler-utils for pdftoppm (OCR pipeline) + tesseract for Hindi/English OCR
 RUN apk add --no-cache python3 make g++ openssl chromium nss freetype harfbuzz ca-certificates \
-  poppler-utils tesseract-ocr tesseract-ocr-data-hin \
+  poppler-utils tesseract-ocr tesseract-ocr-data-hin opencv py3-numpy py3-pillow \
   && apk add --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community font-noto-devanagari || true
 ENV CHROME_PATH=/usr/bin/chromium-browser
 COPY --from=builder /app/package*.json ./
@@ -25,6 +25,7 @@ COPY --from=builder /app/assets ./assets
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/scripts ./scripts
 # Run migrations on startup
 COPY --from=builder /app/prisma ./prisma
 EXPOSE 4000

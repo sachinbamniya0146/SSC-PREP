@@ -11,6 +11,8 @@ import { exec } from 'child_process';
 import { PrismaService } from '../../prisma/prisma.service';
 import { S3Service } from '../../s3/s3.service';
 import { extractPdfText } from '../pdf-text';
+import { OcrPipeline, scoreOcrQuality, normalizeAnswerKey } from '../ocr-pipeline';
+import { VisionExtractor } from '../vision-extractor';
 
 const execAsync = promisify(exec);
 
@@ -62,12 +64,13 @@ interface StructuredQ {
  * pass) so batch completion logic stays intact.
  */
 @Processor('pdf-extraction', {
-  lockDuration: 600000, // 10 minutes - OCR can take a long time
+  lockDuration: 3600000, // 60 minutes - OCR + vision LLM for 25 pages can take a very long time
 })
 @Injectable()
 export class PdfExtractionWorker extends WorkerHost {
   private readonly logger = new Logger(PdfExtractionWorker.name);
   private readonly localDir: string;
+  private visionExtractor: VisionExtractor;
 
   constructor(
     private prisma: PrismaService,
@@ -77,6 +80,7 @@ export class PdfExtractionWorker extends WorkerHost {
   ) {
     super();
     this.localDir = this.config.get<string>('PDF_STORAGE_DIR') || 'files/pdf';
+    this.visionExtractor = new VisionExtractor(config);
   }
 
   async process(job: Job<ExtractChunkData>): Promise<any> {
@@ -94,15 +98,33 @@ export class PdfExtractionWorker extends WorkerHost {
       let text: string = doc?.text ?? '';
       const pageCount: number = doc?.numpages ?? 1;
 
-      // If no text layer (scanned PDF), run OCR on THIS chunk's pages
+      // If no text layer (scanned PDF), run high-quality OCR with OpenCV preprocessing
       if (text.replace(/\s+/g, '').length < 200) {
-        this.logger.log(`Chunk ${data.chunkIndex}: No text layer found, running OCR on pages ${data.startPage}-${data.endPage}...`);
-        text = await this.ocrPdfPages(buf, data.startPage, data.endPage);
+        this.logger.log(`Chunk ${data.chunkIndex}: No text layer found, running high-quality OCR on pages ${data.startPage}-${data.endPage}...`);
+        text = await OcrPipeline.extractOcrText(buf, data.startPage, data.endPage);
         this.logger.log(`Chunk ${data.chunkIndex}: OCR text length = ${text.length} chars`);
-        if (text.replace(/\s+/g, '').length < 200) {
-          await this.markSuccess(data, 0, 'ocr_failed_no_text');
-          await this.checkBatchComplete(data.batchId);
-          return { extracted: 0, reason: 'ocr_failed_no_text' };
+        
+        // Score OCR quality — if text is mostly garbage, fall back to vision LLM
+        const ocrQuality = scoreOcrQuality(text);
+        // Also check for structural quality: look for question/option patterns
+        const hasStructure = /[0-9\u0966-\u096F]\s*[.)]\s+|[A-Da-d]\s*[.)]\s+|[\u09E6-\u09EF]\s*[.)]\s+/.test(text) || 
+                            /Ans\.?|Answer|उत्तर/.test(text);
+        this.logger.log(`Chunk ${data.chunkIndex}: OCR quality score = ${ocrQuality.toFixed(3)}, hasStructure = ${hasStructure}`);
+        
+        // Trigger vision fallback if: poor quality OR no question/option structure detected
+        if (ocrQuality < 0.35 || !hasStructure || text.replace(/\s+/g, '').length < 200) {
+          this.logger.log(`Chunk ${data.chunkIndex}: OCR quality insufficient (${ocrQuality.toFixed(3)}, structure=${hasStructure}), falling back to vision LLM...`);
+          const visionQuestions = await this.visionExtractor.extractFromVision(
+            buf, data.startPage, data.endPage, data.metadata.subjectId
+          );
+          if (visionQuestions.length > 0) {
+            this.logger.log(`Chunk ${data.chunkIndex}: Vision LLM extracted ${visionQuestions.length} questions`);
+            await this.storeVisionQuestions(visionQuestions, data);
+            await this.markSuccess(data, visionQuestions.length, `vision_llm_extracted=${visionQuestions.length} ocr_quality=${ocrQuality.toFixed(3)}`);
+            await this.checkBatchComplete(data.batchId);
+            return { extracted: visionQuestions.length, ocrQuality: ocrQuality.toFixed(3), visionFallback: true };
+          }
+          this.logger.warn(`Chunk ${data.chunkIndex}: Vision fallback also failed`);
         }
       }
 
@@ -341,8 +363,8 @@ export class PdfExtractionWorker extends WorkerHost {
       this.logger.debug(`Options found (after all attempts): ${options.length} - ${JSON.stringify(options.map((o, i) => o.slice(0, 50)))}`);
       if (options.length < 2) return null;
 
-      // Answer key: "Ans. A" / "Answer: B" / "उत्तर- (A)" / "उत्तर: 1" / "उत्तर- १" / "उत्तर-(5)" / "उत्तर-छ)" / "उत्तर-(8)"
-      const ans = block.match(/(?:Ans\.?|Answer|उत्तर)\s*[.:]?\s*[\(]?([A-Da-d१२३४५६७८९०1-9])[\)]?/i);
+      // Answer key: "Ans. A" / "Answer: B" / "उत्तर- (A)" / "उत्तर: 1" / "उत्तर- १" / "उत्तर-(5)" / "उत्तर-छ)" / "उत्तर-(8)" / "उत्तर-(छ])" / "उत्तर-(५)"
+            const ans = block.match(/(?:Ans\.?|Answer|उत्तर)\s*[.:]?\s*[\(\)\[\]]?\s*([A-Da-d१२३४५६७८९०1-9छ])[\)\]\]]?/i);
       this.logger.debug(`Block answerKey match: ${JSON.stringify(ans)}`);
       return { questionText, options, answerKey: ans ? ans[1].toUpperCase() : undefined };
     }
@@ -439,6 +461,67 @@ Options: ${options.join(' | ')}`;
         },
       });
     }
+  }
+
+  /** Store questions extracted via vision LLM fallback. */
+  private async storeVisionQuestions(questions: any[], data: ExtractChunkData): Promise<void> {
+    let stored = 0;
+    for (const q of questions) {
+      const questionText = q.questionText;
+      const options = q.options || [];
+      const correctAnswer = normalizeAnswerKey(q.correctAnswer || '');
+      if (!questionText || options.length < 2 || !correctAnswer) continue;
+
+      const optionsJson = options.slice(0, 9).map((text: string, i: number) => ({
+        key: String.fromCharCode(65 + i),
+        text,
+        isCorrect: String.fromCharCode(65 + i) === correctAnswer,
+      }));
+      const answerIdx = ['A','B','C','D','E','F','G','H','I'].indexOf(correctAnswer);
+      if (answerIdx < 0 || answerIdx >= optionsJson.length) continue;
+
+      const hash = this.searchHash(questionText);
+      const existing = await this.prisma.question.findFirst({ where: { searchHash: hash }, select: { id: true } });
+      if (existing) continue;
+
+      if (!data.metadata.subjectId) continue;
+
+      try {
+        const created = await this.prisma.question.create({
+          data: {
+            questionText,
+            optionsJson: optionsJson as any,
+            correctAnswer,
+            explanation: q.explanation || q.solution || null,
+            explanationSource: 'AI_GENERATED',
+            searchHash: hash,
+            sourcePdfId: data.sourcePdfId,
+            importBatchId: data.batchId,
+            subjectId: data.metadata.subjectId,
+            examId: data.metadata.examId ?? null,
+            year: data.metadata.year ?? null,
+            shift: data.metadata.shift ?? null,
+            marks: 1,
+            negativeMarks: 0.25,
+            isApproved: false,
+            isActive: true,
+            reviewStatus: 'AI_DRAFT',
+            aiConfidenceScore: q.confidence || 0.8,
+          },
+          select: { id: true },
+        });
+        stored++;
+        await this.reviewQueue.add('review', {
+          questionId: created.id,
+          batchId: data.batchId,
+          sourceText: questionText.slice(0, 1000),
+          confidence: q.confidence || 0.8,
+        });
+      } catch (e: any) {
+        this.logger.debug(`storeVisionQuestions: failed to store: ${e.message}`);
+      }
+    }
+    this.logger.log(`storeVisionQuestions: stored ${stored}/${questions.length} questions`);
   }
 
   @OnWorkerEvent('failed')
