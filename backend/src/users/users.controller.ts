@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Put, Body } from '@nestjs/common';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -11,6 +11,11 @@ export class UsersController {
   @Get('me')
   getProfile(@CurrentUser() user: AuthenticatedUser) {
     return this.usersService.getProfile(user.userId);
+  }
+
+  @Put('me/phone')
+  updatePhone(@CurrentUser() user: AuthenticatedUser, @Body() body: { phone: string }) {
+    return this.usersService.updatePhone(user.userId, body.phone);
   }
 
   /**

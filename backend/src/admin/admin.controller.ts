@@ -1,24 +1,26 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { MonetizationService } from '../monetization/monetization.service';
 
-// v1 §10 — Admin dashboards: revenue overview + audit log viewer.
-// Both endpoints are ADMIN/MODERATOR-only (global JwtAuthGuard is on the module).
+// v1 §10 — Admin dashboards: revenue overview + audit log viewer + user management.
+// All endpoints are ADMIN-only (global JwtAuthGuard is on the module).
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.ADMIN)
 export class AdminController {
   constructor(
     private prisma: PrismaService,
     private auditLogService: AuditLogService,
+    private monetization: MonetizationService,
   ) {}
 
   // ---- Revenue overview ----
   @Get('revenue')
-  @Roles(Role.ADMIN)
   async revenue(@Query('days') days?: string) {
     const since = new Date();
     since.setDate(since.getDate() - (days ? Math.min(Number(days) || 30, 365) : 30));
@@ -79,5 +81,161 @@ export class AdminController {
       limit: limit ? Number(limit) : 50,
     });
     return logs;
+  }
+
+  // ---- User management ----
+  @Get('users')
+  async listUsers(
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') search?: string,
+    @Query('role') role?: string,
+  ) {
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.min(100, Math.max(1, Number(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {};
+    if (search) {
+      where.OR = [
+        { email: { contains: search, mode: 'insensitive' } },
+        { fullName: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+    if (role) where.role = role;
+
+    const [users, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        skip,
+        take: limitNum,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          role: true,
+          phone: true,
+          isEmailVerified: true,
+          createdAt: true,
+          subscriptions: {
+            where: { status: { not: 'CANCELLED' } },
+            select: { status: true, endsAt: true, planId: true },
+            orderBy: { startsAt: 'desc' },
+          },
+          _count: { select: { testAttempts: true, bookmarks: true } },
+        },
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+
+    return { users, total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) };
+  }
+
+  @Post('users/:id/subscription/cancel')
+  async cancelUserSubscription(@Param('id', ParseUUIDPipe) userId: string) {
+    const subscription = await this.prisma.subscription.findFirst({
+      where: { userId, status: 'ACTIVE' },
+    });
+    if (!subscription) throw new Error('No active subscription found');
+    await this.prisma.subscription.update({
+      where: { id: subscription.id },
+      data: { status: 'CANCELLED' },
+    });
+    await this.auditLogService.log({
+      action: 'SUBSCRIPTION_CANCELLED_BY_ADMIN',
+      targetEntity: 'Subscription',
+      entityId: subscription.id,
+      metadataJson: { userId, planId: subscription.planId },
+    });
+    return { ok: true };
+  }
+
+  @Post('users/:id/subscription/add')
+  async addUserSubscription(
+    @Param('id', ParseUUIDPipe) userId: string,
+    @Body() body: { planId: string },
+  ) {
+    const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
+    if (!plan || !plan.isActive) throw new Error('Plan not found or inactive');
+
+    // Cancel any existing active subscription
+    await this.prisma.subscription.updateMany({
+      where: { userId, status: 'ACTIVE' },
+      data: { status: 'CANCELLED' },
+    });
+
+    const endsAt = new Date();
+    endsAt.setMonth(endsAt.getMonth() + plan.durationMonths);
+
+    const sub = await this.prisma.subscription.create({
+      data: {
+        userId,
+        planId: plan.id,
+        status: 'ACTIVE',
+        startsAt: new Date(),
+        endsAt,
+      },
+    });
+
+    await this.auditLogService.log({
+      action: 'SUBSCRIPTION_GRANTED_BY_ADMIN',
+      targetEntity: 'Subscription',
+      entityId: sub.id,
+      metadataJson: { userId, planId: plan.id, durationMonths: plan.durationMonths },
+    });
+    return { ok: true, subscription: sub };
+  }
+
+  @Post('subscriptions/bulk')
+  async bulkGrantSubscription(@Body() body: { emails: string[]; planId: string }) {
+    const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
+    if (!plan || !plan.isActive) throw new Error('Plan not found or inactive');
+
+    const results = [];
+    for (const email of body.emails) {
+      const user = await this.prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+      if (!user) {
+        results.push({ email, success: false, reason: 'User not found' });
+        continue;
+      }
+
+      await this.prisma.subscription.updateMany({
+        where: { userId: user.id, status: 'ACTIVE' },
+        data: { status: 'CANCELLED' },
+      });
+
+      const endsAt = new Date();
+      endsAt.setMonth(endsAt.getMonth() + plan.durationMonths);
+
+      await this.prisma.subscription.create({
+        data: {
+          userId: user.id,
+          planId: plan.id,
+          status: 'ACTIVE',
+          startsAt: new Date(),
+          endsAt,
+        },
+      });
+
+      await this.auditLogService.log({
+        action: 'SUBSCRIPTION_GRANTED_BY_ADMIN',
+        targetEntity: 'Subscription',
+        entityId: user.id,
+        metadataJson: { userId: user.id, planId: plan.id, bulk: true },
+      });
+
+      results.push({ email, success: true });
+    }
+    return { results };
+  }
+
+  @Get('plans')
+  async listPlans() {
+    const plans = await this.prisma.plan.findMany({
+      where: { isActive: true },
+      orderBy: { priceInr: 'asc' },
+    });
+    return { plans };
   }
 }

@@ -14,6 +14,7 @@ export default function SignupPage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [fullName, setFullName] = React.useState("");
   const [email, setEmail] = React.useState("");
+  const [phone, setPhone] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -22,15 +23,19 @@ export default function SignupPage() {
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters");
+    if (password.length !== 20) {
+      setError("Password must be exactly 20 characters");
+      return;
+    }
+    if (phone.length < 10) {
+      setError("Mobile number must be at least 10 digits");
       return;
     }
     setLoading(true);
     try {
       const data = await api<AuthResponse>("/auth/signup", {
         method: "POST",
-        body: JSON.stringify({ fullName, email, password }),
+        body: JSON.stringify({ fullName, email, phone, password }),
       });
       localStorage.setItem("ssc_access_token", data.accessToken);
       localStorage.setItem("ssc_refresh_token", data.refreshToken);
@@ -88,15 +93,28 @@ export default function SignupPage() {
             />
           </div>
           <div>
+            <label className="mb-1.5 block text-sm font-medium">Mobile Number <span className="text-red-500">*</span></label>
+            <input
+              type="tel"
+              required
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+91 9876543210"
+              className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+              inputMode="numeric"
+            />
+          </div>
+          <div>
             <label className="mb-1.5 block text-sm font-medium">Password</label>
             <div className="relative">
               <input
                 type={showPassword ? "text" : "password"}
                 required
-                minLength={8}
+                minLength={20}
+                maxLength={20}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Minimum 8 characters"
+                placeholder="Exactly 20 characters"
                 className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
               />
               <button
@@ -112,6 +130,7 @@ export default function SignupPage() {
                 )}
               </button>
             </div>
+            <p className="mt-1 text-xs text-muted-foreground">{password.length}/20 characters</p>
           </div>
           <button
             type="submit"

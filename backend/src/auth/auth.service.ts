@@ -90,15 +90,17 @@ export class AuthService implements OnModuleInit {
     email: string,
     password: string,
     fullName: string,
+    phone: string,
     platform: 'WEB' | 'APP' = 'WEB',
   ): Promise<Authenticated> {
     const normalized = email.toLowerCase().trim();
+    const normalizedPhone = phone.trim();
     const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
     if (existing) throw new ConflictException('Email already registered');
 
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await this.prisma.user.create({
-      data: { email: normalized, fullName, passwordHash },
+      data: { email: normalized, fullName, phone: normalizedPhone, passwordHash },
     });
     return this.completeAuth(user, platform);
   }
@@ -183,6 +185,39 @@ export class AuthService implements OnModuleInit {
       where: { id: user.id },
       data: { passwordHash },
     });
+    return { ok: true };
+  }
+
+  // ------------------------------------------------------- password change (logged in)
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ ok: true }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.passwordHash || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    if (currentPassword === newPassword) {
+      throw new ConflictException('New password must be different from current password');
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
+
+    // Revoke all refresh tokens to force re-login
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    // Revoke all device sessions
+    await this.prisma.deviceSession.updateMany({
+      where: { userId, isActive: true },
+      data: { isActive: false },
+    });
+
     return { ok: true };
   }
 

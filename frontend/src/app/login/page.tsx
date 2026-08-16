@@ -337,10 +337,11 @@ export default function LoginPage() {
                 <input
                   type={showNewPassword ? "text" : "password"}
                   required
-                  minLength={6}
+                  minLength={20}
+                  maxLength={20}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="min 6 characters"
+                  placeholder="Exactly 20 characters"
                   className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
                 />
                 <button
@@ -356,6 +357,7 @@ export default function LoginPage() {
                   )}
                 </button>
               </div>
+              <p className="mt-1 text-xs text-muted-foreground">{newPassword.length}/20 characters</p>
             </div>
             <button
               type="button"

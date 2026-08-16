@@ -106,6 +106,8 @@ export default function QuestionBankPage() {
   const [pdfBusy, setPdfBusy] = React.useState(false);
   // v2 §7.6 — Previous SSC References (real-DB, loaded on demand)
   const [sscRefs, setSscRefs] = React.useState<{ [qid: string]: any }>({});
+  // v7 §1 — Exam-scoped mode: when exam comes from URL, hide other exams & auto-load
+  const [examScoped, setExamScoped] = React.useState(false);
 
   const loadSscRefs = async (questionId: string) => {
     try {
@@ -174,9 +176,19 @@ export default function QuestionBankPage() {
           fetchAuth(`${base}/bank/meta`, { headers: getAuthHeaders() }).then((r) => r.json()),
           fetchAuth(`${base}/bank/subjects`, { headers: getAuthHeaders() }).then((r) => r.json()),
         ]);
-        setExams(Array.isArray(m?.exams) ? m.exams.filter((e: Exam) => e.count > 0) : []);
+        const allExams = Array.isArray(m?.exams) ? m.exams.filter((e: Exam) => e.count > 0) : [];
+        setExams(allExams);
         setSubjects(Array.isArray(sc) ? sc : []);
         setMetaTotal(Number(m?.totalQuestions) || 0);
+
+        // v7 §1 — Check for exam in URL params
+        if (typeof window !== "undefined") {
+          const urlExam = new URLSearchParams(window.location.search).get("exam");
+          if (urlExam && allExams.some((e: Exam) => e.id === urlExam)) {
+            setExamId(urlExam);
+            setExamScoped(true);
+          }
+        }
       } catch (e) {
         console.error("meta load fail", e);
       } finally {
@@ -202,6 +214,13 @@ export default function QuestionBankPage() {
       alive = false;
     };
   }, [examId]);
+
+  // v7 §1 — Auto-load questions when exam is set from URL (exam-scoped mode)
+  React.useEffect(() => {
+    if (examId && examScoped) {
+      loadQuestions();
+    }
+  }, [examId, examScoped]);
 
   const loadChapters = async (sid: string) => {
     setChapterId("");
@@ -296,14 +315,22 @@ export default function QuestionBankPage() {
       {/* Filters */}
       <div className="mb-4 grid gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-3">
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Exam</label>
-          <select value={examId} onChange={(e) => setExamId(e.target.value)}
-            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-            <option value="">All Exams</option>
-            {exams.map((e) => (
-              <option key={e.id} value={e.id}>{e.name} ({e.count})</option>
-            ))}
-          </select>
+          <label className="text-xs font-medium text-muted-foreground">
+            {examScoped ? "Exam (Fixed)" : "Exam"}
+          </label>
+          {examScoped ? (
+            <div className="mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium text-primary">
+              {exams.find((e) => e.id === examId)?.name || examId}
+            </div>
+          ) : (
+            <select value={examId} onChange={(e) => setExamId(e.target.value)}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+              <option value="">All Exams</option>
+              {exams.map((e) => (
+                <option key={e.id} value={e.id}>{e.name} ({e.count})</option>
+              ))}
+            </select>
+          )}
         </div>
         <div>
           <label className="text-xs font-medium text-muted-foreground">Subject</label>

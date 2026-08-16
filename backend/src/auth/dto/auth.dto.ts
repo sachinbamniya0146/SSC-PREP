@@ -13,14 +13,20 @@ export class SignupDto {
   email!: string;
 
   @IsString()
-  @MinLength(8, { message: 'Password must be at least 8 characters' })
-  @MaxLength(72)
+  @MinLength(20, { message: 'Password must be exactly 20 characters' })
+  @MaxLength(20, { message: 'Password must be exactly 20 characters' })
   password!: string;
 
   @IsString()
   @IsNotEmpty()
   @MaxLength(100)
   fullName!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(10, { message: 'Mobile number must be at least 10 digits' })
+  @MaxLength(15, { message: 'Mobile number cannot exceed 15 digits' })
+  phone!: string;
 
   @IsOptional()
   @IsIn(['WEB', 'APP'], { message: 'platform must be WEB or APP' })
@@ -33,6 +39,8 @@ export class LoginDto {
 
   @IsString()
   @IsNotEmpty()
+  @MinLength(20, { message: 'Password must be exactly 20 characters' })
+  @MaxLength(20, { message: 'Password must be exactly 20 characters' })
   password!: string;
 
   @IsOptional()
@@ -91,8 +99,8 @@ export class ResetPasswordDto {
   otp!: string;
 
   @IsString()
-  @MinLength(8, { message: 'Password must be at least 8 characters' })
-  @MaxLength(72)
+  @MinLength(20, { message: 'Password must be exactly 20 characters' })
+  @MaxLength(20, { message: 'Password must be exactly 20 characters' })
   newPassword!: string;
 }
 
@@ -104,4 +112,17 @@ export class GoogleAuthDto {
   @IsOptional()
   @IsIn(['WEB', 'APP'], { message: 'platform must be WEB or APP' })
   platform?: 'WEB' | 'APP';
+}
+
+export class ChangePasswordDto {
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(20, { message: 'Current password must be exactly 20 characters' })
+  @MaxLength(20, { message: 'Current password must be exactly 20 characters' })
+  currentPassword!: string;
+
+  @IsString()
+  @MinLength(20, { message: 'New password must be exactly 20 characters' })
+  @MaxLength(20, { message: 'New password must be exactly 20 characters' })
+  newPassword!: string;
 }
