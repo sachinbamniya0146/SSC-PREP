@@ -2,6 +2,7 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
+COPY .env.local ./
 RUN npm ci
 COPY . .
 RUN npm run build
@@ -14,5 +15,6 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/next.config.mjs ./
+COPY --from=builder /app/.env.local ./
 EXPOSE 3000
 CMD ["npx", "next", "start", "-p", "3000"]
