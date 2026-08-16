@@ -95,4 +95,19 @@ export class TestsController {
   cglExam() {
     return this.testsService.cglExam();
   }
+
+  // v7 §NEW — Wrong/Skipped Auto-Practice: practice from weak chapters
+  @Get('weak-areas/practice')
+  weakAreasPractice(
+    @CurrentUser() user: { userId: string },
+    @Query('limit') limit?: string,
+    @Query('includeSkipped') includeSkipped?: string,
+    @Query('examId') examId?: string,
+  ) {
+    return this.testsService.getWeakAreasPractice(user.userId, {
+      limit: limit ? Number(limit) : 25,
+      includeSkipped: includeSkipped !== 'false',
+      examId,
+    });
+  }
 }

@@ -813,4 +813,143 @@ async saveAnswers(
       questions,
     };
   }
+
+  // ============ WRONG/SKIPPED AUTO-PRACTICE (v7 §NEW) ============
+  // Returns practice questions from chapters where the user got questions wrong or skipped
+  async getWeakAreasPractice(
+    userId: string,
+    options: { limit?: number; includeSkipped?: boolean; examId?: string }
+  ) {
+    const limit = Math.min(Math.max(options.limit ?? 25, 5), 100);
+    const includeSkipped = options.includeSkipped ?? true;
+
+    // Get all SUBMITTED attempts for this user
+    const attempts = await this.prisma.testAttempt.findMany({
+      where: { userId, status: 'SUBMITTED' },
+      select: { id: true, testTemplateId: true },
+    });
+
+    if (attempts.length === 0) {
+      return { questions: [], chapters: [], message: 'No completed tests yet — take a test first!' };
+    }
+
+    const attemptIds = attempts.map((a) => a.id);
+
+    // Find wrong + skipped questions with their chapter/exam info
+    const wrongSkipped = await this.prisma.attemptAnswer.findMany({
+      where: {
+        testAttemptId: { in: attemptIds },
+        OR: [
+          { isCorrect: false }, // wrong
+          ...(includeSkipped ? [{ selectedOption: null }] : []), // skipped
+        ],
+      },
+      include: {
+        question: {
+          select: {
+            id: true,
+            chapterId: true,
+            subjectId: true,
+            examId: true,
+            chapter: { select: { name: true } },
+            subject: { select: { name: true } },
+            exam: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    if (wrongSkipped.length === 0) {
+      return { questions: [], chapters: [], message: 'Perfect! No wrong or skipped questions found.' };
+    }
+
+    // Aggregate by chapter (weak areas)
+    const chapterMap = new Map<string, { chapterId: string; chapterName: string; subjectName: string; examName: string | null; wrongCount: number; skippedCount: number }>();
+    for (const ws of wrongSkipped) {
+      const q = ws.question;
+      if (!q?.chapterId) continue;
+      const key = q.chapterId;
+      const existing = chapterMap.get(key) ?? {
+        chapterId: q.chapterId,
+        chapterName: q.chapter?.name ?? 'Unknown',
+        subjectName: q.subject?.name ?? 'Unknown',
+        examName: q.exam?.name ?? null,
+        wrongCount: 0,
+        skippedCount: 0,
+      };
+      if (ws.selectedOption === null) existing.skippedCount++;
+      else existing.wrongCount++;
+      chapterMap.set(key, existing);
+    }
+
+    // Sort chapters by total errors (wrong + skipped) descending
+    const weakChapters = [...chapterMap.values()]
+      .sort((a, b) => (b.wrongCount + b.skippedCount) - (a.wrongCount + a.skippedCount))
+      .slice(0, 10); // Top 10 weak chapters
+
+    // For each weak chapter, fetch fresh questions (not already attempted in recent tests)
+    const attemptedQuestionIds = new Set(wrongSkipped.map((ws) => ws.questionId));
+    const practiceQuestions: any[] = [];
+
+    for (const ch of weakChapters) {
+      const where: any = {
+        isApproved: true,
+        chapterId: ch.chapterId,
+        questionTextHindi: { not: '' },
+        examId: { not: null },
+        id: { notIn: [...attemptedQuestionIds] }, // don't repeat same questions
+      };
+      if (options.examId) where.examId = options.examId;
+
+      const rows = await this.prisma.question.findMany({
+        where,
+        include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
+        orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
+        take: Math.ceil(limit / weakChapters.length) + 2, // distribute across chapters
+      });
+
+      const validRows = rows.filter(
+        (r) =>
+          Array.isArray(r.optionsJson) &&
+          r.optionsJson.length === 4 &&
+          r.optionsJson.every((o: any) => o && o.text && String(o.text).trim().length > 0),
+      );
+
+      for (const r of validRows) {
+        if (practiceQuestions.length >= limit) break;
+        practiceQuestions.push({
+          id: r.id,
+          questionText: r.questionText,
+          questionTextHindi: r.questionTextHindi,
+          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+          chapter: r.chapter?.name ?? '',
+          examName: r.exam?.name ?? null,
+          year: r.year,
+          shift: r.shift,
+          marks: r.marks ?? 2,
+          negativeMarks: r.negativeMarks ?? 0.5,
+          explanation: r.explanation,
+          explanationHindi: r.explanationHindi,
+          subjectId: r.subjectId,
+          // metadata for UI
+          _weakMeta: { chapterId: ch.chapterId, chapterName: ch.chapterName, wasWrong: true, wasSkipped: false },
+        });
+      }
+    }
+
+    return {
+      type: 'WEAK_AREAS_PRACTICE',
+      count: practiceQuestions.length,
+      chapters: weakChapters.map((c) => ({
+        chapterId: c.chapterId,
+        chapterName: c.chapterName,
+        subjectName: c.subjectName,
+        examName: c.examName,
+        wrongCount: c.wrongCount,
+        skippedCount: c.skippedCount,
+        totalErrors: c.wrongCount + c.skippedCount,
+      })),
+      questions: practiceQuestions,
+    };
+  }
 }

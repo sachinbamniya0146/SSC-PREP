@@ -13,7 +13,7 @@ export default function DashboardPage() {
   // v7 §2 — pattern label comes from ExamPattern (meta), never hardcoded
   const [cglPattern, setCglPattern] = React.useState<string | null>(null);
   const [examsWithQuestions, setExamsWithQuestions] = React.useState<Array<{id: string; name: string; count: number}>>([]);
-  
+
   React.useEffect(() => {
     (async () => {
       try {
@@ -135,6 +135,18 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="rounded-xl border border-border bg-card p-6">
+            <h2 className="font-semibold">🎯 Weak Areas Practice</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Auto-generated practice from your wrong & skipped questions across all tests
+            </p>
+            <a
+              href="/weak-practice"
+              className="mt-4 inline-block rounded-lg bg-destructive px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+            >
+              Start Practice
+            </a>
+          </div>
+          <div className="rounded-xl border border-border bg-card p-6">
             <h2 className="font-semibold">🏆 Leaderboard</h2>
             <p className="mt-2 text-sm text-muted-foreground">
               Climb the ranks — earn XP from tests & daily quizzes, keep your streak alive!
@@ -147,7 +159,7 @@ export default function DashboardPage() {
             </a>
           </div>
           <div className="rounded-xl border border-border bg-card p-6">
-            <h2 className="font-semibold">Refer &amp; Earn 🎁</h2>
+            <h2 className="font-semibold">Refer & Earn 🎁</h2>
             <p className="mt-2 text-sm text-muted-foreground">
               Get FREE subscription when 10 friends buy using your code!
             </p>
