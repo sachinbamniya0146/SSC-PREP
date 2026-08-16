@@ -43,15 +43,23 @@ async function main() {
     console.log('WARN: No GEMINI_API_KEY set. Using placeholder Hindi translation (marked AUTO_UNVERIFIED).');
   }
 
-  // Find questions missing Hindi
+  // Find questions missing Hindi (null/empty Hindi text, excluding those already marked with placeholder)
   const missing = await prisma.question.findMany({
     where: {
       isApproved: true,
       OR: [
         { questionTextHindi: null },
         { questionTextHindi: '' },
-        { translationStatus: 'AUTO_UNVERIFIED' },
       ],
+      // Exclude questions that have the placeholder text (they were already processed)
+      // Only applies to non-null text
+      NOT: {
+        AND: [
+          { questionTextHindi: { not: null } },
+          { questionTextHindi: { not: '' } },
+          { questionTextHindi: { contains: 'Hindi translation pending' } },
+        ],
+      },
     },
     take: 500,
     orderBy: { createdAt: 'asc' },
@@ -107,10 +115,14 @@ async function main() {
         skipped++;
       }
     } else {
-      // No API key - just mark as AUTO_UNVERIFIED
+      // No API key - provide placeholder Hindi text so UI doesn't show empty
+      const placeholderHi = `[Hindi translation pending - auto-generation requires GEMINI_API_KEY]`;
       await prisma.question.update({
         where: { id: q.id },
-        data: { translationStatus: 'AUTO_UNVERIFIED' },
+        data: {
+          questionTextHindi: placeholderHi,
+          translationStatus: 'AUTO_UNVERIFIED',
+        },
       });
       skipped++;
     }
