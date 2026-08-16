@@ -33,7 +33,7 @@ export default function ProfilePage() {
     try {
       const token = localStorage.getItem("ssc_access_token");
       if (!token) return;
-      const data = await api<UserProfile>("/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+      const data = await api<{ user: UserProfile; entitlements: any }>("/auth/me", { headers: { Authorization: `Bearer ${token}` } });
       setUser(data.user);
       if (data.user.phone) setPhone(data.user.phone);
     } catch (err) {
