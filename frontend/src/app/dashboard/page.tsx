@@ -12,16 +12,23 @@ export default function DashboardPage() {
   const [gami, setGami] = React.useState<{ currentStreak: number; longestStreak: number; xp: number; coins: number; hintQuota: number; rank: number } | null>(null);
   // v7 §2 — pattern label comes from ExamPattern (meta), never hardcoded
   const [cglPattern, setCglPattern] = React.useState<string | null>(null);
+  const [examsWithQuestions, setExamsWithQuestions] = React.useState<Array<{id: string; name: string; count: number}>>([]);
+  
   React.useEffect(() => {
     (async () => {
       try {
         const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/bank/meta`);
         const d = await r.json();
         const cgl = (Array.isArray(d?.exams) ? d.exams : []).find((e: any) => e.slug === "cgl");
-                if (cgl?.pattern?.name) {
-                  const m = cgl.pattern.name.match(/\((\d{4})\)/);
-                  setCglPattern(m ? `${m[1]} Pattern` : cgl.pattern.name);
-                }
+        if (cgl?.pattern?.name) {
+          const m = cgl.pattern.name.match(/\((\d{4})\)/);
+          setCglPattern(m ? `${m[1]} Pattern` : cgl.pattern.name);
+        }
+        // Load exams with questions
+        if (Array.isArray(d?.exams)) {
+          const exams = d.exams.filter((e: any) => e.count > 100).sort((a: any, b: any) => b.count - a.count);
+          setExamsWithQuestions(exams.map((e: any) => ({ id: e.id, name: e.name, count: e.count })));
+        }
       } catch {}
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -108,82 +115,24 @@ export default function DashboardPage() {
 
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
           <div className="rounded-xl border border-border bg-card p-6 lg:col-span-2">
-            <h2 className="font-semibold">Your Tests</h2>
+            <h2 className="font-semibold">📚 Choose Your Exam</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Attempt mocks, daily quizzes, and chapter tests — then check your weak topics.
+              Select an exam to see its PYQs, mock tests, and sectional practice
             </p>
-            <a
-              href="/quiz"
-              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-            >
-              📅 Daily Quiz
-            </a>
-            <a
-              href="/mocks"
-              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-            >
-              🎯 Mock Tests
-            </a>
-            <a
-              href="/cgl-test"
-              className="mt-4 mr-3 inline-block rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-            >
-              🏆 CGL Tier 1 {cglPattern ? `(${cglPattern})` : "Exam (2025 Pattern)"}
-            </a>
-            <a
-              href="/sectional"
-              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-            >
-              📚 Sectional Tests
-            </a>
-            <a
-              href="/pricing"
-              className="mt-4 inline-block rounded-lg bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-            >
-              💎 Premium
-            </a>
-            <a
-              href="/question-bank"
-              className="mt-4 mr-3 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
-            >
-              📚 Question Bank
-            </a>
-            <a
-              href="/weak-topics"
-              className="mt-4 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
-            >
-              📊 My Weak Topics
-            </a>
-            <a
-              href="/review"
-              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-            >
-              🔁 Review Queue
-            </a>
-            <a
-              href="/study-plan"
-              className="mt-4 mr-3 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-            >
-              📋 My Study Plan
-            </a>
-            <a
-              href="/verification"
-              className="mt-4 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
-            >
-              ✅ Accuracy Dashboard
-            </a>
-            <a
-              href="/results"
-              className="mt-4 mr-3 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
-            >
-              📊 Results History
-            </a>
-            <a
-              href="/bookmarks"
-              className="mt-4 inline-block rounded-lg border border-border px-5 py-2.5 text-sm font-semibold hover:bg-muted"
-            >
-              🔖 Bookmarks
-            </a>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {examsWithQuestions.map((e) => (
+                <a
+                  key={e.id}
+                  href={`/question-bank?exam=${encodeURIComponent(e.id)}`}
+                  className="rounded-xl border border-border bg-card p-4 hover:border-primary/50 hover:shadow-md transition"
+                >
+                  <div className="font-semibold text-lg">{e.name}</div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    {e.count}+ questions
+                  </div>
+                </a>
+              ))}
+            </div>
           </div>
           <div className="rounded-xl border border-border bg-card p-6">
             <h2 className="font-semibold">🏆 Leaderboard</h2>
