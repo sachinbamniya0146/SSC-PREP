@@ -1,18 +1,19 @@
 "use client";
 
 import * as React from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { ThemeContext } from "@/components/theme-provider";
+import { api } from "@/lib/api";
 
 const exams = [
-  "SSC CGL",
-  "SSC CHSL",
-  "SSC CPO",
-  "SSC MTS",
-  "SSC GD",
-  "SSC JE",
-  "SSC Stenographer",
-  "Delhi Police",
+  { id: "exam-cgl", name: "SSC CGL", short: "CGL", color: "from-blue-500 to-cyan-500" },
+  { id: "exam-chsl", name: "SSC CHSL", short: "CHSL", color: "from-emerald-500 to-teal-500" },
+  { id: "exam-cpo", name: "SSC CPO", short: "CPO", color: "from-orange-500 to-red-500" },
+  { id: "exam-mts", name: "SSC MTS", short: "MTS", color: "from-purple-500 to-pink-500" },
+  { id: "exam-gd", name: "SSC GD", short: "GD", color: "from-amber-500 to-yellow-500" },
+  { id: "exam-je", name: "SSC JE", short: "JE", color: "from-indigo-500 to-purple-500" },
+  { id: "exam-steno", name: "SSC Stenographer", short: "Steno", color: "from-rose-500 to-pink-500" },
+  { id: "exam-delhi-police", name: "Delhi Police", short: "DP", color: "from-green-500 to-emerald-500" },
 ];
 
 type IconProps = { className?: string };
@@ -74,6 +75,22 @@ const IconTrophy = ({ className = "" }: IconProps) => (
 const IconCheck = ({ className = "" }: IconProps) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+
+const IconLock = ({ className = "" }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 15v3a2 2 0 1 0 4 0v-3" />
+    <path d="M16 11V7a4 4 0 1 0-8 0v4" />
+    <rect x="5" y="11" width="14" height="10" rx="2" />
+  </svg>
+);
+
+const IconUsers = ({ className = "" }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M16 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+    <circle cx="12" cy="7" r="4" />
+    <path d="M2 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" />
   </svg>
 );
 
@@ -152,6 +169,24 @@ const fadeUp = {
 
 export default function HomePage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
+  const [isLoggedIn, setIsLoggedIn] = React.useState(false);
+  const [modalExam, setModalExam] = React.useState<typeof exams[0] | null>(null);
+
+  React.useEffect(() => {
+    const token = localStorage.getItem("ssc_access_token");
+    setIsLoggedIn(!!token);
+  }, []);
+
+  // Exam card click handler — shows login prompt or free tier info
+  const handleExamClick = (exam: typeof exams[0]) => {
+    if (!isLoggedIn) {
+      // Not logged in → redirect to login
+      window.location.href = "/login";
+      return;
+    }
+    // Logged in → show free tier modal
+    setModalExam(exam);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -180,12 +215,21 @@ export default function HomePage() {
             >
               {theme === "dark" ? "☀️" : "🌙"}
             </button>
-            <a
-              href="/login"
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
-            >
-              Login
-            </a>
+            {isLoggedIn ? (
+              <a
+                href="/dashboard"
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
+              >
+                Dashboard
+              </a>
+            ) : (
+              <a
+                href="/login"
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
+              >
+                Login
+              </a>
+            )}
           </div>
         </div>
       </header>
@@ -268,27 +312,146 @@ export default function HomePage() {
         >
           Prepare for Every SSC Exam
         </motion.h2>
-        <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <motion.p
+          initial={{ opacity: 0, y: 16 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.4, delay: 0.05 }}
+          className="mx-auto mt-3 max-w-2xl text-center text-sm text-muted-foreground"
+        >
+          Click any exam to start. <strong>3 free mock tests + 3 free sectional tests</strong> on every exam.
+          Unlimited access with a plan — starting at just ₹19/month.
+        </motion.p>
+        <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {exams.map((exam, i) => (
             <motion.div
-              key={exam}
+              key={exam.id}
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.35, delay: i * 0.05 }}
-              className="group cursor-pointer rounded-xl border border-border bg-card p-5 text-center transition hover:-translate-y-1 hover:border-primary hover:shadow-lg"
+              onClick={() => handleExamClick(exam)}
+              className={`group relative cursor-pointer rounded-xl border border-border bg-card p-5 text-center transition hover:-translate-y-1 hover:border-primary hover:shadow-xl`}
             >
-              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className={`mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br ${exam.color} text-white shadow-lg`}>
                 <IconExam className="h-5 w-5" />
               </div>
-              <div className="mt-2 font-semibold group-hover:text-primary">
-                {exam}
+              <div className="mt-2 font-semibold group-hover:text-primary text-base">
+                {exam.name}
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
                 PYQs + Mock Tests
               </div>
+              <div className="mt-2 flex items-center justify-center gap-1">
+                <span className="text-xs text-success">✓ 3 Free Mocks</span>
+                <span className="text-xs text-muted-foreground">·</span>
+                <span className="text-xs text-success">✓ 3 Free Sectional</span>
+              </div>
+              {/* Lock icon for premium upgrade hint */}
+              <div className="absolute -top-1 -right-1 hidden group-hover:block">
+                <IconLock className="h-3 w-3 text-muted-foreground" />
+              </div>
             </motion.div>
           ))}
+        </div>
+      </section>
+
+      {/* ===== FREE TIER EXPLAINER ===== */}
+      <section className="mx-auto max-w-7xl px-4 py-16">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.4 }}
+          className="rounded-2xl border border-border bg-gradient-to-br from-primary/5 to-accent/5 p-8 text-center"
+        >
+          <h3 className="text-2xl font-bold mb-3">Zero-Risk Learning — Start Free</h3>
+          <p className="text-sm text-muted-foreground max-w-2xl mx-auto mb-6">
+            New to SSC PrepHub? Get <strong>3 free mock tests + 3 free sectional tests</strong>
+            on every SSC exam — no payment required. Each mock gives you an
+            all-India rank, detailed analytics, and a personalized study plan.
+            When you're ready, unlock unlimited tests, PDF downloads, and full
+            analytics with a plan starting at just ₹19/month.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-6 text-center">
+            <div>
+              <div className="text-2xl font-bold text-success">3</div>
+              <div className="text-xs text-muted-foreground">Free Mock Tests</div>
+            </div>
+            <div className="text-3xl font-bold text-primary">+</div>
+            <div>
+              <div className="text-2xl font-bold text-success">3</div>
+              <div className="text-xs text-muted-foreground">Free Sectional Tests</div>
+            </div>
+            <div className="mx-4 my-1 h-10 w-px bg-border" />
+            <div>
+              <div className="text-2xl font-bold text-primary">₹19</div>
+              <div className="text-xs text-muted-foreground">per month (unlimited)</div>
+            </div>
+          </div>
+          <div className="mt-6">
+            <a
+              href={isLoggedIn ? "/dashboard" : "/signup"}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-8 py-3 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/30 transition hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0"
+            >
+              <IconUsers className="h-4 w-4" />
+              {isLoggedIn ? "Go to Dashboard →" : "Start Free Practice →"}
+            </a>
+          </div>
+        </motion.div>
+      </section>
+
+      {/* ===== HOW IT WORKS ===== */}
+      <section className="mx-auto max-w-5xl px-4 py-16">
+        <motion.h2
+          initial={{ opacity: 0, y: 16 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.4 }}
+          className="text-center text-3xl font-bold"
+        >
+          How It Works
+        </motion.h2>
+        <div className="mt-10 grid gap-6 sm:grid-cols-3">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.35, delay: 0.05 }}
+            className="card p-6 text-center"
+          >
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <span className="text-xl font-bold">1</span>
+            </div>
+            <h3 className="mt-3 font-semibold">Choose Your Exam</h3>
+            <p className="mt-2 text-sm text-muted-foreground">Click any exam card to see PYQs and mock tests for that exam only.</p>
+          </motion.div>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.35, delay: 0.1 }}
+            className="card p-6 text-center"
+          >
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <span className="text-xl font-bold">2</span>
+            </div>
+            <h3 className="mt-3 font-semibold">Start Free Tests</h3>
+            <p className="mt-2 text-sm text-muted-foreground">3 free mock tests + 3 free sectional tests per exam. No card needed.</p>
+          </motion.div>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.35, delay: 0.15 }}
+            className="card p-6 text-center"
+          >
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <span className="text-xl font-bold">3</span>
+            </div>
+            <h3 className="mt-3 font-semibold">Upgrade for Unlimited</h3>
+            <p className="mt-2 text-sm text-muted-foreground">From ₹19/month — unlock all tests, analytics, PDF downloads.</p>
+          </motion.div>
         </div>
       </section>
 
@@ -314,16 +477,14 @@ export default function HomePage() {
                 transition={{ duration: 0.35, delay: (i % 3) * 0.08 }}
                 className="card p-6 transition hover:-translate-y-1 hover:shadow-md"
               >
-                <div
-                  className={`flex h-11 w-11 items-center justify-center rounded-xl ${f.accent}`}
-                >
+                <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${f.accent}`}>
                   <f.icon className="h-5 w-5" />
                 </div>
                 <h3 className="mt-3 font-semibold">{f.title}</h3>
                 <p className="mt-2 text-sm text-muted-foreground">{f.desc}</p>
               </motion.div>
             ))}
-            {/* Live Leaderboard feature card with illustrative preview */}
+            {/* Live Leaderboard feature card */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
@@ -437,6 +598,72 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
+
+      {/* ===== EXAM FREE TIER MODAL ===== */}
+      <AnimatePresence>
+        {modalExam && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setModalExam(null)}
+          >
+            <motion.div
+              className="relative w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl"
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setModalExam(null)}
+                className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
+              >
+                ✕
+              </button>
+              <h3 className="text-xl font-bold">{modalExam.name} — Free Tier</h3>
+              <div className="mt-4 space-y-3">
+                <div className="flex items-center gap-3 rounded-lg border border-border p-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-success/15 text-success">📝</div>
+                  <div className="flex-1">
+                    <div className="font-semibold">3 Free Mock Tests</div>
+                    <div className="text-xs text-muted-foreground">Real exam-format full-length mocks with all-India rank</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 rounded-lg border border-border p-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-success/15 text-success">🎯</div>
+                  <div className="flex-1">
+                    <div className="font-semibold">3 Free Sectional Tests</div>
+                    <div className="text-xs text-muted-foreground">Practice specific sections: Reasoning, GA, Quant, English</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 rounded-lg border border-dashed border-border p-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-muted-foreground"><IconLock className="h-4 w-4" /></div>
+                  <div className="flex-1">
+                    <div className="font-semibold text-muted-foreground">Unlimited access</div>
+                    <div className="text-xs text-muted-foreground">Upgrade to Super Pass (₹199) for all mocks, PDFs & analytics</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-6 flex gap-3">
+                <a
+                  href={`/question-bank?exam=${modalExam.id}`}
+                  className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-center text-sm font-semibold text-primary-foreground hover:opacity-90"
+                >
+                  Start PYQ Practice →
+                </a>
+                <a
+                  href="/signup"
+                  className="flex-1 rounded-xl border border-border px-4 py-2.5 text-center text-sm font-semibold hover:bg-muted"
+                >
+                  Upgrade (₹19/mo)
+                </a>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
