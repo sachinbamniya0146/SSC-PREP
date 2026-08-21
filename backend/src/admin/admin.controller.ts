@@ -322,4 +322,152 @@ export class AdminController {
     });
     return { plans };
   }
+
+  // ---- Admin: Grant/Revoke Premium Access ----
+  @Post('users/:id/grant-premium')
+  async grantPremium(
+    @Param('id', ParseUUIDPipe) userId: string,
+    @Body() body: { months?: number; days?: number },
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new Error('User not found');
+
+    // Cancel any existing active subscription
+    await this.prisma.subscription.updateMany({
+      where: { userId, status: 'ACTIVE' },
+      data: { status: 'CANCELLED' },
+    });
+
+    const endsAt = new Date();
+    if (body.months) {
+      endsAt.setMonth(endsAt.getMonth() + body.months);
+    } else if (body.days) {
+      endsAt.setDate(endsAt.getDate() + body.days);
+    } else {
+      endsAt.setFullYear(endsAt.getFullYear() + 1); // Default 1 year
+    }
+
+    // Create a special admin-granted subscription (using a special plan or custom)
+    const adminPlan = await this.prisma.plan.findFirst({ 
+      where: { code: 'ADMIN_GRANTED' } 
+    });
+    
+    let planId = adminPlan?.id;
+    if (!planId) {
+      // Create admin plan if doesn't exist
+      const newPlan = await this.prisma.plan.create({
+        data: {
+          code: 'ADMIN_GRANTED',
+          name: 'Admin Granted Premium',
+          description: 'Premium access granted by admin',
+          priceInr: 0,
+          durationMonths: 12,
+          features: ['all_mocks', 'unlimited_bookmarks', 'advanced_analytics', 'priority_support', 'all_chapters'],
+          isActive: true,
+        },
+      });
+      planId = newPlan.id;
+    }
+
+    const sub = await this.prisma.subscription.create({
+      data: {
+        userId,
+        planId,
+        status: 'ACTIVE',
+        startsAt: new Date(),
+        endsAt,
+      },
+    });
+
+    await this.auditLogService.log({
+      action: 'PREMIUM_GRANTED_BY_ADMIN',
+      targetEntity: 'Subscription',
+      entityId: sub.id,
+      metadataJson: { userId, planId, endsAt: endsAt.toISOString() },
+    });
+    return { ok: true, subscription: sub, endsAt };
+  }
+
+  @Post('users/:id/revoke-premium')
+  async revokePremium(@Param('id', ParseUUIDPipe) userId: string) {
+    await this.prisma.subscription.updateMany({
+      where: { userId, status: 'ACTIVE' },
+      data: { status: 'CANCELLED' },
+    });
+    await this.auditLogService.log({
+      action: 'PREMIUM_REVOKED_BY_ADMIN',
+      targetEntity: 'Subscription',
+      entityId: userId,
+      metadataJson: { userId },
+    });
+    return { ok: true };
+  }
+
+  @Post('bulk/grant-premium')
+  async bulkGrantPremium(@Body() body: { emails: string[]; months?: number; days?: number }) {
+    const endsAt = new Date();
+    if (body.months) {
+      endsAt.setMonth(endsAt.getMonth() + body.months);
+    } else if (body.days) {
+      endsAt.setDate(endsAt.getDate() + body.days);
+    } else {
+      endsAt.setFullYear(endsAt.getFullYear() + 1);
+    }
+
+    const adminPlan = await this.prisma.plan.findFirst({ 
+      where: { code: 'ADMIN_GRANTED' } 
+    });
+    
+    let planId = adminPlan?.id;
+    if (!planId) {
+      const newPlan = await this.prisma.plan.create({
+        data: {
+          code: 'ADMIN_GRANTED',
+          name: 'Admin Granted Premium',
+          description: 'Premium access granted by admin',
+          priceInr: 0,
+          durationMonths: 12,
+          features: ['all_mocks', 'unlimited_bookmarks', 'advanced_analytics', 'priority_support', 'all_chapters'],
+          isActive: true,
+        },
+      });
+      planId = newPlan.id;
+    }
+
+    const results = [];
+    for (const email of body.emails) {
+      const user = await this.prisma.user.findUnique({ 
+        where: { email: email.trim().toLowerCase() } 
+      });
+      if (!user) {
+        results.push({ email, success: false, reason: 'User not found' });
+        continue;
+      }
+
+      await this.prisma.subscription.updateMany({
+        where: { userId: user.id, status: 'ACTIVE' },
+        data: { status: 'CANCELLED' },
+      });
+
+      await this.prisma.subscription.create({
+        data: {
+          userId: user.id,
+          planId,
+          status: 'ACTIVE',
+          startsAt: new Date(),
+          endsAt,
+        },
+      });
+
+      await this.auditLogService.log({
+        action: 'PREMIUM_GRANTED_BY_ADMIN',
+        targetEntity: 'Subscription',
+        entityId: user.id,
+        metadataJson: { userId: user.id, planId, bulk: true, endsAt: endsAt.toISOString() },
+      });
+
+      results.push({ email, success: true });
+    }
+    return { results };
+  }
 }

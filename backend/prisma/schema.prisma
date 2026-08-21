@@ -109,6 +109,7 @@ model User {
   role             Role            @default(STUDENT)
   isEmailVerified  Boolean         @default(false)
   avatarUrl        String?
+  googleId         String?         @unique
 
   // Gamification & Daily Streaks
   currentStreak    Int             @default(0)
@@ -494,10 +495,13 @@ model AttemptAnswer {
 
 model Plan {
   id             String   @id @default(uuid())
+  code           String   @unique // e.g. "MONTHLY", "SUPER_PASS_24M", "ADMIN_GRANTED"
   name           String   // e.g. "Monthly Pass (1 Month)", "Super Pass (24 Months)"
+  description    String?
   durationMonths Int
   priceInr       Float
   isActive       Boolean  @default(true)
+  features       String[] @default([])
 
   subscriptions          Subscription[]
   telegramSubscriptions  TelegramSubscription[] @relation("TelegramSubscription_Plan")

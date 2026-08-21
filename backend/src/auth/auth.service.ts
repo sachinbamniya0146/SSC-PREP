@@ -248,8 +248,20 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Google token missing email');
     }
     const email = payload.email.toLowerCase().trim();
-    let user = await this.prisma.user.findUnique({ where: { email } });
+    const googleId = payload.sub;
+    
+    // First check if user exists with this googleId
+    let user = await this.prisma.user.findFirst({ 
+      where: { 
+        OR: [
+          { email },
+          { googleId }
+        ]
+      } 
+    });
+    
     if (!user) {
+      // Create new user
       user = await this.prisma.user.create({
         data: {
           email,
@@ -257,6 +269,17 @@ export class AuthService implements OnModuleInit {
           passwordHash: 'oauth:' + randomBytes(24).toString('hex'),
           isEmailVerified: payload.email_verified === true,
           avatarUrl: payload.picture || null,
+          googleId,
+        },
+      });
+    } else if (!user.googleId) {
+      // Existing user with same email but no googleId - link them
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          googleId,
+          isEmailVerified: payload.email_verified === true || user.isEmailVerified,
+          avatarUrl: payload.picture || user.avatarUrl,
         },
       });
     }
