@@ -32,6 +32,19 @@ interface SubscriptionPlan {
   durationDays: number;
   features: string[];
   isActive: boolean;
+  code?: string;
+  description?: string;
+}
+
+interface AdminGrantRequest {
+  months?: number;
+  days?: number;
+}
+
+interface BulkGrantRequest {
+  emails: string[];
+  months?: number;
+  days?: number;
 }
 
 export default function AdminPage() {
@@ -45,8 +58,14 @@ export default function AdminPage() {
   const [loading, setLoading] = React.useState(false);
   const [selectedUser, setSelectedUser] = React.useState<User | null>(null);
   const [showSubscriptionModal, setShowSubscriptionModal] = React.useState(false);
+  const [showGrantPremiumModal, setShowGrantPremiumModal] = React.useState(false);
   const [showEmailModal, setShowEmailModal] = React.useState(false);
+  const [showBulkPremiumModal, setShowBulkPremiumModal] = React.useState(false);
   const [bulkEmail, setBulkEmail] = React.useState("");
+  const [bulkMonths, setBulkMonths] = React.useState("");
+  const [bulkDays, setBulkDays] = React.useState("");
+  const [grantMonths, setGrantMonths] = React.useState("");
+  const [grantDays, setGrantDays] = React.useState("");
   const [bulkPlanId, setBulkPlanId] = React.useState("");
   const [plans, setPlans] = React.useState<SubscriptionPlan[]>([]);
   const [error, setError] = React.useState("");
@@ -104,6 +123,31 @@ export default function AdminPage() {
     }
   }
 
+  async function grantPremium(userId: string, months?: number, days?: number) {
+    try {
+      await api(`/admin/users/${userId}/grant-premium`, {
+        method: "POST",
+        body: JSON.stringify({ months, days }),
+      });
+      setInfo("Premium granted successfully");
+      loadUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to grant premium");
+    }
+  }
+
+  async function revokePremium(userId: string) {
+    try {
+      await api(`/admin/users/${userId}/revoke-premium`, {
+        method: "POST",
+      });
+      setInfo("Premium revoked successfully");
+      loadUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to revoke premium");
+    }
+  }
+
   async function sendBulkSubscription() {
     if (!bulkEmail || !bulkPlanId) return;
     try {
@@ -119,6 +163,25 @@ export default function AdminPage() {
     }
   }
 
+  async function sendBulkPremium() {
+    if (!bulkEmail) return;
+    const months = bulkMonths ? Number(bulkMonths) : undefined;
+    const days = bulkDays ? Number(bulkDays) : undefined;
+    try {
+      await api("/admin/bulk/grant-premium", {
+        method: "POST",
+        body: JSON.stringify({ emails: bulkEmail.split(",").map(e => e.trim()), months, days }),
+      });
+      setInfo("Bulk premium granted successfully");
+      setShowBulkPremiumModal(false);
+      setBulkEmail("");
+      setBulkMonths("");
+      setBulkDays("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to grant bulk premium");
+    }
+  }
+
   React.useEffect(() => {
     loadUsers();
     loadPlans();
@@ -130,7 +193,8 @@ export default function AdminPage() {
       MODERATOR: "bg-amber-500/20 text-amber-400",
       STUDENT: "bg-blue-500/20 text-blue-400",
     };
-    return <span className={`badge ${colors[role] || "bg-muted text-muted-foreground"}`}>{role}</span>;
+    const colorClass = colors[role] || "bg-muted text-muted-foreground";
+    return <span className={"badge " + colorClass}>{role}</span>;
   };
 
   return (
@@ -154,6 +218,9 @@ export default function AdminPage() {
           <div className="flex gap-2">
             <button onClick={() => setShowEmailModal(true)} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
               📧 Bulk Grant Subscription
+            </button>
+            <button onClick={() => setShowBulkPremiumModal(true)} className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+              🎁 Bulk Grant Premium
             </button>
           </div>
         </div>
@@ -234,10 +301,16 @@ export default function AdminPage() {
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <button onClick={() => setSelectedUser(u)} className="rounded border border-border px-2 py-1 text-xs hover:bg-muted">View</button>
-                          {u.subscriptions.some(s => s.status === "ACTIVE") ? (
-                            <button onClick={() => cancelSubscription(u.id)} className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs text-red-600 hover:bg-red-500/20">Cancel Sub</button>
+                          {u.role !== 'ADMIN' ? (
+                            <>
+                              {u.subscriptions.some(s => s.status === "ACTIVE") ? (
+                                <button onClick={() => revokePremium(u.id)} className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs text-red-600 hover:bg-red-500/20">Revoke Premium</button>
+                              ) : (
+                                <button onClick={() => { setSelectedUser(u); setShowGrantPremiumModal(true); }} className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-500/20">Grant Premium</button>
+                              )}
+                            </>
                           ) : (
-                            <button onClick={() => { setSelectedUser(u); setShowSubscriptionModal(true); }} className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-500/20">Add Sub</button>
+                            <span className="text-xs text-muted-foreground">Admin</span>
                           )}
                         </div>
                       </td>
@@ -310,6 +383,98 @@ export default function AdminPage() {
             <div className="mt-6 flex gap-2">
               <button onClick={sendBulkSubscription} disabled={!bulkEmail || !bulkPlanId} className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">Grant Subscriptions</button>
               <button onClick={() => { setShowEmailModal(false); setBulkEmail(""); setBulkPlanId(""); }} className="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm hover:bg-muted">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Grant Premium Modal */}
+      {showGrantPremiumModal && selectedUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl">
+            <h2 className="text-xl font-bold">Grant Premium to {selectedUser.fullName}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{selectedUser.email}</p>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Duration (months)</label>
+                <input
+                  type="number"
+                  value={grantMonths}
+                  onChange={(e) => setGrantMonths(e.target.value)}
+                  placeholder="e.g., 12"
+                  min="1"
+                  max="120"
+                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Or Duration (days)</label>
+                <input
+                  type="number"
+                  value={grantDays}
+                  onChange={(e) => setGrantDays(e.target.value)}
+                  placeholder="e.g., 30"
+                  min="1"
+                  max="3650"
+                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">Leave both empty for 1 year default</p>
+            </div>
+            <div className="mt-6 flex gap-2">
+              <button onClick={() => { grantPremium(selectedUser.id, grantMonths ? Number(grantMonths) : undefined, grantDays ? Number(grantDays) : undefined); setShowGrantPremiumModal(false); setGrantMonths(""); setGrantDays(""); }} className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90">Grant Premium</button>
+              <button onClick={() => { setShowGrantPremiumModal(false); setSelectedUser(null); setGrantMonths(""); setGrantDays(""); }} className="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm hover:bg-muted">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Premium Modal */}
+      {showBulkPremiumModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl">
+            <h2 className="text-xl font-bold">📧 Bulk Grant Premium</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Enter emails (comma-separated) and duration</p>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Emails</label>
+                <textarea
+                  value={bulkEmail}
+                  onChange={(e) => setBulkEmail(e.target.value)}
+                  placeholder="user1@example.com, user2@example.com"
+                  rows={3}
+                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Duration (months)</label>
+                <input
+                  type="number"
+                  value={bulkMonths}
+                  onChange={(e) => setBulkMonths(e.target.value)}
+                  placeholder="e.g., 12"
+                  min="1"
+                  max="120"
+                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Or Duration (days)</label>
+                <input
+                  type="number"
+                  value={bulkDays}
+                  onChange={(e) => setBulkDays(e.target.value)}
+                  placeholder="e.g., 30"
+                  min="1"
+                  max="3650"
+                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">Leave both empty for 1 year default</p>
+            </div>
+            <div className="mt-6 flex gap-2">
+              <button onClick={sendBulkPremium} disabled={!bulkEmail} className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">Grant Premium</button>
+              <button onClick={() => { setShowBulkPremiumModal(false); setBulkEmail(""); setBulkMonths(""); setBulkDays(""); }} className="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm hover:bg-muted">Cancel</button>
             </div>
           </div>
         </div>
