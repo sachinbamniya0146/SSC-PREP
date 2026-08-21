@@ -395,6 +395,34 @@ export class BankService {
     };
   }
 
+  // v3 §6.4 — ExamPattern: real-exam blueprint (sections, marks, timing, neg marking).
+  // Drives Daily Test composition/duration; source-of-truth for mock realism.
+  async getExamPattern(examId: string): Promise<any> {
+    const cached = cacheGet<any>(`bank:exam-pattern:${examId}`);
+    if (cached) return cached;
+    const [pattern, exam] = await Promise.all([
+      this.prisma.examPattern.findFirst({
+        where: { exam: { slug: examId }, isActive: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.exam.findFirst({ where: { slug: examId }, select: { id: true, name: true, slug: true } }),
+    ]);
+    if (!pattern) throw new NotFoundException(`No active ExamPattern for exam "${examId}"`);
+    const out = {
+      examId,
+      examName: exam?.name ?? null,
+      name: pattern.name,
+      totalQuestions: pattern.totalQuestions,
+      totalMarks: pattern.totalMarks,
+      durationMinutes: pattern.durationMinutes,
+      negativeMarks: pattern.negativeMarks,
+      sections: pattern.sections as { name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number }[],
+      isActive: pattern.isActive,
+    };
+    cacheSet(`bank:exam-pattern:${examId}`, out, 300_000);
+    return out;
+  }
+
   // ---- Video Solution Methods ----
 
   async addVideoSolution(

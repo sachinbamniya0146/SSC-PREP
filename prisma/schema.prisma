@@ -1,0 +1,622 @@
+// SSC Prep Hub — Prisma Database Schema
+// Database: PostgreSQL
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  STUDENT
+  ADMIN
+  MODERATOR
+}
+
+enum Platform {
+  WEB
+  APP
+}
+
+enum TestType {
+  CHAPTER
+  TOPIC
+  SUBJECT
+  MINI_MOCK
+  FULL_MOCK
+  PREVIOUS_YEAR
+  SHIFT_WISE
+  YEAR_WISE
+  CUSTOM
+  DAILY_PRACTICE
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum ExplanationSource {
+  PDF
+  AI_GENERATED
+  HUMAN_VERIFIED
+}
+
+enum TranslationStatus {
+  HUMAN_VERIFIED
+  AUTO_UNVERIFIED
+}
+
+enum ImportStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  PARTIAL
+}
+
+enum ChunkStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  AUTO_SUBMITTED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  PAUSED
+}
+
+// ================= NEW ENUMS =================
+
+enum QuestionReportReason {
+  WRONG_QUESTION
+  WRONG_SOLUTION
+  SPAM
+  INAPPROPRIATE
+  OTHER
+}
+
+enum QuestionReportStatus {
+  PENDING
+  RESOLVED
+  REJECTED
+}
+
+enum AchievementType {
+  STREAK_DAYS
+  XP_MILESTONE
+  TESTS_COMPLETED
+  ACCURACY
+  REFERRALS
+  DAILY_TEST_STREAK
+}
+
+enum AchievementTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+  DIAMOND
+}
+
+// ================= USER & AUTHENTICATION =================
+
+model User {
+  id               String          @id @default(uuid())
+  email            String          @unique
+  phone            String?         @unique
+  fullName         String
+  passwordHash     String
+  role             Role            @default(STUDENT)
+  isEmailVerified  Boolean         @default(false)
+  avatarUrl        String?
+
+  // Gamification & Daily Streaks
+  currentStreak    Int             @default(0)
+  longestStreak    Int             @default(0)
+  lastPracticeDate DateTime?
+  xp               Int             @default(0)
+  coins            Int             @default(0)
+
+  // Referral
+  referralCode     String?         @unique
+  referredByCode   String?         // referral code user signed up with
+  freeSubFromReferral Boolean      @default(false)
+
+  // Relations
+  subscriptions    Subscription[]
+  payments         Payment[]
+  studyPlans       StudyPlan[]
+  questionComments QuestionComment[]
+  questionReports  QuestionReport[]
+  userAchievements UserAchievement[]
+}
+
+// ================= SUBSCRIPTION & PLANNING =================
+
+model Subscription {
+  id        String             @id @default(uuid())
+  userId    String
+  planId    String
+  status    SubscriptionStatus @default(ACTIVE)
+  startsAt  DateTime           @default(now())
+  endsAt    DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id])
+  payments Payment[]
+
+  @@index([userId, status])
+  @@map("subscriptions")
+}
+
+model Payment {
+  id               String        @id @default(uuid())
+  userId           String
+  subscriptionId   String?
+  razorpayOrderId  String        @unique
+  razorpayPaymentId String?      @unique
+  amountInr        Float
+  status           PaymentStatus @default(PENDING)
+  invoiceUrl       String?
+  createdAt        DateTime      @default(now())
+
+  user         User          @relation(fields: [userId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@map("payments")
+}
+
+model Plan {
+  id             String   @id @default(uuid())
+  name           String   // e.g. "Monthly Pass (1 Month)", "Super Pass (24 Months)"
+  durationMonths Int
+  priceInr       Float
+  isActive       Boolean  @default(true)
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+// New: Coupon model for discount codes
+model Coupon {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  description   String?
+  discountPct   Float?   // percentage discount (e.g., 10 for 10%)
+  discountInr   Float?   // fixed amount discount (e.g., 5 for ₹5 off)
+  maxUses       Int?     // null means unlimited
+  usesCount     Int      @default(0)
+  expiresAt     DateTime?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("coupons")
+}
+
+// ================= QUESTION & ANSWER SYSTEM =================
+
+model Question {
+  id                 String            @id @default(uuid())
+  sourcePdfId        String?
+  importBatchId      String?
+
+  subjectId          String
+  chapterId          String?
+  topicId            String?
+  subTopicId         String?
+  examId             String?
+
+  year               Int?
+  shift              String?
+  paperCode          String?
+
+  questionText       String
+  questionTextHindi  String?
+  optionsJson        Json              // Array of { key: "A", text: "...", isCorrect: boolean }
+
+  // Relations
+  subject     Subject    @relation(fields: [subjectId], references: [id])
+  chapter     Chapter?   @relation(fields: [chapterId], references: [id])
+  topic       Topic?     @relation(fields: [topicId], references: [id])
+  subTopic    SubTopic?  @relation(fields: [subTopicId], references: [id])
+  exam        Exam?      @relation(fields: [examId], references: [id])
+  // New relations for comments and reports
+  questionComments QuestionComment[]
+  questionReports  QuestionReport[]
+}
+
+model Answer {
+  id           String   @id @default(uuid())
+  questionId   String
+  correctOption String
+  explanation  String?
+  explanationHindi String?
+
+  question Question @relation(fields: [questionId], references: [id])
+
+  @@map("answers")
+}
+
+// New: User comments on questions
+model QuestionComment {
+  id        String   @id @default(uuid())
+  questionId String
+  userId    String
+  comment   String   // The comment text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  question Question @relation(fields: [questionId], references: [id])
+  user     User   @relation(fields: [userId], references: [id])
+
+  @@map("question_comments")
+  @@index([questionId])
+  @@index([userId])
+}
+
+// New: Reporting wrong questions or solutions
+model QuestionReport {
+  id            String   @id @default(uuid())
+  questionId    String
+  userId        String
+  reason        QuestionReportReason
+  description   String?  // Optional additional details
+  status        QuestionReportStatus @default(PENDING)
+  resolvedBy    String?  // Admin who resolved it
+  resolvedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  question Question @relation(fields: [questionId], references: [id])
+  user     User   @relation(fields: [userId], references: [id])
+  // Optional relation to admin who resolved
+  resolver User?   @relation(fields: [resolvedBy], references: [id])
+
+  @@map("question_reports")
+  @@index([questionId])
+  @@index([status])
+}
+
+// ================= EXAM PATTERNS (for timed test composition) =================
+
+model ExamPattern {
+  id        String   @id @default(uuid())
+  examId    String   // e.g. "CGL", "CHSL"
+  // Pattern could be a JSON representing section-wise distribution and timing
+  // Example: { "sections": [ { "name": "Reasoning", "minutes": 25, "questions": 25 }, ... ] }
+  patternJson Json
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("exam_patterns")
+  @@index([examId, isActive])
+}
+
+// ================= USER ACTIVITY & AUDIT =================
+
+model Attempt {
+  id                    String   @id @default(uuid())
+  userId                String
+  testId                String?
+  startTime             DateTime @default(now())
+  endTime               DateTime?
+  status                AttemptStatus @default(IN_PROGRESS)
+  score                 Int?      // percentage or raw score
+  totalQuestions        Int
+  correctAnswers        Int
+  timeSpentSeconds      Int
+  deviceInfo            String?   // e.g., mobile, desktop, app version
+  ipAddress             String?
+
+  user User @relation(fields: [userId], references: [id])
+  // test Test? @relation(fields: [testId], references: [id]) // if we have a Test model
+  answers AttemptAnswer[]
+
+  @@map("attempts")
+  @@index([userId, status])
+}
+
+model AttemptAnswer {
+  id                 String      @id @default(uuid())
+  testAttemptId     String
+  questionId         String
+  selectedOption     String?     // "A", "B", "C", "D" or null if skipped
+  isCorrect          Boolean     @default(false)
+  timeSpentSeconds   Int         @default(0)
+  isMarkedForReview Boolean     @default(false)
+
+  testAttempt Attempt @relation(fields: [testAttemptId], references: [id])
+  question    Question    @relation(fields: [questionId], references: [id])
+
+  @@unique([testAttemptId, questionId])
+  @@map("attempt_answers")
+}
+
+// Updated TestAttempt model with expiresAt and questionSnapshot
+model TestAttempt {
+  id               String        @id @default(uuid())
+  userId           String
+  testTemplateId   String
+  status           AttemptStatus @default(IN_PROGRESS)
+  
+  score            Float         @default(0.0)
+  totalCorrect     Int           @default(0)
+  totalWrong       Int           @default(0)
+  totalSkipped     Int           @default(0)
+  accuracyPercent  Float         @default(0.0)
+  rank             Int?
+  percentile       Float?
+  
+  // New fields for daily test expiry and question snapshot
+  expiresAt        DateTime?
+  questionSnapshot Json?         // Array of question IDs as strings, e.g., ["id1", "id2", ...]
+  
+  startedAt        DateTime      @default(now())
+  submittedAt      DateTime?
+  
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testTemplate     TestTemplate  @relation(fields: [testTemplateId], references: [id])
+  answers          AttemptAnswer[]
+  
+  @@index([userId, status])
+  @@map("test_attempts")
+}
+
+// ================= STUDY PLANS =================
+
+model StudyPlan {
+  id            String   @id @default(uuid())
+  userId        String
+  planId        String?  // Optional: if generated from a purchased plan
+  title         String
+  description   String?
+  startDate     DateTime
+  endDate       DateTime
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+  // plan Plan? @relation(fields: [planId], references: [id])
+
+  @@map("study_plans")
+  @@index([userId])
+}
+
+// ================= CONTENT MANAGEMENT =================
+
+model Subject {
+  id        String    @id @default(uuid())
+  name      String    @unique // e.g. "Reasoning", "Quantitative Aptitude"
+  slug      String    @unique
+  chapters  Chapter[]
+  questions Question[]
+  sourcePdfs SourcePdf[]
+  studyPlans       StudyPlan[]
+
+  @@map("subjects")
+}
+
+model Chapter {
+  id        String     @id @default(uuid())
+  subjectId String
+  name      String
+  slug      String
+  topics    Topic[]
+  questions Question[]
+  weakTopicReports WeakTopicReport[]
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, slug])
+  @@map("chapters")
+}
+
+model Topic {
+  id        String     @id @default(uuid())
+  chapterId String
+  name      String
+  slug      String
+  subTopics SubTopic[]
+  questions Question[]
+
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  @@map("topics")
+}
+
+model SubTopic {
+  id        String   @id @default(uuid())
+  topicId   String
+  name      String
+  slug      String
+  questions Question[]
+
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  @@map("subtopics")
+}
+
+model Exam {
+  id        String   @id @default(uuid())
+  name      String   @unique // e.g. "SSC CGL", "SSC CHSL"
+  slug      String   @unique
+  code      String   @unique // e.g. "CGL", "CHSL"
+  isActive  Boolean  @default(true)
+
+  questions Question[]
+  sourcePdfs SourcePdf[]
+  studyPlans       StudyPlan[]
+
+  @@map("exams")
+}
+
+model SourcePdf {
+  id        String   @id @default(uuid())
+  examId    String?
+  fileName  String
+  fileUrl   String
+  uploadDate DateTime @default(now())
+  processed Boolean  @default(false)
+
+  exam Exam? @relation(fields: [examId], references: [id])
+  @@map("source_pdfs")
+}
+
+// ================= WEAK TOPIC REPORTING =================
+
+model WeakTopicReport {
+  id             String   @id @default(uuid())
+  userId         String
+  chapterId      String
+  subjectId      String
+  topicId        String?
+  attemptsMade   Int      @default(0)
+  correctCount   Int      @default(0)
+  accuracyPercent Float   @default(0.0)
+  strengthScore  Float    @default(0.0) // 0=weak, 100=strong
+  isWeak         Boolean  @default(false)
+  maxAttempts    Int      @default(25) // target 25 questions per weak chapter
+  updatedAt      DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, chapterId])
+  @@index([userId, strengthScore])
+  @@index([userId, isWeak])
+  @@map("weak_topic_reports")
+}
+
+// ================= BOOKMARKS =================
+
+model Bookmark {
+  id        String   @id @default(uuid())
+  userId    String
+  questionId String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  question Question @relation(fields: [questionId], references: [id])
+
+  @@map("bookmarks")
+  @@unique([userId, questionId])
+}
+
+// ================= ACHIEVEMENTS & BADGES =================
+
+model Achievement {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  description String?
+  iconUrl   String?
+  type      AchievementType
+  tier      AchievementTier
+  criteria  Json     // e.g., { type: "streak", value: 7 } for 7-day streak
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  id             String   @id @default(uuid())
+  userId         String
+  achievementId  String
+  earnedAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  achievement Achievement @relation(fields: [achievementId], references: [id])
+
+  @@map("user_achievements")
+  @@unique([userId, achievementId])
+}
+
+// ================= NOTIFICATIONS =================
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  body      String?
+  type      String   // e.g., "subscription_expiring", "new_mock_test", "achievement_earned"
+  isRead    Boolean  @default(false)
+  data      Json?    // Additional data for the notification
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  @@map("notifications")
+  @@index([userId, isRead])
+}
+
+// ================= MISC =================
+
+model PricePack {
+  id         String   @id @default(uuid())
+  name       String   // e.g. "Mock Access Pack", "10-Day Offer"
+  examId     String?
+  mocksIncluded Int   @default(5)
+  priceInr   Float
+  durationDays Int
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@map("price_packs")
+}
+
+model TestTemplate {
+  id            String   @id @default(uuid())
+  title         String
+  description   String?
+  type          TestType
+  durationMinutes Int
+  totalQuestions Int
+  totalMarks    Int
+  isPremium     Boolean  @default(false)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("test_templates")
+}
+
+model MockAccess {
+  id            String   @id @default(uuid())
+  userId        String
+  testTemplateId String
+  freeMocksAllowed Int   @default(2) // 2 free mocks per test
+  mocksUsed     Int      @default(0)
+  paidPacksPurchased Int @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, testTemplateId])
+  @@index([userId])
+  @@map("mock_accesses")
+}

@@ -6,16 +6,26 @@ type Row = { id: string; fullName: string; xp: number; currentStreak: number; lo
 type LB = { period: string; rows: Row[]; myRank: number | null; me: Row | null };
 
 const apiBase = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
-const authHeaders = (): Record<string, string> => {
-  const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
 
 export default function LeaderboardPage() {
   const [data, setData] = React.useState<LB | null>(null);
   const [period, setPeriod] = React.useState<"all" | "weekly">("all");
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
+
+  const authHeaders = () => {
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("ssc_token") || "";
+      return {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+    }
+    return {
+      Authorization: "Bearer ",
+      "Content-Type": "application/json",
+    };
+  };
 
   React.useEffect(() => {
     (async () => {

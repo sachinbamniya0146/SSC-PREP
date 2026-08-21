@@ -6,6 +6,7 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  Matches,
 } from 'class-validator';
 
 export class SignupDto {
@@ -94,11 +95,14 @@ export class ResetPasswordDto {
   email!: string;
 
   @IsString()
-  @MinLength(6)
-  @MaxLength(6)
-  otp!: string;
+  @IsNotEmpty()
+  @MinLength(32, { message: 'Reset token must be at least 32 characters' })
+  @MaxLength(64, { message: 'Reset token cannot exceed 64 characters' })
+  @Matches(/^[0-9a-f]+$/, { message: 'Reset token must be a hexadecimal string' })
+  token!: string;
 
   @IsString()
+  @IsNotEmpty()
   @MinLength(20, { message: 'Password must be exactly 20 characters' })
   @MaxLength(20, { message: 'Password must be exactly 20 characters' })
   newPassword!: string;
@@ -117,12 +121,12 @@ export class GoogleAuthDto {
 export class ChangePasswordDto {
   @IsString()
   @IsNotEmpty()
-  @MinLength(20, { message: 'Current password must be exactly 20 characters' })
-  @MaxLength(20, { message: 'Current password must be exactly 20 characters' })
+  @MinLength(6, { message: 'Current password must be at least 6 characters' })
+  @MaxLength(100, { message: 'Current password cannot exceed 100 characters' })
   currentPassword!: string;
 
   @IsString()
-  @MinLength(20, { message: 'New password must be exactly 20 characters' })
-  @MaxLength(20, { message: 'New password must be exactly 20 characters' })
+  @MinLength(6, { message: 'New password must be at least 6 characters' })
+  @MaxLength(100, { message: 'New password cannot exceed 100 characters' })
   newPassword!: string;
 }

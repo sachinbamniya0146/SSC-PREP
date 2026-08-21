@@ -164,6 +164,20 @@ export default function TestPage() {
   // ---- per-question pacing (v6 §6: avg time/question, rushing/balanced/slow) ----
   const [qEnterRef] = React.useState<{ qid: string; at: number }>({ qid: "", at: 0 });
   const [timeSpent, setTimeSpent] = React.useState<{ [qid: string]: number }>({});
+  
+  // ---- Resume functionality ----
+  const [resumeAvailable, setResumeAvailable] = React.useState(false);
+  const [resumeData, setResumeData] = React.useState<{
+    questions: UgQ[];
+    idx: number;
+    answers: { [qid: string]: string };
+    timeLeft: number;
+    durationSec: number;
+    attemptId?: string;
+    phase: "instructions" | "exam";
+    visited: { [qid: string]: boolean };
+    status: { [qid: string]: QStatus };
+  } | null>(null);
   React.useEffect(() => {
     if (phase !== "exam" || !questions[idx]) return;
     qEnterRef.qid = questions[idx].id;
@@ -181,6 +195,70 @@ export default function TestPage() {
     setTimeLeft(total);
     setRunning(true);
   }, []);
+
+  // ---- Resume functionality ----
+  const clearResumeData = () => {
+    localStorage.removeItem("ssc_test_progress");
+    setResumeAvailable(false);
+    setResumeData(null);
+  };
+
+  const saveResumeData = () => {
+    if (!questions.length || phase !== "exam") return;
+    try {
+      localStorage.setItem(
+        "ssc_test_progress",
+        JSON.stringify({
+          questions,
+          idx,
+          answers,
+          timeLeft,
+          durationSec: timeLeft + (Date.now() - (questions[idx] ? 0 : 0)), // approximate
+          attemptId,
+          phase,
+          visited,
+          status,
+          savedAt: Date.now(),
+        }),
+      );
+    } catch {}
+  };
+
+  // Auto-save every 10 seconds during exam
+  React.useEffect(() => {
+    if (phase !== "exam") return;
+    const t = window.setInterval(saveResumeData, 10000);
+    return () => window.clearInterval(t);
+  }, [phase]);
+
+  // Check for saved progress on mount
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem("ssc_test_progress");
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d && Array.isArray(d.questions) && d.questions.length > 0) {
+          setResumeData(d);
+          setResumeAvailable(true);
+        }
+      }
+    } catch {}
+  }, []);
+
+  const resumeTest = () => {
+    if (!resumeData) return;
+    setQuestions(resumeData.questions);
+    setIdx(resumeData.idx || 0);
+    setAnswers(resumeData.answers || {});
+    setVisited(resumeData.visited || {});
+    setStatus(resumeData.status || {});
+    setTimeLeft(resumeData.timeLeft || 0);
+    setAttemptId(resumeData.attemptId || null);
+    if (resumeData.attemptId) sessionStorage.setItem("ssc_active_attempt", resumeData.attemptId);
+    setPhase("exam");
+    setRunning(true);
+    setResumeAvailable(false);
+  };
 
   // ---- Load a set when the user clicks Start ----
   const startTest = async () => {
@@ -310,6 +388,7 @@ export default function TestPage() {
         setStarting(false);
         return;
       }
+      clearResumeData(); // Clear any previous test progress when starting fresh
       setIdx(0);
       setAnswers({});
       setStatus({});
@@ -410,7 +489,19 @@ export default function TestPage() {
         setPaletteOpen((p) => !p);
         return;
       }
+      // v7 §1 — extra shortcuts for review/submit/quit (best-in-class UX)
+      if (e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        markForReview();
+        return;
+      }
+      if (e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        submitTest();
+        return;
+      }
       if (e.key === "Escape") setPaletteOpen(false);
+      if (e.key.toLowerCase() === "q") setPhase("results"); // quit to results (best-effort);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -501,6 +592,7 @@ export default function TestPage() {
     setFinalScore(score);
     if (qs[idx]) markQuestionTime(qs[idx].id); // finalize last question time
     setPhase("results");
+    clearResumeData(); // Clear resume data on submit
 
     // P1 — best-effort save to results history (never blocks results view)
     try {
@@ -673,6 +765,39 @@ export default function TestPage() {
               Matching the real SSC bilingual paper experience.
             </p>
           </div>
+
+          {/* Resume previous test if available */}
+          {resumeAvailable && resumeData && (
+            <div className="card mt-6 border-amber-400/40 bg-amber-500/10 p-5">
+              <div className="flex items-start gap-3">
+                <span className="shrink-0 text-2xl">🔄</span>
+                <div className="flex-1">
+                  <p className="font-semibold text-amber-800 dark:text-amber-200">Incomplete Test Found</p>
+                  <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                    You have an in-progress test with {resumeData.questions.length} questions.
+                    {Object.keys(resumeData.answers).length} answered · {formatSec(resumeData.timeLeft)} remaining
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      onClick={() => resumeTest()}
+                      className="rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-amber-50-foreground hover:opacity-90"
+                    >
+                      Resume Test →
+                    </button>
+                    <button
+                      onClick={() => {
+                        clearResumeData();
+                        setResumeAvailable(false);
+                      }}
+                      className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-4 py-2.5 text-sm font-semibold text-amber-700 dark:text-amber-200 hover:bg-amber-500/20"
+                    >
+                      Discard & Start Fresh
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="card mt-6 p-5">
             <label className="text-sm font-semibold">Exam Format</label>

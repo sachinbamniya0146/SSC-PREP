@@ -28,6 +28,7 @@ import { AdminModule } from './admin/admin.module';
 import { SearchModule } from './search/search.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { SolverModule } from './solver/solver.module';
+import { AchievementModule } from './achievement/achievement.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { envValidationSchema } from './config/env.validation';
@@ -85,6 +86,7 @@ import { envValidationSchema } from './config/env.validation';
     TelegramModule,
     ReviewModule,
     ReportErrorModule,
+    AchievementModule,
   ],
   controllers: [HealthController],
   providers: [

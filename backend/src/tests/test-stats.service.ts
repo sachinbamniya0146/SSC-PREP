@@ -83,4 +83,33 @@ export class TestStatsService {
     cacheSet(`tests:stats:${templateId}`, stats, this.TTL);
     return stats;
   }
+
+  /** Global leaderboard — top scorers across all published (auto-completed) attempts. */
+  async getGlobalToppers(limit = 20): Promise<any> {
+    const cached = cacheGet<any>('tests:toppers:global');
+    if (cached) return cached;
+    const rows = await this.prisma.testAttempt.findMany({
+      where: { status: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] } },
+      select: {
+        score: true,
+        accuracyPercent: true,
+        startedAt: true,
+        submittedAt: true,
+        user: { select: { id: true, fullName: true } },
+      },
+      orderBy: { score: 'desc' },
+      take: limit,
+    });
+    const toppers = rows.map((a: any) => ({
+      userId: a.user?.id,
+      fullName: a.user?.fullName || 'Student',
+      score: a.score ?? 0,
+      accuracyPercent: a.accuracyPercent ?? 0,
+      durationSec:
+        a.startedAt && a.submittedAt ? Math.round((new Date(a.submittedAt).getTime() - new Date(a.startedAt).getTime()) / 1000) : 0,
+      submittedAt: a.submittedAt,
+    }));
+    cacheSet('tests:toppers:global', toppers, this.TTL);
+    return { toppers, total: toppers.length };
+  }
 }

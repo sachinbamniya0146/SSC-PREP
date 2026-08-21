@@ -5,6 +5,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { cacheGet, cacheSet } from '../common/cache';
+import { FriendRequestStatus } from '@prisma/client';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30
 
@@ -76,7 +77,11 @@ export class GamificationService {
   }
 
   /** Leaderboard: top N by XP (weekly or all-time), plus the caller's row. Rows cached 30s; myRank computed fresh per user. */
-  async leaderboard(userId: string, period: 'all' | 'weekly' = 'all', take = 50) {
+  async leaderboard(userId: string, period: 'all' | 'weekly' = 'all', take = 50, includeFriends = false) {
+    if (includeFriends) {
+      return this.friendLeaderboard(userId, period, take);
+    }
+
     const cacheKey = `gamification:lb:${period}:${take}`;
     const cachedRows = cacheGet<{ id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number; isMe: boolean }[]>(cacheKey);
     let rows: { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number; isMe: boolean }[];
@@ -105,5 +110,158 @@ export class GamificationService {
       myRank,
       me: me ? { ...me, rank: myRank, isMe: true } : null,
     };
+  }
+
+  /** Leaderboard filtered to user + friends only */
+  private async friendLeaderboard(userId: string, period: 'all' | 'weekly', take: number) {
+    const friends = await this.prisma.friend.findMany({
+      where: { userId },
+      select: { friendId: true },
+    });
+
+    const friendIds = friends.map((f) => f.friendId);
+    const relevantIds = [userId, ...friendIds];
+
+    const since = period === 'weekly' ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) : undefined;
+    const where = since
+      ? { id: { in: relevantIds }, xp: { gt: 0 }, updatedAt: { gte: since } }
+      : { id: { in: relevantIds }, xp: { gt: 0 } };
+
+    const top = await this.prisma.user.findMany({
+      where,
+      orderBy: { xp: 'desc' },
+      take,
+      select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true },
+    });
+
+    const myXp = top.find((u) => u.id === userId)?.xp || 0;
+    const myRank = top.findIndex((u) => u.id === userId) + 1;
+
+    return {
+      period,
+      rows: top.map((r, i) => ({ ...r, rank: i + 1, isMe: r.id === userId })),
+      myRank: myRank > 0 ? myRank : null,
+      me: top.find((r) => r.id === userId) || null,
+      friendIds,
+    };
+  }
+
+  /** Compare rank with friends */
+  async compareWithFriends(userId: string) {
+    const friends = await this.prisma.friend.findMany({
+      where: { userId },
+      select: { friendId: true },
+    });
+
+    const friendIds = friends.map((f) => f.friendId);
+    const me = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true },
+    });
+
+    if (!me) throw new BadRequestException('User not found');
+
+    const allRanks = await this.prisma.user.findMany({
+      where: { id: { in: [userId, ...friendIds] } },
+      select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true },
+      orderBy: { xp: 'desc' },
+    });
+
+    const myRank = allRanks.findIndex((u) => u.id === userId) + 1;
+    const friendRows = allRanks.map((u, i) => ({
+      ...u,
+      rank: i + 1,
+      xpGap: u.id === userId ? 0 : (u.xp - me.xp),
+      isMe: u.id === userId,
+    }));
+
+    return {
+      me: { ...me, rank: myRank },
+      friends: friendRows,
+      friendCount: friends.length,
+    };
+  }
+
+  /** Get friends list */
+  async getFriends(userId: string) {
+    const friends = await this.prisma.friend.findMany({
+      where: { userId },
+      select: { friendId: true },
+    });
+
+    const friendIds = friends.map((f) => f.friendId);
+
+    const friendUsers = await this.prisma.user.findMany({
+      where: { id: { in: friendIds } },
+      select: { id: true, fullName: true, xp: true, currentStreak: true },
+    });
+
+    const friendRequests = await this.prisma.friendRequest.findMany({
+      where: { receiverId: userId, status: FriendRequestStatus.PENDING },
+      include: { sender: { select: { id: true, fullName: true, xp: true, currentStreak: true } } },
+    });
+
+    const myXp = (await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { xp: true },
+    }))?.xp || 0;
+
+    const myRank = (await this.prisma.user.count({
+      where: { xp: { gt: myXp } },
+    })) + 1;
+
+    return {
+      friends: friendUsers,
+      pendingRequests: friendRequests.map((fr) => fr.sender),
+      myRank,
+    };
+  }
+
+  /** Send a friend request */
+  async sendFriendRequest(userId: string, receiverId: string, message?: string) {
+    if (userId === receiverId) throw new BadRequestException("Can't send request to yourself");
+
+    const existing = await this.prisma.friendRequest.findUnique({
+      where: { senderId_receiverId: { senderId: userId, receiverId } },
+    });
+
+    if (existing) {
+      if (existing.status === 'ACCEPTED') return { message: "Already friends" };
+      return { message: "Friend request already sent" };
+    }
+
+    return this.prisma.friendRequest.create({
+      data: {
+        senderId: userId,
+        receiverId,
+        message,
+      },
+    });
+  }
+
+  /** Accept/reject a friend request */
+  async respondToFriendRequest(userId: string, requestId: string, action: 'accept' | 'reject') {
+    const request = await this.prisma.friendRequest.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!request) throw new BadRequestException("Request not found");
+    if (request.receiverId !== userId) throw new BadRequestException("Not your request");
+
+    const status = action === 'accept' ? FriendRequestStatus.ACCEPTED : FriendRequestStatus.REJECTED;
+
+    await this.prisma.friendRequest.update({
+      where: { id: requestId },
+      data: { status, respondedAt: new Date() },
+    });
+
+    if (action === 'accept') {
+      await this.prisma.$transaction([
+        this.prisma.friend.create({ data: { userId: request.senderId, friendId: request.receiverId } }),
+        this.prisma.friend.create({ data: { userId: request.receiverId, friendId: request.senderId } }),
+      ]);
+    }
+
+    return { success: true, status };
   }
 }

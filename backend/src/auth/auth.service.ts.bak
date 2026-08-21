@@ -1,0 +1,163 @@
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleInit,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import { OAuth2Client } from 'google-auth-library';
+import * as bcrypt from 'bcrypt';
+import { createHash, randomBytes } from 'crypto';
+import * as jwt from 'jsonwebtoken';
+import Redis from 'ioredis';
+import { PrismaService } from '../prisma/prisma.service';
+import { REDIS_CLIENT } from '../redis/redis.module';
+import { MailService } from './mail.service';
+import { OtpService } from './otp.service';
+import { PasswordResetService } from './password-reset.service';\n
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+}
+
+export interface AuthenticatedSession {
+  user: {
+    id: string;
+    email: string;
+    fullName: string;
+    role: string;
+    hintQuota?: number;
+  };
+  accessToken: string;
+  refreshToken: string;
+  sessionId: string;
+}
+
+export type Authenticated = AuthenticatedSession;
+
+const ACCESS_TTL_SECONDS_DEFAULT = 15 * 60;
+
+/**
+ * AuthService — signup/login/refresh/logout, email OTP login, Google OAuth,
+ * and single-device session enforcement (1 WEB + 1 APP session max).
+ */
+@Injectable()
+export class AuthService implements OnModuleInit {
+  private readonly logger = new Logger(AuthService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly config: ConfigService,
+    private readonly mail: MailService,
+    private readonly otp: OtpService,
+    private readonly passwordReset: PasswordResetService,\n    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.seedAdmin();
+  }
+
+  /** Seed the admin account from env (idempotent). */
+  private async seedAdmin(): Promise<void> {
+    const email = this.config.get<string>('ADMIN_DEFAULT_EMAIL');
+    const password = this.config.get<string>('ADMIN_DEFAULT_PASSWORD');
+    if (!email || !password) return;
+
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) return;
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await this.prisma.user.create({
+      data: {
+        email,
+        fullName: 'Platform Admin',
+        passwordHash,
+        role: 'ADMIN',
+        isEmailVerified: true,
+      },
+    });
+    this.logger.log(`Seeded admin account: ${email}`);
+  }
+
+  // ---------------------------------------------------------------- signup
+
+  async signup(
+    email: string,
+    password: string,
+    fullName: string,
+    phone: string,
+    platform: 'WEB' | 'APP' = 'WEB',
+  ): Promise<Authenticated> {
+    const normalized = email.toLowerCase().trim();
+    const normalizedPhone = phone.trim();
+    const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (existing) throw new ConflictException('Email already registered');
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await this.prisma.user.create({
+      data: { email: normalized, fullName, phone: normalizedPhone, passwordHash },
+    });
+    return this.completeAuth(user, platform);
+  }
+
+  // ----------------------------------------------------------------- login
+
+  async login(
+    email: string,
+    password: string,
+    platform: 'WEB' | 'APP' = 'WEB',
+    deviceId?: string,
+    userAgent?: string,
+  ): Promise<Authenticated> {
+    const normalized = email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (!user || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+    return this.completeAuth(user, platform, deviceId, userAgent);
+  }
+
+  // ---------------------------------------------------------------- OTP login
+
+  async requestOtp(email: string): Promise<{ sent: boolean; devOtp?: string }> {
+    const normalized = email.toLowerCase().trim();
+    // Optionally create a placeholder user if none exists (email-first flow).
+    const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (!existing) {
+      // Ghost account so OTP login can complete; user's role stays STUDENT.
+      await this.prisma.user.create({
+        data: {
+          email: normalized,
+          fullName: normalized.split('@')[0] || 'User',
+          passwordHash: 'unset:' + randomBytes(24).toString('hex'),
+        },
+      });
+    }
+    return this.otp.issue(normalized);
+  }
+
+  async loginWithOtp(email: string, code: string): Promise<Authenticated> {
+    const normalized = email.toLowerCase().trim();
+    const ok = await this.otp.verify(normalized, code);
+    if (!ok) throw new UnauthorizedException('Invalid or expired OTP');
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    // OTP login proves possession of the inbox → mark verified.
+    if (!user.isEmailVerified) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { isEmailVerified: true },
+      });
+    }
+    return this.completeAuth(user, 'WEB');
+  }
+
+  // ------------------------------------------------------- password reset (OTP)
+
+/** Step 1: send a reset token to the user's email (account must exist). */\n  async forgotPassword(email: string): Promise<{ sent: boolean; devToken?: string }> {\n    const normalized = email.toLowerCase().trim();\n    const user = await this.prisma.user.findUnique({ where: { email: normalized } });\n    if (!user) {\n      // Do not leak which emails have accounts — same response either way.\n      return { sent: true };\n    }\n    const result = await this.passwordReset.issue(normalized);\n    if (result.sent) {\n      const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000';\n      const resetUrl = `${frontendUrl}/reset-password?email=${encodeURIComponent(normalized)}&token=${result.token}`;\n      await this.mail.sendPasswordResetEmail(normalized, resetUrl);\n    }\n    return { sent: true, ...(this.config.get<string>('NODE_ENV') !== 'production' ? { devToken: result.token } : {} ) };\n  }\n

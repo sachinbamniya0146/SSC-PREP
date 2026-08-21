@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
-import { solveQuestion, SolveResult } from './solver-engine';
+import { solveQuestion, SolveResult, SolverOption } from './solver-engine';
 
 @Injectable()
 export class SolverService {
@@ -147,5 +147,97 @@ export class SolverService {
       unsolved,
       results,
     };
+  }
+
+  // AI Doubt Solver Chat
+  async askDoubt(userId: string, body: {
+    questionId?: string;
+    questionText?: string;
+    questionTextHindi?: string;
+    options?: { key: string; text: string; textHi?: string }[];
+    language?: 'en' | 'hi' | 'both';
+  }) {
+    const { questionId, questionText, questionTextHindi, options, language = 'both' } = body;
+    
+    let q = null;
+    let opts = options ?? [];
+    
+    if (questionId) {
+      q = await this.prisma.question.findUnique({ where: { id: questionId } });
+      if (q) {
+        opts = (q.optionsJson as { key: string; text: string; isCorrect?: boolean }[]) ?? [];
+      }
+    }
+    
+    // If no question from DB, use provided text/options
+    const text = questionText ?? q?.questionText ?? '';
+    const optsForSolver = opts.map(o => ({ key: o.key, text: o.text }));
+    
+    const result = solveQuestion(text, optsForSolver);
+    
+    // Build step-by-step explanation
+    let explanation = '';
+    let explanationHindi = '';
+    
+    if (result.solved) {
+      const correctOpt = optsForSolver.find(o => o.key === result.optionKey);
+      explanation = `**Step-by-step solution:**\n\n`;
+      explanation += `${result.evidence}\n\n`;
+      explanation += `✅ **Correct Answer: ${result.optionKey}**. ${correctOpt?.text ?? ''}`;
+      
+      if (language !== 'en') {
+        explanationHindi = `**चरण-दर-चरण समाधान:**\n\n`;
+        explanationHindi += `${result.evidence}\n\n`;
+        explanationHindi += `✅ **सही उत्तर: ${result.optionKey}**. ${correctOpt?.text ?? ''}`;
+      }
+    } else {
+      explanation = `**Could not solve deterministically.**\n\nReason: ${result.reason ?? 'No matching pattern found.'}\n\nFor such questions, please refer to the official explanation or ask a teacher.`;
+      
+      if (language !== 'en') {
+        explanationHindi = `**निश्चित रूप से हल नहीं हो सका।**\n\nकारण: ${result.reason ?? 'कोई मिलान वाला पैटर्न नहीं मिला।'}\n\nऐसे प्रश्नों के लिए, कृपया आधिकारिक व्याख्या देखें या शिक्षक से पूछें।`;
+      }
+    }
+    
+    return {
+      solved: result.solved,
+      answer: result.optionKey,
+      explanation,
+      explanationHindi: language === 'both' ? explanationHindi : (language === 'hi' ? explanationHindi : undefined),
+      confidence: result.solved ? 0.95 : 0,
+    };
+  }
+
+  getSupportedPatterns() {
+    return [
+      { pattern: 'arithmetic', description: 'Basic arithmetic operations (add, subtract, multiply, divide)' },
+      { pattern: 'percentage', description: 'Percentage calculations and word problems' },
+      { pattern: 'ratio_proportion', description: 'Ratio and proportion problems' },
+      { pattern: 'time_work', description: 'Time and work problems' },
+      { pattern: 'speed_distance', description: 'Speed, distance, time problems' },
+      { pattern: 'profit_loss', description: 'Profit and loss calculations' },
+      { pattern: 'simple_interest', description: 'Simple interest calculations' },
+      { pattern: 'compound_interest', description: 'Compound interest calculations' },
+      { pattern: 'average', description: 'Average/mean calculations' },
+      { pattern: 'age', description: 'Age-related word problems' },
+      { pattern: 'calendar', description: 'Calendar and date problems' },
+      { pattern: 'direction_sense', description: 'Direction and distance reasoning' },
+      { pattern: 'blood_relations', description: 'Blood relation logical reasoning' },
+      { pattern: 'coding_decoding', description: 'Coding-decoding patterns' },
+      { pattern: 'series_number', description: 'Number series completion' },
+      { pattern: 'series_letter', description: 'Letter/alphabet series' },
+      { pattern: 'analogy', description: 'Verbal and non-verbal analogies' },
+      { pattern: 'classification', description: 'Odd one out / classification' },
+      { pattern: 'syllogism', description: 'Logical syllogisms (Venn diagram based)' },
+      { pattern: 'venn_diagram', description: 'Venn diagram problems' },
+      { pattern: 'sitting_arrangement', description: 'Linear/circular seating arrangements' },
+      { pattern: 'ranking', description: 'Ranking and ordering problems' },
+      { pattern: 'puzzle', description: 'Logical puzzles (Einstein/grid type)' },
+      { pattern: 'cube_dice', description: 'Cube and dice visualization' },
+      { pattern: 'mirror_water_image', description: 'Mirror and water image reasoning' },
+      { pattern: 'paper_folding', description: 'Paper cutting and folding' },
+      { pattern: 'embedded_figures', description: 'Embedded figure detection' },
+      { pattern: 'completion_figures', description: 'Figure completion/series' },
+      { pattern: 'counting_figures', description: 'Counting squares/triangles/rectangles' },
+    ];
   }
 }

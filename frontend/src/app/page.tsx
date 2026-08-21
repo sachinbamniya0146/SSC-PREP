@@ -173,9 +173,12 @@ export default function HomePage() {
   const [modalExam, setModalExam] = React.useState<typeof exams[0] | null>(null);
 
   React.useEffect(() => {
-    const token = localStorage.getItem("ssc_access_token");
-    setIsLoggedIn(!!token);
-  }, []);
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("ssc_access_token");
+      setIsLoggedIn(!!token);
+    }
+  },
+  []);
 
   // Exam card click handler — shows login prompt or free tier info
   const handleExamClick = (exam: typeof exams[0]) => {

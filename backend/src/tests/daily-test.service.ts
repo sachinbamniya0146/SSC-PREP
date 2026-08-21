@@ -67,8 +67,8 @@ export class DailyTestService {
         ? {
             id: attempt.id,
             status: attempt.status,
-            expired: attempt.expiresAt ? new Date(attempt.expiresAt) <= new Date() : false,
-            expiresAt: attempt.expiresAt,
+            expired: false,
+            // expiresAt: attempt.expiresAt,
             score: attempt.score,
             accuracyPercent: attempt.accuracyPercent,
           }
@@ -94,14 +94,14 @@ export class DailyTestService {
     if (st.attempt && st.attempt.status === 'IN_PROGRESS' && !st.attempt.expired) {
       const snap = await this.prisma.testAttempt.findUnique({
         where: { id: st.attempt.id },
-        select: { questionSnapshot: true, expiresAt: true },
+        select: { questionSnapshot: true },
       });
       const questions = await this.loadQuestions((snap?.questionSnapshot as string[]) || []);
       return {
         resume: true,
         attemptId: st.attempt.id,
-        expiresAt: snap?.expiresAt,
-        durationSec: snap?.expiresAt ? Math.max(1, Math.round((new Date(snap.expiresAt).getTime() - Date.now()) / 1000)) : 0,
+        expiresAt: null,
+        durationSec: 0,
         examName: st.examName,
         dailyTarget: st.dailyTarget,
         questions,
@@ -197,16 +197,13 @@ export class DailyTestService {
   async paper(userId: string, attemptId: string) {
     const attempt = await this.prisma.testAttempt.findFirst({
       where: { id: attemptId, userId },
-      select: { questionSnapshot: true, expiresAt: true, startedAt: true },
+      select: { questionSnapshot: true, startedAt: true },
     });
     if (!attempt) throw new NotFoundException('Attempt not found');
     const ids = (attempt.questionSnapshot as string[]) || [];
     const questions = await this.loadQuestions(ids);
-    const durationSec =
-      attempt.expiresAt && attempt.startedAt
-        ? Math.max(1, Math.round((new Date(attempt.expiresAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000))
-        : 60 * 60;
-    return { attemptId, durationSec, expiresAt: attempt.expiresAt, questions };
+    const durationSec = 60 * 60;
+    return { attemptId, durationSec, questions };
   }
 
   // ---- composition helpers ----

@@ -21,21 +21,21 @@ export default function ReferralPage() {
   const [loading, setLoading] = React.useState(true);
 
   const load = async () => {
-    const token = localStorage.getItem("ssc_access_token");
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/referral/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const d = await res.json();
-        setCode(d.referralCode);
-        setShareLink(d.shareLink);
-        setStats(d.stats);
-        setRefs(d.referrals);
+      const token = typeof window !== 'undefined' ? localStorage.getItem("ssc_access_token") : null;
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/referral/me`, {
+          headers: token ? { Authorization: `Bearer ${token}` } as HeadersInit : {},
+        });
+        if (res.ok) {
+          const d = await res.json();
+          setCode(d.referralCode);
+          setShareLink(d.shareLink);
+          setStats(d.stats);
+          setRefs(d.referrals);
+        }
+      } finally {
+        setLoading(false);
       }
-    } finally {
-      setLoading(false);
-    }
   };
 
   React.useEffect(() => {

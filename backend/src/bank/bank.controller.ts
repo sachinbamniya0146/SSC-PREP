@@ -17,6 +17,13 @@ export class BankController {
     return this.bank.meta();
   }
 
+  // v3 §6.4 — ExamPattern blueprint for an exam (e.g. SSC CGL Tier 1)
+  @Get('exam-pattern/:examId')
+  @Public()
+  examPattern(@Param('examId') examId: string) {
+    return this.bank.getExamPattern(examId);
+  }
+
   // v4 §18 — SearchMiss demand log: user searched, nothing matched.
   @Post('search-miss')
   searchMiss(@Req() req: any, @Body() body: { query: string; exam?: string }) {

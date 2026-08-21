@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Post, Put, Delete, Body, Param, ParseUUIDPipe } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -228,6 +228,90 @@ export class AdminController {
       results.push({ email, success: true });
     }
     return { results };
+  }
+
+  // ---- Coupon Management ----
+  @Get('coupons')
+  async listCoupons(@Query('activeOnly') activeOnly?: string) {
+    const coupons = await this.monetization.listCoupons({
+      activeOnly: activeOnly ? activeOnly === 'true' : undefined,
+    });
+    return { coupons };
+  }
+
+  @Post('coupons')
+  async createCoupon(@Body() body: {
+    code: string;
+    description?: string;
+    discountPct?: number;
+    discountInr?: number;
+    maxUses?: number;
+    expiresAt?: string; // ISO date string
+    isActive?: boolean;
+  }) {
+    const coupon = await this.monetization.createCoupon({
+      code: body.code,
+      description: body.description,
+      discountPct: body.discountPct,
+      discountInr: body.discountInr,
+      maxUses: body.maxUses,
+      expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
+      isActive: body.isActive,
+    });
+    await this.auditLogService.log({
+      action: 'COUPON_CREATED_BY_ADMIN',
+      targetEntity: 'Coupon',
+      entityId: coupon.id,
+      metadataJson: { code: coupon.code },
+    });
+    return { coupon };
+  }
+
+  @Put('coupons/:id')
+  async updateCoupon(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: {
+      code?: string;
+      description?: string;
+      discountPct?: number;
+      discountInr?: number;
+      maxUses?: number;
+      expiresAt?: string; // ISO date string
+      isActive?: boolean;
+    }
+  ) {
+    const coupon = await this.monetization.updateCoupon(id, {
+      code: body.code,
+      description: body.description,
+      discountPct: body.discountPct,
+      discountInr: body.discountInr,
+      maxUses: body.maxUses,
+      expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
+      isActive: body.isActive,
+    });
+    await this.auditLogService.log({
+      action: 'COUPON_UPDATED_BY_ADMIN',
+      targetEntity: 'Coupon',
+      entityId: id,
+      metadataJson: { code: coupon.code },
+    });
+    return { coupon };
+  }
+
+  @Delete('coupons/:id')
+  async deleteCoupon(@Param('id', ParseUUIDPipe) id: string) {
+    // First get the coupon for audit log before deleting
+    const couponExist = await this.prisma.coupon.findUnique({ where: { id } });
+    if (!couponExist) throw new Error('Coupon not found');
+    
+    await this.monetization.deleteCoupon(id);
+    await this.auditLogService.log({
+      action: 'COUPON_DELETED_BY_ADMIN',
+      targetEntity: 'Coupon',
+      entityId: id,
+      metadataJson: { code: couponExist.code },
+    });
+    return { ok: true };
   }
 
   @Get('plans')

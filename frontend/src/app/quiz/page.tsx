@@ -62,7 +62,7 @@ function ReportError({ questionId }: { questionId: string }) {
   ];
 
   const submit = async () => {
-    const token = localStorage.getItem("ssc_access_token");
+    const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
     if (!token) {
       setMsg({ ok: false, text: "Login karke report karo." });
       return;
@@ -195,7 +195,7 @@ export default function DailyQuizPage() {
   >([]);
 
   const load = async () => {
-    const token = localStorage.getItem("ssc_access_token");
+    const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
     try {
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/quiz/today`,
@@ -225,7 +225,7 @@ export default function DailyQuizPage() {
   };
 
   const submit = async () => {
-    const token = localStorage.getItem("ssc_access_token");
+    const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
     const payload = {
       quizId,
       answers: questions.map((q) => ({ questionId: q.id, selectedOption: answers[q.id] })),

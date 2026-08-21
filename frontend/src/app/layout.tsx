@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter, Noto_Sans_Devanagari } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { SWRegister } from "@/components/sw-register";
+import { PWAInstallPrompt } from "@/components/pwa-install-prompt";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -48,7 +50,11 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${notoDevanagari.variable} min-h-screen bg-background font-sans text-foreground antialiased`}
       >
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          {children}
+          <SWRegister />
+          <PWAInstallPrompt />
+        </ThemeProvider>
       </body>
     </html>
   );

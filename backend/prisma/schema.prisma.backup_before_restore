@@ -1,0 +1,198 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DB_URL")
+}
+
+enum ErrorReportStatus {
+  OPEN
+  REVIEWING
+  CONFIRMED
+  REJECTED
+}
+
+model User {
+  id               String          @id @default(uuid())
+  email            String          @unique
+  phone            String?         @unique
+  fullName         String
+  passwordHash     String
+  role             Role            @default(STUDENT)
+  isEmailVerified  Boolean         @default(false)
+  avatarUrl        String?
+  
+  // Gamification & Daily Streaks
+  currentStreak    Int             @default(0)
+  longestStreak    Int             @default(0)
+  lastPracticeDate DateTime?
+  xp               Int             @default(0)
+  coins            Int             @default(0)
+
+  // Referral
+  referralCode     String?         @unique
+  referredByCode   String?         // referral code user signed up with
+  freeSubFromReferral Boolean      @default(false)
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  sessions         DeviceSession[]
+  refreshTokens    RefreshToken[]
+  subscriptions    Subscription[]
+  payments         Payment[]
+  testAttempts     TestAttempt[]
+  bookmarks        Bookmark[]
+  notes            UserNote[]
+  dailyPractices   DailyPracticeHistory[]
+  auditLogs        AuditLog[]
+  dailyQuizAttempts DailyQuizAttempt[]
+  weakTopicReports  WeakTopicReport[]
+  mockAccesses      MockAccess[]
+  referralsMade     Referral[]      @relation("Referrer")
+  referralsReceived Referral[]      @relation("Referee")
+  studyPlans        StudyPlan[]
+
+  @@map("users")
+}
+
+model Question {
+  id                 String            @id @default(uuid())
+  sourcePdfId        String?
+  importBatchId      String?
+  
+  subjectId          String
+  chapterId          String?
+  topicId            String?
+  subTopicId         String?
+  examId             String?
+  
+  year               Int?
+  shift              String?
+  paperCode          String?
+
+  questionText       String
+  questionTextHindi  String?
+  optionsJson        Json              // Array of { key: "A", text: "...", isCorrect: boolean }
+  correctAnswer      String            // e.g. "A" / "B" / "C" / "D"
+  
+  explanation        String?
+  explanationHindi   String?
+  explanationSource  ExplanationSource @default(PDF)
+  translationStatus  TranslationStatus @default(HUMAN_VERIFIED)
+  answerVerificationStatus String @default("UNVERIFIED_SINGLE_SOURCE") // VERIFIED_OFFICIAL, VERIFIED_MULTI_SOURCE, VERIFIED_COMPUTED, UNVERIFIED_SINGLE_SOURCE, DISPUTED
+  lastVerifiedAt DateTime?
+  isApproved         Boolean           @default(false)
+  
+  difficulty         Difficulty        @default(MEDIUM)
+  marks              Float             @default(2.0)
+  negativeMarks      Float             @default(0.5)
+  
+  searchHash         String?
+  isActive           Boolean           @default(true)
+
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  sourcePdf          SourcePdf?        @relation(fields: [sourcePdfId], references: [id])
+  importBatch        ImportBatch?      @relation(fields: [importBatchId], references: [id])
+  subject            Subject           @relation(fields: [subjectId], references: [id])
+  chapter            Chapter?          @relation(fields: [chapterId], references: [id])
+  topic              Topic?            @relation(fields: [topicId], references: [id])
+  subTopic           SubTopic?         @relation(fields: [subTopicId], references: [id])
+  exam               Exam?             @relation(fields: [examId], references: [id])
+  
+  versions           QuestionVersion[]
+  answers            AttemptAnswer[]
+  bookmarks          Bookmark[]
+  notes              UserNote[]
+
+  @@index([subjectId, examId, year, shift])
+  @@index([searchHash])
+  @@index([isApproved, isActive])
+  @@map("questions")
+}
+
+model SearchMiss {
+  id        String   @id @default(uuid())
+  query     String
+  exam      String?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("search_misses")
+}
+
+model QuestionErrorReport {
+  id            String   @id @default(uuid())
+  userId        String
+  questionId    String
+  description   String
+  category      String?
+  status        ErrorReportStatus @default(OPEN)
+  resolvedAt    DateTime?
+  resolvedBy    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question      Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, questionId])
+  @@index([questionId, status])
+  @@map("question_error_reports")
+}
+
+model ReviewCard {
+  id            String   @id @default(uuid())
+  userId        String
+  questionId    String
+  interval      Int
+  repeat        Int
+  easeFactor    Float
+  nextReviewDate DateTime
+  lastReviewDate DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question      Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, nextReviewDate])
+  @@map("review_cards")
+}
+
+model TelegramUser {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  chatId        BigInt
+  username      String?
+  firstName     String?
+  lastName      String?
+  languageCode  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@map("telegram_users")
+}
+
+model TelegramSubscription {
+  id            String   @id @default(uuid())
+  userId        String
+  planId        String
+  startDate     DateTime @default(now())
+  endDate       DateTime?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan          Plan     @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  @@index([userId, planId])
+  @@map("telegram_subscriptions")
+}

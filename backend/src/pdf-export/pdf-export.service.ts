@@ -122,7 +122,7 @@ export class PdfExportService {
     const paperPdf = await this.renderer.htmlToPdf(buildPaperHtml(meta, questions, false));
     const answerKeyPdf = await this.renderer.htmlToPdf(buildAnswerKeyHtml(meta, questions, false));
 
-    const existing = await this.prisma.testPdfExport.findUnique({ where: { testTemplateId: templateId } });
+    const existing = await this.prisma.testPdfExport.findUnique({ where: { testAttemptId: templateId } });
     const data = {
       paperPdf: paperPdf as any,
       answerKeyPdf: answerKeyPdf as any,
@@ -137,17 +137,17 @@ export class PdfExportService {
       lastGeneratedAt: new Date(),
     };
     const saved = existing
-      ? await this.prisma.testPdfExport.update({ where: { testTemplateId: templateId }, data })
-      : await this.prisma.testPdfExport.create({ data: { ...data, testTemplateId: templateId } });
+      ? await this.prisma.testPdfExport.update({ where: { testAttemptId: templateId }, data })
+      : await this.prisma.testPdfExport.create({ data: { ...data, testAttemptId: templateId } });
     return this.toStatus(saved);
   }
 
   // Pass 3: admin spot-check (sampled human review) — admin marks it done.
   async spotCheck(templateId: string): Promise<any> {
-    const row = await this.prisma.testPdfExport.findUnique({ where: { testTemplateId: templateId } });
+    const row = await this.prisma.testPdfExport.findUnique({ where: { testAttemptId: templateId } });
     if (!row) throw new NotFoundException('No PDF export for this test — generate first');
     const updated = await this.prisma.testPdfExport.update({
-      where: { testTemplateId: templateId },
+      where: { testAttemptId: templateId },
       data: { pass3SpotCheck: true },
     });
     return this.toStatus(updated);
@@ -155,7 +155,7 @@ export class PdfExportService {
 
   // Publish: run pass-4 regression diff; only publish when all 4 passes green.
   async publish(templateId: string): Promise<any> {
-    const row = await this.prisma.testPdfExport.findUnique({ where: { testTemplateId: templateId } });
+    const row = await this.prisma.testPdfExport.findUnique({ where: { testAttemptId: templateId } });
     if (!row) throw new NotFoundException('No PDF export for this test — generate first');
     const pass4 = await this.runRegression(templateId, row.questionSnapshot as any);
     const allGreen = row.pass1Field && row.pass2Structural && row.pass3SpotCheck && pass4;
@@ -165,21 +165,21 @@ export class PdfExportService {
       );
     }
     const updated = await this.prisma.testPdfExport.update({
-      where: { testTemplateId: templateId },
+      where: { testAttemptId: templateId },
       data: { pass4Regression: true, isPublished: true, publishedAt: new Date() },
     });
     return this.toStatus(updated);
   }
 
   async status(templateId: string): Promise<any> {
-    const row = await this.prisma.testPdfExport.findUnique({ where: { testTemplateId: templateId } });
-    if (!row) return { testTemplateId: templateId, exists: false };
+    const row = await this.prisma.testPdfExport.findUnique({ where: { testAttemptId: templateId } });
+    if (!row) return { testAttemptId: templateId, exists: false };
     return this.toStatus(row);
   }
 
   // Download: paper or answer key (bilingual). Public route — served ONLY when published.
   async download(templateId: string, kind: 'paper' | 'answerkey'): Promise<{ buffer: Buffer; filename: string }> {
-    const row = await this.prisma.testPdfExport.findUnique({ where: { testTemplateId: templateId } });
+    const row = await this.prisma.testPdfExport.findUnique({ where: { testAttemptId: templateId } });
     if (!row) throw new NotFoundException('PDF export not found');
     if (!row.isPublished) throw new BadRequestException('PDF not published yet — QA gate incomplete');
     const buf = kind === 'paper' ? row.paperPdf : row.answerKeyPdf;
@@ -189,7 +189,7 @@ export class PdfExportService {
 
   private toStatus(row: any): any {
     return {
-      testTemplateId: row.testTemplateId,
+      testAttemptId: row.testAttemptId,
       exists: true,
       pass1Field: row.pass1Field,
       pass2Structural: row.pass2Structural,

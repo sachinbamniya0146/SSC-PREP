@@ -93,7 +93,7 @@ async submitAttempt(
   }
 
   const now = new Date();
-  const expired = attempt.expiresAt != null && now > attempt.expiresAt;
+  const expired = attempt //  //  // .expiresAt != null && now > attempt //  //  // .expiresAt;
 
   // Base = answers already persisted by AUTOSAVE (v4 §31). Client payload is
   // merged on top when the attempt is still live; when expired it is dropped

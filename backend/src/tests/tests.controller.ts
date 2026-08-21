@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Controller, Get, Post, Put, Body, Query, Param } from '@nestjs/common';
+import { Public } from '../common/decorators/public.decorator';
 import { TestsService } from './tests.service';
 import { TestStatsService } from './test-stats.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -58,6 +59,13 @@ export class TestsController {
   @Get('stats/:templateId')
   stats(@Param('templateId') templateId: string) {
     return this.statsService.getStats(templateId);
+  }
+
+  // v6 §6 — global leaderboard: top performers across all published attempts
+  @Public()
+  @Get('toppers')
+  globalToppers(@Query('limit') limit?: string) {
+    return this.statsService.getGlobalToppers(limit ? Number(limit) : 20);
   }
 
   // P1 — student results history

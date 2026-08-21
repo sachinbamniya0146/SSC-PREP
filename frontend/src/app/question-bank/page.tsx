@@ -108,6 +108,19 @@ export default function QuestionBankPage() {
   const [sscRefs, setSscRefs] = React.useState<{ [qid: string]: any }>({});
   // v7 §1 — Exam-scoped mode: when exam comes from URL, hide other exams & auto-load
   const [examScoped, setExamScoped] = React.useState(false);
+  // Test Mode state
+  const [testMode, setTestMode] = React.useState(false);
+  const [testQuestions, setTestQuestions] = React.useState<Q[]>([]);
+  const [testIdx, setTestIdx] = React.useState(0);
+  const [testAnswers, setTestAnswers] = React.useState<{ [qid: string]: string }>({});
+  const [testResults, setTestResults] = React.useState<{ [qid: string]: Attempt }>({});
+  const [testTimeLeft, setTestTimeLeft] = React.useState(0);
+  const [testRunning, setTestRunning] = React.useState(false);
+  const [testStartTime, setTestStartTime] = React.useState<number | null>(null);
+  const [testPhase, setTestPhase] = React.useState<'instructions' | 'exam' | 'results'>('instructions');
+  const [testDuration, setTestDuration] = React.useState(0);
+  const [testPaused, setTestPaused] = React.useState(false);
+  const [resumeData, setResumeData] = React.useState<{ questions: Q[], idx: number, answers: { [qid: string]: string }, timeLeft: number, duration: number } | null>(null);
 
   const loadSscRefs = async (questionId: string) => {
     try {
@@ -295,6 +308,466 @@ export default function QuestionBankPage() {
     } catch {}
   };
 
+  // ============ TEST MODE FUNCTIONS ============
+  // Start test mode with loaded questions. Resume support: if the user
+  // already attempted some of these questions before, start from the first
+  // un-answered one (never repeat work already done).
+  const startQuestionBankTest = () => {
+    if (questions.length === 0) return;
+    // resume-aware: find first unanswered question
+    const attempted = { ...sel };
+    let startIdx = 0;
+    for (let i = 0; i < questions.length; i++) {
+      if (!attempted[questions[i].id]) {
+        startIdx = i;
+        break;
+      }
+    }
+    setTestQuestions([...questions]);
+    setTestAnswers({ ...sel });
+    setTestResults({});
+    setTestIdx(startIdx);
+    setTestStartTime(Date.now());
+    setTestDuration(Math.max(60, questions.length * 45));
+    setTestTimeLeft(Math.max(60, questions.length * 45));
+    setTestRunning(true);
+    setTestPaused(false);
+    setTestPhase("exam");
+    setTestMode(true);
+  };
+
+  // Resume a previously-saved in-progress test from localStorage
+  const resumeSavedTest = () => {
+    try {
+      const raw = localStorage.getItem("ssc_bank_test_progress");
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (!d || !Array.isArray(d.questions) || d.questions.length === 0) return;
+      setTestQuestions(d.questions);
+      setTestAnswers(d.answers || {});
+      setTestResults({});
+      setTestIdx(d.idx || 0);
+      setTestDuration(d.duration || Math.max(60, d.questions.length * 45));
+      setTestTimeLeft(d.timeLeft ?? Math.max(60, d.questions.length * 45));
+      setTestStartTime(Date.now());
+      setTestRunning(true);
+      setTestPaused(false);
+      setTestPhase("exam");
+      setTestMode(true);
+      setResumeData(null);
+    } catch {
+      localStorage.removeItem("ssc_bank_test_progress");
+    }
+  };
+
+  // autosave progress to localStorage every answer change + every 15s (refresh-safe)
+  React.useEffect(() => {
+    if (!testMode || testPhase !== "exam" || !testQuestions.length) return;
+    const save = () => {
+      try {
+        localStorage.setItem(
+          "ssc_bank_test_progress",
+          JSON.stringify({
+            questions: testQuestions,
+            answers: testAnswers,
+            idx: testIdx,
+            timeLeft: testTimeLeft,
+            duration: testDuration,
+            savedAt: Date.now(),
+          }),
+        );
+      } catch {}
+    };
+    save();
+    const t = window.setInterval(save, 15000);
+    return () => window.clearInterval(t);
+  }, [testMode, testPhase, testQuestions, testAnswers, testIdx, testTimeLeft, testDuration]);
+
+  // restore saved progress on mount
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem("ssc_bank_test_progress");
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d && Array.isArray(d.questions) && d.questions.length > 0) {
+          setResumeData({
+            questions: d.questions,
+            idx: d.idx || 0,
+            answers: d.answers || {},
+            timeLeft: d.timeLeft ?? Math.max(60, d.questions.length * 45),
+            duration: d.duration || Math.max(60, d.questions.length * 45),
+          });
+        }
+      }
+    } catch {}
+  }, []);
+
+  // test countdown timer
+  React.useEffect(() => {
+    if (!testRunning || testPhase !== "exam" || testPaused) return;
+    if (testTimeLeft <= 0) {
+      setTestRunning(false);
+      submitBankTest();
+      return;
+    }
+    const t = window.setTimeout(() => setTestTimeLeft((p) => p - 1), 1000);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testRunning, testTimeLeft, testPhase, testPaused]);
+
+  const testPick = (qid: string, key: string) => {
+    setTestAnswers((p) => ({ ...p, [qid]: key }));
+  };
+
+  const testClear = (qid: string) => {
+    setTestAnswers((p) => {
+      const n = { ...p };
+      delete n[qid];
+      return n;
+    });
+  };
+
+  const testNav = (i: number) => {
+    if (i >= 0 && i < testQuestions.length) setTestIdx(i);
+  };
+
+  // submit test: score every answered question via /bank/attempt
+  const submitBankTest = async () => {
+    setTestRunning(false);
+    const res: { [qid: string]: Attempt } = {};
+    for (const q of testQuestions) {
+      const ans = testAnswers[q.id];
+      if (!ans) continue;
+      try {
+        const r = await fetchAuth(`${apiBase()}/bank/attempt`, {
+          method: "POST",
+          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ questionId: q.id, selectedOption: ans }),
+        });
+        const d: Attempt = await r.json();
+        if (d && typeof d.correct === "boolean") res[q.id] = d;
+      } catch {}
+    }
+    setTestResults(res);
+    setTestPhase("results");
+    localStorage.removeItem("ssc_bank_test_progress");
+  };
+
+  const exitTestMode = () => {
+    setTestMode(false);
+    setTestPhase("instructions");
+    setTestRunning(false);
+  };
+
+  const fmtTime = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  };
+
+  // ---- Test Mode sub-renderers ----
+  const renderTestInstructions = () => (
+    <div className="card p-6">
+      <h2 className="text-xl font-bold">🎯 Test Mode</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {testQuestions.length} questions · ~{Math.round((testQuestions.length * 45) / 60)} min · answer key
+        aur solutions har question ke baad milenge.
+      </p>
+      <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+        <div className="rounded-lg border border-border p-3">
+          <p className="font-semibold">📝 Question Type</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Bilingual (EN + हिंदी) PYQs with verified answers
+          </p>
+        </div>
+        <div className="rounded-lg border border-border p-3">
+          <p className="font-semibold">⏱️ Timer</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Auto-submit at zero · progress saved automatically
+          </p>
+        </div>
+        <div className="rounded-lg border border-border p-3">
+          <p className="font-semibold">↔️ Navigation</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Aage-piche jao, kisi bhi question par jump karo
+          </p>
+        </div>
+        <div className="rounded-lg border border-border p-3">
+          <p className="font-semibold">📊 Results</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Full solutions + explanations (EN + हिंदी)
+          </p>
+        </div>
+      </div>
+      <button
+        onClick={startQuestionBankTest}
+        className="mt-5 w-full rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground hover:opacity-90"
+      >
+        Start Test →
+      </button>
+    </div>
+  );
+
+  const renderTestExam = () => {
+    const q = testQuestions[testIdx];
+    if (!q) return null;
+    const answeredCount = Object.keys(testAnswers).length;
+    return (
+      <div className="card overflow-hidden">
+        {/* top bar: progress + timer + controls */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="font-bold text-primary">Q {testIdx + 1}/{testQuestions.length}</span>
+            <span className="text-xs text-muted-foreground">
+              {answeredCount} answered
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setTestPaused((p) => !p)}
+              className="rounded-md border border-border px-3 py-1 text-xs font-semibold hover:bg-muted"
+            >
+              {testPaused ? "▶ Resume" : "⏸ Pause"}
+            </button>
+            <span className={`rounded-md px-3 py-1 font-mono text-sm font-bold ${testTimeLeft < 60 ? "bg-red-500/15 text-red-500" : "bg-primary/10 text-primary"}`}>
+              ⏱ {fmtTime(testTimeLeft)}
+            </span>
+            <button
+              onClick={submitBankTest}
+              className="rounded-md bg-danger/15 px-3 py-1 text-xs font-bold text-danger hover:bg-danger/25"
+            >
+              Submit Test
+            </button>
+          </div>
+        </div>
+
+        {testPaused ? (
+          <div className="p-10 text-center">
+            <p className="text-lg font-bold">⏸ Test Paused</p>
+            <p className="mt-1 text-sm text-muted-foreground">Progress save ho gaya hai — Resume dabao.</p>
+            <button
+              onClick={() => setTestPaused(false)}
+              className="mt-4 rounded-xl bg-primary px-6 py-2.5 text-sm font-bold text-primary-foreground"
+            >
+              ▶ Resume Test
+            </button>
+          </div>
+        ) : (
+          <div className="p-5">
+            {/* question text (bilingual) */}
+            <div className="rounded-lg border border-border bg-background p-4">
+              <p className="text-sm font-medium">{q.questionText}</p>
+              {q.questionTextHindi && (
+                <p className="mt-2 border-t border-border pt-2 text-sm text-muted-foreground">
+                  🇮🇳 {q.questionTextHindi}
+                </p>
+              )}
+            </div>
+
+            {/* options */}
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {q.options.map((o) => {
+                const isSel = testAnswers[q.id] === o.key;
+                const cls = isSel
+                  ? "border-primary bg-primary/10 text-primary ring-1 ring-primary"
+                  : "border-border hover:bg-muted";
+                return (
+                  <button
+                    key={o.key}
+                    onClick={() => testPick(q.id, o.key)}
+                    className={`rounded-lg border px-3 py-3 text-left text-sm transition ${cls}`}
+                  >
+                    <span className="font-bold">{o.key})</span>{" "}
+                    {showHi && (o as any).textHi ? (o as any).textHi : o.text}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* clear answer */}
+            {testAnswers[q.id] && (
+              <button
+                onClick={() => testClear(q.id)}
+                className="mt-3 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+              >
+                ✕ Clear Answer
+              </button>
+            )}
+
+            {/* navigation */}
+            <div className="mt-6 flex items-center justify-between gap-3 border-t border-border pt-4">
+              <button
+                onClick={() => testNav(testIdx - 1)}
+                disabled={testIdx === 0}
+                className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted disabled:opacity-40"
+              >
+                ← Pichla
+              </button>
+              <div className="flex flex-wrap justify-center gap-1.5">
+                {testQuestions.map((tq, i) => {
+                  const st = testAnswers[tq.id] ? "bg-success text-success-foreground" : i === testIdx ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground";
+                  return (
+                    <button
+                      key={tq.id}
+                      onClick={() => testNav(i)}
+                      className={`h-7 w-7 rounded-md text-xs font-bold ${st}`}
+                    >
+                      {i + 1}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                onClick={() => testNav(testIdx + 1)}
+                disabled={testIdx === testQuestions.length - 1}
+                className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted disabled:opacity-40"
+              >
+                Agla →
+              </button>
+            </div>
+
+            {/* last question → submit CTA */}
+            {testIdx === testQuestions.length - 1 && (
+              <button
+                onClick={submitBankTest}
+                className="mt-4 w-full rounded-xl bg-success py-3 text-sm font-bold text-success-foreground hover:opacity-90"
+              >
+                ✅ Test Khatam — Submit & See Results
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderTestResults = () => {
+    const total = testQuestions.length;
+    const attempted = Object.keys(testResults).length;
+    const correct = Object.values(testResults).filter((a) => a.correct).length;
+    const wrong = attempted - correct;
+    const skipped = total - attempted;
+    const accPct = attempted ? Math.round((correct / attempted) * 100) : 0;
+    return (
+      <div className="card p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xl font-bold">🎉 Test Result</h2>
+          <div className="flex gap-2">
+            <button
+              onClick={exitTestMode}
+              className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted"
+            >
+              ← Question Bank par wapas
+            </button>
+            <button
+              onClick={startQuestionBankTest}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              🔄 Retry Test
+            </button>
+          </div>
+        </div>
+
+        {/* summary cards */}
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-center">
+            <p className="text-2xl font-extrabold text-primary">{correct}/{total}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Correct</p>
+          </div>
+          <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-center">
+            <p className="text-2xl font-extrabold text-red-500">{wrong}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Wrong</p>
+          </div>
+          <div className="rounded-xl border border-muted p-4 text-center">
+            <p className="text-2xl font-extrabold text-muted-foreground">{skipped}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Skipped</p>
+          </div>
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 text-center">
+            <p className="text-2xl font-extrabold text-emerald-500">{accPct}%</p>
+            <p className="mt-1 text-xs text-muted-foreground">Accuracy</p>
+          </div>
+        </div>
+
+        {/* per-question review with solutions */}
+        <div className="mt-6 space-y-4">
+          {testQuestions.map((q, i) => {
+            const a = testResults[q.id];
+            const selKey = testAnswers[q.id];
+            return (
+              <div key={q.id} className="rounded-xl border border-border p-4">
+                <div className="flex items-start gap-2">
+                  <span className="rounded bg-muted px-2 py-0.5 text-xs font-semibold">{i + 1}</span>
+                  <span className="text-sm font-medium">{q.questionText}</span>
+                  {a && (
+                    <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-xs font-bold ${a.correct ? "bg-success/15 text-success" : "bg-danger/15 text-danger"}`}>
+                      {a.correct ? "✓ Correct" : "✗ Wrong"}
+                    </span>
+                  )}
+                  {!a && (
+                    <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-bold text-muted-foreground">
+                      ⏭ Skipped
+                    </span>
+                  )}
+                </div>
+                {q.questionTextHindi && (
+                  <p className="mt-1 text-xs text-muted-foreground">🇮🇳 {q.questionTextHindi}</p>
+                )}
+                <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                  {q.options.map((o) => {
+                    const isSel = selKey === o.key;
+                    const isCorrect = a && a.correctAnswer === o.key;
+                    const isWrongSel = isSel && a && o.key !== a.correctAnswer;
+                    const cls = isWrongSel
+                      ? "border-red-500 bg-red-500/10 text-red-600"
+                      : isCorrect
+                        ? "border-emerald-500 bg-emerald-500/10 text-emerald-600"
+                        : isSel
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border opacity-60";
+                    return (
+                      <div key={o.key} className={`rounded-lg border px-3 py-2 text-sm ${cls}`}>
+                        <span className="font-bold">{o.key})</span>{" "}
+                        {showHi && (o as any).textHi ? (o as any).textHi : o.text}
+                        {isCorrect && <span className="ml-1">✅</span>}
+                        {isWrongSel && <span className="ml-1">❌</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                {a && (a.explanation || a.explanationHindi) && (
+                  <div className={`mt-3 rounded-lg border p-3 text-sm ${a.correct ? "border-success/40 bg-success/10" : "border-danger/40 bg-danger/10"}`}>
+                    <p className="font-semibold">📖 Solution: {a.correctAnswer}</p>
+                    {a.explanation && <p className="mt-1 whitespace-pre-line">EN: {a.explanation}</p>}
+                    {a.explanationHindi && (
+                      <p className="mt-1 whitespace-pre-line border-t border-border pt-1">
+                        🇮🇳 {a.explanationHindi}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {!a && (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Is question ko skip kiya gaya —{" "}
+                    <button
+                      onClick={() => {
+                        setTestPhase("exam");
+                        setTestIdx(i);
+                        setTestRunning(true);
+                      }}
+                      className="font-semibold text-primary underline"
+                    >
+                      wapas try karo
+                    </button>
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
       <div className="mb-6 flex items-center justify-between">
@@ -382,7 +855,39 @@ export default function QuestionBankPage() {
           </button>
           </>
         )}
+        {questions.length > 0 && !testMode && (
+          <button
+            onClick={startQuestionBankTest}
+            className="rounded-lg bg-success py-2.5 px-5 text-sm font-semibold text-success-foreground hover:opacity-90"
+          >
+            🎯 Start Test Mode ({questions.length} Qs)
+          </button>
+        )}
       </div>
+
+      {resumeData && !testMode && (
+        <div className="mb-6 rounded-xl border border-amber-400/40 bg-amber-500/10 p-4">
+          <p className="font-semibold text-amber-800 dark:text-amber-200">🔄 Incomplete test found</p>
+          <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+            {resumeData.questions.length} questions · {Object.keys(resumeData.answers).length} answered · {fmtTime(resumeData.timeLeft)} left
+          </p>
+          <button
+            onClick={resumeSavedTest}
+            className="mt-3 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-amber-50-foreground hover:opacity-90"
+          >
+            Resume Test
+          </button>
+        </div>
+      )}
+
+      {/* Test Mode UI */}
+      {testMode && (
+        <div className="mb-6">
+          {testPhase === "instructions" && renderTestInstructions()}
+          {testPhase === "exam" && renderTestExam()}
+          {testPhase === "results" && renderTestResults()}
+        </div>
+      )}
 
       {/* Questions */}
       {questions.length === 0 && !loading && (

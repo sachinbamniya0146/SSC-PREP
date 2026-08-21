@@ -28,8 +28,10 @@
     "@prisma/client": "^5.22.0",
     "@types/pdfkit": "^0.17.6",
     "@types/uuid": "^10.0.0",
+    "@vitalets/google-translate-api": "^9.2.1",
     "axios": "^1.19.0",
     "bcrypt": "^5.1.1",
+    "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.2",
     "bullmq": "^5.81.3",
     "class-transformer": "^0.5.1",
@@ -51,6 +53,7 @@
     "puppeteer-core": "^25.5.0",
     "razorpay": "^2.9.8",
     "reflect-metadata": "^0.2.2",
+    "resend": "^6.20.0",
     "rxjs": "^7.8.2",
     "socket.io": "^4.7.4",
     "uuid": "^14.0.1"

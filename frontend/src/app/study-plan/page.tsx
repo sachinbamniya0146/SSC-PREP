@@ -54,9 +54,16 @@ export default function StudyPlanPage() {
   const [loading, setLoading] = React.useState(true);
 
   const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
-  const headers = () => {
-    const t = localStorage.getItem("ssc_access_token");
-    return { Authorization: `Bearer ${t}` };
+  const headers = (): HeadersInit => {
+    if (typeof window === 'undefined' || !window?.localStorage) {
+      return {};
+    }
+    const t = window.localStorage.getItem("ssc_access_token");
+    const h: HeadersInit = {};
+    if (t) {
+      h.Authorization = `Bearer ${t}`;
+    }
+    return h;
   };
 
   const loadPlan = async () => {
