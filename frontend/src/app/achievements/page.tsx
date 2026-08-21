@@ -12,6 +12,7 @@ import {
   ArcElement,
 } from "chart.js";
 import { Bar, Doughnut } from "react-chartjs-2";
+import { AppHeader } from "@/components/app-header";
 
 ChartJS.register(
   CategoryScale,
@@ -157,15 +158,7 @@ export default function AchievementsPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <span className="text-sm text-muted-foreground">Achievements & Badges 🏆</span>
-        </div>
-      </header>
-
+      <AppHeader showSupport={true} />
       <main className="mx-auto max-w-6xl px-4 py-10">
         <div className="mb-8">
           <h1 className="text-2xl font-bold">Achievements & Badges</h1>

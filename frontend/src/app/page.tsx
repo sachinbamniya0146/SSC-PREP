@@ -4,6 +4,7 @@ import * as React from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
+import { AppHeader } from "@/components/app-header";
 
 const exams = [
   { id: "exam-cgl", name: "SSC CGL", short: "CGL", color: "from-blue-500 to-cyan-500" },
@@ -193,49 +194,7 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* ===== NAVBAR ===== */}
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
-          <a href="/" className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
-              S
-            </span>
-            <span className="text-lg font-bold tracking-tight">
-              SSC<span className="text-primary">PrepHub</span>
-            </span>
-          </a>
-          <nav className="hidden items-center gap-8 text-sm font-medium text-muted-foreground md:flex">
-            <a href="#tests" className="hover:text-foreground">Tests</a>
-            <a href="#features" className="hover:text-foreground">Features</a>
-            <a href="#pricing" className="hover:text-foreground">Pricing</a>
-            <a href="#blog" className="hover:text-foreground">Blog</a>
-          </nav>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={toggleTheme}
-              aria-label="Toggle theme"
-              className="rounded-lg border border-border p-2 text-sm hover:bg-muted"
-            >
-              {theme === "dark" ? "☀️" : "🌙"}
-            </button>
-            {isLoggedIn ? (
-              <a
-                href="/dashboard"
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
-              >
-                Dashboard
-              </a>
-            ) : (
-              <a
-                href="/login"
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
-              >
-                Login
-              </a>
-            )}
-          </div>
-        </div>
-      </header>
+      <AppHeader showSupport={true} />
 
       {/* ===== HERO ===== */}
       <section className="relative overflow-hidden">

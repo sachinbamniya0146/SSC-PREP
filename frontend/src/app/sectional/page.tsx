@@ -2,6 +2,7 @@
 import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
+import { AppHeader } from "@/components/app-header";
 
 type Subject = { id: string; name: string; slug: string; questionCount: number };
 
@@ -68,15 +69,7 @@ export default function SectionalPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <a href="/mocks" className="btn btn-outline text-sm">Mock Tests</a>
-        </div>
-      </header>
-
+      <AppHeader showSupport={true} />
       <main className="mx-auto max-w-4xl px-4 py-10">
         <h1 className="text-2xl font-bold">📚 Sectional Tests</h1>
         <p className="mt-1 text-sm text-muted-foreground">

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AppHeader } from "@/components/app-header";
 
 type PlanData = {
   plan: {
@@ -110,16 +111,7 @@ export default function StudyPlanPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-          <div className="flex items-center gap-3 text-sm">
-            {!plan && <button onClick={() => setStep("create")} className="btn btn-primary">Create Plan</button>}
-            <a href="/dashboard" className="btn btn-outline">Dashboard</a>
-          </div>
-        </div>
-      </header>
-
+      <AppHeader showSupport={true} />
       <main className="mx-auto max-w-4xl px-4 py-10">
         {step === "create" && (
           <>

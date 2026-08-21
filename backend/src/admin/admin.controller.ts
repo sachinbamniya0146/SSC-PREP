@@ -470,4 +470,148 @@ export class AdminController {
     }
     return { results };
   }
+
+  // ---- Support Tickets ----
+  @Get('support-tickets')
+  async listSupportTickets(
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('status') status?: string,
+    @Query('category') category?: string,
+    @Query('priority') priority?: string,
+    @Query('search') search?: string,
+  ) {
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.min(100, Math.max(1, Number(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {};
+    if (status) where.status = status;
+    if (category) where.category = category;
+    if (priority) where.priority = priority;
+    if (search) {
+      where.OR = [
+        { subject: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [tickets, total] = await Promise.all([
+      this.prisma.supportTicket.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limitNum,
+        include: {
+          user: {
+            select: { id: true, email: true, fullName: true, role: true },
+          },
+        },
+      }),
+      this.prisma.supportTicket.count({ where }),
+    ]);
+
+    return {
+      tickets,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    };
+  }
+
+  @Get('support-tickets/:id')
+  async getSupportTicket(@Param('id', ParseUUIDPipe) id: string) {
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id },
+      include: {
+        user: {
+          select: { id: true, email: true, fullName: true, role: true, phone: true },
+        },
+      },
+    });
+    if (!ticket) {
+      throw new Error('Support ticket not found');
+    }
+    return ticket;
+  }
+
+  @Put('support-tickets/:id')
+  async updateSupportTicket(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { status?: string; priority?: string; adminNotes?: string; category?: string },
+  ) {
+    const ticket = await this.prisma.supportTicket.findUnique({ where: { id } });
+    if (!ticket) {
+      throw new Error('Support ticket not found');
+    }
+
+    const updateData: any = {};
+    if (body.status) updateData.status = body.status;
+    if (body.priority) updateData.priority = body.priority;
+    if (body.category) updateData.category = body.category;
+    if (body.adminNotes !== undefined) updateData.adminNotes = body.adminNotes;
+
+    // If status changed to RESOLVED or CLOSED, set resolvedAt and resolvedBy
+    if (body.status && (body.status === 'RESOLVED' || body.status === 'CLOSED') && ticket.status !== body.status) {
+      updateData.resolvedAt = new Date();
+      updateData.resolvedBy = 'admin'; // In real app, get from request user
+    }
+
+    const updated = await this.prisma.supportTicket.update({
+      where: { id },
+      data: updateData,
+      include: {
+        user: {
+          select: { id: true, email: true, fullName: true, role: true },
+        },
+      },
+    });
+
+    await this.auditLogService.log({
+      action: 'SUPPORT_TICKET_UPDATED',
+      targetEntity: 'SupportTicket',
+      entityId: id,
+      metadataJson: { ...updateData, previousStatus: ticket.status },
+    });
+
+    return updated;
+  }
+
+  @Post('support-tickets/:id/reply')
+  async replyToTicket(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { message: string },
+  ) {
+    // For now, just add to adminNotes - could create a separate TicketReply model
+    const ticket = await this.prisma.supportTicket.findUnique({ where: { id } });
+    if (!ticket) {
+      throw new Error('Support ticket not found');
+    }
+
+    const replyText = `\n\n[Admin Reply - ${new Date().toISOString()}]\n${body.message}`;
+    const updated = await this.prisma.supportTicket.update({
+      where: { id },
+      data: {
+        adminNotes: (ticket.adminNotes || '') + replyText,
+        status: 'IN_PROGRESS',
+      },
+      include: {
+        user: {
+          select: { id: true, email: true, fullName: true, role: true },
+        },
+      },
+    });
+
+    await this.auditLogService.log({
+      action: 'SUPPORT_TICKET_REPLIED',
+      targetEntity: 'SupportTicket',
+      entityId: id,
+      metadataJson: { message: body.message },
+    });
+
+    return updated;
+  }
 }

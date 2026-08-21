@@ -159,6 +159,7 @@ model User {
   receivedFriendRequests FriendRequest[]          @relation("User_ReceivedFriendRequests")
   testPdfExports       TestPdfExport[] @relation("TestPdfExport_User")
   testAttemptStats     TestAttemptStats[] @relation("TestAttemptStats_User")
+  supportTickets       SupportTicket[]  @relation("SupportTicket_User")
 
   @@map("users")
 }
@@ -1073,4 +1074,53 @@ model TestAttemptStats {
 
   @@index([userId])
   @@map("test_attempt_stats")
+}
+
+model SupportTicket {
+  id          String         @id @default(uuid())
+  userId      String?
+  user        User?          @relation("SupportTicket_User", fields: [userId], references: [id], onDelete: SetNull)
+  email       String         // contact email
+  name        String?        // user name (optional)
+  subject     String
+  description String
+  category    TicketCategory @default(GENERAL)
+  priority    TicketPriority @default(MEDIUM)
+  status      TicketStatus   @default(OPEN)
+  adminNotes  String?
+  resolvedAt  DateTime?
+  resolvedBy  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([category])
+  @@index([createdAt])
+  @@map("support_tickets")
+}
+
+enum TicketCategory {
+  GENERAL
+  TECHNICAL
+  BILLING
+  CONTENT
+  FEATURE_REQUEST
+  BUG_REPORT
+  ACCOUNT
+  OTHER
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
 }

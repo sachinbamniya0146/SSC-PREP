@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AppHeader } from "@/components/app-header";
 
 type QuizQ = {
   id: string;
@@ -251,15 +252,7 @@ export default function DailyQuizPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <span className="text-sm text-muted-foreground">{title}</span>
-        </div>
-      </header>
-
+      <AppHeader showSupport={true} />
       <main className="mx-auto max-w-3xl px-4 py-10">
         {loading && <p className="text-muted-foreground">Loading today&apos;s quiz…</p>}
 

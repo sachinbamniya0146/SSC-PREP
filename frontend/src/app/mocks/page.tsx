@@ -2,6 +2,7 @@
 import { fetchAuth } from "@/lib/api";
 import * as React from "react";
 import Link from "next/link";
+import { AppHeader } from "@/components/app-header";
 
 interface TestTemplate {
   id: string;
@@ -231,7 +232,9 @@ export default function MocksPage() {
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8">
+    <div className="min-h-screen bg-background">
+      <AppHeader showSupport={true} />
+      <main className="mx-auto max-w-7xl px-4 py-8">
       <div className="mb-6">
         <h1 className="text-2xl font-bold">🧪 SSC Mock Tests</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -391,5 +394,6 @@ export default function MocksPage() {
         </div>
       </div>
     </main>
-  );
+  </div>
+);
 }

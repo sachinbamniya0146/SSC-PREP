@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
+import { AppHeader } from "@/components/app-header";
 
 export default function DashboardPage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
@@ -64,35 +65,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
-          <span className="text-lg font-bold">
-            SSC<span className="text-primary">PrepHub</span>
-          </span>
-          <div className="flex items-center gap-3 text-sm">
-            <button
-              onClick={toggleTheme}
-              aria-label="Toggle theme"
-              className="rounded-lg border border-border p-2 text-sm"
-            >
-              {theme === "dark" ? "☀️" : "🌙"}
-            </button>
-            <span className="hidden font-medium sm:block">
-              {user?.fullName || "Student"}
-            </span>
-            <a
-              href="/login"
-              className="rounded-lg border border-border px-4 py-2 font-semibold hover:bg-muted"
-              onClick={() => {
-                localStorage.clear();
-              }}
-            >
-              Logout
-            </a>
-          </div>
-        </div>
-      </header>
-
+      <AppHeader showSupport={true} />
       <main className="mx-auto max-w-7xl px-4 py-8">
         <h1 className="text-2xl font-bold">
           Namaste, {user?.fullName?.split(" ")[0] || "Student"} 👋

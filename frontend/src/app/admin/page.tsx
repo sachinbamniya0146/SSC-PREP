@@ -47,6 +47,29 @@ interface BulkGrantRequest {
   days?: number;
 }
 
+interface SupportTicket {
+  id: string;
+  subject: string;
+  description: string;
+  category: string;
+  priority: string;
+  status: string;
+  adminNotes: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  user: { id: string; email: string; fullName: string; role: string; phone?: string | null };
+}
+
+interface SupportTicketsResponse {
+  tickets: SupportTicket[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export default function AdminPage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [users, setUsers] = React.useState<User[]>([]);
@@ -70,6 +93,19 @@ export default function AdminPage() {
   const [plans, setPlans] = React.useState<SubscriptionPlan[]>([]);
   const [error, setError] = React.useState("");
   const [info, setInfo] = React.useState("");
+  // Support tickets
+  const [showSupportModal, setShowSupportModal] = React.useState(false);
+  const [supportTickets, setSupportTickets] = React.useState<SupportTicket[]>([]);
+  const [supportTotal, setSupportTotal] = React.useState(0);
+  const [supportPage, setSupportPage] = React.useState(1);
+  const [supportLimit] = React.useState(20);
+  const [supportStatus, setSupportStatus] = React.useState("");
+  const [supportCategory, setSupportCategory] = React.useState("");
+  const [supportPriority, setSupportPriority] = React.useState("");
+  const [supportSearch, setSupportSearch] = React.useState("");
+  const [selectedTicket, setSelectedTicket] = React.useState<SupportTicket | null>(null);
+  const [replyText, setReplyText] = React.useState("");
+  const [supportLoading, setSupportLoading] = React.useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -182,10 +218,63 @@ export default function AdminPage() {
     }
   }
 
+  // Support ticket functions
+  async function loadSupportTickets() {
+    setSupportLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append("page", String(supportPage));
+      params.append("limit", String(supportLimit));
+      if (supportStatus) params.append("status", supportStatus);
+      if (supportCategory) params.append("category", supportCategory);
+      if (supportPriority) params.append("priority", supportPriority);
+      if (supportSearch) params.append("search", supportSearch);
+      const data = await api<SupportTicketsResponse>(`/admin/support-tickets?${params}`);
+      setSupportTickets(data.tickets);
+      setSupportTotal(data.total);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load support tickets");
+    } finally {
+      setSupportLoading(false);
+    }
+  }
+
+  async function updateTicketStatus(ticketId: string, status: string) {
+    try {
+      await api(`/admin/support-tickets/${ticketId}`, {
+        method: "PUT",
+        body: JSON.stringify({ status }),
+      });
+      setInfo("Ticket status updated");
+      loadSupportTickets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update ticket");
+    }
+  }
+
+  async function replyToTicket(ticketId: string) {
+    if (!replyText.trim()) return;
+    try {
+      await api(`/admin/support-tickets/${ticketId}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ message: replyText }),
+      });
+      setInfo("Reply sent successfully");
+      setReplyText("");
+      loadSupportTickets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reply");
+    }
+  }
+
   React.useEffect(() => {
     loadUsers();
     loadPlans();
   }, [page, search, roleFilter]);
+
+  React.useEffect(() => {
+    loadSupportTickets();
+  }, [supportPage, supportStatus, supportCategory, supportPriority, supportSearch]);
 
   const roleBadge = (role: string) => {
     const colors: Record<string, string> = {
@@ -195,6 +284,20 @@ export default function AdminPage() {
     };
     const colorClass = colors[role] || "bg-muted text-muted-foreground";
     return <span className={"badge " + colorClass}>{role}</span>;
+  };
+
+  const statusColors: Record<string, string> = {
+    OPEN: "bg-blue-500/20 text-blue-400",
+    IN_PROGRESS: "bg-amber-500/20 text-amber-400",
+    RESOLVED: "bg-emerald-500/20 text-emerald-400",
+    CLOSED: "bg-muted text-muted-foreground",
+  };
+
+  const priorityColors: Record<string, string> = {
+    LOW: "bg-blue-500/20 text-blue-400",
+    MEDIUM: "bg-amber-500/20 text-amber-400",
+    HIGH: "bg-orange-500/20 text-orange-400",
+    URGENT: "bg-red-500/20 text-red-400",
   };
 
   return (
@@ -216,6 +319,9 @@ export default function AdminPage() {
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-2xl font-bold">👥 User Management</h1>
           <div className="flex gap-2">
+            <button onClick={() => setShowSupportModal(true)} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+              🎫 Support Tickets
+            </button>
             <button onClick={() => setShowEmailModal(true)} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
               📧 Bulk Grant Subscription
             </button>
@@ -475,6 +581,192 @@ export default function AdminPage() {
             <div className="mt-6 flex gap-2">
               <button onClick={sendBulkPremium} disabled={!bulkEmail} className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">Grant Premium</button>
               <button onClick={() => { setShowBulkPremiumModal(false); setBulkEmail(""); setBulkMonths(""); setBulkDays(""); }} className="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm hover:bg-muted">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Support Tickets Modal */}
+      {showSupportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-5xl rounded-2xl border border-border bg-card p-6 shadow-xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold">🎫 Support Tickets</h2>
+              <button onClick={() => setShowSupportModal(false)} className="rounded-lg border border-border p-2 hover:bg-muted">✕</button>
+            </div>
+
+            {/* Filters */}
+            <div className="mb-4 flex flex-wrap gap-3 rounded-xl border border-border bg-background p-3">
+              <div className="flex-1 min-w-[150px]">
+                <label className="mb-1 block text-xs font-medium">Search</label>
+                <input
+                  value={supportSearch}
+                  onChange={(e) => { setSupportSearch(e.target.value); setSupportPage(1); }}
+                  placeholder="Search subject, email, name..."
+                  className="w-full rounded-lg border border-border bg-card px-3 py-1.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <div className="flex-1 min-w-[140px]">
+                <label className="mb-1 block text-xs font-medium">Status</label>
+                <select value={supportStatus} onChange={(e) => { setSupportStatus(e.target.value); setSupportPage(1); }} className="w-full rounded-lg border border-border bg-card px-3 py-1.5 text-sm outline-none focus:border-primary">
+                  <option value="">All</option>
+                  <option value="OPEN">Open</option>
+                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="RESOLVED">Resolved</option>
+                  <option value="CLOSED">Closed</option>
+                </select>
+              </div>
+              <div className="flex-1 min-w-[140px]">
+                <label className="mb-1 block text-xs font-medium">Category</label>
+                <select value={supportCategory} onChange={(e) => { setSupportCategory(e.target.value); setSupportPage(1); }} className="w-full rounded-lg border border-border bg-card px-3 py-1.5 text-sm outline-none focus:border-primary">
+                  <option value="">All</option>
+                  <option value="GENERAL">General</option>
+                  <option value="TECHNICAL">Technical</option>
+                  <option value="BILLING">Billing</option>
+                  <option value="CONTENT">Content</option>
+                  <option value="FEATURE_REQUEST">Feature Request</option>
+                  <option value="BUG_REPORT">Bug Report</option>
+                  <option value="ACCOUNT">Account</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </div>
+              <div className="flex-1 min-w-[120px]">
+                <label className="mb-1 block text-xs font-medium">Priority</label>
+                <select value={supportPriority} onChange={(e) => { setSupportPriority(e.target.value); setSupportPage(1); }} className="w-full rounded-lg border border-border bg-card px-3 py-1.5 text-sm outline-none focus:border-primary">
+                  <option value="">All</option>
+                  <option value="LOW">Low</option>
+                  <option value="MEDIUM">Medium</option>
+                  <option value="HIGH">High</option>
+                  <option value="URGENT">Urgent</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Tickets Table */}
+            <div className="flex-1 overflow-auto rounded-xl border border-border bg-card">
+              {supportLoading ? (
+                <div className="flex items-center justify-center h-64">Loading...</div>
+              ) : supportTickets.length === 0 ? (
+                <div className="flex items-center justify-center h-64 text-muted-foreground">No tickets found</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium">Subject</th>
+                      <th className="px-3 py-2 text-left font-medium">User</th>
+                      <th className="px-3 py-2 text-left font-medium">Category</th>
+                      <th className="px-3 py-2 text-left font-medium">Priority</th>
+                      <th className="px-3 py-2 text-left font-medium">Status</th>
+                      <th className="px-3 py-2 text-left font-medium">Created</th>
+                      <th className="px-3 py-2 text-right font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {supportTickets.map((t) => (
+                      <tr key={t.id} className="border-t border-border hover:bg-muted/50 cursor-pointer" onClick={() => setSelectedTicket(t)}>
+                        <td className="px-3 py-2">
+                          <div className="font-medium max-w-xs truncate" title={t.subject}>{t.subject}</div>
+                          <div className="text-xs text-muted-foreground truncate max-w-xs">{t.description}</div>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="font-medium">{t.user.fullName}</div>
+                          <div className="text-xs text-muted-foreground">{t.user.email}</div>
+                          <div className="text-xs">{roleBadge(t.user.role)}</div>
+                        </td>
+                        <td className="px-3 py-2 text-xs">{t.category}</td>
+                        <td className="px-3 py-2">
+                          <span className={`badge ${priorityColors[t.priority] || "bg-muted text-muted-foreground"}`}>{t.priority}</span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`badge ${statusColors[t.status] || "bg-muted text-muted-foreground"}`}>{t.status}</span>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{new Date(t.createdAt).toLocaleDateString()}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button onClick={(e) => { e.stopPropagation(); setSelectedTicket(t); }} className="rounded border border-border px-2 py-1 text-xs hover:bg-muted">View</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <div className="px-3 py-2 border-t border-border flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Page {supportPage} of {Math.ceil(supportTotal / supportLimit)} — {supportTotal} total</span>
+                <div className="flex gap-2">
+                  <button onClick={() => setSupportPage(p => Math.max(1, p - 1))} disabled={supportPage === 1} className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50">Prev</button>
+                  <button onClick={() => setSupportPage(p => Math.min(Math.ceil(supportTotal / supportLimit), p + 1))} disabled={supportPage === Math.ceil(supportTotal / supportLimit)} className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50">Next</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ticket Detail & Reply Modal */}
+      {selectedTicket && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { setSelectedTicket(null); setReplyText(""); }}>
+          <div className="w-full max-w-2xl rounded-2xl border border-border bg-card p-6 shadow-xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-xl font-bold">{selectedTicket.subject}</h2>
+                <div className="mt-1 flex items-center gap-2 text-sm flex-wrap">
+                  <span className={`badge ${statusColors[selectedTicket.status] || "bg-muted text-muted-foreground"}`}>{selectedTicket.status}</span>
+                  <span className={`badge ${priorityColors[selectedTicket.priority] || "bg-muted text-muted-foreground"}`}>{selectedTicket.priority}</span>
+                  <span className="badge bg-muted text-muted-foreground">{selectedTicket.category}</span>
+                </div>
+              </div>
+              <button onClick={() => { setSelectedTicket(null); setReplyText(""); }} className="rounded-lg border border-border p-2 hover:bg-muted">✕</button>
+            </div>
+
+            <div className="mt-4 border-t border-border pt-4">
+              <h3 className="font-medium">User Details</h3>
+              <div className="mt-2 text-sm space-y-1">
+                <div><span className="font-medium">Name:</span> {selectedTicket.user.fullName}</div>
+                <div><span className="font-medium">Email:</span> {selectedTicket.user.email}</div>
+                <div><span className="font-medium">Role:</span> {roleBadge(selectedTicket.user.role)}</div>
+                {selectedTicket.user.phone && <div><span className="font-medium">Phone:</span> {selectedTicket.user.phone}</div>}
+              </div>
+            </div>
+
+            <div className="mt-4 border-t border-border pt-4">
+              <h3 className="font-medium">Description</h3>
+              <p className="mt-2 text-sm whitespace-pre-wrap">{selectedTicket.description}</p>
+            </div>
+
+            {selectedTicket.adminNotes && (
+              <div className="mt-4 border-t border-border pt-4">
+                <h3 className="font-medium">Admin Notes / Replies</h3>
+                <div className="mt-2 text-sm whitespace-pre-wrap bg-muted/50 p-3 rounded-lg">{selectedTicket.adminNotes}</div>
+              </div>
+            )}
+
+            <div className="mt-4 border-t border-border pt-4">
+              <h3 className="font-medium">Reply to User</h3>
+              <textarea
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                placeholder="Type your reply..."
+                rows={4}
+                className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary resize-none"
+              />
+              <div className="mt-3 flex gap-2">
+                <select
+                  value={selectedTicket.status}
+                  onChange={(e) => updateTicketStatus(selectedTicket.id, e.target.value)}
+                  className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+                >
+                  <option value="OPEN">Open</option>
+                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="RESOLVED">Resolved</option>
+                  <option value="CLOSED">Closed</option>
+                </select>
+                <button onClick={() => replyToTicket(selectedTicket.id)} disabled={!replyText.trim()} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50">Send Reply</button>
+              </div>
+            </div>
+
+            <div className="mt-4 border-t border-border pt-4 text-xs text-muted-foreground">
+              <div>Created: {new Date(selectedTicket.createdAt).toLocaleString()}</div>
+              <div>Updated: {new Date(selectedTicket.updatedAt).toLocaleString()}</div>
+              {selectedTicket.resolvedAt && <div>Resolved: {new Date(selectedTicket.resolvedAt).toLocaleString()} by {selectedTicket.resolvedBy}</div>}
             </div>
           </div>
         </div>

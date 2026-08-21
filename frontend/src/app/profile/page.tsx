@@ -3,6 +3,7 @@
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
+import { AppHeader } from "@/components/app-header";
 
 interface UserProfile {
   id: string;
@@ -107,20 +108,7 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-4">
-          <span className="text-lg font-bold">
-            SSC<span className="text-primary">PrepHub</span>
-          </span>
-          <div className="flex items-center gap-3 text-sm">
-            <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm">
-              {theme === "dark" ? "☀️" : "🌙"}
-            </button>
-            <a href="/dashboard" className="rounded-lg border border-border px-4 py-2 font-semibold hover:bg-muted">Dashboard</a>
-          </div>
-        </div>
-      </header>
-
+      <AppHeader showSupport={true} />
       <main className="mx-auto max-w-4xl px-4 py-8">
         <h1 className="text-2xl font-bold">👤 My Profile</h1>
         <p className="mt-1 text-sm text-muted-foreground">Manage your account settings and preferences</p>

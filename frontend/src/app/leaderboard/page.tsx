@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AppHeader } from "@/components/app-header";
 
 type Row = { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number; isMe?: boolean };
 type LB = { period: string; rows: Row[]; myRank: number | null; me: Row | null };
@@ -49,26 +50,7 @@ export default function LeaderboardPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPeriod("all")}
-              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${period === "all" ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}
-            >
-              All-time
-            </button>
-            <button
-              onClick={() => setPeriod("weekly")}
-              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${period === "weekly" ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}
-            >
-              This Week
-            </button>
-          </div>
-        </div>
-      </header>
-
+      <AppHeader showSupport={true} />
       <main className="mx-auto max-w-3xl px-4 py-10">
         <h1 className="text-2xl font-bold">🏆 Leaderboard</h1>
         <p className="mt-1 text-sm text-muted-foreground">Top scorers by XP — attempt tests & daily quizzes to climb!</p>
