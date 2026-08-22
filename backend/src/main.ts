@@ -31,9 +31,13 @@ async function bootstrap() {
       // 2026-08-12: restrict to allow-list. Dev allows LAN IPs for phone testing.
       // Production: set FRONTEND_URL env var to your domain.
       origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         const allowList = [
-          process.env.FRONTEND_URL || 'http://localhost:3000',
-          process.env.FRONTEND_URL?.replace('localhost', '127.0.0.1') || 'http://127.0.0.1:3000',
+          frontendUrl,
+          frontendUrl.replace('localhost', '127.0.0.1'),
+          // Add www variant for production
+          frontendUrl.replace('https://', 'https://www.'),
+          frontendUrl.replace('https://', 'https://www.').replace('localhost', '127.0.0.1'),
           // Docker maps frontend 3000->3001, so allow both
           'http://localhost:3001',
           'http://127.0.0.1:3001',
