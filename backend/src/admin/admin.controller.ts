@@ -19,6 +19,126 @@ export class AdminController {
     private monetization: MonetizationService,
   ) {}
 
+  // ---- Dashboard Overview ----
+  @Get('dashboard')
+  async dashboard(@Query('days') days?: string) {
+    const since = new Date();
+    since.setDate(since.getDate() - (days ? Math.min(Number(days) || 30, 365) : 30));
+
+    const [
+      totalUsers,
+      activeUsers,
+      newUsers,
+      totalRevenue,
+      totalSubscriptions,
+      totalTestAttempts,
+      totalMockAttempts,
+      totalPracticeSets,
+      revenueData,
+    ] = await Promise.all([
+      this.prisma.user.count(),
+      this.prisma.user.count({
+        where: { testAttempts: { some: { startedAt: { gte: since } } } },
+      }),
+      this.prisma.user.count({ where: { createdAt: { gte: since } } }),
+      this.prisma.payment.aggregate({
+        where: { status: 'SUCCESS', createdAt: { gte: since } },
+        _sum: { amountInr: true },
+      }),
+      this.prisma.subscription.count({ where: { status: 'ACTIVE', endsAt: { gt: new Date() } } }),
+      this.prisma.testAttempt.count({ where: { startedAt: { gte: since } } }),
+      this.prisma.testAttempt.count({ 
+        where: { startedAt: { gte: since }, testTemplate: { type: 'FULL_MOCK' } } 
+      }),
+      this.prisma.questionBankSet.count({ where: { startedAt: { gte: since } } }),
+      this.prisma.payment.groupBy({
+        by: ['createdAt'],
+        where: { status: 'SUCCESS', createdAt: { gte: since } },
+        _sum: { amountInr: true },
+        _count: true,
+      }),
+    ]);
+
+    // Revenue by day for chart
+    const revenueByDay = revenueData.reduce((acc: any, r: any) => {
+      const day = r.createdAt.toISOString().split('T')[0];
+      if (!acc[day]) acc[day] = { revenue: 0, count: 0 };
+      acc[day].revenue += r._sum.amountInr || 0;
+      acc[day].count += r._count;
+      return acc;
+    }, {});
+
+    // Top users by activity
+    const topUsers = await this.prisma.user.findMany({
+      where: { testAttempts: { some: { startedAt: { gte: since } } } },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        _count: { select: { testAttempts: true } },
+      },
+      orderBy: { testAttempts: { _count: 'desc' } },
+      take: 10,
+    });
+
+    // Question bank practice stats
+    const practiceStats = await this.prisma.questionBankSet.groupBy({
+      by: ['mode', 'isCompleted'],
+      where: { startedAt: { gte: since } },
+      _count: true,
+    });
+
+    // Subject-wise practice distribution
+    const subjectPractice = await this.prisma.questionBankSet.groupBy({
+      by: ['subjectId'],
+      where: { startedAt: { gte: since } },
+      _count: true,
+      orderBy: { _count: { subjectId: 'desc' } },
+      take: 10,
+    });
+
+    const subjectIds = subjectPractice.map(s => s.subjectId).filter((id): id is string => id !== null);
+    const subjects = subjectIds.length > 0
+      ? await this.prisma.subject.findMany({ 
+          where: { id: { in: subjectIds } }, 
+          select: { id: true, name: true } 
+        })
+      : [];
+    const subjectMap = new Map(subjects.map(s => [s.id, s.name]));
+
+    // Mock test stats
+    const mockStats = await this.prisma.testAttempt.groupBy({
+      by: ['testTemplateId', 'status'],
+      where: { startedAt: { gte: since }, testTemplate: { isPremium: true } },
+      _count: true,
+    });
+
+    return {
+      period: { since, days: days || 30 },
+      overview: {
+        totalUsers,
+        activeUsers,
+        newUsers,
+        revenueInr: Math.round((totalRevenue._sum?.amountInr ?? 0) * 100) / 100,
+        activeSubscriptions: totalSubscriptions,
+        totalTestAttempts,
+        totalMockAttempts,
+        totalPracticeSets,
+      },
+      revenueByDay: Object.entries(revenueByDay).map(([day, data]: [string, any]) => ({ day, ...data })),
+      topUsers,
+      questionBankPractice: {
+        byMode: practiceStats,
+        bySubject: subjectPractice.map(s => ({ 
+          subjectId: s.subjectId, 
+          subjectName: s.subjectId ? subjectMap.get(s.subjectId) : 'Unknown', 
+          count: s._count 
+        })),
+      },
+      mockTests: mockStats,
+    };
+  }
+
   // ---- Revenue overview ----
   @Get('revenue')
   async revenue(@Query('days') days?: string) {
