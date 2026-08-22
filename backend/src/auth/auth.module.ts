@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { MailService } from './mail.service';
 import { OtpService } from './otp.service';
+import { PasswordResetService } from './password-reset.service';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { OtpService } from './otp.service';
         }) as JwtModuleOptions,
     }),
   ],
-  providers: [AuthService, MailService, OtpService],
+  providers: [AuthService, MailService, OtpService, PasswordResetService],
   controllers: [AuthController],
   exports: [AuthService],
 })

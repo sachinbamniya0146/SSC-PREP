@@ -26,6 +26,12 @@ interface TestTemplate {
   };
   tags?: string[];
   createdAt: string;
+  // Payment/access fields
+  free?: boolean;
+  locked?: boolean;
+  reason?: string;
+  offerPriceInr?: number;
+  offerDays?: number;
 }
 
 interface Exam {
@@ -33,6 +39,23 @@ interface Exam {
   name: string;
   slug: string;
   count: number;
+}
+
+interface MockAccessResponse {
+  freeMocksPerExam: number;
+  mockAccess: TestTemplate[];
+  examPacks: {
+    name: string;
+    priceInr: number;
+    mocksIncluded: number;
+    durationDays: number;
+  };
+  offer: {
+    active: boolean;
+    priceInr: number;
+    days: number;
+    message: string;
+  };
 }
 
 function apiBase() {
@@ -86,13 +109,12 @@ export default function MocksPage() {
     const load = async () => {
       try {
         setLoading(true);
-        const [templatesRes, examsRes] = await Promise.all([
+        const [mocksRes, examsRes] = await Promise.all([
           fetchAuth(`${apiBase()}/mocks`, { headers: getAuthHeaders() }),
           fetchAuth(`${apiBase()}/bank/meta`, { headers: getAuthHeaders() }).then((r) => r.json()),
         ]);
-        const tDataFull = await templatesRes.json();
-        const tData = tDataFull.mockAccess || [];
-        setTemplates(Array.isArray(tData) ? tData : []);
+        const mocksData: MockAccessResponse = await mocksRes.json();
+        setTemplates(mocksData.mockAccess || []);
         const allExams = Array.isArray(examsRes?.exams) ? examsRes.exams.filter((e: Exam) => e.count > 0) : [];
         setExams(allExams);
 
@@ -162,47 +184,79 @@ export default function MocksPage() {
     return `${mins}m`;
   };
 
-  const renderTemplateCard = (t: TestTemplate) => (
-    <Link
-      key={t.id}
-      href={`/test?template=${encodeURIComponent(t.id)}`}
-      className="group block rounded-xl border border-border bg-card p-5 transition hover:border-primary/50 hover:shadow-lg"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${TYPE_COLOR[t.type] || TYPE_COLOR.CUSTOM}`}>
-              {TYPE_ICON[t.type] || "📝"} {t.type.replace(/_/g, " ")}
-            </span>
-            {t.isPremium && (
-              <span className="inline-flex items-center rounded-full border border-amber-400/40 bg-amber-500/10 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-200">
-                💎 Premium
+  const renderTemplateCard = (t: TestTemplate) => {
+    // Handle premium/locked status
+    const isLocked = t.locked === true;
+    const isFree = t.free === true;
+    const offerPrice = t.offerPriceInr || 0;
+    const offerDays = t.offerDays || 0;
+
+    return (
+      <Link
+        key={t.id}
+        href={isLocked ? `/mocks` : `/test?template=${encodeURIComponent(t.id)}`}
+        className="group block rounded-xl border border-border bg-card p-5 transition hover:border-primary/50 hover:shadow-lg"
+        onClick={isLocked ? (e) => e.preventDefault() : undefined}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${TYPE_COLOR[t.type] || TYPE_COLOR.CUSTOM}`}>
+                {TYPE_ICON[t.type] || "📝"} {t.type.replace(/_/g, " ")}
               </span>
+              {t.isPremium && (
+                <span className="inline-flex items-center rounded-full border border-amber-400/40 bg-amber-500/10 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-200">
+                  💎 Premium
+                </span>
+              )}
+              {isLocked && (
+                <span className="inline-flex items-center rounded-full border border-red-500/40 bg-red-500/10 px-2.5 py-0.5 text-xs font-semibold text-red-700 dark:text-red-200">
+                  🔒 Locked
+                </span>
+              )}
+              {isFree && !isLocked && (
+                <span className="inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-200">
+                  ✅ Free
+                </span>
+              )}
+              {!t.isActive && (
+                <span className="inline-flex items-center rounded-full border border-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+                  Inactive
+                </span>
+              )}
+            </div>
+            <h3 className="mt-2 text-lg font-bold truncate group-hover:text-primary">{t.title}</h3>
+            <p className="mt-1 text-sm text-muted-foreground line-clamp-2">{t.description}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">{t.totalQuestions} Qs</span>
+              <span className="flex items-center gap-1">⏱ {formatDuration(t.durationMinutes)}</span>
+              <span className="flex items-center gap-1">⭐ {t.totalMarks} Marks</span>
+              {t.exam && <span className="flex items-center gap-1 text-primary">{t.exam.name}</span>}
+              {t.subject && <span className="flex items-center gap-1 text-info">{t.subject.name}</span>}
+            </div>
+            {isLocked && offerPrice > 0 && (
+              <div className="mt-3 flex items-center gap-2 text-sm">
+                <span className="rounded-lg bg-amber-500/10 px-3 py-1 text-amber-700 dark:text-amber-300">
+                  Unlock for ₹{offerPrice} ({offerDays} days)
+                </span>
+              </div>
             )}
-            {!t.isActive && (
-              <span className="inline-flex items-center rounded-full border border-muted px-2.5 py-0.5 text-xs text-muted-foreground">
-                Inactive
+          </div>
+          <div className="shrink-0 flex flex-col items-end gap-2">
+            {isLocked ? (
+              <span className="rounded-xl bg-red-500/10 px-3 py-1.5 text-sm font-bold text-red-600">
+                Locked - Pay to Unlock
+              </span>
+            ) : (
+              <span className="rounded-xl bg-primary/10 px-3 py-1.5 text-sm font-bold text-primary">
+                Start Test →
               </span>
             )}
           </div>
-          <h3 className="mt-2 text-lg font-bold truncate group-hover:text-primary">{t.title}</h3>
-          <p className="mt-1 text-sm text-muted-foreground line-clamp-2">{t.description}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">{t.totalQuestions} Qs</span>
-            <span className="flex items-center gap-1">⏱ {formatDuration(t.durationMinutes)}</span>
-            <span className="flex items-center gap-1">⭐ {t.totalMarks} Marks</span>
-            {t.exam && <span className="flex items-center gap-1 text-primary">{t.exam.name}</span>}
-            {t.subject && <span className="flex items-center gap-1 text-info">{t.subject.name}</span>}
-          </div>
         </div>
-        <div className="shrink-0 flex flex-col items-end gap-2">
-          <span className="rounded-xl bg-primary/10 px-3 py-1.5 text-sm font-bold text-primary">
-            Start Test →
-          </span>
-        </div>
-      </div>
-    </Link>
-  );
+      </Link>
+    );
+  };
 
   if (loading) {
     return (

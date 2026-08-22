@@ -1,8 +1,9 @@
-import { Controller, Post, Body, UseGuards, Get, Query, Param, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get, Query, Param, ParseUUIDPipe, Patch } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Public } from '../common/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { TicketCategory, TicketPriority } from '@prisma/client';
+import { TicketCategory, TicketPriority, TicketStatus } from '@prisma/client';
 
 @Controller('support')
 @UseGuards(JwtAuthGuard)
@@ -91,6 +92,7 @@ export class SupportController {
   }
 
   // ---- Public Support Contact (No auth required) ----
+  @Public()
   @Post('contact')
   async submitContactForm(
     @Body() body: { email: string; name: string; subject: string; description: string; category?: TicketCategory; priority?: TicketPriority },
@@ -124,5 +126,121 @@ export class SupportController {
     });
 
     return { success: true, ticketId: ticket.id, message: 'Your support request has been submitted. We will get back to you soon.' };
+  }
+
+  // ---- Admin: Get All Tickets (with filters) ----
+  @Get('admin/tickets')
+  async getAllTickets(
+    @CurrentUser() user: { id: string; role: string },
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('status') status?: string,
+    @Query('category') category?: string,
+    @Query('priority') priority?: string,
+    @Query('search') search?: string,
+  ) {
+    if (user.role !== 'ADMIN' && user.role !== 'MODERATOR') {
+      throw new Error('Admin access required');
+    }
+
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.min(100, Math.max(1, Number(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const where: any = {};
+    if (status) where.status = status;
+    if (category) where.category = category;
+    if (priority) where.priority = priority;
+    if (search) {
+      where.OR = [
+        { subject: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [tickets, total] = await Promise.all([
+      this.prisma.supportTicket.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limitNum,
+        include: {
+          user: {
+            select: { id: true, email: true, fullName: true, phone: true },
+          },
+        },
+      }),
+      this.prisma.supportTicket.count({ where }),
+    ]);
+
+    return {
+      tickets,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    };
+  }
+
+  // ---- Admin: Get Single Ticket ----
+  @Get('admin/tickets/:id')
+  async getTicketAdmin(
+    @CurrentUser() user: { id: string; role: string },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    if (user.role !== 'ADMIN' && user.role !== 'MODERATOR') {
+      throw new Error('Admin access required');
+    }
+
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id },
+      include: {
+        user: {
+          select: { id: true, email: true, fullName: true, phone: true },
+        },
+      },
+    });
+
+    if (!ticket) {
+      throw new Error('Support ticket not found');
+    }
+
+    return ticket;
+  }
+
+  // ---- Admin: Update Ticket Status/Reply ----
+  @Patch('admin/tickets/:id')
+  async updateTicketAdmin(
+    @CurrentUser() user: { id: string; role: string },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { status?: string; adminReply?: string; priority?: string },
+  ) {
+    if (user.role !== 'ADMIN' && user.role !== 'MODERATOR') {
+      throw new Error('Admin access required');
+    }
+
+    const ticket = await this.prisma.supportTicket.findUnique({ where: { id } });
+    if (!ticket) {
+      throw new Error('Support ticket not found');
+    }
+
+    const updateData: any = {};
+    if (body.status) updateData.status = body.status;
+    if (body.adminReply) updateData.adminNotes = body.adminReply;
+    if (body.priority) updateData.priority = body.priority;
+
+    const updated = await this.prisma.supportTicket.update({
+      where: { id },
+      data: updateData,
+      include: {
+        user: {
+          select: { id: true, email: true, fullName: true, phone: true },
+        },
+      },
+    });
+
+    return { ticket: updated };
   }
 }

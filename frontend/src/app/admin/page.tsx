@@ -119,6 +119,23 @@ export default function AdminPage() {
       const data = await api<UsersResponse>(`/admin/users?${params}`);
       setUsers(data.users);
       setTotal(data.total);
+
+      // Check for admin-specific params (grant-premium via URL)
+      if (typeof window !== "undefined") {
+        const url = new URLSearchParams(window.location.search);
+        const grantUserId = url.get("grant_user");
+        const grantMonths = url.get("months");
+        const grantDays = url.get("days");
+        if (grantUserId && data.users.length > 0) {
+          // If we're on admin page with grant params, auto-apply
+          const targetUser = data.users.find(u => u.id === grantUserId);
+          if (targetUser) {
+            const months = grantMonths ? Number(grantMonths) : undefined;
+            const days = grantDays ? Number(grantDays) : undefined;
+            await grantPremium(targetUser.id, months, days);
+          }
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load users");
     } finally {
@@ -229,7 +246,7 @@ export default function AdminPage() {
       if (supportCategory) params.append("category", supportCategory);
       if (supportPriority) params.append("priority", supportPriority);
       if (supportSearch) params.append("search", supportSearch);
-      const data = await api<SupportTicketsResponse>(`/admin/support-tickets?${params}`);
+      const data = await api<SupportTicketsResponse>(`/support/admin/tickets?${params}`);
       setSupportTickets(data.tickets);
       setSupportTotal(data.total);
     } catch (err) {
@@ -241,8 +258,8 @@ export default function AdminPage() {
 
   async function updateTicketStatus(ticketId: string, status: string) {
     try {
-      await api(`/admin/support-tickets/${ticketId}`, {
-        method: "PUT",
+      await api(`/support/admin/tickets/${ticketId}`, {
+        method: "PATCH",
         body: JSON.stringify({ status }),
       });
       setInfo("Ticket status updated");
@@ -255,9 +272,9 @@ export default function AdminPage() {
   async function replyToTicket(ticketId: string) {
     if (!replyText.trim()) return;
     try {
-      await api(`/admin/support-tickets/${ticketId}/reply`, {
-        method: "POST",
-        body: JSON.stringify({ message: replyText }),
+      await api(`/support/admin/tickets/${ticketId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "RESOLVED", adminReply: replyText }),
       });
       setInfo("Reply sent successfully");
       setReplyText("");
@@ -374,7 +391,9 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {users.length === 0 ? (
+                {loading ? (
+                  <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">Loading users...</td></tr>
+                ) : users.length === 0 ? (
                   <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No users found</td></tr>
                 ) : (
                   users.map((u) => (
