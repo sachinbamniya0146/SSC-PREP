@@ -13,8 +13,8 @@ export class SignupDto {
   email!: string;
 
   @IsString()
-  @MinLength(20, { message: 'Password must be exactly 20 characters' })
-  @MaxLength(20, { message: 'Password must be exactly 20 characters' })
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(128, { message: 'Password cannot exceed 128 characters' })
   password!: string;
 
   @IsString()
@@ -39,8 +39,8 @@ export class LoginDto {
 
   @IsString()
   @IsNotEmpty()
-  @MinLength(20, { message: 'Password must be exactly 20 characters' })
-  @MaxLength(20, { message: 'Password must be exactly 20 characters' })
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(128, { message: 'Password cannot exceed 128 characters' })
   password!: string;
 
   @IsOptional()
@@ -99,8 +99,8 @@ export class ResetPasswordDto {
   otp!: string;
 
   @IsString()
-  @MinLength(20, { message: 'Password must be exactly 20 characters' })
-  @MaxLength(20, { message: 'Password must be exactly 20 characters' })
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(128, { message: 'Password cannot exceed 128 characters' })
   newPassword!: string;
 }
 
@@ -117,12 +117,12 @@ export class GoogleAuthDto {
 export class ChangePasswordDto {
   @IsString()
   @IsNotEmpty()
-  @MinLength(20, { message: 'Current password must be exactly 20 characters' })
-  @MaxLength(20, { message: 'Current password must be exactly 20 characters' })
+  @MinLength(8, { message: 'Current password must be at least 8 characters' })
+  @MaxLength(128, { message: 'Current password cannot exceed 128 characters' })
   currentPassword!: string;
 
   @IsString()
-  @MinLength(20, { message: 'New password must be exactly 20 characters' })
-  @MaxLength(20, { message: 'New password must be exactly 20 characters' })
+  @MinLength(8, { message: 'New password must be at least 8 characters' })
+  @MaxLength(128, { message: 'New password cannot exceed 128 characters' })
   newPassword!: string;
 }

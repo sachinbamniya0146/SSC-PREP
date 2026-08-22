@@ -16,3 +16,14 @@ files/
 frontend/tsconfig.tsbuildinfo
 *.tsbuildinfo
 backend/extract/*.pdf
+
+# Deployment backups
+*.backup*
+*.backup.*
+*.safe
+*.swp
+docker-compose.yml.backup*
+docker-compose.yml.before-*
+docker-compose.yml.safe
+frontend/..env.local.swp
+frontend/Dockerfile.backup
