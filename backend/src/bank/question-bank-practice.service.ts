@@ -95,6 +95,23 @@ export class QuestionBankPracticeService {
       }
     }
 
+    // Check if user has an existing incomplete set for this subject/chapter/setNumber (prevent duplicates)
+    const existingIncompleteSet = await this.prisma.questionBankSet.findFirst({
+      where: {
+        userId,
+        subjectId,
+        chapterId,
+        examId,
+        setNumber: setNumber || 1,
+        isCompleted: false,
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    if (existingIncompleteSet) {
+      return this.formatSet(existingIncompleteSet);
+    }
+
     // Check if user has completed sets for this subject/chapter
     const completedSets = await this.prisma.questionBankSet.findMany({
       where: {
@@ -164,7 +181,7 @@ export class QuestionBankPracticeService {
   ): Promise<any[]> {
     const where: any = {
       isApproved: true,
-      questionTextHindi: { not: '' },
+      questionTextHindi: { not: null },
     };
 
     if (subjectId) where.subjectId = subjectId;
