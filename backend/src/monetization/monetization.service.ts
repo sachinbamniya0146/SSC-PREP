@@ -222,7 +222,7 @@ export class MonetizationService {
 
     await this.prisma.payment.update({
       where: { id: payment.id },
-      data: { razorpayPaymentId, status: 'SUCCESS' },
+      data: { razorpayPaymentId, status: 'SUCCESS', invoiceUrl: `https://sscprephub.in/invoice/${payment.id}` },
     });
     // consume coupon if any
     if (meta.couponCode) {
@@ -231,6 +231,16 @@ export class MonetizationService {
         data: { usesCount: { increment: 1 } },
       });
     }
+    // Log invoice generation
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'INVOICE_GENERATED',
+        targetEntity: 'Payment',
+        entityId: payment.id,
+        metadataJson: { planId: meta.planId, amountInr: payment.amountInr, couponCode: meta.couponCode },
+      },
+    });
   }
 
   // ---- Chapter purchases ----

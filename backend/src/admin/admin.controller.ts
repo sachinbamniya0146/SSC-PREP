@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Patch, Delete } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -357,5 +357,137 @@ export class AdminController {
       orderBy: { priceInr: 'asc' },
     });
     return { plans };
+  }
+
+  // ---- Plan Management (Admin) ----
+  @Post('plans')
+  async createPlan(@Body() body: { name: string; durationMonths: number; priceInr: number }) {
+    const plan = await this.prisma.plan.create({
+      data: { name: body.name, durationMonths: body.durationMonths, priceInr: body.priceInr, isActive: true },
+    });
+    await this.auditLogService.log({
+      action: 'PLAN_CREATED',
+      targetEntity: 'Plan',
+      entityId: plan.id,
+      metadataJson: body,
+    });
+    return { plan };
+  }
+
+  @Patch('plans/:id')
+  async updatePlan(@Param('id', ParseUUIDPipe) id: string, @Body() body: { name?: string; durationMonths?: number; priceInr?: number; isActive?: boolean }) {
+    const plan = await this.prisma.plan.update({
+      where: { id },
+      data: body,
+    });
+    await this.auditLogService.log({
+      action: 'PLAN_UPDATED',
+      targetEntity: 'Plan',
+      entityId: id,
+      metadataJson: body,
+    });
+    return { plan };
+  }
+
+  @Delete('plans/:id')
+  async deletePlan(@Param('id', ParseUUIDPipe) id: string) {
+    await this.prisma.plan.delete({ where: { id } });
+    await this.auditLogService.log({
+      action: 'PLAN_DELETED',
+      targetEntity: 'Plan',
+      entityId: id,
+    });
+    return { ok: true };
+  }
+
+  // ---- Coupon Management (Admin) ----
+  @Get('coupons')
+  async listCoupons() {
+    const coupons = await this.prisma.coupon.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return { coupons };
+  }
+
+  @Post('coupons')
+  async createCoupon(@Body() body: { code: string; description?: string; discountPct?: number; discountInr?: number; maxUses?: number; expiresAt?: string }) {
+    if (body.discountPct && body.discountInr) throw new Error('Use either discountPct or discountInr, not both');
+    const coupon = await this.prisma.coupon.create({
+      data: {
+        code: body.code.trim().toUpperCase(),
+        description: body.description,
+        discountPct: body.discountPct,
+        discountInr: body.discountInr,
+        maxUses: body.maxUses ?? 1,
+        expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
+        isActive: true,
+      },
+    });
+    await this.auditLogService.log({
+      action: 'COUPON_CREATED',
+      targetEntity: 'Coupon',
+      entityId: coupon.id,
+      metadataJson: body,
+    });
+    return { coupon };
+  }
+
+  @Patch('coupons/:id')
+  async updateCoupon(@Param('id', ParseUUIDPipe) id: string, @Body() body: { description?: string; discountPct?: number; discountInr?: number; maxUses?: number; expiresAt?: string; isActive?: boolean }) {
+    const coupon = await this.prisma.coupon.update({
+      where: { id },
+      data: body,
+    });
+    await this.auditLogService.log({
+      action: 'COUPON_UPDATED',
+      targetEntity: 'Coupon',
+      entityId: id,
+      metadataJson: body,
+    });
+    return { coupon };
+  }
+
+  @Delete('coupons/:id')
+  async deleteCoupon(@Param('id', ParseUUIDPipe) id: string) {
+    await this.prisma.coupon.delete({ where: { id } });
+    await this.auditLogService.log({
+      action: 'COUPON_DELETED',
+      targetEntity: 'Coupon',
+      entityId: id,
+    });
+    return { ok: true };
+  }
+
+  // ---- Invoice Generation ----
+  @Get('invoices/:paymentId')
+  async getInvoice(@Param('paymentId', ParseUUIDPipe) paymentId: string) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: { user: { select: { email: true, fullName: true, phone: true } }, subscription: { include: { plan: true } } },
+    });
+    if (!payment) throw new Error('Payment not found');
+    
+    const meta = payment.metadataJson as any || {};
+    return {
+      invoiceNumber: `INV-${payment.id.slice(0, 8).toUpperCase()}`,
+      date: payment.createdAt,
+      amountInr: payment.amountInr,
+      status: payment.status,
+      user: {
+        email: payment.user.email,
+        name: payment.user.fullName,
+        phone: payment.user.phone,
+      },
+      plan: payment.subscription?.plan ? {
+        name: payment.subscription.plan.name,
+        durationMonths: payment.subscription.plan.durationMonths,
+        priceInr: payment.subscription.plan.priceInr,
+      } : null,
+      couponCode: meta.couponCode,
+      discount: meta.discount,
+      paymentMethod: 'Razorpay',
+      razorpayOrderId: payment.razorpayOrderId,
+      razorpayPaymentId: payment.razorpayPaymentId,
+    };
   }
 }
