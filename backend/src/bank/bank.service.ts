@@ -110,17 +110,25 @@ export class BankService {
       take,
     });
     const total = await this.prisma.question.count({ where });
-    const data: QuestionCard[] = rows.map((r: any) => ({
-      id: r.id,
-      questionText: r.questionText,
-      questionTextHindi: r.questionTextHindi,
-      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
-      optionsHi: null,
-      chapter: r.chapter?.name ?? '',
-      answerVerificationStatus: r.answerVerificationStatus ?? 'UNVERIFIED_SINGLE_SOURCE',
-      lastVerifiedAt: r.lastVerifiedAt ?? null,
-      // exam/year handled server-side in a typed served mode
-    }));
+    const data: QuestionCard[] = rows.map((r: any) => {
+      const opts = (r.optionsJson as any[]) || [];
+      const optionsWithKeys = opts.map((o: any, idx: number) => ({
+        key: String.fromCharCode(65 + idx), // A, B, C, D
+        text: o.text,
+        textHi: o.textHi ?? null,
+      }));
+      return {
+        id: r.id,
+        questionText: r.questionText,
+        questionTextHindi: r.questionTextHindi,
+        options: optionsWithKeys,
+        optionsHi: null,
+        chapter: r.chapter?.name ?? '',
+        answerVerificationStatus: r.answerVerificationStatus ?? 'UNVERIFIED_SINGLE_SOURCE',
+        lastVerifiedAt: r.lastVerifiedAt ?? null,
+        // exam/year handled server-side in a typed served mode
+      };
+    });
     return { total, data };
   }
 
@@ -164,7 +172,11 @@ export class BankService {
       id: q.id,
       questionText: q.questionText,
       questionTextHindi: q.questionTextHindi,
-      options: (q.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+      options: ((q.optionsJson as any[]) || []).map((o: any, idx: number) => ({
+        key: String.fromCharCode(65 + idx),
+        text: o.text,
+        textHi: o.textHi ?? null,
+      })),
       correctAnswer: q.correctAnswer,
       explanation: q.explanation,
       explanationHindi: q.explanationHindi,
@@ -186,8 +198,21 @@ export class BankService {
     const q = await this.prisma.question.findFirst({ where: { id: dto.questionId, isApproved: true } });
     if (!q) throw new NotFoundException('Question not found');
 
-    const option = dto.selectedOption.trim().toUpperCase();
-    const correct = option === q.correctAnswer;
+    const selectedKey = dto.selectedOption.trim().toUpperCase();
+    
+    // Find the correct option key by matching correctAnswer text to options
+    const opts = (q.optionsJson as any[]) || [];
+    let correctKey = '';
+    for (let i = 0; i < opts.length; i++) {
+      const optText = (opts[i].text || '').trim();
+      const correctText = (q.correctAnswer || '').trim();
+      if (optText.toUpperCase() === correctText.toUpperCase()) {
+        correctKey = String.fromCharCode(65 + i); // A, B, C, D
+        break;
+      }
+    }
+    
+    const correct = selectedKey === correctKey;
 
     // Log attempt as a TestAttempt (single-question practice set)
     const templateId = dto.templateId ?? 'tpl-practice';
@@ -226,7 +251,7 @@ export class BankService {
       data: {
         testAttemptId: attempt.id,
         questionId: q.id,
-        selectedOption: option,
+        selectedOption: selectedKey,
         isCorrect: correct,
       },
     });
@@ -234,7 +259,7 @@ export class BankService {
     return {
       correct,
       correctAnswer: q.correctAnswer,
-      selectedOption: option,
+      selectedOption: selectedKey,
       explanation: q.explanation,
       explanationHindi: q.explanationHindi,
       videoUrl: q.videoUrl,
@@ -272,7 +297,11 @@ export class BankService {
         id: r.id,
         questionText: r.questionText,
         questionTextHindi: r.questionTextHindi,
-        options: (r.optionsJson as any[]).map(o => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+        options: ((r.optionsJson as any[]) || []).map((o: any, idx: number) => ({
+          key: String.fromCharCode(65 + idx),
+          text: o.text,
+          textHi: o.textHi ?? null,
+        })),
         correctAnswer: r.correctAnswer,
         explanation: r.explanation,
         explanationHindi: r.explanationHindi,
