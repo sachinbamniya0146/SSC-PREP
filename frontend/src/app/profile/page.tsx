@@ -235,8 +235,8 @@ export default function ProfilePage() {
                   type={showNewPassword ? "text" : "password"}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Exactly 20 characters"
-                  minLength={20}
+                  placeholder="6-20 characters"
+                  minLength={6}
                   maxLength={20}
                   className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
                 />
@@ -248,9 +248,9 @@ export default function ProfilePage() {
                   {showNewPassword ? "👁️" : "🔒"}
                 </button>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">{newPassword.length}/20 characters</p>
+              <p className="mt-1 text-xs text-muted-foreground">{newPassword.length}/20 characters (min 6)</p>
             </div>
-            <button onClick={changePassword} disabled={saving || !currentPassword || newPassword.length !== 20} className="rounded-lg bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+            <button onClick={changePassword} disabled={saving || !currentPassword || newPassword.length < 6 || newPassword.length > 20} className="rounded-lg bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
               {saving ? "Changing…" : "Change Password"}
             </button>
           </div>

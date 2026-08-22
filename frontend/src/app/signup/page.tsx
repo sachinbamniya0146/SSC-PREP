@@ -23,8 +23,8 @@ export default function SignupPage() {
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (password.length !== 20) {
-      setError("Password must be exactly 20 characters");
+    if (password.length < 6 || password.length > 20) {
+      setError("Password must be between 6 and 20 characters");
       return;
     }
     if (phone.length < 10) {
@@ -110,11 +110,11 @@ export default function SignupPage() {
               <input
                 type={showPassword ? "text" : "password"}
                 required
-                minLength={20}
+                minLength={6}
                 maxLength={20}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Exactly 20 characters"
+                placeholder="6-20 characters"
                 className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
               />
               <button
@@ -130,7 +130,7 @@ export default function SignupPage() {
                 )}
               </button>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">{password.length}/20 characters</p>
+            <p className="mt-1 text-xs text-muted-foreground">{password.length}/20 characters (min 6)</p>
           </div>
           <button
             type="submit"
