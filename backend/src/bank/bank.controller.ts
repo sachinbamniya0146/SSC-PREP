@@ -2,6 +2,7 @@
 import { Controller, Get, Query, Post, Body, Param, Put, Delete, UseGuards, Req } from '@nestjs/common';
 import { Public } from '../common/decorators/public.decorator';
 import { BankService } from './bank.service';
+import { QuestionBankPracticeService } from './question-bank-practice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -9,7 +10,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 @Controller('bank')
 @UseGuards(JwtAuthGuard)
 export class BankController {
-  constructor(private readonly bank: BankService) {}
+  constructor(
+    private readonly bank: BankService,
+    private readonly practiceService: QuestionBankPracticeService,
+  ) {}
 
   @Get('meta')
   @Public()
@@ -157,5 +161,83 @@ export class BankController {
   @Roles('ADMIN', 'MODERATOR')
   topicWeightage(@Query('examId') examId?: string) {
     return this.bank.getTopicWeightage(examId);
+  }
+
+  // ================= QUESTION BANK PRACTICE =================
+
+  @Get('practice/subjects')
+  async getPracticeSubjects(@Req() req: any, @Query('examId') examId?: string) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.getAvailableSubjects(userId, examId);
+  }
+
+  @Get('practice/progress')
+  async getUserProgress(@Req() req: any) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.getUserProgress(userId);
+  }
+
+  @Get('practice/history')
+  async getPracticeHistory(@Req() req: any, @Query('subjectId') subjectId?: string) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.getPracticeHistory(userId, subjectId);
+  }
+
+  @Post('practice/start')
+  async startPracticeSet(
+    @Req() req: any,
+    @Body() body: {
+      subjectId?: string;
+      chapterId?: string;
+      examId?: string;
+      setNumber?: number;
+      mode?: 'practice' | 'test';
+      resume?: boolean; // if true, resume existing incomplete set
+    }
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.getOrCreateSet(userId, body);
+  }
+
+  @Get('practice/set/:setId')
+  async getPracticeSet(@Req() req: any, @Param('setId') setId: string) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.getSetById(userId, setId, true); // resume by default when getting set
+  }
+
+  @Post('practice/set/:setId/answer')
+  async submitAnswer(
+    @Req() req: any,
+    @Param('setId') setId: string,
+    @Body() body: { questionId: string; selectedOption: string }
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.submitAnswer(userId, setId, body.questionId, body.selectedOption);
+  }
+
+  @Post('practice/set/:setId/skip')
+  async skipQuestion(
+    @Req() req: any,
+    @Param('setId') setId: string,
+    @Body() body: { questionId: string }
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.skipQuestion(userId, setId, body.questionId);
+  }
+
+  @Post('practice/set/:setId/previous')
+  async previousQuestion(@Req() req: any, @Param('setId') setId: string) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.previousQuestion(userId, setId);
+  }
+
+  @Post('practice/set/:setId/goto')
+  async gotoQuestion(
+    @Req() req: any,
+    @Param('setId') setId: string,
+    @Body() body: { index: number }
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.goToQuestion(userId, setId, body.index);
   }
 }

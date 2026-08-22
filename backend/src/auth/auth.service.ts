@@ -42,7 +42,7 @@ export type Authenticated = AuthenticatedSession;
 const ACCESS_TTL_SECONDS_DEFAULT = 15 * 60;
 
 /**
- * AuthService — signup/login/refresh/logout, email OTP login, Google OAuth,
+ * AuthService — signup/login/refresh/logout, password reset OTP, Google OAuth,
  * and single-device session enforcement (1 WEB + 1 APP session max).
  */
 @Injectable()
@@ -120,42 +120,6 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Invalid email or password');
     }
     return this.completeAuth(user, platform, deviceId, userAgent);
-  }
-
-  // ---------------------------------------------------------------- OTP login
-
-  async requestOtp(email: string): Promise<{ sent: boolean; devOtp?: string }> {
-    const normalized = email.toLowerCase().trim();
-    // Optionally create a placeholder user if none exists (email-first flow).
-    const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
-    if (!existing) {
-      // Ghost account so OTP login can complete; user's role stays STUDENT.
-      await this.prisma.user.create({
-        data: {
-          email: normalized,
-          fullName: normalized.split('@')[0] || 'User',
-          passwordHash: 'unset:' + randomBytes(24).toString('hex'),
-        },
-      });
-    }
-    return this.otp.issue(normalized);
-  }
-
-  async loginWithOtp(email: string, code: string): Promise<Authenticated> {
-    const normalized = email.toLowerCase().trim();
-    const ok = await this.otp.verify(normalized, code);
-    if (!ok) throw new UnauthorizedException('Invalid or expired OTP');
-    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
-    if (!user) throw new UnauthorizedException('User not found');
-
-    // OTP login proves possession of the inbox → mark verified.
-    if (!user.isEmailVerified) {
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { isEmailVerified: true },
-      });
-    }
-    return this.completeAuth(user, 'WEB');
   }
 
   // ------------------------------------------------------- password reset (OTP)
@@ -314,7 +278,19 @@ export class AuthService implements OnModuleInit {
     const [user, bookmarkCount, todayQuiz] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
-        select: { role: true, subscriptions: { where: { status: 'ACTIVE' }, select: { endsAt: true }, take: 1 } },
+        select: { 
+          role: true, 
+          subscriptions: { 
+            where: { status: 'ACTIVE' }, 
+            select: { 
+              planId: true, 
+              status: true, 
+              startsAt: true, 
+              endsAt: true 
+            }, 
+            take: 1 
+          } 
+        },
       }),
       this.prisma.bookmark.count({ where: { userId } }),
       (async () => {
@@ -334,9 +310,17 @@ export class AuthService implements OnModuleInit {
       user?.role === 'ADMIN' ||
       (user?.subscriptions?.[0] != null && new Date(user.subscriptions[0].endsAt) > new Date());
 
+    const subscription = user?.subscriptions?.[0] ? {
+      planId: user.subscriptions[0].planId,
+      status: user.subscriptions[0].status,
+      startsAt: user.subscriptions[0].startsAt,
+      endsAt: user.subscriptions[0].endsAt,
+    } : null;
+
     return {
       isPremium,
       plan: isPremium ? (user?.role === 'ADMIN' ? 'ADMIN' : 'PREMIUM') : 'FREE',
+      subscription,
       bookmarks: { used: bookmarkCount, limit: isPremium ? null : 100 },
       dailyQuiz: todayQuiz ?? { taken: false },
       message: isPremium

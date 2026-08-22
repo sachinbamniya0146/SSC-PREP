@@ -11,10 +11,8 @@ import {
   LoginDto,
   LogoutDto,
   RefreshDto,
-  RequestOtpDto,
   ResetPasswordDto,
   SignupDto,
-  VerifyOtpDto,
 } from './dto/auth.dto';
 
 @Controller('auth')
@@ -40,22 +38,6 @@ export class AuthController {
       dto.deviceId,
       dto.userAgent,
     );
-  }
-
-  @Public()
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  @Post('otp/request')
-  @HttpCode(HttpStatus.OK)
-  requestOtp(@Body() dto: RequestOtpDto) {
-    return this.authService.requestOtp(dto.email);
-  }
-
-  @Public()
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  @Post('otp/verify')
-  @HttpCode(HttpStatus.OK)
-  verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.loginWithOtp(dto.email, dto.otp);
   }
 
   @Public()

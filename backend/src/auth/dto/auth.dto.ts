@@ -69,21 +69,6 @@ export class LogoutDto {
   refreshToken!: string;
 }
 
-export class RequestOtpDto {
-  @IsEmail({}, { message: 'Valid email required' })
-  email!: string;
-}
-
-export class VerifyOtpDto {
-  @IsEmail({}, { message: 'Valid email required' })
-  email!: string;
-
-  @IsString()
-  @MinLength(6)
-  @MaxLength(6)
-  otp!: string;
-}
-
 export class ForgotPasswordDto {
   @IsEmail({}, { message: 'Valid email required' })
   email!: string;

@@ -143,6 +143,8 @@ model User {
   reviewCards       ReviewCard[]
   errorReports      QuestionErrorReport[]
   searchMisses      SearchMiss[]
+  questionBankSets  QuestionBankSet[]
+  userProgress      UserProgress[]
 
   @@map("users")
 }
@@ -210,23 +212,27 @@ model Exam {
   slug      String   @unique
   code      String   @unique // e.g. "CGL", "CHSL"
   isActive  Boolean  @default(true)
-  
+
   questions Question[]
   sourcePdfs SourcePdf[]
   studyPlans       StudyPlan[]
   examPatterns ExamPattern[]
+  questionBankSets QuestionBankSet[]
+  userProgress     UserProgress[]
 
   @@map("exams")
 }
 
 model Subject {
   id        String    @id @default(uuid())
-  name      String    @unique // e.g. "Reasoning", "Quantitative Aptitude"
+  name      String    // e.g. "Reasoning", "Quantitative Aptitude"
   slug      String    @unique
   chapters  Chapter[]
   questions Question[]
   sourcePdfs SourcePdf[]
   studyPlans       StudyPlan[]
+  questionBankSets QuestionBankSet[]
+  userProgress     UserProgress[]
 
   @@map("subjects")
 }
@@ -240,6 +246,8 @@ model Chapter {
   questions Question[]
   weakTopicReports WeakTopicReport[]
   purchases ChapterPurchase[]
+  questionBankSets QuestionBankSet[]
+  userProgress     UserProgress[]
 
   subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
 
@@ -914,6 +922,59 @@ model SearchMiss {
   @@index([query])
   @@index([createdAt])
   @@map("search_misses")
+}
+
+// ================= QUESTION BANK PRACTICE =================
+// 25-question sets per subject/chapter with resume support and free/premium gating
+
+model QuestionBankSet {
+  id              String   @id @default(uuid())
+  userId          String
+  subjectId       String?
+  chapterId       String?
+  examId          String?
+  setNumber       Int      // 1, 2, 3... for each subject/chapter
+  questions       Json     // Array of question IDs in order
+  currentIndex    Int      @default(0) // 0-based index of current question
+  answers         Json?    // {questionId: selectedOption}
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  score           Float?
+  isCompleted     Boolean  @default(false)
+  mode            String   @default("practice") // "practice", "test"
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject     Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  chapter     Chapter? @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  exam        Exam?    @relation(fields: [examId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, subjectId, chapterId, examId, setNumber])
+  @@index([userId, subjectId, chapterId])
+  @@index([userId, isCompleted])
+  @@map("question_bank_sets")
+}
+
+model UserProgress {
+  id              String   @id @default(uuid())
+  userId          String
+  subjectId       String
+  chapterId       String?
+  examId          String?
+  setsCompleted   Int      @default(0)
+  totalQuestions  Int      @default(0)
+  correctAnswers  Int      @default(0)
+  wrongAnswers    Int      @default(0)
+  skippedAnswers  Int      @default(0)
+  lastPracticedAt DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject Subject? @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  chapter Chapter? @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  exam    Exam?    @relation(fields: [examId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, subjectId, chapterId, examId])
+  @@index([userId, subjectId])
+  @@map("user_progress")
 }
 
 // v3 §6.4 — ExamPattern: real-exam blueprint (sections, marks, per-section
