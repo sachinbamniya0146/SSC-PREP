@@ -198,10 +198,15 @@ export class AuthService implements OnModuleInit {
       throw new ForbiddenException('Google login not configured on the server');
     }
     const client = new OAuth2Client(clientId, clientSecret);
-    const ticket = await client.verifyIdToken({
-      idToken,
-      audience: clientId,
-    });
+    let ticket;
+    try {
+      ticket = await client.verifyIdToken({
+        idToken,
+        audience: clientId,
+      });
+    } catch (error) {
+      throw new UnauthorizedException('Invalid Google ID token');
+    }
     const payload = ticket.getPayload();
     if (!payload?.email) {
       throw new UnauthorizedException('Google token missing email');
