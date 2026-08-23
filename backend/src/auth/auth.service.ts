@@ -68,20 +68,21 @@ export class AuthService implements OnModuleInit {
     const password = this.config.get<string>('ADMIN_DEFAULT_PASSWORD');
     if (!email || !password) return;
 
-    const existing = await this.prisma.user.findUnique({ where: { email } });
+    const normalized = email.toLowerCase().trim();
+    const existing = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
     if (existing) return;
 
     const passwordHash = await bcrypt.hash(password, 12);
     await this.prisma.user.create({
       data: {
-        email,
+        email: normalized,
         fullName: 'Platform Admin',
         passwordHash,
         role: 'ADMIN',
         isEmailVerified: true,
       },
     });
-    this.logger.log(`Seeded admin account: ${email}`);
+    this.logger.log(`Seeded admin account: ${normalized}`);
   }
 
   // ---------------------------------------------------------------- signup
@@ -95,7 +96,7 @@ export class AuthService implements OnModuleInit {
   ): Promise<Authenticated> {
     const normalized = email.toLowerCase().trim();
     const normalizedPhone = phone.trim();
-    const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
+    const existing = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
     if (existing) throw new ConflictException('Email already registered');
 
     const passwordHash = await bcrypt.hash(password, 12);
@@ -115,7 +116,7 @@ export class AuthService implements OnModuleInit {
     userAgent?: string,
   ): Promise<Authenticated> {
     const normalized = email.toLowerCase().trim();
-    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    const user = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
     if (!user || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException('Invalid email or password');
     }
@@ -127,7 +128,7 @@ export class AuthService implements OnModuleInit {
   /** Step 1: send a reset OTP to the user's email (account must exist). */
   async forgotPassword(email: string): Promise<{ sent: boolean; devOtp?: string }> {
     const normalized = email.toLowerCase().trim();
-    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    const user = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
     if (!user) {
       // Do not leak which emails have accounts — same response either way.
       return { sent: true };
@@ -138,7 +139,7 @@ export class AuthService implements OnModuleInit {
   /** Step 2: verify OTP + set a new password. OTP is single-use. */
   async resetPassword(email: string, code: string, newPassword: string): Promise<{ ok: true }> {
     const normalized = email.toLowerCase().trim();
-    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    const user = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
     if (!user) throw new UnauthorizedException('User not found');
 
     const ok = await this.otp.verify(normalized, code);
@@ -206,7 +207,7 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Google token missing email');
     }
     const email = payload.email.toLowerCase().trim();
-    let user = await this.prisma.user.findUnique({ where: { email } });
+    let user = await this.prisma.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
     if (!user) {
       user = await this.prisma.user.create({
         data: {

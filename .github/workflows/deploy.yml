@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:  # Allow manual trigger
 
 permissions:
   contents: read
@@ -19,28 +20,42 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+     
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-      
+     
       - name: Verify SSH connection
         run: |
           ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "echo 'SSH connection successful' && hostname"
-      
+     
+      - name: Copy production env file
+        env:
+          PRODUCTION_ENV: ${{ secrets.PRODUCTION_ENV }}
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
+            cd /opt/ssc-prep-hub &&
+            if [ ! -f .env ]; then
+              echo 'Creating .env from template...'
+              printf '%s' \"$PRODUCTION_ENV\" > .env
+            fi
+          "
+     
       - name: Run deployment script
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
             cd /opt/ssc-prep-hub &&
+            chmod +x deploy.sh &&
             ./deploy.sh
           "
         timeout-minutes: 25
-      
+     
       - name: Verify deployment
         if: success()
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
+            sleep 10 &&
             curl -sf -o /dev/null -w '%{http_code}' https://sscprephub.in | grep -q '^200$' &&
             curl -sf -o /dev/null -w '%{http_code}' https://sscprephub.in/api/v1/health | grep -q '^200$' &&
             echo 'Deployment verification PASSED'
@@ -57,3 +72,4 @@ jobs:
         run: |
           echo "Deployment failed for commit ${{ github.sha }}"
           echo "Check GitHub Actions for details"
+          # Add Slack/Discord/Email notification here if needed

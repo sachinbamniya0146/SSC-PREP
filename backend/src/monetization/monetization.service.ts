@@ -30,9 +30,9 @@ export class MonetizationService {
 
   constructor(private prisma: PrismaService) {
     this.payuConfig = {
-      merchantId: process.env.PAYU_MERCHANT_ID || '',
-      merchantKey: process.env.PAYU_KEY || 'eUXkOt',
-      salt: process.env.PAYU_SALT || 'e0YkggUb7yKMMj39c3cxXk3VSSTnUeuc',
+      merchantId: process.env.PAYU_MERCHANT_KEY || '',
+      merchantKey: process.env.PAYU_MERCHANT_KEY || 'eUXkOt',
+      salt: process.env.PAYU_MERCHANT_SALT || 'e0YkggUb7yKMMj39c3cxXk3VSSTnUeuc',
       baseUrl: process.env.PAYU_BASE_URL || 'https://test.payu.in',
       isTest: process.env.PAYU_TEST_MODE !== 'false',
     };
