@@ -17,7 +17,7 @@ git reset --hard origin/main
 
 # Build and restart services (preserve volumes and .env)
 echo "🔨 Building and starting services..."
-docker compose build backend frontend
+docker compose build --build-arg NEXT_PUBLIC_API_BASE_URL=https://sscprephub.in/api/v1 --build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID=449330513452-02oguopf78aldfio3r2pa98dujkbkheo.apps.googleusercontent.com backend frontend
 
 # Only restart changed services, don't bring down database/redis/meilisearch
 docker compose up -d --no-deps backend frontend
