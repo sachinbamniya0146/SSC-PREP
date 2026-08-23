@@ -129,6 +129,7 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: https://sscprephub.in/api/v1
+        NEXT_PUBLIC_API_URL: https://sscprephub.in/api/v1
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: 449330513452-02oguopf78aldfio3r2pa98dujkbkheo.apps.googleusercontent.com
     container_name: ssc-frontend
     logging:
