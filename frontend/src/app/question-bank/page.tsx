@@ -2,6 +2,7 @@
 import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 interface Subject {
   id: string;
@@ -85,7 +86,7 @@ function getAuthHeaders(): { [k: string]: string } {
 }
 
 function apiBase() {
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+  return API_BASE;
 }
 
 export default function QuestionBankPage() {

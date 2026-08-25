@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { fetchAuth } from "@/lib/api";
+import { API_BASE } from "@/lib/api";
 
 type WeakPracticeData = {
   type: "WEAK_AREAS_PRACTICE";
@@ -42,7 +43,7 @@ export default function WeakPracticePage() {
   const [count, setCount] = React.useState(25);
   const [includeSkipped, setIncludeSkipped] = React.useState(true);
 
-  const apiBase = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+  const apiBase = () => API_BASE;
 
   const load = async () => {
     setLoading(true);

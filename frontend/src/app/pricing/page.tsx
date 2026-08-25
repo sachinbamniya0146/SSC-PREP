@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type Plan = { id: string; name: string; durationMonths: number; priceInr: number };
 type SubInfo = { active: boolean; plan?: Plan; endsAt?: string };
@@ -14,7 +15,7 @@ export default function PricingPage() {
   const [buying, setBuying] = React.useState<string>("");
   const [error, setError] = React.useState("");
 
-  const apiBase = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+  const apiBase = () => API_BASE;
   const authHeaders = (): Record<string, string> => {
     const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
     return token ? { Authorization: `Bearer ${token}` } : {};

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type ReviewCardData = {
   id: string;
@@ -60,7 +61,7 @@ export default function ReviewPage() {
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+  const apiBase = API_BASE;
   const headers = (): Record<string, string> => {
     const token =
       typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";

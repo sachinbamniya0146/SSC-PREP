@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type WeakTopic = {
   chapterId: string;
@@ -34,7 +35,7 @@ export default function WeakTopicsPage() {
     const token = localStorage.getItem("ssc_access_token");
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/analytics/performance`,
+        `${API_BASE}/analytics/performance`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (res.ok) {
@@ -56,7 +57,7 @@ export default function WeakTopicsPage() {
   const startDrill = async (t: WeakTopic) => {
     const token = localStorage.getItem("ssc_access_token");
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/analytics/chapter/${t.chapterId}/drill`,
+      `${API_BASE}/analytics/chapter/${t.chapterId}/drill`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (res.ok) {

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
+import { API_BASE } from "@/lib/api";
 
 export default function DashboardPage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
@@ -17,7 +18,7 @@ export default function DashboardPage() {
   React.useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/bank/meta`);
+        const r = await fetch(`${API_BASE}/bank/meta`);
         const d = await r.json();
         const cgl = (Array.isArray(d?.exams) ? d.exams : []).find((e: any) => e.slug === "cgl");
         if (cgl?.pattern?.name) {
@@ -46,7 +47,7 @@ export default function DashboardPage() {
     // v1 Phase 6 — live streak/XP from the gamification service
     const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
     if (token) {
-      fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/gamification/me`, {
+      fetch(`${API_BASE}/gamification/me`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then((r) => (r.ok ? r.json() : null))

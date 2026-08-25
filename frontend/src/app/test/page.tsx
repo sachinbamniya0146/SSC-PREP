@@ -3,6 +3,7 @@ import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
 import { motion } from "framer-motion";
+import { API_BASE } from "@/lib/api";
 
 type UgQ = {
   id: string;
@@ -44,7 +45,7 @@ const STATUS_LABEL: Record<QStatus, string> = {
 };
 
 function apiBase() {
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+  return API_BASE;
 }
 
 function getAuthHeaders(): { [k: string]: string } {

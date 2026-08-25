@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type Mock = {
   id: string;
@@ -26,7 +27,7 @@ export default function MocksPage() {
     const token = localStorage.getItem("ssc_access_token");
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/mocks`,
+        `${API_BASE}/mocks`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (res.ok) {
@@ -47,7 +48,7 @@ export default function MocksPage() {
   const purchase = async (m: Mock) => {
     const token = localStorage.getItem("ssc_access_token");
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/mocks/purchase`,
+      `${API_BASE}/mocks/purchase`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

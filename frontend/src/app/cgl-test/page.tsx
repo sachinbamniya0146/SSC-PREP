@@ -3,6 +3,7 @@ import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
 import {
+import { API_BASE } from "@/lib/api";
   CglExam,
   INSTRUCTIONS,
   SECTION_ROW,
@@ -18,7 +19,7 @@ type AnswerMap = { [qid: string]: string };
 type StatusMap = { [qid: string]: "answered" | "review" | "visited" | "unvisited" };
 type LangMode = "en" | "hi" | "both";
 
-const apiBase = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+const apiBase = () => API_BASE;
 const authHeaders = (): Record<string, string> => {
   const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
   return token ? { Authorization: `Bearer ${token}` } : {};

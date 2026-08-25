@@ -2,6 +2,7 @@
 import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type Subject = { id: string; name: string; slug: string; questionCount: number };
 
@@ -13,7 +14,7 @@ export default function SectionalPage() {
   const [starting, setStarting] = React.useState(false);
   const [error, setError] = React.useState("");
 
-  const apiBase = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+  const apiBase = () => API_BASE;
   const authHeaders = (): Record<string, string> => {
     const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
     return token ? { Authorization: `Bearer ${token}` } : {};

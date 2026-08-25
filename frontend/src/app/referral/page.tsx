@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type ReferralStat = {
   totalReferrals: number;
@@ -23,7 +24,7 @@ export default function ReferralPage() {
   const load = async () => {
     const token = localStorage.getItem("ssc_access_token");
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/referral/me`, {
+      const res = await fetch(`${API_BASE}/referral/me`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {

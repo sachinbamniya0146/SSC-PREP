@@ -2,6 +2,7 @@
 import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type Bm = {
   bookmarkedAt: string;
@@ -19,7 +20,7 @@ type Bm = {
   };
 };
 
-const apiBase = () => process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+const apiBase = () => API_BASE;
 const authHeaders = (): Record<string, string> => {
   const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
   return token ? { Authorization: `Bearer ${token}` } : {};

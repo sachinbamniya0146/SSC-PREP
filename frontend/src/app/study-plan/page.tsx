@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type PlanData = {
   plan: {
@@ -53,7 +54,7 @@ export default function StudyPlanPage() {
   const [duration, setDuration] = React.useState("3"); // months
   const [loading, setLoading] = React.useState(true);
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+  const apiBase = API_BASE;
   const headers = () => {
     const t = localStorage.getItem("ssc_access_token");
     return { Authorization: `Bearer ${t}` };

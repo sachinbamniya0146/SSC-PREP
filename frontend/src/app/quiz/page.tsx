@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { API_BASE } from "@/lib/api";
 
 type QuizQ = {
   id: string;
@@ -70,7 +71,7 @@ function ReportError({ questionId }: { questionId: string }) {
     setSending(true);
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/report-error`,
+        `${API_BASE}/report-error`,
         {
           method: "POST",
           headers: {
@@ -198,7 +199,7 @@ export default function DailyQuizPage() {
     const token = localStorage.getItem("ssc_access_token");
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/quiz/today`,
+        `${API_BASE}/quiz/today`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (res.ok) {
@@ -231,7 +232,7 @@ export default function DailyQuizPage() {
       answers: questions.map((q) => ({ questionId: q.id, selectedOption: answers[q.id] })),
     };
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1"}/quiz/submit`,
+      `${API_BASE}/quiz/submit`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
