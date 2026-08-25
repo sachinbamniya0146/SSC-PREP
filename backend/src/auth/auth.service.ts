@@ -137,10 +137,14 @@ export class AuthService implements OnModuleInit {
   }
 
   /** Step 2: verify OTP + set a new password. OTP is single-use. */
-  async resetPassword(email: string, code: string, newPassword: string): Promise<{ ok: true }> {
+  async resetPassword(email: string, code: string, newPassword: string, confirmPassword: string): Promise<{ ok: true }> {
     const normalized = email.toLowerCase().trim();
     const user = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
     if (!user) throw new UnauthorizedException('User not found');
+
+    if (newPassword !== confirmPassword) {
+      throw new ConflictException('New password and confirm password do not match');
+    }
 
     const ok = await this.otp.verify(normalized, code);
     if (!ok) throw new UnauthorizedException('Invalid or expired OTP');
@@ -155,7 +159,7 @@ export class AuthService implements OnModuleInit {
 
   // ------------------------------------------------------- password change (logged in)
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ ok: true }> {
+  async changePassword(userId: string, currentPassword: string, newPassword: string, confirmPassword: string): Promise<{ ok: true }> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user || !user.passwordHash || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
       throw new UnauthorizedException('Current password is incorrect');
@@ -163,6 +167,10 @@ export class AuthService implements OnModuleInit {
 
     if (currentPassword === newPassword) {
       throw new ConflictException('New password must be different from current password');
+    }
+
+    if (newPassword !== confirmPassword) {
+      throw new ConflictException('New password and confirm password do not match');
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 12);

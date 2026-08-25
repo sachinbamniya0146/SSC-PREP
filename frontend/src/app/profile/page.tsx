@@ -22,8 +22,10 @@ export default function ProfilePage() {
   const [phone, setPhone] = React.useState("");
   const [currentPassword, setCurrentPassword] = React.useState("");
   const [newPassword, setNewPassword] = React.useState("");
+  const [confirmPassword, setConfirmPassword] = React.useState("");
   const [showCurrentPassword, setShowCurrentPassword] = React.useState(false);
   const [showNewPassword, setShowNewPassword] = React.useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
   const [error, setError] = React.useState("");
   const [info, setInfo] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -65,8 +67,12 @@ export default function ProfilePage() {
   }
 
   async function changePassword() {
-    if (newPassword.length !== 20) {
-      setError("New password must be exactly 20 characters");
+    if (newPassword.length < 6 || newPassword.length > 20) {
+      setError("New password must be between 6 and 20 characters");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("New password and confirm password do not match");
       return;
     }
     setSaving(true);
@@ -76,11 +82,12 @@ export default function ProfilePage() {
       await api("/auth/password/change", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ currentPassword, newPassword }),
+        body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
       });
       setInfo("Password changed successfully. Please login again.");
       setCurrentPassword("");
       setNewPassword("");
+      setConfirmPassword("");
       setTimeout(() => { localStorage.clear(); window.location.href = "/login"; }, 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to change password");
@@ -207,7 +214,7 @@ export default function ProfilePage() {
         {/* Change Password */}
         <div className="mt-6 rounded-xl border border-border bg-card p-6">
           <h2 className="text-lg font-semibold">🔐 Change Password</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Password must be exactly 20 characters</p>
+          <p className="mt-1 text-sm text-muted-foreground">Password must be between 6 and 20 characters</p>
           <div className="mt-4 space-y-4 max-w-md">
             <div>
               <label className="mb-1.5 block text-sm font-medium">Current Password</label>
@@ -250,7 +257,32 @@ export default function ProfilePage() {
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{newPassword.length}/20 characters (min 6)</p>
             </div>
-            <button onClick={changePassword} disabled={saving || !currentPassword || newPassword.length < 6 || newPassword.length > 20} className="rounded-lg bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">Confirm New Password</label>
+              <div className="relative">
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm new password"
+                  minLength={6}
+                  maxLength={20}
+                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showConfirmPassword ? "👁️" : "🔒"}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{confirmPassword.length}/20 characters (min 6)</p>
+              {confirmPassword && newPassword !== confirmPassword && (
+                <p className="mt-1 text-xs text-red-500">⚠️ Passwords do not match</p>
+              )}
+            </div>
+            <button onClick={changePassword} disabled={saving || !currentPassword || newPassword.length < 6 || newPassword.length > 20 || newPassword !== confirmPassword} className="rounded-lg bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
               {saving ? "Changing…" : "Change Password"}
             </button>
           </div>

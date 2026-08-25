@@ -12,16 +12,19 @@ type AuthResponse = {
 
 export default function LoginPage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
-  const [mode, setMode] = React.useState<"login" | "otp" | "forgot">("login");
+  const [mode, setMode] = React.useState<"login" | "otp" | "forgot" | "forgot-verify">("login");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
   const [otp, setOtp] = React.useState("");
   const [newPassword, setNewPassword] = React.useState("");
+  const [confirmPassword, setConfirmPassword] = React.useState("");
   const [showNewPassword, setShowNewPassword] = React.useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
   const [info, setInfo] = React.useState("");
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
+  const [userExists, setUserExists] = React.useState(false);
 
   // Google Sign-In (Google Identity Services) — visible only when the server
   // has GOOGLE_CLIENT_ID configured (NEXT_PUBLIC_GOOGLE_CLIENT_ID).
@@ -128,11 +131,12 @@ export default function LoginPage() {
     setInfo("");
     setLoading(true);
     try {
-      await api("/auth/password/forgot", {
+      const res = await api("/auth/password/forgot", {
         method: "POST",
         body: JSON.stringify({ email }),
       });
       setInfo("Reset OTP sent to your email. Enter it with your new password below.");
+      setMode("forgot-verify");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send reset OTP");
     } finally {
@@ -143,18 +147,49 @@ export default function LoginPage() {
   async function resetPassword(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    if (newPassword !== confirmPassword) {
+      setError("New password and confirm password do not match");
+      return;
+    }
     setLoading(true);
     try {
       await api("/auth/password/reset", {
         method: "POST",
-        body: JSON.stringify({ email, otp, newPassword }),
+        body: JSON.stringify({ email, otp, newPassword, confirmPassword }),
       });
       setInfo("✅ Password updated. Login with your new password.");
       setMode("login");
       setPassword("");
       setOtp("");
+      setNewPassword("");
+      setConfirmPassword("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reset failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function checkEmailExists() {
+    if (!email) {
+      setError("Please enter your email first");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      // Call forgot password endpoint to check if user exists
+      // The backend returns {sent: true} even if user doesn't exist (security)
+      // But we can use signup endpoint to check or check login
+      const res = await api("/auth/password/forgot", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      // Backend doesn't leak info, but we can check if signup would fail
+      setInfo("If this email is registered, a reset OTP has been sent.");
+      setMode("forgot-verify");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not check email");
     } finally {
       setLoading(false);
     }
@@ -165,7 +200,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 shadow-xl">
         <div className="mb-8 flex items-center justify-between">
           <h1 className="text-2xl font-bold">
-            {mode === "login" ? "Login to " : mode === "otp" ? "OTP Login " : "Reset Password "}
+            {mode === "login" ? "Login to " : mode === "otp" ? "OTP Login " : mode === "forgot" ? "Reset Password " : "Verify OTP "}
             <span className="text-primary">SSC Prep Hub</span>
           </h1>
           <button
@@ -222,7 +257,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               />
             </div>
             <div>
@@ -234,7 +269,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
+                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
                 />
                 <button
                   type="button"
@@ -271,7 +306,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               />
             </div>
             <div>
@@ -284,7 +319,7 @@ export default function LoginPage() {
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
                 placeholder="6-digit OTP"
-                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               />
             </div>
             <button
@@ -306,7 +341,7 @@ export default function LoginPage() {
         )}
 
         {mode === "forgot" && (
-          <form onSubmit={resetPassword} className="space-y-4">
+          <div className="space-y-4">
             <div>
               <label className="mb-1.5 block text-sm font-medium">Email</label>
               <input
@@ -315,7 +350,33 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+              />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Enter your registered email. If the account exists, we'll send a reset OTP.
+            </p>
+            <button
+              type="button"
+              onClick={checkEmailExists}
+              disabled={loading || !email}
+              className="w-full rounded-lg border border-primary/40 bg-primary/10 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
+            >
+              {loading ? "Checking…" : "Check & Send Reset OTP"}
+            </button>
+          </div>
+        )}
+
+        {mode === "forgot-verify" && (
+          <form onSubmit={resetPassword} className="space-y-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">Email</label>
+              <input
+                type="email"
+                required
+                readOnly
+                value={email}
+                className="w-full rounded-lg border border-input bg-muted px-4 py-2.5 text-sm outline-none"
               />
             </div>
             <div>
@@ -328,7 +389,7 @@ export default function LoginPage() {
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
                 placeholder="6-digit OTP"
-                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               />
             </div>
             <div>
@@ -342,7 +403,7 @@ export default function LoginPage() {
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="6-20 characters"
-                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
+                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
                 />
                 <button
                   type="button"
@@ -359,17 +420,48 @@ export default function LoginPage() {
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{newPassword.length}/20 characters (min 6)</p>
             </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">Confirm New Password</label>
+              <div className="relative">
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  required
+                  minLength={6}
+                  maxLength={20}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm new password"
+                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                >
+                  {showConfirmPassword ? (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
+                  ) : (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                  )}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{confirmPassword.length}/20 characters (min 6)</p>
+              {confirmPassword && newPassword !== confirmPassword && (
+                <p className="mt-1 text-xs text-red-500">⚠️ Passwords do not match</p>
+              )}
+            </div>
             <button
               type="button"
               onClick={requestForgot}
               disabled={loading || !email}
               className="w-full rounded-lg border border-primary/40 bg-primary/10 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
             >
-              {loading ? "Sending…" : "Send Reset OTP"}
+              {loading ? "Sending…" : "Resend OTP"}
             </button>
             <button
               type="submit"
-              disabled={loading || !otp || !newPassword}
+              disabled={loading || !otp || !newPassword || !confirmPassword || newPassword !== confirmPassword}
               className="w-full rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
             >
               {loading ? "Resetting…" : "Reset Password"}

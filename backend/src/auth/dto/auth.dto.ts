@@ -87,6 +87,11 @@ export class ResetPasswordDto {
   @MinLength(6, { message: 'New password must be at least 6 characters' })
   @MaxLength(20, { message: 'New password cannot exceed 20 characters' })
   newPassword!: string;
+
+  @IsString()
+  @MinLength(6, { message: 'Confirm password must be at least 6 characters' })
+  @MaxLength(20, { message: 'Confirm password cannot exceed 20 characters' })
+  confirmPassword!: string;
 }
 
 export class GoogleAuthDto {
@@ -110,4 +115,9 @@ export class ChangePasswordDto {
   @MinLength(6, { message: 'New password must be at least 6 characters' })
   @MaxLength(20, { message: 'New password cannot exceed 20 characters' })
   newPassword!: string;
+
+  @IsString()
+  @MinLength(6, { message: 'Confirm password must be at least 6 characters' })
+  @MaxLength(20, { message: 'Confirm password cannot exceed 20 characters' })
+  confirmPassword!: string;
 }
