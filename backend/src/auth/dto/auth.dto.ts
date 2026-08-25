@@ -31,6 +31,11 @@ export class SignupDto {
   @IsOptional()
   @IsIn(['WEB', 'APP'], { message: 'platform must be WEB or APP' })
   platform?: 'WEB' | 'APP';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  referralCode?: string;
 }
 
 export class LoginDto {

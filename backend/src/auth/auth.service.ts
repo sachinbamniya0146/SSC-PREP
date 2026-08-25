@@ -18,6 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { MailService } from './mail.service';
 import { OtpService } from './otp.service';
+import { ReferralService } from '../referral/referral.service';
 
 export interface TokenPair {
   accessToken: string;
@@ -55,6 +56,7 @@ export class AuthService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly mail: MailService,
     private readonly otp: OtpService,
+    private readonly referralService: ReferralService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -93,6 +95,7 @@ export class AuthService implements OnModuleInit {
     fullName: string,
     phone: string,
     platform: 'WEB' | 'APP' = 'WEB',
+    referralCode?: string,
   ): Promise<Authenticated> {
     const normalized = email.toLowerCase().trim();
     const normalizedPhone = phone.trim();
@@ -113,6 +116,12 @@ export class AuthService implements OnModuleInit {
     const user = await this.prisma.user.create({
       data: { email: normalized, fullName, phone: normalizedPhone, passwordHash },
     });
+
+    // Apply referral code if provided
+    if (referralCode) {
+      await this.referralService.applyReferralCode(referralCode, user.id);
+    }
+
     return this.completeAuth(user, platform);
   }
 

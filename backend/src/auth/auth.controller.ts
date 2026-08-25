@@ -23,7 +23,7 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('signup')
   signup(@Body() dto: SignupDto) {
-    return this.authService.signup(dto.email, dto.password, dto.fullName, dto.phone, dto.platform);
+    return this.authService.signup(dto.email, dto.password, dto.fullName, dto.phone, dto.platform, dto.referralCode);
   }
 
   @Public()
