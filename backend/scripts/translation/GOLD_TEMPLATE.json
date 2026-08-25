@@ -1,0 +1,96 @@
+{
+  "_README": "SSC PREP HUB — BILINGUAL QUESTION ENHANCEMENT (GOLD TEMPLATE). Ye file 'standard' hai. Hermes isko dekh kar EXACT isi format aur isi quality me baaki questions bharega. 'questions' array me 4 fully-done example diye hain (General Awareness, Analogy, Coding-Decoding, Quantitative) — inko dekh kar samajh lo ki har question ka output kaisa dikhna chahiye. Is file ko aap khud bhi edit kar sakte ho.",
+  "_field_guide": {
+    "id": "DB ka question id. ISKO KABHI MAT BADLO (import isi se match karta hai).",
+    "subject / exam / year / difficulty": "Sirf reference ke liye (context). Change karne ki zaroorat nahi.",
+    "questionText": "English question — DB se aaya hua. ISE MAT BADLO.",
+    "questionTextHindi": "FILL KARO: sahi, natural Hindi translation. Numbers/symbols/technical terms wahi rakho. Proper nouns (naam, jagah) standard Hindi me ya waise hi.",
+    "options": "Har option object: { key, text, textHi, isCorrect }. key/text/isCorrect DB se hain — INKO MAT BADLO. Sirf 'textHi' (Hindi) FILL karo.",
+    "correctAnswer": "Sahi option ka key (A/B/C/D). DB se verified. ISE KABHI MAT BADLO — na hi koi naya answer guess karo.",
+    "explanation": "FILL KARO: detailed step-by-step English solution. Sirf answer mat likho — WHY sahi hai wo samjhao, aur zaroorat ho to baaki options kyun galat hain.",
+    "explanationHindi": "FILL KARO: wahi detailed solution Hindi me."
+  },
+  "_rules": [
+    "1. correctAnswer aur isCorrect flags KABHI mat badlo. Answer DB se aata hai (already verified). Agar answer galat lage to solution me note likho, par field mat badlo.",
+    "2. questionText aur option 'text' (English) ko mat chhedo — sirf Hindi (questionTextHindi, textHi) aur solutions (explanation, explanationHindi) bharo.",
+    "3. Solution DETAILED ho: step-by-step reasoning, formula/rule, aur final answer. Ek-line ka 'kyunki A sahi hai' NAHI chalega.",
+    "4. Hindi shuddh aur padhne-layak ho. Machine-jaisi tooti Hindi nahi.",
+    "5. Agar question me FIGURE/IMAGE hai jo text se solve nahi ho sakta (mirror image, embedded figure, counting figure, etc.), to us question par 'needsImageReview': true laga do aur solution blank chhod do — galat solution mat likho.",
+    "6. Math me clear notation use karo (×, ÷, √, %, ² etc.).",
+    "7. Format bilkul in 4 examples jaisa rakho — na koi field hatao, na naya add karo (sirf zaroorat par needsImageReview)."
+  ],
+  "questions": [
+    {
+      "id": "EXAMPLE-DO-NOT-IMPORT-1",
+      "subject": "General Awareness",
+      "exam": "SSC CGL",
+      "year": 2022,
+      "difficulty": "EASY",
+      "questionText": "Who was the first President of independent India?",
+      "questionTextHindi": "स्वतंत्र भारत के प्रथम राष्ट्रपति कौन थे?",
+      "options": [
+        { "key": "A", "text": "Dr. Rajendra Prasad", "textHi": "डॉ. राजेन्द्र प्रसाद", "isCorrect": true },
+        { "key": "B", "text": "Dr. S. Radhakrishnan", "textHi": "डॉ. एस. राधाकृष्णन", "isCorrect": false },
+        { "key": "C", "text": "Jawaharlal Nehru", "textHi": "जवाहरलाल नेहरू", "isCorrect": false },
+        { "key": "D", "text": "Sardar Vallabhbhai Patel", "textHi": "सरदार वल्लभभाई पटेल", "isCorrect": false }
+      ],
+      "correctAnswer": "A",
+      "explanation": "Dr. Rajendra Prasad was the first President of independent India. He held office from 26 January 1950 — the day India became a republic — to 13 May 1962, and remains the longest-serving President in Indian history. Checking the other options: Dr. S. Radhakrishnan (B) was the first Vice-President and later the second President; Jawaharlal Nehru (C) was the first Prime Minister, not the President; Sardar Vallabhbhai Patel (D) was the first Deputy Prime Minister and Home Minister. Therefore the correct answer is (A) Dr. Rajendra Prasad.",
+      "explanationHindi": "डॉ. राजेन्द्र प्रसाद स्वतंत्र भारत के प्रथम राष्ट्रपति थे। उन्होंने 26 जनवरी 1950 (जिस दिन भारत गणराज्य बना) से 13 मई 1962 तक पद संभाला और वे भारत के इतिहास में सबसे लंबे समय तक रहने वाले राष्ट्रपति हैं। अन्य विकल्प देखें: डॉ. एस. राधाकृष्णन (B) प्रथम उपराष्ट्रपति तथा बाद में द्वितीय राष्ट्रपति थे; जवाहरलाल नेहरू (C) प्रथम प्रधानमंत्री थे, राष्ट्रपति नहीं; सरदार वल्लभभाई पटेल (D) प्रथम उप-प्रधानमंत्री एवं गृह मंत्री थे। अतः सही उत्तर (A) डॉ. राजेन्द्र प्रसाद है।"
+    },
+    {
+      "id": "EXAMPLE-DO-NOT-IMPORT-2",
+      "subject": "Reasoning",
+      "exam": "SSC CGL",
+      "year": 2021,
+      "difficulty": "MEDIUM",
+      "questionText": "Select the option that is related to the fourth term in the same way as the second term is related to the first term. BOOK : DQQM :: WORD : ?",
+      "questionTextHindi": "उस विकल्प का चयन करें जो चौथे पद से उसी प्रकार संबंधित है जैसे दूसरा पद पहले पद से संबंधित है। BOOK : DQQM :: WORD : ?",
+      "options": [
+        { "key": "A", "text": "YQTF", "textHi": "YQTF", "isCorrect": true },
+        { "key": "B", "text": "YQTE", "textHi": "YQTE", "isCorrect": false },
+        { "key": "C", "text": "XQTF", "textHi": "XQTF", "isCorrect": false },
+        { "key": "D", "text": "YPTF", "textHi": "YPTF", "isCorrect": false }
+      ],
+      "correctAnswer": "A",
+      "explanation": "In this letter analogy each letter of the first term is shifted forward by 2 positions in the English alphabet to get the second term. Verify with BOOK → DQQM: B(+2)=D, O(+2)=Q, O(+2)=Q, K(+2)=M — correct. Apply the same rule to WORD: W(+2)=Y, O(+2)=Q, R(+2)=T, D(+2)=F, which gives YQTF. Hence the answer is (A) YQTF.",
+      "explanationHindi": "इस अक्षर सादृश्य में पहले पद के प्रत्येक अक्षर को अंग्रेज़ी वर्णमाला में 2 स्थान आगे बढ़ाने पर दूसरा पद प्राप्त होता है। BOOK → DQQM से जाँचें: B(+2)=D, O(+2)=Q, O(+2)=Q, K(+2)=M — सही। यही नियम WORD पर लगाएँ: W(+2)=Y, O(+2)=Q, R(+2)=T, D(+2)=F, अर्थात् YQTF। अतः सही उत्तर (A) YQTF है।"
+    },
+    {
+      "id": "EXAMPLE-DO-NOT-IMPORT-3",
+      "subject": "Reasoning",
+      "exam": "SSC CHSL",
+      "year": 2020,
+      "difficulty": "EASY",
+      "questionText": "In a certain code language, 'CAT' is written as 'DBU'. How will 'DOG' be written in that language?",
+      "questionTextHindi": "एक निश्चित कूट भाषा में 'CAT' को 'DBU' लिखा जाता है। उसी भाषा में 'DOG' को कैसे लिखा जाएगा?",
+      "options": [
+        { "key": "A", "text": "EPH", "textHi": "EPH", "isCorrect": true },
+        { "key": "B", "text": "EPI", "textHi": "EPI", "isCorrect": false },
+        { "key": "C", "text": "FPH", "textHi": "FPH", "isCorrect": false },
+        { "key": "D", "text": "EOH", "textHi": "EOH", "isCorrect": false }
+      ],
+      "correctAnswer": "A",
+      "explanation": "Each letter of the word is moved one step forward in the alphabet to form the code. Verify with CAT → DBU: C(+1)=D, A(+1)=B, T(+1)=U — correct. Applying the same rule to DOG: D(+1)=E, O(+1)=P, G(+1)=H, which gives EPH. Hence the answer is (A) EPH.",
+      "explanationHindi": "शब्द के प्रत्येक अक्षर को वर्णमाला में एक स्थान आगे बढ़ाकर कूट बनाया जाता है। CAT → DBU से जाँचें: C(+1)=D, A(+1)=B, T(+1)=U — सही। यही नियम DOG पर लगाएँ: D(+1)=E, O(+1)=P, G(+1)=H, अर्थात् EPH। अतः सही उत्तर (A) EPH है।"
+    },
+    {
+      "id": "EXAMPLE-DO-NOT-IMPORT-4",
+      "subject": "Quantitative Aptitude",
+      "exam": "SSC CGL",
+      "year": 2019,
+      "difficulty": "MEDIUM",
+      "questionText": "The price of an article is first increased by 20% and then decreased by 20%. What is the net percentage change in the price?",
+      "questionTextHindi": "किसी वस्तु के मूल्य में पहले 20% की वृद्धि की जाती है और फिर 20% की कमी की जाती है। मूल्य में कुल प्रतिशत परिवर्तन क्या है?",
+      "options": [
+        { "key": "A", "text": "4% decrease", "textHi": "4% की कमी", "isCorrect": true },
+        { "key": "B", "text": "4% increase", "textHi": "4% की वृद्धि", "isCorrect": false },
+        { "key": "C", "text": "No change", "textHi": "कोई परिवर्तन नहीं", "isCorrect": false },
+        { "key": "D", "text": "2% decrease", "textHi": "2% की कमी", "isCorrect": false }
+      ],
+      "correctAnswer": "A",
+      "explanation": "When a value is first increased by a% and then decreased by b%, the net percentage change = a - b - (a x b)/100. Here a = 20 and b = 20, so net change = 20 - 20 - (20 x 20)/100 = -400/100 = -4%. The negative sign means a net decrease of 4%. (Shortcut: increasing by x% and then decreasing by the same x% always gives a net decrease of x^2/100 %; here 20^2/100 = 4%.) Hence the answer is (A) 4% decrease.",
+      "explanationHindi": "जब किसी मान में पहले a% की वृद्धि और फिर b% की कमी की जाए, तो कुल प्रतिशत परिवर्तन = a - b - (a × b)/100 होता है। यहाँ a = 20 और b = 20, अतः कुल परिवर्तन = 20 - 20 - (20 × 20)/100 = -400/100 = -4%। ऋण चिह्न का अर्थ है कुल 4% की कमी। (शॉर्टकट: किसी मान को पहले x% बढ़ाकर फिर उतने ही x% घटाने पर सदैव x²/100 % की कमी होती है; यहाँ 20²/100 = 4%।) अतः सही उत्तर (A) 4% की कमी है।"
+    }
+  ]
+}
