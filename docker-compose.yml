@@ -9,9 +9,11 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    env_file:
+      - .env
     environment:
+      # Only Docker-internal hostnames stay here — these are NOT secrets
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ssc_prep_hub
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -72,44 +74,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    env_file:
+      - .env
     environment:
-      NODE_ENV: production
-      PORT: 4000
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/ssc_prep_hub?schema=public&connection_limit=20
+      # Only Docker-internal hostnames stay here — these are NOT secrets
       REDIS_HOST: redis
-      REDIS_PORT: 6379
       MEILISEARCH_HOST: http://meilisearch:7700
-      MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY:-}
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-${JWT_SECRET}}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
-      JWT_ACCESS_EXPIRES_IN: 15m
-      JWT_REFRESH_EXPIRES_IN: 7d
-      JWT_EXPIRES_IN: 7d
-      ADMIN_DEFAULT_EMAIL: ${ADMIN_DEFAULT_EMAIL}
-      ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://opencode.ai/zen/v1}
-      OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-v4-flash-free}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      # PayU Payment Gateway (Production)
-      PAYU_MERCHANT_KEY: ${PAYU_MERCHANT_KEY}
-      PAYU_MERCHANT_SALT: ${PAYU_MERCHANT_SALT}
-      PAYU_BASE_URL: ${PAYU_BASE_URL:-https://secure.payu.in}
-      # Legacy Razorpay (for backward compatibility, will be removed)
-      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
-      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
-      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-ssc-dev-webhook-secret}
-      PDF_STORAGE_DIR: ${PDF_STORAGE_DIR:-files/pdf}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      GOOGLE_CALLBACK_URL: https://www.sscprephub.in/api/v1/auth/google/callback
-      SMTP_HOST: ${SMTP_HOST}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER}
-      SMTP_PASS: ${SMTP_PASS}
-      SMTP_FROM: ${SMTP_FROM:-noreply@sscprephub.in}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
