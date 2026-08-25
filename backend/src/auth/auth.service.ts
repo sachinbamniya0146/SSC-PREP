@@ -105,6 +105,10 @@ export class AuthService implements OnModuleInit {
     const existing = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
     if (existing) throw new ConflictException('Email already registered');
 
+    // Check if phone is already registered
+    const existingPhone = await this.prisma.user.findFirst({ where: { phone: normalizedPhone } });
+    if (existingPhone) throw new ConflictException('This mobile number is already registered');
+
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await this.prisma.user.create({
       data: { email: normalized, fullName, phone: normalizedPhone, passwordHash },
