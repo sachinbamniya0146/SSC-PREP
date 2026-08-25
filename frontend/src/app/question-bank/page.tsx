@@ -2,7 +2,7 @@
 import { fetchAuth } from "@/lib/api";
 
 import * as React from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 interface Subject {
   id: string;
