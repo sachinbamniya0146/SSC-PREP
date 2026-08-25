@@ -12,18 +12,6 @@ interface PayUConfig {
   isTest: boolean;
 }
 
-interface PayUOrderResponse {
-  orderId: string;
-  amountInr: number;
-  keyId: string;
-  hash: string;
-  planName?: string;
-  chapterName?: string;
-  mockTitle?: string;
-  discount?: number;
-  formData: Record<string, string>;
-}
-
 @Injectable()
 export class MonetizationService {
   private payuConfig: PayUConfig;
@@ -195,7 +183,7 @@ export class MonetizationService {
     const hash = this.generatePayUHash(hashParams);
 
     // Create payment record
-    const payment = await this.prisma.payment.create({
+    await this.prisma.payment.create({
       data: {
         userId,
         razorpayOrderId: txnid, // Reusing field for PayU txnid

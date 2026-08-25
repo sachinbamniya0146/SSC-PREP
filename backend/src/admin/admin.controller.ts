@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Pa
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { Role } from '@prisma/client';
+import { Role, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { MonetizationService } from '../monetization/monetization.service';
@@ -60,7 +60,7 @@ export class AdminController {
     ]);
 
     // Revenue by day for chart
-    const revenueByDay = revenueData.reduce((acc: any, r: any) => {
+    const revenueByDay = revenueData.reduce((acc: Record<string, { revenue: number; count: number }>, r: { createdAt: Date; _sum: { amountInr: number | null }; _count: number }) => {
       const day = r.createdAt.toISOString().split('T')[0];
       if (!acc[day]) acc[day] = { revenue: 0, count: 0 };
       acc[day].revenue += r._sum.amountInr || 0;
@@ -125,7 +125,7 @@ export class AdminController {
         totalMockAttempts,
         totalPracticeSets,
       },
-      revenueByDay: Object.entries(revenueByDay).map(([day, data]: [string, any]) => ({ day, ...data })),
+      revenueByDay: Object.entries(revenueByDay).map(([day, data]) => ({ day, ...data })),
       topUsers,
       questionBankPractice: {
         byMode: practiceStats,
@@ -215,14 +215,14 @@ export class AdminController {
     const limitNum = Math.min(100, Math.max(1, Number(limit)));
     const skip = (pageNum - 1) * limitNum;
 
-    const where: any = {};
+    const where: Prisma.UserWhereInput = {};
     if (search) {
       where.OR = [
         { email: { contains: search, mode: 'insensitive' } },
         { fullName: { contains: search, mode: 'insensitive' } },
       ];
     }
-    if (role) where.role = role;
+    if (role) where.role = role as Role;
 
     const [users, total] = await Promise.all([
       this.prisma.user.findMany({
@@ -467,7 +467,7 @@ export class AdminController {
     });
     if (!payment) throw new Error('Payment not found');
     
-    const meta = payment.metadataJson as any || {};
+    const meta = (payment.metadataJson ?? {}) as Record<string, unknown>;
     return {
       invoiceNumber: `INV-${payment.id.slice(0, 8).toUpperCase()}`,
       date: payment.createdAt,

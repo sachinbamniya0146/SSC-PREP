@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Body, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { MonetizationService } from './monetization.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
@@ -77,7 +78,7 @@ export class MonetizationController {
   // PayU webhook (server-confirmed payments)
   @Public()
   @Post('webhook')
-  webhook(@Req() req: any) {
+  webhook(@Req() req: Request) {
     return this.service.handleWebhook(req.body);
   }
 }

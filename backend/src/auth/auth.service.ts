@@ -204,7 +204,7 @@ export class AuthService implements OnModuleInit {
         idToken,
         audience: clientId,
       });
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException('Invalid Google ID token');
     }
     const payload = ticket.getPayload();

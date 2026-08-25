@@ -206,7 +206,7 @@ export class QuestionBankPracticeService {
   }
 
   // Get a specific set by ID
-  async getSetById(userId: string, setId: string, resume = false): Promise<PracticeSet> {
+  async getSetById(userId: string, setId: string, _resume = false): Promise<PracticeSet> {
     const set = await this.prisma.questionBankSet.findFirst({
       where: { id: setId, userId },
     });
@@ -299,7 +299,7 @@ export class QuestionBankPracticeService {
     const isComplete = nextIndex >= questionIds.length;
 
     // Update set
-    const updatedSet = await this.prisma.questionBankSet.update({
+    await this.prisma.questionBankSet.update({
       where: { id: setId },
       data: {
         answers,
