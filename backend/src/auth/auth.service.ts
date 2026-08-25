@@ -96,6 +96,12 @@ export class AuthService implements OnModuleInit {
   ): Promise<Authenticated> {
     const normalized = email.toLowerCase().trim();
     const normalizedPhone = phone.trim();
+    
+    // Check if email domain is allowed
+    if (!this.isAllowedDomain(normalized)) {
+      throw new ForbiddenException('Please use a valid email provider (Gmail, Yahoo, Outlook, etc.). Temporary/disposable emails are not allowed.');
+    }
+    
     const existing = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
     if (existing) throw new ConflictException('Email already registered');
 
@@ -133,7 +139,7 @@ export class AuthService implements OnModuleInit {
       // Do not leak which emails have accounts — same response either way.
       return { sent: true };
     }
-    return this.otp.issue(normalized);
+    return this.otp.issue(normalized, 'forgot');
   }
 
   /** Step 2: verify OTP + set a new password. OTP is single-use. */
@@ -484,5 +490,74 @@ export class AuthService implements OnModuleInit {
           ? Math.floor(parseInt(v, 10) / 24)
           : 7;
     return new Date(Date.now() + days * 86400 * 1000);
+  }
+
+  /** Check if email domain is allowed (no temp/disposable emails) */
+  private isAllowedDomain(email: string): boolean {
+    const domain = email.split('@')[1]?.toLowerCase();
+    if (!domain) return false;
+
+    // List of blocked disposable/temporary email domains
+    const blockedDomains = [
+      'tempmail.com', 'temp-mail.org', 'guerrillamail.com', '10minutemail.com',
+      'mailinator.com', 'throwawaymail.com', 'yopmail.com', 'dispostable.com',
+      'fakeinbox.com', 'trashmail.com', 'getnada.com', 'maildrop.cc',
+      'sharklasers.com', 'grr.la', 'spamgourmet.com', 'mintemail.com',
+      'tempmail.net', 'tempmail.io', 'tempmail.plus', 'inboxkitten.com',
+      'fakemailgenerator.com', 'emailondeck.com', 'getairmail.com',
+      'dropmail.me', 'boxmail.xyz', 'wuzupmail.net', 'tempr.email',
+      'tempemail.co', 'bccto.me', 'chacuo.net', 'mailcatch.com',
+      'fakemail.net', 'spam4.me', 'spambox.us', 'spamcannon.com',
+      'spamcowboy.com', 'spamcrackers.com', 'spamgourmet.net',
+      'spamhole.com', 'spaminator.de', 'spamkill.info', 'spaml.com',
+      'spaml.de', 'spammer.com', 'spammers.dk', 'spambog.com',
+      'spambog.de', 'spambog.ru', 'spambog.com', 'spamday.com',
+      'spamex.com', 'spamfree24.com', 'spamfree24.de', 'spamfree24.eu',
+      'spamfree24.net', 'spamfree24.org', 'spamgourmet.org',
+      'spamherelots.com', 'spamhereplease.com', 'spamhere.org',
+      'spamhole.com', 'spamkill.net', 'spammonitor.net', 'spamnesty.com',
+      'spamspot.com', 'spamstack.net', 'spamthis.co', 'spamthisplease.com',
+    ];
+
+    if (blockedDomains.includes(domain)) {
+      return false;
+    }
+
+    // Allow major providers
+    const allowedDomains = [
+      'gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.in', 'yahoo.co.uk',
+      'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+      'icloud.com', 'me.com', 'mac.com',
+      'protonmail.com', 'proton.me',
+      'zoho.com', 'zohomail.com',
+      'aol.com', 'aim.com',
+      'mail.com', 'email.com',
+      'gmx.com', 'gmx.de', 'gmx.net',
+      'web.de', 't-online.de',
+      'yandex.com', 'yandex.ru',
+      'rediffmail.com', 'indiatimes.com',
+      'company.com', 'organization.com', // common corporate patterns
+    ];
+
+    // Allow common corporate/educational domains
+    const commonSuffixes = [
+      '.edu', '.ac.in', '.gov.in', '.nic.in', '.org', '.net', '.co.in', '.in'
+    ];
+
+    // Check if exact match or subdomain of allowed
+    if (allowedDomains.includes(domain)) return true;
+    
+    // Check common suffixes (educational, gov, org)
+    for (const suffix of commonSuffixes) {
+      if (domain.endsWith(suffix)) return true;
+    }
+
+    // Block suspicious patterns
+    if (domain.includes('temp') || domain.includes('disposable') || domain.includes('throwaway') || domain.includes('fake') || domain.includes('trash') || domain.includes('spam')) {
+      return false;
+    }
+
+    // Allow other domains by default (but not temp mail)
+    return true;
   }
 }

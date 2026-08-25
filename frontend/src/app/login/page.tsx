@@ -12,7 +12,7 @@ type AuthResponse = {
 
 export default function LoginPage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
-  const [mode, setMode] = React.useState<"login" | "otp" | "forgot" | "forgot-verify">("login");
+  const [mode, setMode] = React.useState<"login" | "forgot" | "forgot-verify">("login");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
@@ -24,7 +24,8 @@ export default function LoginPage() {
   const [info, setInfo] = React.useState("");
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
-  const [userExists, setUserExists] = React.useState(false);
+  const [otpCooldown, setOtpCooldown] = React.useState(0);
+  const [otpSent, setOtpSent] = React.useState(false);
 
   // Google Sign-In (Google Identity Services) — visible only when the server
   // has GOOGLE_CLIENT_ID configured (NEXT_PUBLIC_GOOGLE_CLIENT_ID).
@@ -69,6 +70,22 @@ export default function LoginPage() {
     document.head.appendChild(s);
   }, [googleClientId, handleGoogleCredential]);
 
+  // OTP Cooldown timer
+  React.useEffect(() => {
+    if (otpCooldown > 0) {
+      const timer = setInterval(() => {
+        setOtpCooldown(prev => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [otpCooldown]);
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -83,44 +100,13 @@ export default function LoginPage() {
       localStorage.setItem("ssc_user", JSON.stringify(data.user));
       window.location.href = "/dashboard";
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function requestOtp() {
-    setError("");
-    setInfo("");
-    setLoading(true);
-    try {
-      await api("/auth/otp/request", {
-        method: "POST",
-        body: JSON.stringify({ email }),
-      });
-      setInfo("OTP sent to your email (dev: check server log / demo OTP 123456).");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send OTP");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function verifyOtp(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      const data = await api<AuthResponse>("/auth/otp/verify", {
-        method: "POST",
-        body: JSON.stringify({ email, otp }),
-      });
-      localStorage.setItem("ssc_access_token", data.accessToken);
-      localStorage.setItem("ssc_refresh_token", data.refreshToken);
-      localStorage.setItem("ssc_user", JSON.stringify(data.user));
-      window.location.href = "/dashboard";
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Invalid OTP");
+      const message = err instanceof Error ? err.message : "Login failed";
+      // Provide specific error messages
+      if (message.includes("Invalid email or password")) {
+        setError("Invalid email or password. Please check your credentials and try again.");
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -135,10 +121,50 @@ export default function LoginPage() {
         method: "POST",
         body: JSON.stringify({ email }),
       });
-      setInfo("Reset OTP sent to your email. Enter it with your new password below.");
+      setInfo("If this email is registered, a reset OTP has been sent. Check your inbox (and spam folder).");
       setMode("forgot-verify");
+      setOtpSent(true);
+      setOtpCooldown(60); // 60 second cooldown
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send reset OTP");
+      const message = err instanceof Error ? err.message : "Could not send reset OTP";
+      // Show specific error messages to user
+      if (message.includes("wait")) {
+        setError(message);
+      } else if (message.includes("Maximum 3 reset OTPs per hour") || message.includes("Too many reset requests")) {
+        setError(message);
+      } else if (message.includes("valid email provider") || message.includes("Temporary/disposable emails")) {
+        setError(message);
+      } else {
+        setError("Failed to send reset OTP. Please check your email and try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function resendOtp() {
+    if (otpCooldown > 0) return;
+    setError("");
+    setInfo("");
+    setLoading(true);
+    try {
+      const res = await api("/auth/password/forgot", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setInfo("New reset OTP sent to your email. Please check your inbox.");
+      setOtpCooldown(60);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not resend OTP";
+      if (message.includes("wait")) {
+        setError(message);
+      } else if (message.includes("Maximum 3 reset OTPs per hour") || message.includes("Too many reset requests")) {
+        setError(message);
+      } else if (message.includes("valid email provider") || message.includes("Temporary/disposable emails")) {
+        setError(message);
+      } else {
+        setError("Failed to resend OTP. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -151,45 +177,38 @@ export default function LoginPage() {
       setError("New password and confirm password do not match");
       return;
     }
+    if (newPassword.length < 6 || newPassword.length > 20) {
+      setError("New password must be between 6 and 20 characters");
+      return;
+    }
+    if (!otp || otp.length !== 6) {
+      setError("Please enter the 6-digit OTP");
+      return;
+    }
     setLoading(true);
     try {
       await api("/auth/password/reset", {
         method: "POST",
         body: JSON.stringify({ email, otp, newPassword, confirmPassword }),
       });
-      setInfo("✅ Password updated. Login with your new password.");
-      setMode("login");
-      setPassword("");
-      setOtp("");
-      setNewPassword("");
-      setConfirmPassword("");
+      setInfo("✅ Password updated successfully! Redirecting to login...");
+      setTimeout(() => {
+        setMode("login");
+        setPassword("");
+        setOtp("");
+        setNewPassword("");
+        setConfirmPassword("");
+        setOtpSent(false);
+      }, 2000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Reset failed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function checkEmailExists() {
-    if (!email) {
-      setError("Please enter your email first");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      // Call forgot password endpoint to check if user exists
-      // The backend returns {sent: true} even if user doesn't exist (security)
-      // But we can use signup endpoint to check or check login
-      const res = await api("/auth/password/forgot", {
-        method: "POST",
-        body: JSON.stringify({ email }),
-      });
-      // Backend doesn't leak info, but we can check if signup would fail
-      setInfo("If this email is registered, a reset OTP has been sent.");
-      setMode("forgot-verify");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not check email");
+      const message = err instanceof Error ? err.message : "Reset failed";
+      if (message.includes("Invalid or expired OTP")) {
+        setError("The OTP is invalid or has expired. Please request a new one.");
+      } else if (message.includes("match")) {
+        setError("New password and confirm password do not match");
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -200,7 +219,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 shadow-xl">
         <div className="mb-8 flex items-center justify-between">
           <h1 className="text-2xl font-bold">
-            {mode === "login" ? "Login to " : mode === "otp" ? "OTP Login " : mode === "forgot" ? "Reset Password " : "Verify OTP "}
+            {mode === "login" ? "Login to " : mode === "forgot" ? "Reset Password " : "Verify OTP "}
             <span className="text-primary">SSC Prep Hub</span>
           </h1>
           <button
@@ -212,9 +231,9 @@ export default function LoginPage() {
           </button>
         </div>
 
-        {/* Mode tabs */}
+        {/* Mode tabs - only Login and Forgot Password */}
         <div className="mb-6 flex overflow-hidden rounded-lg border border-border text-sm">
-          {(["login", "otp", "forgot"] as const).map((m) => (
+          {(["login", "forgot"] as const).map((m) => (
             <button
               key={m}
               onClick={() => { setMode(m); setError(""); setInfo(""); }}
@@ -222,19 +241,25 @@ export default function LoginPage() {
                 mode === m ? "bg-primary font-semibold text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"
               }`}
             >
-              {m === "login" ? "Password" : m === "otp" ? "OTP" : "Forgot"}
+              {m === "login" ? "Password Login" : "Forgot Password"}
             </button>
           ))}
         </div>
 
         {error && (
-          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">
-            {error}
+          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400" role="alert">
+            <div className="flex items-center gap-2">
+              <span>⚠️</span>
+              <span>{error}</span>
+            </div>
           </div>
         )}
         {info && (
-          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-600 dark:text-emerald-400">
-            {info}
+          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-600 dark:text-emerald-400" role="status">
+            <div className="flex items-center gap-2">
+              <span>✅</span>
+              <span>{info}</span>
+            </div>
           </div>
         )}
 
@@ -257,6 +282,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
+                autoComplete="email"
                 className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               />
             </div>
@@ -269,6 +295,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
+                  autoComplete="current-password"
                   className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
                 />
                 <button
@@ -296,73 +323,33 @@ export default function LoginPage() {
           </>
         )}
 
-        {mode === "otp" && (
-          <form onSubmit={verifyOtp} className="space-y-4">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium">Email</label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium">OTP</label>
-              <input
-                type="text"
-                required
-                inputMode="numeric"
-                maxLength={6}
-                value={otp}
-                onChange={(e) => setOtp(e.target.value)}
-                placeholder="6-digit OTP"
-                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={requestOtp}
-              disabled={loading || !email}
-              className="w-full rounded-lg border border-primary/40 bg-primary/10 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
-            >
-              {loading ? "Sending…" : "Send OTP"}
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !otp}
-              className="w-full rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
-            >
-              {loading ? "Verifying…" : "Verify & Login"}
-            </button>
-          </form>
-        )}
-
         {mode === "forgot" && (
           <div className="space-y-4">
             <div>
-              <label className="mb-1.5 block text-sm font-medium">Email</label>
+              <label className="mb-1.5 block text-sm font-medium">Email Address</label>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder="you@gmail.com"
+                autoComplete="email"
                 className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Enter your registered email. We'll send a 6-digit OTP (valid for 10 minutes).
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Use a real email provider (Gmail, Yahoo, Outlook, etc.). Temporary emails are not allowed.
+              </p>
             </div>
-            <p className="text-sm text-muted-foreground">
-              Enter your registered email. If the account exists, we'll send a reset OTP.
-            </p>
             <button
               type="button"
-              onClick={checkEmailExists}
-              disabled={loading || !email}
+              onClick={requestForgot}
+              disabled={loading || !email || otpCooldown > 0}
               className="w-full rounded-lg border border-primary/40 bg-primary/10 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
             >
-              {loading ? "Checking…" : "Check & Send Reset OTP"}
+              {loading ? "Sending…" : otpCooldown > 0 ? `Resend in ${otpCooldown}s` : otpSent ? "Resend OTP" : "Send Reset OTP"}
             </button>
           </div>
         )}
@@ -380,7 +367,7 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium">OTP (from email)</label>
+              <label className="mb-1.5 block text-sm font-medium">6-Digit OTP <span className="text-primary">(valid for 10 minutes)</span></label>
               <input
                 type="text"
                 required
@@ -388,9 +375,21 @@ export default function LoginPage() {
                 maxLength={6}
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
-                placeholder="6-digit OTP"
-                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                placeholder="Enter OTP from email"
+                autoComplete="one-time-code"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary text-center tracking-widest text-lg"
               />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Didn't receive the OTP? Check spam folder or 
+                <button
+                  type="button"
+                  onClick={resendOtp}
+                  disabled={otpCooldown > 0 || loading}
+                  className="text-primary underline hover:no-underline disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {otpCooldown > 0 ? `resend in ${otpCooldown}s` : "resend OTP"}
+                </button>
+              </p>
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium">New Password</label>
@@ -403,6 +402,7 @@ export default function LoginPage() {
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="6-20 characters"
+                  autoComplete="new-password"
                   className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
                 />
                 <button
@@ -419,6 +419,9 @@ export default function LoginPage() {
                 </button>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{newPassword.length}/20 characters (min 6)</p>
+              <div className="mt-1 h-1 w-full bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-primary transition-all duration-300" style={{ width: `${Math.min(100, (newPassword.length / 20) * 100)}%` }} />
+              </div>
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium">Confirm New Password</label>
@@ -431,6 +434,7 @@ export default function LoginPage() {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Confirm new password"
+                  autoComplete="new-password"
                   className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
                 />
                 <button
@@ -450,18 +454,21 @@ export default function LoginPage() {
               {confirmPassword && newPassword !== confirmPassword && (
                 <p className="mt-1 text-xs text-red-500">⚠️ Passwords do not match</p>
               )}
+              {confirmPassword && newPassword === confirmPassword && confirmPassword.length >= 6 && (
+                <p className="mt-1 text-xs text-emerald-500">✅ Passwords match</p>
+              )}
             </div>
             <button
               type="button"
-              onClick={requestForgot}
-              disabled={loading || !email}
+              onClick={resendOtp}
+              disabled={loading || otpCooldown > 0}
               className="w-full rounded-lg border border-primary/40 bg-primary/10 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
             >
-              {loading ? "Sending…" : "Resend OTP"}
+              {loading ? "Sending…" : otpCooldown > 0 ? `Resend in ${otpCooldown}s` : "Resend OTP"}
             </button>
             <button
               type="submit"
-              disabled={loading || !otp || !newPassword || !confirmPassword || newPassword !== confirmPassword}
+              disabled={loading || !otp || !newPassword || !confirmPassword || newPassword !== confirmPassword || newPassword.length < 6 || newPassword.length > 20}
               className="w-full rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
             >
               {loading ? "Resetting…" : "Reset Password"}
