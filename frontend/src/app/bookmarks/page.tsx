@@ -1,6 +1,4 @@
 "use client";
-import { fetchAuth } from "@/lib/api";
-
 import * as React from "react";
 import { API_BASE } from "@/lib/api";
 

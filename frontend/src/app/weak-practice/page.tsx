@@ -1,8 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { fetchAuth } from "@/lib/api";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 type WeakPracticeData = {
   type: "WEAK_AREAS_PRACTICE";
