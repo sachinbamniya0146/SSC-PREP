@@ -33,7 +33,7 @@ logs
 coverage
 
 # Prisma
-prisma/migrations
+# prisma/migrations
 
 # Docker
 docker-compose.yml
