@@ -115,6 +115,13 @@ model User {
   coins            Int             @default(0)
   hintQuota        Int             @default(3)
 
+  // User preferences
+  darkMode         Boolean         @default(false)  // Light mode is default
+  preferredLanguage String         @default("en")   // "en" or "hi"
+  
+  // User's personal OpenRouter API key for AI explanations
+  openrouterApiKey String?         // Encrypted API key for personal AI usage
+
   // Referral
   referralCode     String?         @unique
   referredByCode   String?         // referral code user signed up with
@@ -1013,4 +1020,21 @@ model TestAttemptStats {
   testTemplate TestTemplate @relation(fields: [testTemplateId], references: [id], onDelete: Cascade)
 
   @@map("test_attempt_stats")
+}
+
+// ================= AI API KEYS =================
+// Admin-managed API keys for different AI providers
+model AdminApiKey {
+  id           String   @id @default(uuid())
+  provider     String // e.g., "openrouter", "openai", "gemini"
+  keyName      String // e.g., "OpenRouter - GPT-4o-mini"
+  apiKey       String // Encrypted API key
+  isActive     Boolean  @default(true)
+  isPrimary    Boolean  @default(false) // Only one primary key per provider
+  freeModelOnly Boolean @default(false) // Only use free models if true
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdBy    String? // Admin user ID
+
+  @@map("admin_api_keys")
 }

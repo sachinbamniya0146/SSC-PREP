@@ -1,54 +1,35 @@
-import { Controller, Get, Param, Put, Body } from '@nestjs/common';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
-import type { AuthenticatedUser } from '../common/decorators/current-user.decorator';
-import { UsersService } from './users.service';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { UserService } from './users.service';
 
 @Controller('users')
+@UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UserService) {}
 
   @Get('me')
-  getProfile(@CurrentUser() user: AuthenticatedUser) {
-    return this.usersService.getProfile(user.userId);
+  async getMe() {
+    return this.usersService.findById('dummy');
   }
 
-  @Put('me/phone')
-  updatePhone(@CurrentUser() user: AuthenticatedUser, @Body() body: { phone: string }) {
-    return this.usersService.updatePhone(user.userId, body.phone);
+  @Get('me/stats')
+  async getMeStats(@Query('limit') limit?: string) {
+    return this.usersService.getStats('dummy');
   }
 
-  /**
-   * Get comprehensive user dashboard with daily activity tracking
-   */
-  @Get('me/dashboard')
-  getDashboard(@CurrentUser() user: AuthenticatedUser) {
-    return this.usersService.getDashboard(user.userId);
+  @Get('me/activity')
+  async getMeActivity(@Query('limit') limit?: string) {
+    return this.usersService.getRecentActivity('dummy', limit ? parseInt(limit, 10) : 10);
   }
 
-  /**
-   * Get weekly progress report
-   */
-  @Get('me/dashboard/weekly')
-  getWeeklyProgress(@CurrentUser() user: AuthenticatedUser) {
-    return this.usersService.getWeeklyProgress(user.userId);
+  @Post('me/preferences')
+  async updatePreferences(@Body() body: { darkMode?: boolean; preferredLanguage?: string }) {
+    return this.usersService.updatePreferences('dummy', body);
   }
 
-  /**
-   * Get monthly activity summary
-   */
-  @Get('me/dashboard/monthly')
-  getMonthlySummary(@CurrentUser() user: AuthenticatedUser) {
-    return this.usersService.getMonthlySummary(user.userId);
-  }
-
-  /**
-   * Admin-only: device/session history for a user (v1 §10 device monitoring).
-   * Protected by JwtAuthGuard + RolesGuard via @Roles('ADMIN', 'MODERATOR').
-   */
-  @Roles('ADMIN', 'MODERATOR')
-  @Get(':userId/sessions')
-  listUserSessions(@Param('userId') userId: string) {
-    return this.usersService.listActiveSessions(userId);
+  @Post('me/openrouter-key')
+  async updateOpenrouterApiKey(@Body() body: { apiKey: string }) {
+    return this.usersService.updateOpenrouterApiKey('dummy', body.apiKey);
   }
 }

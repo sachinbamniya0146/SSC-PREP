@@ -64,4 +64,8 @@ export const envValidationSchema = Joi.object({
   // Meilisearch — Phase 2
   MEILISEARCH_HOST: Joi.string().allow('').default('http://localhost:7700'),
   MEILISEARCH_MASTER_KEY: Joi.string().allow('').default(''),
+
+  // AI / OpenRouter — optional; provides AI-powered explanations & study plans
+  OPENROUTER_API_KEY: Joi.string().allow('').default(''),
+  OPENROUTER_MODEL: Joi.string().allow('').default('openai/gpt-4o-mini'),
 }).unknown(true);

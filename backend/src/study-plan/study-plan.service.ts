@@ -1,258 +1,154 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { StudyPlanType } from '@prisma/client';
+
+interface StudyPlanRequest {
+  userId: string;
+  testResults: {
+    totalQuestions: number;
+    correctAnswers: number;
+    incorrectAnswers: number;
+    skippedAnswers: number;
+    subjectScores: { subject: string; score: number; total: number }[];
+    topicScores: { topic: string; score: number; total: number }[];
+  };
+  userOpenRouterKey?: string;
+}
+
+interface StudyPlanResponse {
+  plan: string;
+  planHindi: string;
+  focusAreas: string[];
+  focusAreasHindi: string[];
+  dailySchedule: { day: number; topic: string; duration: number; priority: 'high' | 'medium' | 'low' }[];
+  tips: string[];
+  tipsHindi: string[];
+}
 
 @Injectable()
 export class StudyPlanService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Create a study plan for the user.
-   * Calculates daily_target = ceil(total_questions_for_exam / remaining_days).
-   */
-  async createPlan(
-    userId: string,
-    examId: string,
-    subjectId: string | undefined,
-    type: 'COMBINED' | 'SUBJECT_WISE',
-    targetDate: string, // ISO date string
-  ) {
-    const exam = await this.prisma.exam.findUnique({ where: { id: examId } });
-    if (!exam) throw new NotFoundException('Exam not found');
+  async generateStudyPlan(request: StudyPlanRequest, userOpenRouterKey?: string): Promise<StudyPlanResponse> {
+    const { userId, testResults } = request;
+    const accuracy = testResults.totalQuestions > 0 ? (testResults.correctAnswers / testResults.totalQuestions) * 100 : 0;
 
-    if (subjectId && type === 'SUBJECT_WISE') {
-      const subject = await this.prisma.subject.findUnique({ where: { id: subjectId } });
-      if (!subject) throw new NotFoundException('Subject not found');
+    const apiKey = userOpenRouterKey || process.env.OPENROUTER_API_KEY;
+
+    if (!apiKey) {
+      return this.generateBasicStudyPlan(testResults);
     }
 
-    // Count total questions for the exam (and optionally subject)
-    const questionFilter: Record<string, unknown> = { examId, isActive: true };
-    if (subjectId) questionFilter.subjectId = subjectId;
-    const totalQuestions = await this.prisma.question.count({ where: questionFilter });
+    try {
+      const prompt = `You are an expert SSC exam study planner. Based on the student's test performance, create a personalized study plan.
 
-    if (totalQuestions === 0) {
-      throw new BadRequestException('No questions available for the selected exam/subject combination');
-    }
+Test Performance:
+- Total Questions: ${testResults.totalQuestions}
+- Correct Answers: ${testResults.correctAnswers} (${((testResults.correctAnswers / testResults.totalQuestions) * 100).toFixed(1)}%)
+- Incorrect Answers: ${testResults.incorrectAnswers}
+- Skipped Answers: ${testResults.skippedAnswers}
 
-    // Calculate remaining days (start today, targetDate is the deadline)
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const target = new Date(targetDate);
-    target.setHours(23, 59, 59, 999);
+Subject-wise Performance:
+${testResults.subjectScores.map(s => `- ${s.subject}: ${s.score}/${s.total} (${((s.score/s.total)*100).toFixed(1)}%)`).join('\n')}
 
-    if (target <= start) {
-      throw new BadRequestException('Target date must be in the future');
-    }
+Topic-wise Performance:
+${testResults.topicScores.map(t => `- ${t.topic}: ${t.score}/${t.total} (${((t.score/t.total)*100).toFixed(1)}%)`).join('\n')}
 
-    const remainingDays = Math.max(1, Math.ceil((target.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
-    const dailyTarget = Math.ceil(totalQuestions / remainingDays);
+Create a comprehensive study plan in the following JSON format:
+{
+  "plan": "Detailed study plan in English (3-4 paragraphs with specific recommendations)",
+  "planHindi": "Detailed study plan in Hindi (3-4 paragraphs with specific recommendations)",
+  "focusAreas": ["Top 5 weak areas to focus on"],
+  "focusAreasHindi": ["Top 5 weak areas in Hindi"],
+  "dailySchedule": [
+    { "day": 1, "topic": "Topic name", "duration": 60, "priority": "high" },
+    { "day": 2, "topic": "Topic name", "duration": 45, "priority": "medium" }
+  ],
+  "tips": ["Exam tips in English"],
+  "tipsHindi": ["Exam tips in Hindi"]
+}
 
-    // Create the plan
-    const plan = await this.prisma.studyPlan.create({
-      data: {
-        userId,
-        examId,
-        subjectId: subjectId ?? null,
-        type: type as StudyPlanType,
-        startDate: start,
-        targetDate: target,
-        dailyTarget,
-        currentStreak: 0,
-        longestStreak: 0,
-      },
-    });
+IMPORTANT:
+- Focus on weak areas first
+- Include specific topics, not just subjects
+- Make duration realistic (30-90 minutes per topic)
+- Use simple, encouraging language
+- Return ONLY valid JSON`;
 
-    return {
-      plan,
-      stats: {
-        totalQuestions,
-        remainingDays,
-        dailyTarget,
-      },
-    };
-  }
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://sscprephub.in',
+          'X-Title': 'SSC Prep Hub',
+        },
+        body: JSON.stringify({
+          model: 'openai/gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are an expert SSC exam study planner.' },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.3,
+          max_tokens: 2000,
+          response_format: { type: 'json_object' },
+        }),
+      });
 
-  /** Get the user's most recent active study plan */
-  async getPlan(userId: string) {
-    const plan = await this.prisma.studyPlan.findFirst({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        exam: { select: { id: true, name: true, slug: true } },
-        subject: { select: { id: true, name: true, slug: true } },
-      },
-    });
-
-    if (!plan) return null;
-
-    // Compute progress stats
-    const questionFilter: Record<string, unknown> = { examId: plan.examId, isActive: true };
-    if (plan.subjectId) questionFilter.subjectId = plan.subjectId;
-    const totalQuestions = await this.prisma.question.count({ where: questionFilter });
-
-    // Count questions practiced so far under this plan (via test attempts since plan start)
-    const practiced = await this.prisma.testAttempt.aggregate({
-      where: {
-        userId,
-        startedAt: { gte: plan.startDate },
-        status: 'SUBMITTED',
-      },
-      _sum: { totalCorrect: true, totalWrong: true },
-    });
-    const questionsDone = (practiced._sum.totalCorrect ?? 0) + (practiced._sum.totalWrong ?? 0);
-
-    return {
-      ...plan,
-      progress: {
-        totalQuestions,
-        questionsDone,
-        remaining: Math.max(0, totalQuestions - questionsDone),
-        percentComplete: totalQuestions > 0 ? Math.round((questionsDone / totalQuestions) * 100) : 0,
-      },
-    };
-  }
-
-  /**
-   * Record a practice session. Updates streaks and recomputes daily_target.
-   */
-  async recordPractice(
-    userId: string,
-    planId: string,
-    questionsAttempted: number,
-    _correct: number,
-  ) {
-    const plan = await this.prisma.studyPlan.findUnique({ where: { id: planId } });
-    if (!plan) throw new NotFoundException('Study plan not found');
-    if (plan.userId !== userId) throw new BadRequestException('Plan does not belong to this user');
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const lastPractice = plan.lastPracticeDate ? new Date(plan.lastPracticeDate) : null;
-    let newStreak = plan.currentStreak;
-
-    if (lastPractice) {
-      const diffDays = Math.floor((today.getTime() - lastPractice.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) {
-        // Consecutive day — increment streak
-        newStreak = plan.currentStreak + 1;
-      } else if (diffDays > 1) {
-        // Missed a day — reset streak
-        newStreak = 1;
+      if (!response.ok) {
+        throw new Error(`AI API error: ${response.status}`);
       }
-      // diffDays === 0: same day — keep current streak
-    } else {
-      // First practice ever
-      newStreak = 1;
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+
+      if (!content) {
+        throw new Error('Empty response from AI');
+      }
+
+      return JSON.parse(content);
+    } catch (error) {
+      return this.generateBasicStudyPlan(testResults);
     }
-
-    const newLongest = Math.max(plan.longestStreak, newStreak);
-
-    // Recompute daily target based on remaining questions / remaining days
-    const questionFilter: Record<string, unknown> = { examId: plan.examId, isActive: true };
-    if (plan.subjectId) questionFilter.subjectId = plan.subjectId;
-    const totalQuestions = await this.prisma.question.count({ where: questionFilter });
-
-    const targetEnd = new Date(plan.targetDate);
-    targetEnd.setHours(23, 59, 59, 999);
-    const remainingDays = Math.max(1, Math.ceil((targetEnd.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
-
-    const practiced = await this.prisma.testAttempt.aggregate({
-      where: {
-        userId,
-        startedAt: { gte: plan.startDate },
-        status: 'SUBMITTED',
-      },
-      _sum: { totalCorrect: true, totalWrong: true },
-    });
-    const questionsDone = (practiced._sum.totalCorrect ?? 0) + (practiced._sum.totalWrong ?? 0) + questionsAttempted;
-    const remaining = Math.max(0, totalQuestions - questionsDone);
-    const newDailyTarget = Math.ceil(remaining / remainingDays);
-
-    const updated = await this.prisma.studyPlan.update({
-      where: { id: planId },
-      data: {
-        currentStreak: newStreak,
-        longestStreak: newLongest,
-        lastPracticeDate: today,
-        dailyTarget: newDailyTarget,
-      },
-    });
-
-    return {
-      plan: updated,
-      streak: {
-        currentStreak: newStreak,
-        longestStreak: newLongest,
-        isNewRecord: newLongest > plan.longestStreak,
-      },
-      progress: {
-        remaining,
-        dailyTarget: newDailyTarget,
-        remainingDays,
-      },
-    };
   }
 
-  /** Get today's daily target for the user */
-  async getDailyTarget(userId: string) {
-    const plan = await this.prisma.studyPlan.findFirst({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-    });
+  private generateBasicStudyPlan(testResults: StudyPlanRequest['testResults']): StudyPlanResponse {
+    const weakSubjects = testResults.subjectScores
+      .filter(s => (s.score / s.total) * 100 < 60)
+      .sort((a, b) => (a.score / a.total) - (b.score / b.total))
+      .slice(0, 5)
+      .map(s => s.subject);
 
-    if (!plan) {
-      return { hasPlan: false, dailyTarget: 0, message: 'No active study plan. Create one first!' };
-    }
+    const weakTopics = testResults.topicScores
+      .filter(t => (t.score / t.total) * 100 < 60)
+      .sort((a, b) => (a.score / a.total) - (b.score / b.total))
+      .slice(0, 5)
+      .map(t => t.topic);
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const questionFilter: Record<string, unknown> = { examId: plan.examId, isActive: true };
-    if (plan.subjectId) questionFilter.subjectId = plan.subjectId;
-    const totalQuestions = await this.prisma.question.count({ where: questionFilter });
-
-    const targetEnd = new Date(plan.targetDate);
-    targetEnd.setHours(23, 59, 59, 999);
-    const remainingDays = Math.max(1, Math.ceil((targetEnd.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
-
-    const practiced = await this.prisma.testAttempt.aggregate({
-      where: {
-        userId,
-        startedAt: { gte: plan.startDate },
-        status: 'SUBMITTED',
-      },
-      _sum: { totalCorrect: true, totalWrong: true },
-    });
-    const questionsDone = (practiced._sum.totalCorrect ?? 0) + (practiced._sum.totalWrong ?? 0);
-    const remaining = Math.max(0, totalQuestions - questionsDone);
-
-    // Check how many the user did today
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-
-    const todayPractice = await this.prisma.testAttempt.aggregate({
-      where: {
-        userId,
-        startedAt: { gte: todayStart, lte: todayEnd },
-        status: 'SUBMITTED',
-      },
-      _sum: { totalCorrect: true, totalWrong: true },
-    });
-    const todayDone = (todayPractice._sum.totalCorrect ?? 0) + (todayPractice._sum.totalWrong ?? 0);
+    const accuracy = testResults.totalQuestions > 0 ? (testResults.correctAnswers / testResults.totalQuestions) * 100 : 0;
 
     return {
-      hasPlan: true,
-      planId: plan.id,
-      dailyTarget: plan.dailyTarget,
-      todayDone,
-      remaining,
-      totalQuestions,
-      remainingDays,
-      streak: plan.currentStreak,
-      targetDate: plan.targetDate,
+      plan: accuracy < 50
+        ? 'Your accuracy is low. Focus on building fundamentals. Start with easy topics and practice daily. Aim for 80+ questions per day.'
+        : accuracy < 75
+        ? 'Good progress! Focus on your weak areas while maintaining strength in good subjects. Practice 100+ questions daily.'
+        : 'Excellent performance! Focus on advanced topics and time management. Practice full mock tests.',
+      planHindi: accuracy < 50
+        ? 'आपकୀ सटीकता कम है। बुनियादी बातों पर ध्यान दें। आसान विषयों से शुरू करें और रोजाना अभ्यास करें।'
+        : accuracy < 75
+        ? 'अच्छी प्रगति! अपनी कमज़ोर areas पर ध्यान दें जबकि अच्छे विषयों में मज़बूती बनाए रखें।'
+        : 'उत्कृष्ट प्रदर्शन! उन्नत विषयों और समय प्रबंधन पर ध्यान दें।',
+      focusAreas: [...weakSubjects, ...weakTopics].slice(0, 5),
+      focusAreasHindi: [...weakSubjects, ...weakTopics].slice(0, 5),
+      dailySchedule: [
+        { day: 1, topic: weakTopics[0] || 'Quantitative Aptitude', duration: 60, priority: 'high' },
+        { day: 2, topic: weakTopics[1] || 'Reasoning', duration: 45, priority: 'high' },
+        { day: 3, topic: weakTopics[2] || 'General Awareness', duration: 30, priority: 'medium' },
+        { day: 4, topic: weakTopics[0] || 'English', duration: 45, priority: 'medium' },
+        { day: 5, topic: 'Mock Test Review', duration: 90, priority: 'high' },
+      ],
+      tips: ['Practice daily', 'Focus on weak areas', 'Take mock tests regularly', 'Review mistakes'],
+      tipsHindi: ['रोज़ाना अभ्यास करें', 'कमज़ोर areas पर ध्यान दें', 'नियमित mock tests लें', 'ग़लतियों का विश्लेषण करें'],
     };
   }
 }
