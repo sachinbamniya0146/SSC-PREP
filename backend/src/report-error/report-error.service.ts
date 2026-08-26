@@ -16,7 +16,7 @@ export class ReportErrorService {
   }
 
   /** Student reports a suspected error on a question. */
-  async report(userId: string, questionId: string, description: string, category?: string) {
+  async report(userId: string, questionId: string, description: string, category?: string, issueType?: string) {
     const question = await this.prisma.question.findUnique({
       where: { id: questionId },
       select: { id: true, autoSuspended: true },
@@ -64,7 +64,7 @@ export class ReportErrorService {
   }
 
   /** Admin: list reports, optionally filtered by status. */
-  async list(status?: string, questionId?: string) {
+  async list(status?: string, questionId?: string, issueType?: string) {
     const where: Prisma.QuestionErrorReportWhereInput = {};
     if (status) where.status = status as ErrorReportStatus;
     if (questionId) where.questionId = questionId;
@@ -92,7 +92,7 @@ export class ReportErrorService {
   }
 
   /** Admin resolves a report. */
-  async resolve(reportId: string, status: ErrorReportStatus, resolvedBy: string) {
+  async resolve(reportId: string, status: ErrorReportStatus, resolvedBy: string, adminNotes?: string) {
     const report = await this.prisma.questionErrorReport.update({
       where: { id: reportId },
       data: { status, resolvedAt: new Date(), resolvedBy },
@@ -113,6 +113,67 @@ export class ReportErrorService {
       });
     }
     return { report };
+  }
+
+  /** Get all reports for a specific question */
+  async getQuestionReports(questionId: string) {
+    const question = await this.prisma.question.findUnique({
+      where: { id: questionId },
+      select: {
+        id: true,
+        questionText: true,
+        correctAnswer: true,
+        autoSuspended: true,
+        errorReportCount: true,
+        exam: { select: { name: true } },
+      },
+    });
+    if (!question) {
+      throw new NotFoundException('Question not found');
+    }
+
+    const reports = await this.prisma.questionErrorReport.findMany({
+      where: { questionId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+
+    return { question, reports, count: reports.length };
+  }
+
+  /** Admin: manually unsuspend a question after fixing */
+  async unsuspendQuestion(questionId: string, adminId: string) {
+    const question = await this.prisma.question.findUnique({
+      where: { id: questionId },
+    });
+    if (!question) {
+      throw new NotFoundException('Question not found');
+    }
+
+    // Update all OPEN/REVIEWING reports to REJECTED
+    await this.prisma.questionErrorReport.updateMany({
+      where: { questionId, status: { in: ['OPEN', 'REVIEWING'] } },
+      data: { status: 'REJECTED', resolvedAt: new Date(), resolvedBy: adminId },
+    });
+
+    await this.prisma.question.update({
+      where: { id: questionId },
+      data: { autoSuspended: false, suspendedAt: null, errorReportCount: 0 },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'QUESTION_UNSUSPENDED',
+        targetEntity: 'Question',
+        entityId: questionId,
+        metadataJson: { questionText: question.questionText.substring(0, 100) } as any,
+      },
+    });
+
+    return { success: true, message: 'Question unsuspended and error reports cleared' };
   }
 
   /** v5 §40 — error-type classification stats for the admin accuracy dashboard. */

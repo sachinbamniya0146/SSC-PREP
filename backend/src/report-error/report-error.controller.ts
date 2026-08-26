@@ -8,6 +8,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Put,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
@@ -31,7 +32,7 @@ export class ReportErrorController {
   @ApiOperation({ summary: 'Report a suspected error on a question (v5 §37.4)' })
   async report(
     @CurrentUser() user: { userId: string },
-    @Body() body: { questionId: string; description?: string; category?: string },
+    @Body() body: { questionId: string; description?: string; category?: string; issueType?: string },
   ) {
     if (!body.questionId) {
       return { statusCode: 400, message: 'questionId is required' };
@@ -41,6 +42,7 @@ export class ReportErrorController {
       body.questionId,
       body.description || 'Reported error',
       body.category,
+      body.issueType,
     );
   }
 
@@ -52,8 +54,9 @@ export class ReportErrorController {
   async list(
     @Query('status') status?: string,
     @Query('questionId') questionId?: string,
+    @Query('issueType') issueType?: string,
   ) {
-    return this.reports.list(status, questionId);
+    return this.reports.list(status, questionId, issueType);
   }
 
   @Post(':id/resolve')
@@ -64,10 +67,10 @@ export class ReportErrorController {
   async resolve(
     @Param('id') id: string,
     @CurrentUser() user: { userId: string; role?: string },
-    @Body() body: { status?: 'REVIEWING' | 'CONFIRMED' | 'REJECTED' },
+    @Body() body: { status?: 'REVIEWING' | 'CONFIRMED' | 'REJECTED'; adminNotes?: string },
   ) {
     const status = body.status || 'REVIEWING';
-    return this.reports.resolve(id, status, user.userId);
+    return this.reports.resolve(id, status, user.userId, body.adminNotes);
   }
 
   @Get('stats/categories')
@@ -84,5 +87,22 @@ export class ReportErrorController {
   @ApiOperation({ summary: 'Current auto-suspend threshold (public)' })
   async threshold() {
     return this.reports.getExports();
+  }
+
+  @Get('question/:questionId/reports')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get all reports for a specific question' })
+  async getQuestionReports(@Param('questionId') questionId: string) {
+    return this.reports.getQuestionReports(questionId);
+  }
+
+  @Put('question/:questionId/unsuspend')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Admin: manually unsuspend a question after fixing' })
+  async unsuspendQuestion(@Param('questionId') questionId: string, @CurrentUser() user: { userId: string }) {
+    return this.reports.unsuspendQuestion(questionId, user.userId);
   }
 }
