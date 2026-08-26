@@ -438,4 +438,395 @@ export class AdminService {
       percentage: total > 0 ? Math.round((count / total) * 1000) / 10 : 0,
     }));
   }
+
+  // ---- Admin Help System ----
+
+  /**
+   * Get format examples for bulk question upload
+   */
+  async getFormatExamples() {
+    return {
+      excel: {
+        description: 'Excel (.xlsx) format for bulk question upload',
+        headers: [
+          'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
+          'questionText*', 'questionTextHindi',
+          'optionA*', 'optionA_Hindi',
+          'optionB*', 'optionB_Hindi',
+          'optionC*', 'optionC_Hindi',
+          'optionD*', 'optionD_Hindi',
+          'correctAnswer*', 'explanation', 'explanationHindi',
+          'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
+          'difficulty'
+        ],
+        sampleRow: {
+          examId: 'cgl-exam-id',
+          subjectId: 'quantitative-aptitude-id',
+          chapterId: 'arithmetic-id',
+          topicId: 'percentage',
+          subTopicId: 'percentage-basics',
+          questionText: 'What is 20% of 150?',
+          questionTextHindi: '150 का 20% क्या है?',
+          optionA: '30',
+          optionA_Hindi: '30',
+          optionB: '25',
+          optionB_Hindi: '25',
+          optionC: '35',
+          optionC_Hindi: '35',
+          optionD: '40',
+          optionD_Hindi: '40',
+          correctAnswer: 'A',
+          explanation: 'Multiply 150 by 0.20',
+          explanationHindi: '150 को 0.20 से गुणा करें',
+          year: 2023,
+          shift: 'Shift 1',
+          paperCode: 'PAPER-1',
+          marks: 2,
+          negativeMarks: 0.5,
+          difficulty: 'EASY'
+        },
+        rules: [
+          'Required fields are marked with *',
+          'Hindi fields are optional but recommended for bilingual support',
+          'correctAnswer must be A, B, C, or D',
+          'difficulty must be EASY, MEDIUM, or HARD',
+          'year should be a valid year (e.g., 2023, 2024)',
+          'marks default to 1, negativeMarks default to 0.25',
+          'examId, subjectId, chapterId must exist in the database',
+          'topicId and subTopicId are optional but recommended for better organization'
+        ]
+      },
+      csv: {
+        description: 'CSV format for bulk question upload (comma-separated)',
+        headers: [
+          'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
+          'questionText*', 'questionTextHindi',
+          'optionA*', 'optionA_Hindi',
+          'optionB*', 'optionB_Hindi',
+          'optionC*', 'optionC_Hindi',
+          'optionD*', 'optionD_Hindi',
+          'correctAnswer*', 'explanation', 'explanationHindi',
+          'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
+          'difficulty'
+        ],
+        sampleRow: 'cgl-exam-id,quantitative-aptitude-id,arithmetic-id,percentage,percentage-basics,"What is 20% of 150?","150 का 20% क्या है?",30,30,25,25,35,35,40,40,A,"Multiply 150 by 0.20","150 को 0.20 से गुणा करें",2023,"Shift 1","PAPER-1",2,0.5,EASY',
+        rules: [
+          'Required fields are marked with *',
+          'Use comma separation',
+          'Wrap fields with commas or quotes in double quotes',
+          'Hindi fields are optional',
+          'correctAnswer must be A, B, C, or D',
+          'difficulty must be EASY, MEDIUM, or HARD'
+        ]
+      },
+      json: {
+        description: 'JSON Lines format - one JSON object per line',
+        structure: {
+          examId: 'cgl-exam-id',
+          subjectId: 'quantitative-aptitude-id',
+          chapterId: 'arithmetic-id',
+          topicId: 'percentage',
+          subTopicId: 'percentage-basics',
+          questionText: 'What is 20% of 150?',
+          questionTextHindi: '150 का 20% क्या है?',
+          options: [
+            { key: 'A', text: '30', textHi: '30' },
+            { key: 'B', text: '25', textHi: '25' },
+            { key: 'C', text: '35', textHi: '35' },
+            { key: 'D', text: '40', textHi: '40' }
+          ],
+          correctAnswer: 'A',
+          explanation: 'Multiply 150 by 0.20',
+          explanationHindi: '150 को 0.20 से गुणा करें',
+          year: 2023,
+          shift: 'Shift 1',
+          paperCode: 'PAPER-1',
+          marks: 2,
+          negativeMarks: 0.5,
+          difficulty: 'EASY'
+        },
+        rules: [
+          'One JSON object per line (JSONL format)',
+          'All fields in single object',
+          'options array with key, text, textHi',
+          'correctAnswer must match one of the option keys',
+          'difficulty must be EASY, MEDIUM, or HARD'
+        ]
+      },
+      text: {
+        description: 'Tab-separated text format',
+        headers: [
+          'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
+          'questionText*', 'questionTextHindi',
+          'optionA*', 'optionA_Hindi',
+          'optionB*', 'optionB_Hindi',
+          'optionC*', 'optionC_Hindi',
+          'optionD*', 'optionD_Hindi',
+          'correctAnswer*', 'explanation', 'explanationHindi',
+          'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
+          'difficulty'
+        ],
+        sampleRow: 'cgl-exam-id\tquantitative-aptitude-id\tarithmetic-id\tpercentage\tpercentage-basics\tWhat is 20% of 150?\t150 का 20% क्या है?\t30\t30\t25\t25\t35\t35\t40\t40\tA\tMultiply 150 by 0.20\t150 को 0.20 से गुणा करें\t2023\tShift 1\tPAPER-1\t2\t0.5\tEASY',
+        rules: [
+          'Required fields are marked with *',
+          'Use tabs between fields',
+          'Hindi fields are optional',
+          'correctAnswer must be A, B, C, or D'
+        ]
+      }
+    };
+  }
+
+  /**
+   * Get AI prompts for generating questions
+   */
+  async getAIPrompts() {
+    return {
+      systemPrompt: `You are an expert SSC exam question creator. Generate high-quality, exam-standard questions for SSC CGL, CHSL, MTS, CPO, GD, and other government exams.
+
+CRITICAL RULES:
+1. Questions MUST be bilingual (English + Hindi)
+2. Exactly 4 options (A, B, C, D) with non-empty text
+3. One correct answer clearly marked
+4. Detailed explanation in both English and Hindi
+5. Match actual SSC exam patterns, difficulty, and topic distribution
+6. Include year, shift, paperCode where applicable
+7. Marks: 2 for correct, -0.5 for wrong (standard SSC)
+8. Difficulty: EASY, MEDIUM, or HARD
+
+OUTPUT FORMAT: JSON object with all required fields.`,
+      
+      topicPrompts: {
+        'percentage': {
+          english: `Generate 10 SSC-level percentage questions covering: basic percentage, profit/loss, discount, simple/compound interest, population growth. Include bilingual text, 4 options each, detailed explanations.`,
+          hindi: `SSC स्तर के 10 प्रतिशत प्रश्न बनाएं: बुनियादी प्रतिशत, लाभ/हानि, छूट, साधारण/चक्रवृद्धि ब्याज, जनसंख्या वृद्धि। द्विभाषी पाठ, प्रत्येक के 4 विकल्प, विस्तृत व्याख्या।`
+        },
+        'time-work': {
+          english: `Generate 10 SSC-level Time & Work questions: pipes/cisterns, efficiency, work division, alternating work. Bilingual, 4 options, detailed explanations.`,
+          hindi: `SSC स्तर के 10 समय और कार्य प्रश्न: पाइप/सिस्टर्न, दक्षता, कार्य विभाजन, बारी-बारी कार्य। द्विभाषी, 4 विकल्प, विस्तृत व्याख्या।`
+        },
+        'algebra': {
+          english: `Generate 10 SSC-level Algebra questions: linear equations, quadratic equations, polynomials, identities, factorization. Bilingual, 4 options, detailed explanations.`,
+          hindi: `SSC स्तर के 10 बीजगणित प्रश्न: रैखिक समीकरण, द्विघात समीकरण, बहुपद, सर्वसमिकाएँ, गुणनखंड। द्विभाषी, 4 विकल्प, विस्तृत व्याख्या।`
+        },
+        'geometry': {
+          english: `Generate 10 SSC-level Geometry questions: triangles, circles, quadrilaterals, coordinate geometry, mensuration. Bilingual, 4 options, detailed explanations.`,
+          hindi: `SSC स्तर के 10 ज्यामिति प्रश्न: त्रिभुज, वृत्त, चतुर्भुज, निर्देशांक ज्यामिति, क्षेत्रमिति। द्विभाषी, 4 विकल्प, विस्तृत व्याख्या।`
+        },
+        'trigonometry': {
+          english: `Generate 10 SSC-level Trigonometry questions: ratios, identities, heights/distances, max/min values. Bilingual, 4 options, detailed explanations.`,
+          hindi: `SSC स्तर के 10 त्रिकोणमिति प्रश्न: अनुपात, सर्वसमिकाएँ, ऊंचाई/दूरी, अधिकतम/न्यूनतम मान। द्विभाषी, 4 विकल्प, विस्तृत व्याख्या।`
+        },
+        'reasoning-analogy': {
+          english: `Generate 10 SSC Reasoning Analogy questions: word analogy, number analogy, letter analogy. Bilingual, 4 options, explanations with pattern logic.`,
+          hindi: `SSC रीजनिंग सादृश्यता के 10 प्रश्न: शब्द सादृश्यता, संख्या सादृश्यता, अक्षर सादृश्यता। द्विभाषी, 4 विकल्प, पैटर्न तर्क के साथ व्याख्या।`
+        },
+        'reasoning-series': {
+          english: `Generate 10 SSC Reasoning Series questions: number series, letter series, mixed series. Bilingual, 4 options, explanations with pattern.`,
+          hindi: `SSC रीजनिंग श्रृंखला के 10 प्रश्न: संख्या श्रृंखला, अक्षर श्रृंखला, मिश्रित श्रृंखला। द्विभाषी, 4 विकल्प, पैटर्न के साथ व्याख्या।`
+        },
+        'english-spotting': {
+          english: `Generate 10 SSC English Error Spotting questions covering: subject-verb agreement, tense, preposition, article, pronoun, conjunction. Bilingual explanations.`,
+          hindi: `SSC अंग्रेजी त्रुटि खोज के 10 प्रश्न: विषय-क्रिया सहमति, काल, पूर्वसर्ग, आर्टिकल, सर्वनाम, संयोजन। द्विभाषी व्याख्या।`
+        },
+        'english-fill': {
+          english: `Generate 10 SSC English Fill in the Blanks questions: vocabulary, grammar, prepositions, phrasal verbs. Bilingual explanations.`,
+          hindi: `SSC अंग्रेजी रिक्त स्थान भरें के 10 प्रश्न: शब्दावली, व्याकरण, पूर्वसर्ग, फ्रेज़ल क्रिया। द्विभाषी व्याख्या।`
+        },
+        'ga-history': {
+          english: `Generate 10 SSC General Awareness History questions: Ancient, Medieval, Modern Indian History. Focus on SSC-repeated topics. Bilingual.`,
+          hindi: `SSC सामान्य जागरूकता इतिहास के 10 प्रश्न: प्राचीन, मध्यकालीन, आधुनिक भारतीय इतिहास। SSC दोहराए गए विषयों पर ध्यान। द्विभाषी।`
+        },
+        'ga-polity': {
+          english: `Generate 10 SSC Polity questions: Constitution, Parliament, Fundamental Rights, DPSP, Amendments. Bilingual.`,
+          hindi: `SSC राजव्यवस्था के 10 प्रश्न: संविधान, संसद, मौलिक अधिकार, नीति निदेशक तत्व, संशोधन। द्विभाषी।`
+        },
+        'ga-geography': {
+          english: `Generate 10 SSC Geography questions: Physical, Indian, World Geography. Climate, rivers, mountains, soils. Bilingual.`,
+          hindi: `SSC भूगोल के 10 प्रश्न: भौतिक, भारतीय, विश्व भूगोल। जलवायु, नदियाँ, पर्वत, मिट्टी। द्विभाषी।`
+        },
+        'ga-science': {
+          english: `Generate 10 SSC General Science questions: Physics, Chemistry, Biology (up to Class 10 level). Practical applications. Bilingual.`,
+          hindi: `SSC सामान्य विज्ञान के 10 प्रश्न: भौतिकी, रसायन विज्ञान, जीव विज्ञान (कक्षा 10 तक)। व्यावहारिक अनुप्रयोग। द्विभाषी।`
+        },
+        'ga-current': {
+          english: `Generate 10 SSC Current Affairs questions (last 6 months): Awards, Sports, Appointments, Schemes, Summits, Reports. Bilingual.`,
+          hindi: `SSC समसामयिकी के 10 प्रश्न (पिछले 6 महीने): पुरस्कार, खेल, नियुक्तियाँ, योजनाएँ, शिखर सम्मेलन, रिपोर्ट। द्विभाषी।`
+        }
+      },
+
+      bulkGenerationPrompt: `Generate a complete mock test paper for SSC CGL Tier 1:
+- 100 questions total (25 each: Reasoning, GA, Quant, English)
+- 15 minutes per section, 60 minutes total
+- Multi-year distribution (2017-2024)
+- Bilingual (English + Hindi)
+- Exactly 4 non-empty options per question
+- Detailed explanations
+- Output as JSON array
+
+Section A - General Intelligence & Reasoning (25 Qs): Analogy, Series, Coding-Decoding, Blood Relations, Direction, Venn Diagram, Syllogism, etc.
+
+Section B - General Awareness (25 Qs): History, Polity, Geography, Science, Current Affairs, Static GK
+
+Section C - Quantitative Aptitude (25 Qs): Arithmetic, Algebra, Geometry, Trigonometry, Data Interpretation
+
+Section D - English Comprehension (25 Qs): Error Spotting, Fill in Blanks, Synonyms/Antonyms, Idioms, Reading Comprehension, Cloze Test`,
+
+      validationPrompt: `Validate this question for SSC exam standards:
+1. Is it bilingual (English + Hindi)?
+2. Exactly 4 options with non-empty text?
+3. Correct answer is one of A/B/C/D?
+4. Explanation provided in both languages?
+5. Difficulty appropriate (EASY/MEDIUM/HARD)?
+6. Topic matches the subject/chapter?
+7. Year/shift/paperCode realistic?
+8. No duplicate questions?
+9. Marks: 2, Negative: 0.5?
+
+Return: { valid: true/false, issues: [], suggestions: [] }`
+    };
+  }
+
+  /**
+   * Generate Excel template for download
+   */
+  generateExcelTemplate(): Buffer {
+    // We'll create a simple XLSX buffer using a basic approach
+    // In production, use xlsx library to create proper Excel file
+    const headers = [
+      'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
+      'questionText*', 'questionTextHindi',
+      'optionA*', 'optionA_Hindi',
+      'optionB*', 'optionB_Hindi',
+      'optionC*', 'optionC_Hindi',
+      'optionD*', 'optionD_Hindi',
+      'correctAnswer*', 'explanation', 'explanationHindi',
+      'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
+      'difficulty'
+    ];
+    
+    const sampleRow = [
+      'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
+      'What is 20% of 150?', '150 का 20% क्या है?',
+      '30', '30',
+      '25', '25',
+      '35', '35',
+      '40', '40',
+      'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
+      '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
+      'EASY'
+    ];
+
+    // Create CSV content (can be opened in Excel)
+    const lines = [
+      headers.join(','),
+      sampleRow.map(cell => cell.includes(',') ? `"${cell}"` : cell).join(',')
+    ];
+    
+    return Buffer.from(lines.join('\n'), 'utf-8');
+  }
+
+  /**
+   * Generate CSV template for download
+   */
+  generateCSVTemplate(): Buffer {
+    const headers = [
+      'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
+      'questionText*', 'questionTextHindi',
+      'optionA*', 'optionA_Hindi',
+      'optionB*', 'optionB_Hindi',
+      'optionC*', 'optionC_Hindi',
+      'optionD*', 'optionD_Hindi',
+      'correctAnswer*', 'explanation', 'explanationHindi',
+      'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
+      'difficulty'
+    ];
+    
+    const sampleRow = [
+      'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
+      'What is 20% of 150?', '150 का 20% क्या है?',
+      '30', '30',
+      '25', '25',
+      '35', '35',
+      '40', '40',
+      'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
+      '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
+      'EASY'
+    ];
+
+    const lines = [
+      headers.join(','),
+      sampleRow.map(cell => cell.includes(',') || cell.includes('"') ? `"${cell.replace(/"/g, '""')}"` : cell).join(',')
+    ];
+    
+    return Buffer.from(lines.join('\n'), 'utf-8');
+  }
+
+  /**
+   * Generate JSON template for download
+   */
+  generateJSONTemplate(): Buffer {
+    const template = {
+      examId: 'cgl-exam-id',
+      subjectId: 'quantitative-aptitude-id',
+      chapterId: 'arithmetic-id',
+      topicId: 'percentage',
+      subTopicId: 'percentage-basics',
+      questionText: 'What is 20% of 150?',
+      questionTextHindi: '150 का 20% क्या है?',
+      options: [
+        { key: 'A', text: '30', textHi: '30' },
+        { key: 'B', text: '25', textHi: '25' },
+        { key: 'C', text: '35', textHi: '35' },
+        { key: 'D', text: '40', textHi: '40' }
+      ],
+      correctAnswer: 'A',
+      explanation: 'Multiply 150 by 0.20',
+      explanationHindi: '150 को 0.20 से गुणा करें',
+      year: 2023,
+      shift: 'Shift 1',
+      paperCode: 'PAPER-1',
+      marks: 2,
+      negativeMarks: 0.5,
+      difficulty: 'EASY'
+    };
+
+    return Buffer.from(JSON.stringify(template, null, 2), 'utf-8');
+  }
+
+  /**
+   * Generate Text template for download
+   */
+  generateTextTemplate(): Buffer {
+    const headers = [
+      'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
+      'questionText*', 'questionTextHindi',
+      'optionA*', 'optionA_Hindi',
+      'optionB*', 'optionB_Hindi',
+      'optionC*', 'optionC_Hindi',
+      'optionD*', 'optionD_Hindi',
+      'correctAnswer*', 'explanation', 'explanationHindi',
+      'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
+      'difficulty'
+    ];
+    
+    const sampleRow = [
+      'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
+      'What is 20% of 150?', '150 का 20% क्या है?',
+      '30', '30',
+      '25', '25',
+      '35', '35',
+      '40', '40',
+      'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
+      '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
+      'EASY'
+    ];
+
+    const lines = [
+      headers.join('\t'),
+      sampleRow.join('\t')
+    ];
+    
+    return Buffer.from(lines.join('\n'), 'utf-8');
+  }
 }
