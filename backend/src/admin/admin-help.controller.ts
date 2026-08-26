@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Res } from '@nestjs/common';
+import { Controller, Get, Res } from '@nestjs/common';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -10,13 +10,13 @@ export class AdminHelpController {
 
   @Get('formats')
   @Roles('ADMIN', 'MODERATOR')
-  async getFormatExamples(@CurrentUser() user: { userId: string }) {
+  async getFormatExamples(@CurrentUser() _user: { userId: string }) {
     return this.adminService.getFormatExamples();
   }
 
   @Get('prompts')
   @Roles('ADMIN', 'MODERATOR')
-  async getAIPrompts(@CurrentUser() user: { userId: string }) {
+  async getAIPrompts(@CurrentUser() _user: { userId: string }) {
     return this.adminService.getAIPrompts();
   }
 

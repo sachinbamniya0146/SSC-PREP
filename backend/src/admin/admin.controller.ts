@@ -645,7 +645,7 @@ export class AdminController {
   // ---- System Health ----
     @Get('system/health')
     async systemHealth() {
-      const dbStatus = await this.prisma.$queryRaw`SELECT 1 as ok`;
+      await this.prisma.$queryRaw`SELECT 1 as ok`;
       const userCount = await this.prisma.user.count();
       const activeSessions = await this.prisma.deviceSession.count({ where: { isActive: true } });
       const pendingPayments = await this.prisma.payment.count({ 

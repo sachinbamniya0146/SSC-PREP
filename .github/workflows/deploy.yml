@@ -13,54 +13,88 @@ jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-     
+      
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-     
+      
       - name: Verify SSH connection
         run: |
           ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "echo 'SSH connection successful' && hostname"
-     
+      
       - name: Copy production env file
         env:
           PRODUCTION_ENV: ${{ secrets.PRODUCTION_ENV }}
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-            cd /opt/ssc-prep-hub &&
+            cd /opt/ssc-prep-hub && 
             if [ ! -f .env ]; then
               echo 'Creating .env from template...'
               printf '%s' \"$PRODUCTION_ENV\" > .env
             fi
           "
-     
-      - name: Run deployment script
+      
+      - name: Run deployment script with retry
+        id: deploy
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-            cd /opt/ssc-prep-hub &&
-            chmod +x deploy.sh &&
-            ./deploy.sh
-          "
-        timeout-minutes: 50
-     
-      - name: Verify deployment
+          max_retries=3
+          retry_count=0
+          while [ $retry_count -lt $max_retries ]; do
+            echo "🚀 Deployment attempt $((retry_count + 1))/$max_retries"
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST}} "
+              cd /opt/ssc-prep-hub &&
+              chmod +x deploy.sh &&
+              ./deploy.sh
+            "; then
+              echo "✅ Deployment succeeded"
+              exit 0
+            else
+              retry_count=$((retry_count + 1))
+              if [ $retry_count -lt $max_retries ]; then
+                echo "⚠️ Deployment failed, retrying in 60 seconds..."
+                sleep 60
+              else
+                echo "❌ All deployment attempts failed"
+                exit 1
+              fi
+            fi
+          done
+        timeout-minutes: 80
+      
+      - name: Verify deployment with retry
         if: success()
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-            sleep 10 &&
-            curl -sf -o /dev/null -w '%{http_code}' https://sscprephub.in | grep -q '^200$' &&
-            curl -sf -o /dev/null -w '%{http_code}' https://sscprephub.in/api/v1/health | grep -q '^200$' &&
-            echo 'Deployment verification PASSED'
-          "
-        timeout-minutes: 5
+          max_retries=5
+          retry_count=0
+          while [ $retry_count -lt $max_retries ]; do
+            echo "🔍 Verification attempt $((retry_count + 1))/$max_retries"
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
+              sleep 15 &&
+              curl -sf -o /dev/null -w '%{http_code}' --max-time 30 https://sscprephub.in | grep -q '^200$' &&
+              curl -sf -o /dev/null -w '%{http_code}' --max-time 30 https://sscprephub.in/api/v1/health | grep -q '^200$'
+            "; then
+              echo "✅ Deployment verification PASSED"
+              exit 0
+            else
+              retry_count=$((retry_count + 1))
+              if [ $retry_count -lt $max_retries ]; then
+                echo "⚠️ Verification failed, retrying in 30 seconds..."
+                sleep 30
+              else
+                echo "❌ All verification attempts failed"
+                exit 1
+              fi
+            fi
+          done
+        timeout-minutes: 10
 
   notify:
     name: Notify on failure

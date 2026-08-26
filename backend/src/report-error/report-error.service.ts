@@ -16,7 +16,7 @@ export class ReportErrorService {
   }
 
   /** Student reports a suspected error on a question. */
-  async report(userId: string, questionId: string, description: string, category?: string, issueType?: string) {
+  async report(userId: string, questionId: string, description: string, category?: string, _issueType?: string) {
     const question = await this.prisma.question.findUnique({
       where: { id: questionId },
       select: { id: true, autoSuspended: true },
@@ -64,7 +64,7 @@ export class ReportErrorService {
   }
 
   /** Admin: list reports, optionally filtered by status. */
-  async list(status?: string, questionId?: string, issueType?: string) {
+  async list(status?: string, questionId?: string, _issueType?: string) {
     const where: Prisma.QuestionErrorReportWhereInput = {};
     if (status) where.status = status as ErrorReportStatus;
     if (questionId) where.questionId = questionId;
@@ -92,7 +92,7 @@ export class ReportErrorService {
   }
 
   /** Admin resolves a report. */
-  async resolve(reportId: string, status: ErrorReportStatus, resolvedBy: string, adminNotes?: string) {
+  async resolve(reportId: string, status: ErrorReportStatus, resolvedBy: string, _adminNotes?: string) {
     const report = await this.prisma.questionErrorReport.update({
       where: { id: reportId },
       data: { status, resolvedAt: new Date(), resolvedBy },

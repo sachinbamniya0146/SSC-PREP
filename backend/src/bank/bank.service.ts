@@ -104,22 +104,30 @@ export class BankService {
     else if (f.subjectId) where.subjectId = f.subjectId;
     const rows = await this.prisma.question.findMany({
       where,
-      include: { chapter: { select: { name: true } } },
+      include: { chapter: { select: { name: true } }, exam: { select: { name: true } }, subject: { select: { name: true } } },
       orderBy: { createdAt: 'asc' },
       skip,
       take,
     });
     const total = await this.prisma.question.count({ where });
-    const data: QuestionCard[] = rows.map((r: any) => ({
+    const data = rows.map((r: any) => ({
       id: r.id,
       questionText: r.questionText,
       questionTextHindi: r.questionTextHindi,
       options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
-      optionsHi: null,
+      correctAnswer: r.correctAnswer,
+      explanation: r.explanation,
+      explanationHindi: r.explanationHindi,
       chapter: r.chapter?.name ?? '',
+      exam: r.exam?.name ?? null,
+      year: r.year,
+      shift: r.shift,
+      subject: r.subject?.name ?? null,
+      difficulty: r.difficulty,
+      marks: r.marks,
+      negativeMarks: r.negativeMarks,
       answerVerificationStatus: r.answerVerificationStatus ?? 'UNVERIFIED_SINGLE_SOURCE',
       lastVerifiedAt: r.lastVerifiedAt ?? null,
-      // exam/year handled server-side in a typed served mode
     }));
     return { total, data };
   }

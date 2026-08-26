@@ -343,10 +343,11 @@ export class UsersService {
       const weekTests = testAttempts.filter(t =>
         new Date(t.submittedAt!) >= weekStart && new Date(t.submittedAt!) <= weekEnd
       );
-      const weekQuestions = questionAttempts.filter(q => {
-        // We'd need to join with testAttempt to get date - simplified
-        return false;
-      });
+      // weekQuestions not used - keeping for future implementation
+      // const weekQuestions = questionAttempts.filter(_q => {
+      //   // We'd need to join with testAttempt to get date - simplified
+      //   return false;
+      // });
 
       weeklyData.push({
         week: `Week ${4 - i}`,

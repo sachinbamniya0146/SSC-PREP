@@ -9,8 +9,6 @@ export class AdminService {
   /** Get comprehensive dashboard statistics */
   async getDashboardStats(days: number = 30) {
     const since = startOfDay(subDays(new Date(), days));
-    const today = startOfDay(new Date());
-    const yesterday = startOfDay(subDays(new Date(), 1));
 
     // Core metrics
     const [

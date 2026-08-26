@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
@@ -483,7 +483,7 @@ export class BankUploadService {
   /**
    * Parse a single row into a question object
    */
-  private parseQuestionRow(row: any[], headerMap: Record<string, number>, rowNum: number): BulkUploadQuestion {
+  private parseQuestionRow(row: any[], headerMap: Record<string, number>, _rowNum: number): BulkUploadQuestion {
     const get = (key: string): string => {
       const idx = headerMap[key];
       return idx !== undefined && row[idx] !== undefined ? String(row[idx]).trim() : '';
