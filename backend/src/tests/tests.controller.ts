@@ -110,4 +110,52 @@ export class TestsController {
       examId,
     });
   }
+
+  // ---- Enhanced Analytics Endpoints ----
+  @Get('analytics/performance/:templateId')
+  getPerformanceAnalytics(
+    @CurrentUser() user: { userId: string },
+    @Param('templateId') templateId: string,
+  ) {
+    return this.testsService.getPerformanceAnalytics(user.userId, templateId);
+  }
+
+  @Get('analytics/subject-wise')
+  getSubjectWiseAnalytics(@CurrentUser() user: { userId: string }) {
+    return this.testsService.getSubjectWiseAnalytics(user.userId);
+  }
+
+  @Get('analytics/time-spent')
+  getTimeSpentAnalytics(
+    @CurrentUser() user: { userId: string },
+    @Query('templateId') templateId?: string,
+  ) {
+    return this.testsService.getTimeSpentAnalytics(user.userId, templateId);
+  }
+
+  @Get('analytics/accuracy-trend')
+  getAccuracyTrend(
+    @CurrentUser() user: { userId: string },
+    @Query('days') days?: string,
+  ) {
+    return this.testsService.getAccuracyTrend(user.userId, days ? Number(days) : 30);
+  }
+
+  @Get('analytics/weak-chapters')
+  getWeakChapters(@CurrentUser() user: { userId: string }) {
+    return this.testsService.getWeakChapters(user.userId);
+  }
+
+  @Get('analytics/strength-chapters')
+  getStrengthChapters(@CurrentUser() user: { userId: string }) {
+    return this.testsService.getStrengthChapters(user.userId);
+  }
+
+  @Get('analytics/comparison/:templateId')
+  getComparisonWithToppers(
+    @CurrentUser() user: { userId: string },
+    @Param('templateId') templateId: string,
+  ) {
+    return this.testsService.getComparisonWithToppers(user.userId, templateId);
+  }
 }

@@ -952,4 +952,437 @@ async saveAnswers(
       questions: practiceQuestions,
     };
   }
+
+  // ---- Enhanced Analytics Methods ----
+
+  /**
+   * Get detailed performance analytics for a specific test template
+   */
+  async getPerformanceAnalytics(userId: string, templateId: string) {
+    const attempts = await this.prisma.testAttempt.findMany({
+      where: { userId, testTemplateId: templateId, status: 'SUBMITTED' },
+      orderBy: { submittedAt: 'desc' },
+      include: {
+        testTemplate: { select: { title: true, totalQuestions: true, totalMarks: true } },
+        answers: {
+          include: {
+            question: {
+              select: {
+                id: true,
+                subjectId: true,
+                chapterId: true,
+                examId: true,
+                subject: { select: { name: true } },
+                chapter: { select: { name: true } },
+                exam: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!attempts.length) {
+      return { message: 'No completed attempts for this test' };
+    }
+
+    const latest = attempts[0];
+    const template = latest.testTemplate;
+
+    // Overall stats
+    const scores = attempts.map(a => a.score ?? 0);
+    const accuracies = attempts.map(a => a.accuracyPercent ?? 0);
+    const times = attempts
+      .filter(a => a.startedAt && a.submittedAt)
+      .map(a => (new Date(a.submittedAt!).getTime() - new Date(a.startedAt!).getTime()) / 1000);
+
+    // Subject-wise breakdown
+    const subjectStats = new Map<string, { total: number; correct: number; wrong: number; skipped: number; time: number }>();
+    const chapterStats = new Map<string, { total: number; correct: number; wrong: number; skipped: number; time: number }>();
+
+    for (const attempt of attempts) {
+      for (const answer of attempt.answers) {
+        const q = answer.question;
+        if (!q) continue;
+
+        const subjName = q.subject?.name || 'Unknown';
+        const chapName = q.chapter?.name || 'Unknown';
+        const examName = q.exam?.name || 'Unknown';
+
+        // Subject stats
+        if (!subjectStats.has(subjName)) subjectStats.set(subjName, { total: 0, correct: 0, wrong: 0, skipped: 0, time: 0 });
+        const subj = subjectStats.get(subjName)!;
+        subj.total++;
+        if (answer.isCorrect) subj.correct++;
+        else if (answer.selectedOption === null) subj.skipped++;
+        else subj.wrong++;
+        subj.time += answer.timeSpentSeconds || 0;
+
+        // Chapter stats
+        const chapKey = `${chapName} (${examName})`;
+        if (!chapterStats.has(chapKey)) chapterStats.set(chapKey, { total: 0, correct: 0, wrong: 0, skipped: 0, time: 0 });
+        const chap = chapterStats.get(chapKey)!;
+        chap.total++;
+        if (answer.isCorrect) chap.correct++;
+        else if (answer.selectedOption === null) chap.skipped++;
+        else chap.wrong++;
+        chap.time += answer.timeSpentSeconds || 0;
+      }
+    }
+
+    // Progress over attempts
+    const attemptProgress = attempts.slice().reverse().map((a, i) => ({
+      attemptNumber: i + 1,
+      score: a.score ?? 0,
+      accuracy: a.accuracyPercent ?? 0,
+      timeSpent: a.startedAt && a.submittedAt
+        ? Math.round((new Date(a.submittedAt!).getTime() - new Date(a.startedAt!).getTime()) / 1000)
+        : 0,
+      date: a.submittedAt,
+    }));
+
+    return {
+      templateId,
+      templateTitle: template.title,
+      totalAttempts: attempts.length,
+      bestScore: Math.max(...scores),
+      avgScore: Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10,
+      latestScore: scores[0],
+      bestAccuracy: Math.max(...accuracies),
+      avgAccuracy: Math.round((accuracies.reduce((a, b) => a + b, 0) / accuracies.length) * 10) / 10,
+      latestAccuracy: accuracies[0],
+      avgTimePerAttempt: times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0,
+      subjectWise: Array.from(subjectStats.entries()).map(([subject, stats]) => ({
+        subject,
+        accuracy: stats.total > 0 ? Math.round((stats.correct / stats.total) * 1000) / 10 : 0,
+        totalQuestions: stats.total,
+        correct: stats.correct,
+        wrong: stats.wrong,
+        skipped: stats.skipped,
+        avgTimePerQuestion: stats.total > 0 ? Math.round(stats.time / stats.total) : 0,
+      })),
+      chapterWise: Array.from(chapterStats.entries())
+        .map(([chapter, stats]) => ({
+          chapter,
+          accuracy: stats.total > 0 ? Math.round((stats.correct / stats.total) * 1000) / 10 : 0,
+          totalQuestions: stats.total,
+          correct: stats.correct,
+          wrong: stats.wrong,
+          skipped: stats.skipped,
+          avgTimePerQuestion: stats.total > 0 ? Math.round(stats.time / stats.total) : 0,
+        }))
+        .sort((a, b) => b.totalQuestions - a.totalQuestions),
+      attemptProgress,
+    };
+  }
+
+  /**
+   * Get subject-wise performance across all tests
+   */
+  async getSubjectWiseAnalytics(userId: string) {
+    const attempts = await this.prisma.testAttempt.findMany({
+      where: { userId, status: 'SUBMITTED' },
+      include: {
+        answers: {
+          include: {
+            question: {
+              select: {
+                subjectId: true,
+                subject: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const subjectMap = new Map<string, { total: number; correct: number; wrong: number; skipped: number; time: number }>();
+
+    for (const attempt of attempts) {
+      for (const answer of attempt.answers) {
+        const q = answer.question;
+        if (!q) continue;
+        const subjName = q.subject?.name || 'Unknown';
+        if (!subjectMap.has(subjName)) subjectMap.set(subjName, { total: 0, correct: 0, wrong: 0, skipped: 0, time: 0 });
+        const stats = subjectMap.get(subjName)!;
+        stats.total++;
+        if (answer.isCorrect) stats.correct++;
+        else if (answer.selectedOption === null) stats.skipped++;
+        else stats.wrong++;
+        stats.time += answer.timeSpentSeconds || 0;
+      }
+    }
+
+    return Array.from(subjectMap.entries())
+      .map(([subject, stats]) => ({
+        subject,
+        totalAttempts: attempts.length,
+        totalQuestions: stats.total,
+        correct: stats.correct,
+        wrong: stats.wrong,
+        skipped: stats.skipped,
+        accuracy: stats.total > 0 ? Math.round((stats.correct / stats.total) * 1000) / 10 : 0,
+        avgTimePerQuestion: stats.total > 0 ? Math.round(stats.time / stats.total) : 0,
+      }))
+      .sort((a, b) => b.totalQuestions - a.totalQuestions);
+  }
+
+  /**
+   * Get time spent analytics
+   */
+  async getTimeSpentAnalytics(userId: string, templateId?: string) {
+    const where: any = { userId, status: 'SUBMITTED' };
+    if (templateId) where.testTemplateId = templateId;
+
+    const attempts = await this.prisma.testAttempt.findMany({
+      where,
+      include: {
+        testTemplate: { select: { title: true, durationMinutes: true } },
+        answers: { select: { timeSpentSeconds: true, questionId: true } },
+      },
+      orderBy: { submittedAt: 'desc' },
+    });
+
+    const totalTime = attempts.reduce((sum, a) => {
+      if (a.startedAt && a.submittedAt) {
+        return sum + (new Date(a.submittedAt).getTime() - new Date(a.startedAt).getTime()) / 1000;
+      }
+      return sum + (a.answers.reduce((s, ans) => s + (ans.timeSpentSeconds || 0), 0));
+    }, 0);
+
+    const avgTimePerAttempt = attempts.length ? totalTime / attempts.length : 0;
+    const avgTimePerQuestion = attempts.reduce((sum, a) => sum + a.answers.length, 0) > 0
+      ? attempts.reduce((sum, a) => sum + a.answers.reduce((s, ans) => s + (ans.timeSpentSeconds || 0), 0), 0) /
+        attempts.reduce((sum, a) => sum + a.answers.length, 0)
+      : 0;
+
+    return {
+      totalAttempts: attempts.length,
+      totalTimeSpentSeconds: Math.round(totalTime),
+      avgTimePerAttemptSeconds: Math.round(avgTimePerAttempt),
+      avgTimePerQuestionSeconds: Math.round(avgTimePerQuestion),
+      attempts: attempts.map(a => ({
+        templateTitle: a.testTemplate?.title,
+        durationMinutes: a.testTemplate?.durationMinutes,
+        actualTimeSeconds: a.startedAt && a.submittedAt
+          ? Math.round((new Date(a.submittedAt).getTime() - new Date(a.startedAt).getTime()) / 1000)
+          : a.answers.reduce((s, ans) => s + (ans.timeSpentSeconds || 0), 0),
+        questionsAnswered: a.answers.length,
+      })),
+    };
+  }
+
+  /**
+   * Get accuracy trend over time
+   */
+  async getAccuracyTrend(userId: string, days: number = 30) {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const attempts = await this.prisma.testAttempt.findMany({
+      where: { userId, status: 'SUBMITTED', submittedAt: { gte: since } },
+      select: { accuracyPercent: true, submittedAt: true, score: true },
+      orderBy: { submittedAt: 'asc' },
+    });
+
+    // Group by day
+    const dailyMap = new Map<string, { accuracies: number[]; scores: number[] }>();
+    for (const a of attempts) {
+      const day = a.submittedAt!.toISOString().split('T')[0];
+      if (!dailyMap.has(day)) dailyMap.set(day, { accuracies: [], scores: [] });
+      const d = dailyMap.get(day)!;
+      if (a.accuracyPercent != null) d.accuracies.push(a.accuracyPercent);
+      if (a.score != null) d.scores.push(a.score);
+    }
+
+    return Array.from(dailyMap.entries())
+      .map(([date, data]) => ({
+        date,
+        avgAccuracy: data.accuracies.length
+          ? Math.round((data.accuracies.reduce((a, b) => a + b, 0) / data.accuracies.length) * 10) / 10
+          : 0,
+        avgScore: data.scores.length
+          ? Math.round((data.scores.reduce((a, b) => a + b, 0) / data.scores.length) * 10) / 10
+          : 0,
+        attempts: data.accuracies.length,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  /**
+   * Get weak chapters (lowest accuracy)
+   */
+  async getWeakChapters(userId: string) {
+    const attempts = await this.prisma.testAttempt.findMany({
+      where: { userId, status: 'SUBMITTED' },
+      include: {
+        answers: {
+          include: {
+            question: {
+              select: {
+                chapterId: true,
+                chapter: { select: { name: true } },
+                subject: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const chapterMap = new Map<string, { name: string; subject: string; total: number; correct: number; wrong: number; skipped: number }>();
+
+    for (const attempt of attempts) {
+      for (const answer of attempt.answers) {
+        const q = answer.question;
+        if (!q?.chapterId) continue;
+        const key = q.chapterId;
+        const name = q.chapter?.name || 'Unknown';
+        const subject = q.subject?.name || 'Unknown';
+        if (!chapterMap.has(key)) chapterMap.set(key, { name, subject, total: 0, correct: 0, wrong: 0, skipped: 0 });
+        const stats = chapterMap.get(key)!;
+        stats.total++;
+        if (answer.isCorrect) stats.correct++;
+        else if (answer.selectedOption === null) stats.skipped++;
+        else stats.wrong++;
+      }
+    }
+
+    return Array.from(chapterMap.entries())
+      .filter(([, stats]) => stats.total >= 5) // Minimum 5 questions
+      .map(([chapterId, stats]) => ({
+        chapterId,
+        chapterName: stats.name,
+        subject: stats.subject,
+        totalQuestions: stats.total,
+        correct: stats.correct,
+        wrong: stats.wrong,
+        skipped: stats.skipped,
+        accuracy: stats.total > 0 ? Math.round((stats.correct / stats.total) * 1000) / 10 : 0,
+      }))
+      .sort((a, b) => a.accuracy - b.accuracy)
+      .slice(0, 20);
+  }
+
+  /**
+   * Get strength chapters (highest accuracy)
+   */
+  async getStrengthChapters(userId: string) {
+    const attempts = await this.prisma.testAttempt.findMany({
+      where: { userId, status: 'SUBMITTED' },
+      include: {
+        answers: {
+          include: {
+            question: {
+              select: {
+                chapterId: true,
+                chapter: { select: { name: true } },
+                subject: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const chapterMap = new Map<string, { name: string; subject: string; total: number; correct: number; wrong: number; skipped: number }>();
+
+    for (const attempt of attempts) {
+      for (const answer of attempt.answers) {
+        const q = answer.question;
+        if (!q?.chapterId) continue;
+        const key = q.chapterId;
+        const name = q.chapter?.name || 'Unknown';
+        const subject = q.subject?.name || 'Unknown';
+        if (!chapterMap.has(key)) chapterMap.set(key, { name, subject, total: 0, correct: 0, wrong: 0, skipped: 0 });
+        const stats = chapterMap.get(key)!;
+        stats.total++;
+        if (answer.isCorrect) stats.correct++;
+        else if (answer.selectedOption === null) stats.skipped++;
+        else stats.wrong++;
+      }
+    }
+
+    return Array.from(chapterMap.entries())
+      .filter(([, stats]) => stats.total >= 5)
+      .map(([chapterId, stats]) => ({
+        chapterId,
+        chapterName: stats.name,
+        subject: stats.subject,
+        totalQuestions: stats.total,
+        correct: stats.correct,
+        wrong: stats.wrong,
+        skipped: stats.skipped,
+        accuracy: stats.total > 0 ? Math.round((stats.correct / stats.total) * 1000) / 10 : 0,
+      }))
+      .sort((a, b) => b.accuracy - a.accuracy)
+      .slice(0, 20);
+  }
+
+  /**
+   * Get comparison with toppers for a specific test
+   */
+  async getComparisonWithToppers(userId: string, templateId: string) {
+    const userAttempts = await this.prisma.testAttempt.findMany({
+      where: { userId, testTemplateId: templateId, status: 'SUBMITTED' },
+      orderBy: { submittedAt: 'desc' },
+      take: 1,
+    });
+
+    if (!userAttempts.length) {
+      return { message: 'You have not attempted this test yet' };
+    }
+
+    const latest = userAttempts[0];
+
+    // Get top 5 toppers
+    const toppers = await this.prisma.testAttempt.findMany({
+      where: { testTemplateId: templateId, status: 'SUBMITTED' },
+      orderBy: { score: 'desc' },
+      take: 5,
+      select: {
+        user: { select: { fullName: true } },
+        score: true,
+        accuracyPercent: true,
+        submittedAt: true,
+        startedAt: true,
+      },
+    });
+
+    // Get average stats
+    const stats = await this.prisma.testAttempt.aggregate({
+      where: { testTemplateId: templateId, status: 'SUBMITTED' },
+      _avg: { score: true, accuracyPercent: true },
+      _max: { score: true, accuracyPercent: true },
+      _count: true,
+    });
+
+    const percentile = await this.prisma.testAttempt.count({
+      where: { testTemplateId: templateId, status: 'SUBMITTED', score: { lt: latest.score } },
+    });
+    const total = await this.prisma.testAttempt.count({
+      where: { testTemplateId: templateId, status: 'SUBMITTED' },
+    });
+
+    return {
+      yourScore: latest.score ?? 0,
+      yourAccuracy: latest.accuracyPercent ?? 0,
+      yourRank: percentile + 1,
+      yourPercentile: total > 0 ? Math.round(((total - percentile) / total) * 1000) / 10 : 100,
+      totalAttempts: total,
+      averageScore: Math.round((stats._avg.score || 0) * 10) / 10,
+      averageAccuracy: Math.round((stats._avg.accuracyPercent || 0) * 10) / 10,
+      maxScore: stats._max.score ?? 0,
+      maxAccuracy: stats._max.accuracyPercent ?? 0,
+      toppers: toppers.map((t, i) => ({
+        rank: i + 1,
+        name: t.user?.fullName || 'Student',
+        score: t.score ?? 0,
+        accuracy: t.accuracyPercent ?? 0,
+        timeTaken: t.startedAt && t.submittedAt
+          ? Math.round((new Date(t.submittedAt).getTime() - new Date(t.startedAt).getTime()) / 1000)
+          : 0,
+      })),
+    };
+  }
 }
