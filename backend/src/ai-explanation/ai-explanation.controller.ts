@@ -1,7 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { Controller, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AIExplanationService } from './ai-explanation.service';
 
 @Controller('ai-explanation')
@@ -10,12 +8,8 @@ export class AIExplanationController {
   constructor(private readonly aiExplanationService: AIExplanationService) {}
 
   @Get('questions/:id')
-  async getExplanation(
-    @Param('id') questionId: string,
-    @CurrentUser() user: { userId: string },
-    @Query('userApiKey') userApiKey?: string,
-  ) {
-    return this.aiExplanationService.getOrGenerateExplanation(questionId, userApiKey);
+  async getExplanation(@Param('id') questionId: string) {
+    return this.aiExplanationService.getOrGenerateExplanation(questionId);
   }
 
   @Get('questions/:id/available')

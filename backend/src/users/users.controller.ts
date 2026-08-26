@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { UserService } from './users.service';
@@ -14,7 +13,7 @@ export class UsersController {
   }
 
   @Get('me/stats')
-  async getMeStats(@Query('limit') limit?: string) {
+  async getMeStats(@Query('limit') _limit?: string) {
     return this.usersService.getStats('dummy');
   }
 

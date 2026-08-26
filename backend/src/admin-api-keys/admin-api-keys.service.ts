@@ -13,9 +13,8 @@ interface ApiKeyInput {
 export class AdminApiKeyService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Get all admin API keys (keys are masked in response) */
   async getKeys(provider?: string) {
-    const where: any = {};
+    const where: Record<string, unknown> = {};
     if (provider) where.provider = provider;
 
     const keys = await this.prisma.adminApiKey.findMany({
@@ -34,16 +33,13 @@ export class AdminApiKeyService {
       orderBy: { isPrimary: 'desc' },
     });
 
-    // Mask the API keys in response
-    return keys.map((k: any) => ({
+    return keys.map((k) => ({
       ...k,
       apiKey: k.apiKey ? `${k.apiKey.substring(0, 8)}...${k.apiKey.substring(k.apiKey.length - 4)}` : '',
     }));
   }
 
-  /** Add a new API key */
-  async addKey(dto: ApiKeyInput, createdBy: string) {
-    // If setting as primary, clear primary flag from existing keys of same provider
+  async addKey(dto: ApiKeyInput, _createdBy: string) {
     if (dto.isPrimary) {
       await this.prisma.adminApiKey.updateMany({
         where: { provider: dto.provider, isPrimary: true },
@@ -51,14 +47,13 @@ export class AdminApiKeyService {
       });
     }
 
-    const key = await this.prisma.adminApiKey.create({
+    return this.prisma.adminApiKey.create({
       data: {
         provider: dto.provider,
         keyName: dto.keyName,
-        apiKey: dto.apiKey, // In production, encrypt this
+        apiKey: dto.apiKey,
         freeModelOnly: dto.freeModelOnly || false,
         isPrimary: dto.isPrimary || false,
-        createdBy,
       },
       select: {
         id: true,
@@ -71,12 +66,9 @@ export class AdminApiKeyService {
         createdAt: true,
       },
     });
-
-    return key;
   }
 
-  /** Update an API key */
-  async updateKey(id: string, dto: Partial<ApiKeyInput> & { isPrimary?: boolean; isActive?: boolean }, createdBy: string) {
+  async updateKey(id: string, dto: Partial<ApiKeyInput> & { isPrimary?: boolean; isActive?: boolean }, _createdBy: string) {
     const existing = await this.prisma.adminApiKey.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('API Key not found');
 
@@ -87,7 +79,7 @@ export class AdminApiKeyService {
       });
     }
 
-    const key = await this.prisma.adminApiKey.update({
+    return this.prisma.adminApiKey.update({
       where: { id },
       data: {
         keyName: dto.keyName,
@@ -107,11 +99,8 @@ export class AdminApiKeyService {
         createdAt: true,
       },
     });
-
-    return key;
   }
 
-  /** Delete an API key */
   async deleteKey(id: string) {
     const existing = await this.prisma.adminApiKey.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('API Key not found');
@@ -120,8 +109,7 @@ export class AdminApiKeyService {
     return { ok: true };
   }
 
-  /** Get active primary key for a provider (used by AI service) */
-  async getActiveKey(provider: string): Promise<{ key: string; freeModelOnly: boolean } | null> {
+  async getActiveKey(provider: string) {
     const key = await this.prisma.adminApiKey.findFirst({
       where: { provider, isActive: true, isPrimary: true },
       select: { apiKey: true, freeModelOnly: true },
@@ -129,8 +117,7 @@ export class AdminApiKeyService {
     return key ? { key: key.apiKey, freeModelOnly: key.freeModelOnly } : null;
   }
 
-  /** Get primary key for AI explanation service */
-  async getPrimaryKeyForProvider(provider: string): Promise<string | null> {
+  async getPrimaryKeyForProvider(provider: string) {
     const key = await this.prisma.adminApiKey.findFirst({
       where: { provider, isActive: true, isPrimary: true },
       select: { apiKey: true },
