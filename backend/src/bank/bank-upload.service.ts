@@ -590,14 +590,84 @@ export class BankUploadService {
   }
 
   /**
+   * Check if a duplicate question already exists in the database
+   */
+  private async checkDuplicate(question: BulkUploadQuestion): Promise<{ isDuplicate: boolean; existingQuestion?: any }> {
+    // Create a search hash from question text, options, and correct answer for efficient duplicate detection
+    const normalizedText = question.questionText.trim().toLowerCase();
+    const optionsSignature = question.options
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(o => `${o.key}:${o.text.trim().toLowerCase()}`)
+      .join('|');
+    const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
+
+    // First check by searchHash if it exists
+    const existingByHash = await this.prisma.question.findFirst({
+      where: { searchHash, isActive: true },
+      select: { id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true, explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true, subjectId: true, chapterId: true, examId: true, createdAt: true },
+    });
+
+    if (existingByHash) {
+      return { isDuplicate: true, existingQuestion: existingByHash };
+    }
+
+    // Fallback: check by exact text match + options + correct answer
+    const existingByContent = await this.prisma.question.findFirst({
+      where: {
+        questionText: question.questionText,
+        correctAnswer: question.correctAnswer,
+        isActive: true,
+      },
+      select: { id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true, explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true, subjectId: true, chapterId: true, examId: true, createdAt: true },
+    });
+
+    if (existingByContent) {
+      // Verify options match
+      const existingOptions = existingByContent.optionsJson as any[];
+      const newOptionsSorted = question.options
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(o => `${o.key}:${o.text.trim()}|${o.textHi?.trim() || ''}`);
+      const existingOptionsSorted = existingOptions
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(o => `${o.key}:${o.text.trim()}|${o.textHi?.trim() || ''}`);
+
+      if (JSON.stringify(newOptionsSorted) === JSON.stringify(existingOptionsSorted)) {
+        return { isDuplicate: true, existingQuestion: existingByContent };
+      }
+    }
+
+    return { isDuplicate: false };
+  }
+
+  /**
    * Create a question in the database
    */
   private async createQuestion(question: BulkUploadQuestion, adminId: string): Promise<void> {
+    // Check for duplicates first
+    const duplicateCheck = await this.checkDuplicate(question);
+    if (duplicateCheck.isDuplicate) {
+      const existing = duplicateCheck.existingQuestion!;
+      throw new Error(
+        `Duplicate question found (ID: ${existing.id}). ` +
+        `Question: "${existing.questionText.substring(0, 80)}..." ` +
+        `Already exists in database with same options and answer. ` +
+        `Created at: ${existing.createdAt}`
+      );
+    }
+
     const optionsJson = question.options.map(o => ({
       key: o.key,
       text: o.text,
       textHi: o.textHi || '',
     }));
+
+    // Create search hash for future duplicate detection
+    const normalizedText = question.questionText.trim().toLowerCase();
+    const optionsSignature = question.options
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(o => `${o.key}:${o.text.trim().toLowerCase()}`)
+      .join('|');
+    const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
 
     await this.prisma.question.create({
       data: {
@@ -621,6 +691,7 @@ export class BankUploadService {
         isApproved: true,
         answerVerificationStatus: 'UNVERIFIED_SINGLE_SOURCE',
         reviewStatus: 'PENDING',
+        searchHash,
       },
     });
 
