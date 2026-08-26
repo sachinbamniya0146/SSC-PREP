@@ -508,16 +508,16 @@ async saveAnswers(
     const sections =
       fam === 'mts'
         ? [
-            { part: 'A', name: 'Numerical and Mathematical Ability', subjectSlug: 'quantitative_aptitude', q: 20, marks: 20, min: 20 },
+            { part: 'A', name: 'Numerical and Mathematical Ability', subjectSlug: 'quantitative-aptitude', q: 20, marks: 20, min: 20 },
             { part: 'B', name: 'Reasoning Ability and Problem Solving', subjectSlug: 'reasoning', q: 25, marks: 25, min: 25 },
-            { part: 'C', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 25, min: 25 },
-            { part: 'D', name: 'General Awareness', subjectSlug: 'general_awareness', q: 20, marks: 20, min: 20 },
+            { part: 'C', name: 'English Comprehension', subjectSlug: 'english-comprehension', q: 25, marks: 25, min: 25 },
+            { part: 'D', name: 'General Awareness', subjectSlug: 'general-awareness', q: 20, marks: 20, min: 20 },
           ]
         : [
             { part: 'A', name: 'General Intelligence and Reasoning', subjectSlug: 'reasoning', q: 25, marks: 50, min: 15 },
-            { part: 'B', name: 'General Awareness', subjectSlug: 'general_awareness', q: 25, marks: 50, min: 15 },
-            { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', q: 25, marks: 50, min: 15 },
-            { part: 'D', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 50, min: 15 },
+            { part: 'B', name: 'General Awareness', subjectSlug: 'general-awareness', q: 25, marks: 50, min: 15 },
+            { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative-aptitude', q: 25, marks: 50, min: 15 },
+            { part: 'D', name: 'English Comprehension', subjectSlug: 'english-comprehension', q: 25, marks: 50, min: 15 },
           ];
 
     const subs = await this.prisma.subject.findMany({ select: { id: true, slug: true, name: true } });
@@ -617,9 +617,9 @@ async saveAnswers(
   async cglExam() {
     const sections = [
       { part: 'A', name: 'General Intelligence and Reasoning', subjectSlug: 'reasoning', q: 25, marks: 50, min: 15 },
-      { part: 'B', name: 'General Awareness', subjectSlug: 'general_awareness', q: 25, marks: 50, min: 15 },
-      { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', q: 25, marks: 50, min: 15 },
-      { part: 'D', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 50, min: 15 },
+      { part: 'B', name: 'General Awareness', subjectSlug: 'general-awareness', q: 25, marks: 50, min: 15 },
+      { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative-aptitude', q: 25, marks: 50, min: 15 },
+      { part: 'D', name: 'English Comprehension', subjectSlug: 'english-comprehension', q: 25, marks: 50, min: 15 },
     ];
     const subs = await this.prisma.subject.findMany({
       select: { id: true, slug: true, name: true },
