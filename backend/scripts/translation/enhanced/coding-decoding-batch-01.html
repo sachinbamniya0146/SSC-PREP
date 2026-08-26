@@ -1,0 +1,269 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coding-Decoding — Batch 1 (Bilingual)</title>
+<style>
+:root{color-scheme:light}
+body{font-family:-apple-system,Segoe UI,Roboto,Noto Sans,Arial,sans-serif;background:#f6f7f9;color:#1a1a1a;margin:0;padding:24px;line-height:1.55}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:#666;margin:0 0 20px;font-size:14px}
+.card{background:#fff;border:1px solid #e3e6ea;border-radius:12px;padding:16px 18px;margin:0 auto 16px;max-width:820px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.qhead{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.num{background:#2563eb;color:#fff;font-weight:700;border-radius:6px;padding:2px 8px;font-size:13px}
+.meta{color:#888;font-size:12px}
+.q{margin:2px 0}
+.q.en{font-weight:600}
+.q.hi{color:#333}
+.opts{margin:10px 0;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.opt{border:1px solid #e3e6ea;border-radius:8px;padding:6px 10px;font-size:14px}
+.opt.correct{border-color:#16a34a;background:#f0fdf4;font-weight:600}
+.ans{margin:6px 0;font-size:14px}
+.review{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:8px;padding:8px 10px;font-size:13px;margin:6px 0}
+details{background:#fafbfc;border:1px solid #eee;border-radius:8px;padding:8px 12px;margin-top:6px}
+summary{cursor:pointer;font-weight:600;font-size:14px}
+.sol{font-size:13.5px;margin-top:6px}
+.sol.hi{color:#222}
+</style></head><body>
+<h1>Coding-Decoding — Batch 1 · English + हिंदी</h1>
+<p class="sub">20 questions · answers verified by code · source: pinnacle/Coding-Decoding.json · ⚠ = flagged for review</p>
+
+    <div class="card">
+      <div class="qhead"><span class="num">Q1</span> <span class="meta">PINNACLE-CODING-1 · SSC CPO 2019</span></div>
+      <div class="q en">In a code language, BANKER is written as NABREK. How will STRING be written as in that language?</div>
+      <div class="q hi">एक कूट भाषा में BANKER को NABREK लिखा जाता है। उसी भाषा में STRING को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> RSTGI</div><div class="opt correct"><b>B)</b> RTSGNI ✓</div><div class="opt"><b>C)</b> TSIRGN</div><div class="opt"><b>D)</b> RTGSNI</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>B</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> The six-letter word is split into two groups of three letters, and the letters within each group are reversed. Check: BANKER -&gt; BAN|KER -&gt; reverse each group -&gt; NAB|REK -&gt; NABREK. Apply the same to STRING -&gt; STR|ING -&gt; reverse each -&gt; RTS|GNI -&gt; RTSGNI. Hence the answer is (B) RTSGNI.</div>
+        <div class="sol hi"><b>HI:</b> छह अक्षरों के शब्द को तीन-तीन अक्षरों के दो समूहों में बाँटकर, प्रत्येक समूह के अक्षरों को उल्टा कर दिया जाता है। जाँचें: BANKER -&gt; BAN|KER -&gt; प्रत्येक समूह उल्टा -&gt; NAB|REK -&gt; NABREK। यही नियम STRING पर लगाएँ -&gt; STR|ING -&gt; उल्टा -&gt; RTS|GNI -&gt; RTSGNI। अतः सही उत्तर (B) RTSGNI है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q2</span> <span class="meta">PINNACLE-CODING-2 · SSC CPO 2019</span></div>
+      <div class="q en">If CAB = 12 and FED = 30, then HIDE =____.</div>
+      <div class="q hi">यदि CAB = 12 और FED = 30 है, तो HIDE = ____ होगा।</div>
+      <div class="opts"><div class="opt"><b>A)</b> 44</div><div class="opt"><b>B)</b> 68</div><div class="opt correct"><b>C)</b> 52 ✓</div><div class="opt"><b>D)</b> 48</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>C</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each letter is replaced by its position in the alphabet (A=1, B=2, ...) and the sum is doubled. Check: CAB = 3+1+2 = 6, and 6x2 = 12. FED = 6+5+4 = 15, and 15x2 = 30. For HIDE = 8+9+4+5 = 26, so 26x2 = 52. Hence the answer is (C) 52.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक अक्षर को वर्णमाला में उसकी स्थिति (A=1, B=2, ...) से बदलकर योग को दोगुना किया जाता है। जाँचें: CAB = 3+1+2 = 6, और 6x2 = 12। FED = 6+5+4 = 15, और 15x2 = 30। HIDE = 8+9+4+5 = 26, अतः 26x2 = 52। सही उत्तर (C) 52 है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q3</span> <span class="meta">PINNACLE-CODING-3 · SSC CPO 2019</span></div>
+      <div class="q en">In a code language, QUESTION is written as OPJUTFVR. How will FACTOR be written in that language?</div>
+      <div class="q hi">एक कूट भाषा में QUESTION को OPJUTFVR लिखा जाता है। उसी भाषा में FACTOR को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> SUPEGB</div><div class="opt"><b>B)</b> BGDSPU</div><div class="opt correct"><b>C)</b> SPUDBG ✓</div><div class="opt"><b>D)</b> QPUDBE</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>C</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> First the word is written in reverse, then each letter is moved one step forward in the alphabet. Check: QUESTION reversed = NOITSEUQ; adding 1 to each letter (N-&gt;O, O-&gt;P, I-&gt;J, T-&gt;U, S-&gt;T, E-&gt;F, U-&gt;V, Q-&gt;R) gives OPJUTFVR. Apply to FACTOR: reversed = ROTCAF; +1 each (R-&gt;S, O-&gt;P, T-&gt;U, C-&gt;D, A-&gt;B, F-&gt;G) = SPUDBG. Hence the answer is (C) SPUDBG.</div>
+        <div class="sol hi"><b>HI:</b> पहले शब्द को उल्टा लिखा जाता है, फिर प्रत्येक अक्षर को वर्णमाला में एक स्थान आगे बढ़ाया जाता है। जाँचें: QUESTION का उल्टा = NOITSEUQ; प्रत्येक अक्षर +1 (N-&gt;O, O-&gt;P, I-&gt;J, T-&gt;U, S-&gt;T, E-&gt;F, U-&gt;V, Q-&gt;R) = OPJUTFVR। FACTOR पर लगाएँ: उल्टा = ROTCAF; +1 (R-&gt;S, O-&gt;P, T-&gt;U, C-&gt;D, A-&gt;B, F-&gt;G) = SPUDBG। सही उत्तर (C) SPUDBG है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q4</span> <span class="meta">PINNACLE-CODING-4 · SSC CPO 2019</span></div>
+      <div class="q en">If HECK is coded as 94410 and DIG is coded as 588, then how will BIKE be coded as?</div>
+      <div class="q hi">यदि HECK को 94410 और DIG को 588 कूटबद्ध किया जाता है, तो BIKE को कैसे कूटबद्ध किया जाएगा?</div>
+      <div class="opts"><div class="opt correct"><b>A)</b> 38124 ✓</div><div class="opt"><b>B)</b> 38115</div><div class="opt"><b>C)</b> 19113</div><div class="opt"><b>D)</b> 39105</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>A</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each letter is replaced by its alphabet position, but the positions are alternately increased by 1 and decreased by 1 (1st letter +1, 2nd -1, 3rd +1, ...), and the numbers are written together. Check HECK: H(8)+1=9, E(5)-1=4, C(3)+1=4, K(11)-1=10 -&gt; 94410. Check DIG: D(4)+1=5, I(9)-1=8, G(7)+1=8 -&gt; 588. For BIKE: B(2)+1=3, I(9)-1=8, K(11)+1=12, E(5)-1=4 -&gt; 38124. Hence the answer is (A) 38124.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक अक्षर को उसकी वर्णमाला-स्थिति से बदला जाता है, परंतु स्थितियों को क्रमशः +1 और -1 किया जाता है (पहला अक्षर +1, दूसरा -1, तीसरा +1, ...), और संख्याओं को साथ-साथ लिख दिया जाता है। HECK: H(8)+1=9, E(5)-1=4, C(3)+1=4, K(11)-1=10 -&gt; 94410। DIG: D(4)+1=5, I(9)-1=8, G(7)+1=8 -&gt; 588। BIKE: B(2)+1=3, I(9)-1=8, K(11)+1=12, E(5)-1=4 -&gt; 38124। सही उत्तर (A) 38124 है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q5</span> <span class="meta">PINNACLE-CODING-5 · SSC CPO 2019</span></div>
+      <div class="q en">In a code language, MACHINE is written as CAMHENI. How will MONSTER be written as in that language?</div>
+      <div class="q hi">एक कूट भाषा में MACHINE को CAMHENI लिखा जाता है। उसी भाषा में MONSTER को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt correct"><b>A)</b> NOMSRET ✓</div><div class="opt"><b>B)</b> OMNSETR</div><div class="opt"><b>C)</b> NOMETSR</div><div class="opt"><b>D)</b> SNOMRET</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>A</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> The first three letters are reversed, the middle (fourth) letter stays in place, and the last three letters are reversed. Check MACHINE: MAC-&gt;CAM, H stays, INE-&gt;ENI -&gt; CAMHENI. Apply to MONSTER: MON-&gt;NOM, S stays, TER-&gt;RET -&gt; NOMSRET. Hence the answer is (A) NOMSRET.</div>
+        <div class="sol hi"><b>HI:</b> पहले तीन अक्षरों को उल्टा किया जाता है, बीच का (चौथा) अक्षर यथावत रहता है, और अंतिम तीन अक्षरों को उल्टा किया जाता है। जाँचें MACHINE: MAC-&gt;CAM, H यथावत, INE-&gt;ENI -&gt; CAMHENI। MONSTER पर लगाएँ: MON-&gt;NOM, S यथावत, TER-&gt;RET -&gt; NOMSRET। सही उत्तर (A) NOMSRET है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q6</span> <span class="meta">PINNACLE-CODING-6 · SSC CPO 2019</span></div>
+      <div class="q en">In a code language, BACHELOR is written as SNMDIBBA. How will COHESION be written as in that language?</div>
+      <div class="q hi">एक कूट भाषा में BACHELOR को SNMDIBBA लिखा जाता है। उसी भाषा में COHESION को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> ONIFTJBP</div><div class="opt correct"><b>B)</b> ONJRFGPB ✓</div><div class="opt"><b>C)</b> NPHTDIND</div><div class="opt"><b>D)</b> BPJTFINO</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>B</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> First the word is reversed, then the letters are alternately moved +1 and -1 in the alphabet (1st +1, 2nd -1, ...). Check BACHELOR: reversed = ROLEHCAB; applying +1,-1,... gives R-&gt;S, O-&gt;N, L-&gt;M, E-&gt;D, H-&gt;I, C-&gt;B, A-&gt;B, B-&gt;A = SNMDIBBA. Apply to COHESION: reversed = NOISEHOC; +1,-1,... gives N-&gt;O, O-&gt;N, I-&gt;J, S-&gt;R, E-&gt;F, H-&gt;G, O-&gt;P, C-&gt;B = ONJRFGPB. Hence the answer is (B) ONJRFGPB.</div>
+        <div class="sol hi"><b>HI:</b> पहले शब्द को उल्टा किया जाता है, फिर अक्षरों को बारी-बारी से +1 और -1 खिसकाया जाता है (पहला +1, दूसरा -1, ...)। BACHELOR: उल्टा = ROLEHCAB; +1,-1,... लगाने पर R-&gt;S, O-&gt;N, L-&gt;M, E-&gt;D, H-&gt;I, C-&gt;B, A-&gt;B, B-&gt;A = SNMDIBBA। COHESION: उल्टा = NOISEHOC; +1,-1,... -&gt; N-&gt;O, O-&gt;N, I-&gt;J, S-&gt;R, E-&gt;F, H-&gt;G, O-&gt;P, C-&gt;B = ONJRFGPB। सही उत्तर (B) ONJRFGPB है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q7</span> <span class="meta">PINNACLE-CODING-7 · SSC CPO 2019</span></div>
+      <div class="q en">If CAB = 13 and FEED = 41, then JADE = ________.</div>
+      <div class="q hi">यदि CAB = 13 और FEED = 41 है, तो JADE = ________ होगा।</div>
+      <div class="opts"><div class="opt"><b>A)</b> 35</div><div class="opt"><b>B)</b> 43</div><div class="opt correct"><b>C)</b> 41 ✓</div><div class="opt"><b>D)</b> 45</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>C</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each letter is replaced by its alphabet position; the sum is doubled and 1 is added. Check CAB: (3+1+2)=6, 2x6+1 = 13. FEED: (6+5+5+4)=20, 2x20+1 = 41. For JADE: (10+1+4+5)=20, 2x20+1 = 41. Hence the answer is (C) 41.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक अक्षर को उसकी वर्णमाला-स्थिति से बदला जाता है; योग को दोगुना कर उसमें 1 जोड़ा जाता है। CAB: (3+1+2)=6, 2x6+1 = 13। FEED: (6+5+5+4)=20, 2x20+1 = 41। JADE: (10+1+4+5)=20, 2x20+1 = 41। सही उत्तर (C) 41 है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q8</span> <span class="meta">PINNACLE-CODING-8 · SSC CPO 2019</span></div>
+      <div class="q en">If DIG=41 and GOAD=55, then FACT=____.</div>
+      <div class="q hi">यदि DIG = 41 और GOAD = 55 है, तो FACT = ____ होगा।</div>
+      <div class="opts"><div class="opt"><b>A)</b> 45</div><div class="opt correct"><b>B)</b> 61 ✓</div><div class="opt"><b>C)</b> 53</div><div class="opt"><b>D)</b> 63</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>B</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each letter is replaced by its alphabet position; the sum is doubled and 1 is added. Check DIG: (4+9+7)=20, 2x20+1 = 41. GOAD: (7+15+1+4)=27, 2x27+1 = 55. For FACT: (6+1+3+20)=30, 2x30+1 = 61. Hence the answer is (B) 61.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक अक्षर को उसकी वर्णमाला-स्थिति से बदला जाता है; योग को दोगुना कर 1 जोड़ा जाता है। DIG: (4+9+7)=20, 2x20+1 = 41। GOAD: (7+15+1+4)=27, 2x27+1 = 55। FACT: (6+1+3+20)=30, 2x30+1 = 61। सही उत्तर (B) 61 है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q9</span> <span class="meta">PINNACLE-CODING-9 · SSC CPO 2019</span></div>
+      <div class="q en">If &#x27;DONKEY&#x27; is coded as &#x27;88&#x27; and &#x27;SPARROW&#x27; is coded as &#x27;79&#x27;, then how will &#x27;PEGION&#x27; be coded?</div>
+      <div class="q hi">यदि &#x27;DONKEY&#x27; को &#x27;88&#x27; और &#x27;SPARROW&#x27; को &#x27;79&#x27; कूटबद्ध किया जाता है, तो &#x27;PEGION&#x27; को कैसे कूटबद्ध किया जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> 73</div><div class="opt correct"><b>B)</b> 96 ✓</div><div class="opt"><b>C)</b> 85</div><div class="opt"><b>D)</b> 91</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>B</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each letter is given its reverse position value (A=26, B=25, ..., Z=1, i.e. 27 - normal position) and these are added. Check DONKEY: D=23, O=12, N=13, K=16, E=22, Y=2 -&gt; sum = 88. SPARROW: S=8, P=11, A=26, R=9, R=9, O=12, W=4 -&gt; sum = 79. For PEGION: P=11, E=22, G=20, I=18, O=12, N=13 -&gt; sum = 96. Hence the answer is (B) 96.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक अक्षर को उसका उल्टा स्थिति-मान दिया जाता है (A=26, B=25, ..., Z=1, अर्थात 27 - सामान्य स्थिति) और इन्हें जोड़ा जाता है। DONKEY: D=23, O=12, N=13, K=16, E=22, Y=2 -&gt; योग = 88। SPARROW: S=8, P=11, A=26, R=9, R=9, O=12, W=4 -&gt; योग = 79। PEGION: P=11, E=22, G=20, I=18, O=12, N=13 -&gt; योग = 96। सही उत्तर (B) 96 है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q10</span> <span class="meta">PINNACLE-CODING-10 · SSC CPO 2019</span></div>
+      <div class="q en">In a code language, CONCERT is written as CNEROCT. How will SMARTER be written in that language?</div>
+      <div class="q hi">एक कूट भाषा में CONCERT को CNEROCT लिखा जाता है। उसी भाषा में SMARTER को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> RATESMR</div><div class="opt correct"><b>B)</b> RATEMSR ✓</div><div class="opt"><b>C)</b> RATMESR</div><div class="opt"><b>D)</b> RETRAMS</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>B</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> The seven letters are rearranged in a fixed order: the new word is formed by taking the original letters in the position order 4-3-5-6-2-1-7. Check CONCERT (C-O-N-C-E-R-T): positions 4,3,5,6,2,1,7 give C,N,E,R,O,C,T = CNEROCT. Apply the same order to SMARTER (S-M-A-R-T-E-R): positions 4,3,5,6,2,1,7 give R,A,T,E,M,S,R = RATEMSR. Hence the answer is (B) RATEMSR.</div>
+        <div class="sol hi"><b>HI:</b> सात अक्षरों को एक निश्चित क्रम में पुनर्व्यवस्थित किया जाता है: नया शब्द मूल अक्षरों को स्थिति-क्रम 4-3-5-6-2-1-7 में लेकर बनता है। जाँचें CONCERT (C-O-N-C-E-R-T): स्थितियाँ 4,3,5,6,2,1,7 -&gt; C,N,E,R,O,C,T = CNEROCT। यही क्रम SMARTER (S-M-A-R-T-E-R) पर लगाएँ -&gt; R,A,T,E,M,S,R = RATEMSR। सही उत्तर (B) RATEMSR है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q11</span> <span class="meta">PINNACLE-CODING-11 · SSC CPO 2019</span></div>
+      <div class="q en">If MADE is coded as 12236 and BAD is coded as 123, then how will DECK be coded as?</div>
+      <div class="q hi">यदि MADE को 12236 और BAD को 123 कूटबद्ध किया जाता है, तो DECK को कैसे कूटबद्ध किया जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> 36212</div><div class="opt"><b>B)</b> 34312</div><div class="opt"><b>C)</b> 36201</div><div class="opt"><b>D)</b> 44412</div></div>
+      <div class="review">⚠ Review needed: Derived code 36210 does not match any given option (closest 36212); options likely misprinted.</div>
+      <div class="ans">Answer / उत्तर: <b>—</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Here consonants are replaced by (alphabet position - 1) and vowels by (alphabet position + 1). Check MADE: M(13-1)=12, A(1+1)=2, D(4-1)=3, E(5+1)=6 -&gt; 12236. BAD: B(2-1)=1, A(1+1)=2, D(4-1)=3 -&gt; 123. Applying the same rule to DECK: D(4-1)=3, E(5+1)=6, C(3-1)=2, K(11-1)=10 -&gt; 36210. NOTE: none of the given options exactly equals 36210 (closest is 36212); the option list appears to have a misprint, so this question is flagged for human review instead of forcing a wrong option.</div>
+        <div class="sol hi"><b>HI:</b> यहाँ व्यंजनों को (वर्णमाला-स्थिति - 1) और स्वरों को (वर्णमाला-स्थिति + 1) से बदला जाता है। MADE: M(13-1)=12, A(1+1)=2, D(4-1)=3, E(5+1)=6 -&gt; 12236। BAD: B(2-1)=1, A(1+1)=2, D(4-1)=3 -&gt; 123। यही नियम DECK पर: D=3, E=6, C=2, K(11-1)=10 -&gt; 36210। ध्यान दें: दिए गए विकल्पों में से कोई भी ठीक 36210 नहीं है (निकटतम 36212); विकल्पों में मुद्रण-त्रुटि प्रतीत होती है, अतः इस प्रश्न को गलत विकल्प चुनने के बजाय मानव-समीक्षा हेतु चिह्नित किया गया है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q12</span> <span class="meta">PINNACLE-CODING-12 · SSC CPO 2019</span></div>
+      <div class="q en">In a code language, MONKEY is written as LPMLDZ. How will STROKE be written as in that language?</div>
+      <div class="q hi">एक कूट भाषा में MONKEY को LPMLDZ लिखा जाता है। उसी भाषा में STROKE को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> TSSNLD</div><div class="opt"><b>B)</b> RUQFJP</div><div class="opt"><b>C)</b> RUQNLD</div><div class="opt correct"><b>D)</b> RUQPJF ✓</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>D</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> The letters are alternately moved -1 and +1 in the alphabet (1st -1, 2nd +1, 3rd -1, ...). Check MONKEY: M-&gt;L, O-&gt;P, N-&gt;M, K-&gt;L, E-&gt;D, Y-&gt;Z = LPMLDZ. Apply to STROKE: S-&gt;R, T-&gt;U, R-&gt;Q, O-&gt;P, K-&gt;J, E-&gt;F = RUQPJF. Hence the answer is (D) RUQPJF.</div>
+        <div class="sol hi"><b>HI:</b> अक्षरों को बारी-बारी से -1 और +1 खिसकाया जाता है (पहला -1, दूसरा +1, तीसरा -1, ...)। MONKEY: M-&gt;L, O-&gt;P, N-&gt;M, K-&gt;L, E-&gt;D, Y-&gt;Z = LPMLDZ। STROKE: S-&gt;R, T-&gt;U, R-&gt;Q, O-&gt;P, K-&gt;J, E-&gt;F = RUQPJF। सही उत्तर (D) RUQPJF है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q13</span> <span class="meta">PINNACLE-CODING-13 · SSC CPO 2019</span></div>
+      <div class="q en">In a code language, EXPLAIN is written as XEALPNI. How will FACTORY be written in that language?</div>
+      <div class="q hi">एक कूट भाषा में EXPLAIN को XEALPNI लिखा जाता है। उसी भाषा में FACTORY को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> AFTCROY</div><div class="opt"><b>B)</b> CAFOTYR</div><div class="opt correct"><b>C)</b> AFOTCYR ✓</div><div class="opt"><b>D)</b> AFTOCYR</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>C</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> The word is processed in three parts: the first two letters are swapped, the middle three letters are reversed, and the last two letters are swapped. Check EXPLAIN: EX-&gt;XE, PLA-&gt;ALP, IN-&gt;NI -&gt; XEALPNI. Apply to FACTORY: FA-&gt;AF, CTO-&gt;OTC, RY-&gt;YR -&gt; AFOTCYR. Hence the answer is (C) AFOTCYR.</div>
+        <div class="sol hi"><b>HI:</b> शब्द को तीन भागों में बदला जाता है: पहले दो अक्षर आपस में बदले जाते हैं, बीच के तीन अक्षर उल्टे किए जाते हैं, और अंतिम दो अक्षर आपस में बदले जाते हैं। EXPLAIN: EX-&gt;XE, PLA-&gt;ALP, IN-&gt;NI -&gt; XEALPNI। FACTORY: FA-&gt;AF, CTO-&gt;OTC, RY-&gt;YR -&gt; AFOTCYR। सही उत्तर (C) AFOTCYR है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q14</span> <span class="meta">PINNACLE-CODING-14 · SSC CPO 2019</span></div>
+      <div class="q en">If FATHER = 7 and DAUGHTER = 9, then DISTANT = ______.</div>
+      <div class="q hi">यदि FATHER = 7 और DAUGHTER = 9 है, तो DISTANT = ______ होगा।</div>
+      <div class="opts"><div class="opt"><b>A)</b> 6</div><div class="opt"><b>B)</b> 10</div><div class="opt correct"><b>C)</b> 8 ✓</div><div class="opt"><b>D)</b> 7</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>C</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> The code is simply the number of letters in the word plus 1. Check: FATHER has 6 letters -&gt; 6+1 = 7. DAUGHTER has 8 letters -&gt; 8+1 = 9. DISTANT has 7 letters -&gt; 7+1 = 8. Hence the answer is (C) 8.</div>
+        <div class="sol hi"><b>HI:</b> कूट केवल शब्द के अक्षरों की संख्या में 1 जोड़ने पर मिलता है। FATHER में 6 अक्षर -&gt; 6+1 = 7। DAUGHTER में 8 अक्षर -&gt; 8+1 = 9। DISTANT में 7 अक्षर -&gt; 7+1 = 8। सही उत्तर (C) 8 है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q15</span> <span class="meta">PINNACLE-CODING-15 · SSC CPO 2019</span></div>
+      <div class="q en">If DRIVE is coded as 59372, and SPUR is coded as 6489, what will be code for PRIDE?</div>
+      <div class="q hi">यदि DRIVE को 59372 और SPUR को 6489 कूटबद्ध किया जाता है, तो PRIDE का कूट क्या होगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> 49235</div><div class="opt"><b>B)</b> 94532</div><div class="opt correct"><b>C)</b> 49352 ✓</div><div class="opt"><b>D)</b> 43925</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>C</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each letter has a fixed digit code. From DRIVE = 59372 we get D=5, R=9, I=3, V=7, E=2; from SPUR = 6489 we get S=6, P=4, U=8, R=9 (R agrees). For PRIDE: P=4, R=9, I=3, D=5, E=2 -&gt; 49352. Hence the answer is (C) 49352.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक अक्षर का एक निश्चित अंक-कूट है। DRIVE = 59372 से D=5, R=9, I=3, V=7, E=2; SPUR = 6489 से S=6, P=4, U=8, R=9 (R समान)। PRIDE के लिए: P=4, R=9, I=3, D=5, E=2 -&gt; 49352। सही उत्तर (C) 49352 है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q16</span> <span class="meta">PINNACLE-CODING-16 · SSC CPO 2019</span></div>
+      <div class="q en">In a code language PENCIL is written as PNEICL, How will MOTHER be written in that language?</div>
+      <div class="q hi">एक कूट भाषा में PENCIL को PNEICL लिखा जाता है। उसी भाषा में MOTHER को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> MTOREH</div><div class="opt"><b>B)</b> MHTORE</div><div class="opt"><b>C)</b> OMHTRE</div><div class="opt correct"><b>D)</b> MTOEHR ✓</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>D</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> The first and last letters stay in place, while the middle letters are swapped in pairs - the 2nd with the 3rd and the 4th with the 5th. Check PENCIL: P stays, E&lt;-&gt;N gives N,E, C&lt;-&gt;I gives I,C, L stays -&gt; PNEICL. Apply to MOTHER: M stays, O&lt;-&gt;T gives T,O, H&lt;-&gt;E gives E,H, R stays -&gt; MTOEHR. Hence the answer is (D) MTOEHR.</div>
+        <div class="sol hi"><b>HI:</b> पहला और अंतिम अक्षर यथावत रहते हैं, जबकि बीच के अक्षर जोड़ियों में बदले जाते हैं - दूसरा तीसरे के साथ और चौथा पाँचवें के साथ। PENCIL: P यथावत, E&lt;-&gt;N -&gt; N,E, C&lt;-&gt;I -&gt; I,C, L यथावत -&gt; PNEICL। MOTHER: M यथावत, O&lt;-&gt;T -&gt; T,O, H&lt;-&gt;E -&gt; E,H, R यथावत -&gt; MTOEHR। सही उत्तर (D) MTOEHR है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q17</span> <span class="meta">PINNACLE-CODING-17 · SSC CPO 2019</span></div>
+      <div class="q en">If AN=14 and CAT=60, then BEG=?</div>
+      <div class="q hi">यदि AN = 14 और CAT = 60 है, तो BEG = ? होगा।</div>
+      <div class="opts"><div class="opt"><b>A)</b> 68</div><div class="opt"><b>B)</b> 72</div><div class="opt"><b>C)</b> 74</div><div class="opt correct"><b>D)</b> 70 ✓</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>D</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each letter is replaced by its alphabet position and the values are multiplied. Check AN: A(1)xN(14) = 14. CAT: C(3)xA(1)xT(20) = 60. For BEG: B(2)xE(5)xG(7) = 70. Hence the answer is (D) 70.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक अक्षर को उसकी वर्णमाला-स्थिति से बदलकर मानों को गुणा किया जाता है। AN: A(1)xN(14) = 14। CAT: C(3)xA(1)xT(20) = 60। BEG: B(2)xE(5)xG(7) = 70। सही उत्तर (D) 70 है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q18</span> <span class="meta">PINNACLE-CODING-18 · SSC CPO 2019</span></div>
+      <div class="q en">In a certain language EMBEZZLE is coded as MEEBZZEL. How will MAXIMIZE be coded in the same language?</div>
+      <div class="q hi">एक निश्चित कूट भाषा में EMBEZZLE को MEEBZZEL लिखा जाता है। उसी भाषा में MAXIMIZE को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> AIMXMIEZ</div><div class="opt correct"><b>B)</b> AMIXIMEZ ✓</div><div class="opt"><b>C)</b> AMIMIXEZ</div><div class="opt"><b>D)</b> EMIXIMEM</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>B</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> The letters are swapped in consecutive pairs: 1st&lt;-&gt;2nd, 3rd&lt;-&gt;4th, 5th&lt;-&gt;6th, 7th&lt;-&gt;8th. Check EMBEZZLE: EM-&gt;ME, BE-&gt;EB, ZZ-&gt;ZZ, LE-&gt;EL -&gt; MEEBZZEL. Apply to MAXIMIZE: MA-&gt;AM, XI-&gt;IX, MI-&gt;IM, ZE-&gt;EZ -&gt; AMIXIMEZ. Hence the answer is (B) AMIXIMEZ.</div>
+        <div class="sol hi"><b>HI:</b> अक्षरों को क्रमागत जोड़ियों में आपस में बदला जाता है: पहला&lt;-&gt;दूसरा, तीसरा&lt;-&gt;चौथा, पाँचवाँ&lt;-&gt;छठा, सातवाँ&lt;-&gt;आठवाँ। EMBEZZLE: EM-&gt;ME, BE-&gt;EB, ZZ-&gt;ZZ, LE-&gt;EL -&gt; MEEBZZEL। MAXIMIZE: MA-&gt;AM, XI-&gt;IX, MI-&gt;IM, ZE-&gt;EZ -&gt; AMIXIMEZ। सही उत्तर (B) AMIXIMEZ है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q19</span> <span class="meta">PINNACLE-CODING-19 · SSC CPO 2019</span></div>
+      <div class="q en">If in a certain code ‘OPERATION’ is written as ‘BWDATXPBJ’ and ‘PARENT’ is written as ‘WTADJX’, how will ‘ORIENT’ be written in that code?</div>
+      <div class="q hi">यदि किसी कूट में &#x27;OPERATION&#x27; को &#x27;BWDATXPBJ&#x27; और &#x27;PARENT&#x27; को &#x27;WTADJX&#x27; लिखा जाता है, तो &#x27;ORIENT&#x27; को उस कूट में कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> PSJFOU</div><div class="opt correct"><b>B)</b> BAPDJX ✓</div><div class="opt"><b>C)</b> BPADJX</div><div class="opt"><b>D)</b> BWPDJX</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>B</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each letter maps to a fixed letter, read off from the two given words: O-&gt;B, P-&gt;W, E-&gt;D, R-&gt;A, A-&gt;T, T-&gt;X, I-&gt;P, N-&gt;J (consistent across OPERATION-&gt;BWDATXPBJ and PARENT-&gt;WTADJX). For ORIENT: O-&gt;B, R-&gt;A, I-&gt;P, E-&gt;D, N-&gt;J, T-&gt;X -&gt; BAPDJX. Hence the answer is (B) BAPDJX.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक अक्षर एक निश्चित अक्षर में बदलता है, जिसे दिए गए दो शब्दों से पढ़ा जा सकता है: O-&gt;B, P-&gt;W, E-&gt;D, R-&gt;A, A-&gt;T, T-&gt;X, I-&gt;P, N-&gt;J (OPERATION-&gt;BWDATXPBJ तथा PARENT-&gt;WTADJX दोनों में संगत)। ORIENT के लिए: O-&gt;B, R-&gt;A, I-&gt;P, E-&gt;D, N-&gt;J, T-&gt;X -&gt; BAPDJX। सही उत्तर (B) BAPDJX है।</div>
+      </details>
+    </div>
+    <div class="card">
+      <div class="qhead"><span class="num">Q20</span> <span class="meta">PINNACLE-CODING-20 · SSC CPO 2019</span></div>
+      <div class="q en">In a certain code language ‘CANDLE’ is written as ‘D1OEM2’ and ‘MODERN’ is written as N4E2SO. How will ‘BEWARE’ be written in the same code language?</div>
+      <div class="q hi">एक निश्चित कूट भाषा में &#x27;CANDLE&#x27; को &#x27;D1OEM2&#x27; और &#x27;MODERN&#x27; को &#x27;N4E2SO&#x27; लिखा जाता है। उसी कूट भाषा में &#x27;BEWARE&#x27; को कैसे लिखा जाएगा?</div>
+      <div class="opts"><div class="opt"><b>A)</b> D2OEM2</div><div class="opt"><b>B)</b> C2X2S2</div><div class="opt"><b>C)</b> CFY2S2</div><div class="opt correct"><b>D)</b> C2X1S2 ✓</div></div>
+      
+      <div class="ans">Answer / उत्तर: <b>D</b></div>
+      <details open><summary>Solution / हल</summary>
+        <div class="sol en"><b>EN:</b> Each consonant is moved one step forward in the alphabet, while each vowel is replaced by its serial number among the vowels (A=1, E=2, I=3, O=4, U=5). Check CANDLE: C-&gt;D, A-&gt;1, N-&gt;O, D-&gt;E, L-&gt;M, E-&gt;2 -&gt; D1OEM2. Check MODERN: M-&gt;N, O-&gt;4, D-&gt;E, E-&gt;2, R-&gt;S, N-&gt;O -&gt; N4E2SO. For BEWARE: B-&gt;C, E-&gt;2, W-&gt;X, A-&gt;1, R-&gt;S, E-&gt;2 -&gt; C2X1S2. Hence the answer is (D) C2X1S2.</div>
+        <div class="sol hi"><b>HI:</b> प्रत्येक व्यंजन को वर्णमाला में एक स्थान आगे बढ़ाया जाता है, जबकि प्रत्येक स्वर को स्वरों में उसके क्रमांक से बदला जाता है (A=1, E=2, I=3, O=4, U=5)। CANDLE: C-&gt;D, A-&gt;1, N-&gt;O, D-&gt;E, L-&gt;M, E-&gt;2 -&gt; D1OEM2। MODERN: M-&gt;N, O-&gt;4, D-&gt;E, E-&gt;2, R-&gt;S, N-&gt;O -&gt; N4E2SO। BEWARE: B-&gt;C, E-&gt;2, W-&gt;X, A-&gt;1, R-&gt;S, E-&gt;2 -&gt; C2X1S2। सही उत्तर (D) C2X1S2 है।</div>
+      </details>
+    </div>
+</body></html>
