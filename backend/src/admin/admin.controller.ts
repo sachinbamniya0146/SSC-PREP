@@ -6,6 +6,7 @@ import { Role, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { MonetizationService } from '../monetization/monetization.service';
+import { AdminService } from './admin.service';
 
 // v1 §10 — Admin dashboards: revenue overview + audit log viewer + user management.
 // All endpoints are ADMIN-only (global JwtAuthGuard is on the module).
@@ -17,6 +18,7 @@ export class AdminController {
     private prisma: PrismaService,
     private auditLogService: AuditLogService,
     private monetization: MonetizationService,
+    private adminService: AdminService,
   ) {}
 
   // ---- Dashboard Overview ----
@@ -47,8 +49,8 @@ export class AdminController {
       }),
       this.prisma.subscription.count({ where: { status: 'ACTIVE', endsAt: { gt: new Date() } } }),
       this.prisma.testAttempt.count({ where: { startedAt: { gte: since } } }),
-      this.prisma.testAttempt.count({ 
-        where: { startedAt: { gte: since }, testTemplate: { type: 'FULL_MOCK' } } 
+      this.prisma.testAttempt.count({
+        where: { startedAt: { gte: since }, testTemplate: { type: 'FULL_MOCK' } },
       }),
       this.prisma.questionBankSet.count({ where: { startedAt: { gte: since } } }),
       this.prisma.payment.groupBy({
@@ -99,9 +101,9 @@ export class AdminController {
 
     const subjectIds = subjectPractice.map(s => s.subjectId).filter((id): id is string => id !== null);
     const subjects = subjectIds.length > 0
-      ? await this.prisma.subject.findMany({ 
-          where: { id: { in: subjectIds } }, 
-          select: { id: true, name: true } 
+      ? await this.prisma.subject.findMany({
+          where: { id: { in: subjectIds } },
+          select: { id: true, name: true },
         })
       : [];
     const subjectMap = new Map(subjects.map(s => [s.id, s.name]));
@@ -129,14 +131,26 @@ export class AdminController {
       topUsers,
       questionBankPractice: {
         byMode: practiceStats,
-        bySubject: subjectPractice.map(s => ({ 
-          subjectId: s.subjectId, 
-          subjectName: s.subjectId ? subjectMap.get(s.subjectId) : 'Unknown', 
-          count: s._count 
+        bySubject: subjectPractice.map(s => ({
+          subjectId: s.subjectId,
+          subjectName: s.subjectId ? subjectMap.get(s.subjectId) : 'Unknown',
+          count: s._count,
         })),
       },
       mockTests: mockStats,
     };
+  }
+
+  // ---- Enhanced Dashboard with Analytics ----
+  @Get('dashboard-enhanced')
+  async enhancedDashboard(@Query('days') days?: string) {
+    return this.adminService.getDashboardStats(days ? Number(days) : 30);
+  }
+
+  // ---- User Activity Analytics ----
+  @Get('analytics/user-activity')
+  async userActivityAnalytics(@Query('days') days?: string) {
+    return this.adminService.getUserActivityAnalytics(days ? Number(days) : 30);
   }
 
   // ---- Revenue overview ----
@@ -466,7 +480,7 @@ export class AdminController {
       include: { user: { select: { email: true, fullName: true, phone: true } }, subscription: { include: { plan: true } } },
     });
     if (!payment) throw new Error('Payment not found');
-    
+
     const meta = (payment.metadataJson ?? {}) as Record<string, unknown>;
     return {
       invoiceNumber: `INV-${payment.id.slice(0, 8).toUpperCase()}`,
@@ -490,4 +504,163 @@ export class AdminController {
       razorpayPaymentId: payment.razorpayPaymentId,
     };
   }
-}
+
+  // ---- Referral Analytics ----
+  @Get('referrals/analytics')
+  async referralAnalytics(@Query('days') days?: string) {
+    const since = new Date();
+    since.setDate(since.getDate() - (days ? Math.min(Number(days) || 30, 365) : 30));
+
+    const [
+      totalReferrals,
+      paidReferrals,
+      rewardedReferrals,
+      topReferrers,
+    ] = await Promise.all([
+      this.prisma.referral.count({ where: { createdAt: { gte: since } } }),
+      this.prisma.referral.count({
+        where: { createdAt: { gte: since }, status: { in: ['PAIDED', 'REWARDED'] } },
+      }),
+      this.prisma.referral.count({
+        where: { createdAt: { gte: since }, status: 'REWARDED' },
+      }),
+      this.prisma.user.findMany({
+        where: { referralCode: { not: null } },
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          referralCode: true,
+          _count: { select: { referralsMade: true } },
+        },
+        orderBy: { referralsMade: { _count: 'desc' } },
+        take: 20,
+      }),
+    ]);
+
+    return {
+      totalReferrals,
+      paidReferrals,
+      rewardedReferrals,
+      conversionRate: totalReferrals > 0 ? Math.round((paidReferrals / totalReferrals) * 1000) / 10 : 0,
+      topReferrers,
+    };
+  }
+
+  // ---- Export Users ----
+  @Get('users/export')
+  async exportUsers(
+    @Query('role') role?: string,
+    @Query('hasSubscription') hasSubscription?: string,
+  ) {
+    const where: Prisma.UserWhereInput = {};
+    if (role) where.role = role as Role;
+    if (hasSubscription === 'true') {
+      where.subscriptions = { some: { status: 'ACTIVE', endsAt: { gt: new Date() } } };
+    } else if (hasSubscription === 'false') {
+      where.subscriptions = { none: { status: 'ACTIVE', endsAt: { gt: new Date() } } };
+    }
+
+    const users = await this.prisma.user.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phone: true,
+        role: true,
+        isEmailVerified: true,
+        createdAt: true,
+        referralCode: true,
+        referredByCode: true,
+        freeSubFromReferral: true,
+        currentStreak: true,
+        xp: true,
+        coins: true,
+        _count: { select: { testAttempts: true, bookmarks: true, questionBankSets: true } },
+        subscriptions: {
+          where: { status: { not: 'CANCELLED' } },
+          select: { status: true, endsAt: true, planId: true },
+          orderBy: { startsAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    return { users, count: users.length };
+  }
+
+  // ---- Bulk Operations ----
+  @Post('users/bulk-subscription')
+  async bulkSubscription(@Body() body: { userIds: string[]; planId: string; action: 'grant' | 'cancel' | 'extend' }) {
+    const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
+    if (!plan || !plan.isActive) throw new Error('Plan not found or inactive');
+
+    const results = [];
+    for (const userId of body.userIds) {
+      try {
+        if (body.action === 'grant') {
+          await this.prisma.subscription.updateMany({
+            where: { userId, status: 'ACTIVE' },
+            data: { status: 'CANCELLED' },
+          });
+          const endsAt = new Date();
+          endsAt.setMonth(endsAt.getMonth() + plan.durationMonths);
+          await this.prisma.subscription.create({
+            data: { userId, planId: plan.id, status: 'ACTIVE', startsAt: new Date(), endsAt },
+          });
+          results.push({ userId, success: true, action: 'granted' });
+        } else if (body.action === 'cancel') {
+          await this.prisma.subscription.updateMany({
+            where: { userId, status: 'ACTIVE' },
+            data: { status: 'CANCELLED' },
+          });
+          results.push({ userId, success: true, action: 'cancelled' });
+        } else if (body.action === 'extend') {
+          const sub = await this.prisma.subscription.findFirst({
+            where: { userId, status: 'ACTIVE' },
+            orderBy: { endsAt: 'desc' },
+          });
+          if (sub) {
+            const newEndsAt = new Date(sub.endsAt);
+            newEndsAt.setMonth(newEndsAt.getMonth() + plan.durationMonths);
+            await this.prisma.subscription.update({
+              where: { id: sub.id },
+              data: { endsAt: newEndsAt },
+            });
+            results.push({ userId, success: true, action: 'extended', newEndsAt });
+          } else {
+            results.push({ userId, success: false, reason: 'No active subscription to extend' });
+          }
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        results.push({ userId, success: false, reason: message });
+      }
+    }
+    return { results };
+  }
+
+  // ---- System Health ----
+    @Get('system/health')
+    async systemHealth() {
+      const dbStatus = await this.prisma.$queryRaw`SELECT 1 as ok`;
+      const userCount = await this.prisma.user.count();
+      const activeSessions = await this.prisma.deviceSession.count({ where: { isActive: true } });
+      const pendingPayments = await this.prisma.payment.count({ 
+        where: { 
+          status: 'PENDING', 
+          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } 
+        } 
+      });
+
+      return {
+        database: 'healthy',
+        totalUsers: userCount,
+        activeSessions,
+        pendingPayments24h: pendingPayments,
+        timestamp: new Date(),
+      };
+    }
+  }
