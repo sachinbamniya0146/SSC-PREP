@@ -1,0 +1,795 @@
+{
+  "_note": "Coding-Decoding batch 1 (first 20 text-based questions from pinnacle). English source questions translated to Hindi, with verified answer keys and detailed bilingual step-by-step solutions. Answers were derived by logic and independently verified by code. Editable file - review/edit freely.",
+  "source": "backend/extract/pinnacle/Coding-Decoding.json",
+  "subject": "Reasoning",
+  "topic": "Coding-Decoding",
+  "batch": 1,
+  "count": 20,
+  "reviewFlags": [
+    "PINNACLE-CODING-11"
+  ],
+  "questions": [
+    {
+      "id": "PINNACLE-CODING-1",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a code language, BANKER is written as NABREK. How will STRING be written as in that language?",
+      "questionTextHindi": "एक कूट भाषा में BANKER को NABREK लिखा जाता है। उसी भाषा में STRING को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "RSTGI",
+          "textHi": "RSTGI",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "RTSGNI",
+          "textHi": "RTSGNI",
+          "isCorrect": true
+        },
+        {
+          "key": "C",
+          "text": "TSIRGN",
+          "textHi": "TSIRGN",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "RTGSNI",
+          "textHi": "RTGSNI",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "B",
+      "explanation": "The six-letter word is split into two groups of three letters, and the letters within each group are reversed. Check: BANKER -> BAN|KER -> reverse each group -> NAB|REK -> NABREK. Apply the same to STRING -> STR|ING -> reverse each -> RTS|GNI -> RTSGNI. Hence the answer is (B) RTSGNI.",
+      "explanationHindi": "छह अक्षरों के शब्द को तीन-तीन अक्षरों के दो समूहों में बाँटकर, प्रत्येक समूह के अक्षरों को उल्टा कर दिया जाता है। जाँचें: BANKER -> BAN|KER -> प्रत्येक समूह उल्टा -> NAB|REK -> NABREK। यही नियम STRING पर लगाएँ -> STR|ING -> उल्टा -> RTS|GNI -> RTSGNI। अतः सही उत्तर (B) RTSGNI है।"
+    },
+    {
+      "id": "PINNACLE-CODING-2",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If CAB = 12 and FED = 30, then HIDE =____.",
+      "questionTextHindi": "यदि CAB = 12 और FED = 30 है, तो HIDE = ____ होगा।",
+      "options": [
+        {
+          "key": "A",
+          "text": "44",
+          "textHi": "44",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "68",
+          "textHi": "68",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "52",
+          "textHi": "52",
+          "isCorrect": true
+        },
+        {
+          "key": "D",
+          "text": "48",
+          "textHi": "48",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "C",
+      "explanation": "Each letter is replaced by its position in the alphabet (A=1, B=2, ...) and the sum is doubled. Check: CAB = 3+1+2 = 6, and 6x2 = 12. FED = 6+5+4 = 15, and 15x2 = 30. For HIDE = 8+9+4+5 = 26, so 26x2 = 52. Hence the answer is (C) 52.",
+      "explanationHindi": "प्रत्येक अक्षर को वर्णमाला में उसकी स्थिति (A=1, B=2, ...) से बदलकर योग को दोगुना किया जाता है। जाँचें: CAB = 3+1+2 = 6, और 6x2 = 12। FED = 6+5+4 = 15, और 15x2 = 30। HIDE = 8+9+4+5 = 26, अतः 26x2 = 52। सही उत्तर (C) 52 है।"
+    },
+    {
+      "id": "PINNACLE-CODING-3",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a code language, QUESTION is written as OPJUTFVR. How will FACTOR be written in that language?",
+      "questionTextHindi": "एक कूट भाषा में QUESTION को OPJUTFVR लिखा जाता है। उसी भाषा में FACTOR को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "SUPEGB",
+          "textHi": "SUPEGB",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "BGDSPU",
+          "textHi": "BGDSPU",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "SPUDBG",
+          "textHi": "SPUDBG",
+          "isCorrect": true
+        },
+        {
+          "key": "D",
+          "text": "QPUDBE",
+          "textHi": "QPUDBE",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "C",
+      "explanation": "First the word is written in reverse, then each letter is moved one step forward in the alphabet. Check: QUESTION reversed = NOITSEUQ; adding 1 to each letter (N->O, O->P, I->J, T->U, S->T, E->F, U->V, Q->R) gives OPJUTFVR. Apply to FACTOR: reversed = ROTCAF; +1 each (R->S, O->P, T->U, C->D, A->B, F->G) = SPUDBG. Hence the answer is (C) SPUDBG.",
+      "explanationHindi": "पहले शब्द को उल्टा लिखा जाता है, फिर प्रत्येक अक्षर को वर्णमाला में एक स्थान आगे बढ़ाया जाता है। जाँचें: QUESTION का उल्टा = NOITSEUQ; प्रत्येक अक्षर +1 (N->O, O->P, I->J, T->U, S->T, E->F, U->V, Q->R) = OPJUTFVR। FACTOR पर लगाएँ: उल्टा = ROTCAF; +1 (R->S, O->P, T->U, C->D, A->B, F->G) = SPUDBG। सही उत्तर (C) SPUDBG है।"
+    },
+    {
+      "id": "PINNACLE-CODING-4",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If HECK is coded as 94410 and DIG is coded as 588, then how will BIKE be coded as?",
+      "questionTextHindi": "यदि HECK को 94410 और DIG को 588 कूटबद्ध किया जाता है, तो BIKE को कैसे कूटबद्ध किया जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "38124",
+          "textHi": "38124",
+          "isCorrect": true
+        },
+        {
+          "key": "B",
+          "text": "38115",
+          "textHi": "38115",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "19113",
+          "textHi": "19113",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "39105",
+          "textHi": "39105",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "A",
+      "explanation": "Each letter is replaced by its alphabet position, but the positions are alternately increased by 1 and decreased by 1 (1st letter +1, 2nd -1, 3rd +1, ...), and the numbers are written together. Check HECK: H(8)+1=9, E(5)-1=4, C(3)+1=4, K(11)-1=10 -> 94410. Check DIG: D(4)+1=5, I(9)-1=8, G(7)+1=8 -> 588. For BIKE: B(2)+1=3, I(9)-1=8, K(11)+1=12, E(5)-1=4 -> 38124. Hence the answer is (A) 38124.",
+      "explanationHindi": "प्रत्येक अक्षर को उसकी वर्णमाला-स्थिति से बदला जाता है, परंतु स्थितियों को क्रमशः +1 और -1 किया जाता है (पहला अक्षर +1, दूसरा -1, तीसरा +1, ...), और संख्याओं को साथ-साथ लिख दिया जाता है। HECK: H(8)+1=9, E(5)-1=4, C(3)+1=4, K(11)-1=10 -> 94410। DIG: D(4)+1=5, I(9)-1=8, G(7)+1=8 -> 588। BIKE: B(2)+1=3, I(9)-1=8, K(11)+1=12, E(5)-1=4 -> 38124। सही उत्तर (A) 38124 है।"
+    },
+    {
+      "id": "PINNACLE-CODING-5",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a code language, MACHINE is written as CAMHENI. How will MONSTER be written as in that language?",
+      "questionTextHindi": "एक कूट भाषा में MACHINE को CAMHENI लिखा जाता है। उसी भाषा में MONSTER को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "NOMSRET",
+          "textHi": "NOMSRET",
+          "isCorrect": true
+        },
+        {
+          "key": "B",
+          "text": "OMNSETR",
+          "textHi": "OMNSETR",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "NOMETSR",
+          "textHi": "NOMETSR",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "SNOMRET",
+          "textHi": "SNOMRET",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "A",
+      "explanation": "The first three letters are reversed, the middle (fourth) letter stays in place, and the last three letters are reversed. Check MACHINE: MAC->CAM, H stays, INE->ENI -> CAMHENI. Apply to MONSTER: MON->NOM, S stays, TER->RET -> NOMSRET. Hence the answer is (A) NOMSRET.",
+      "explanationHindi": "पहले तीन अक्षरों को उल्टा किया जाता है, बीच का (चौथा) अक्षर यथावत रहता है, और अंतिम तीन अक्षरों को उल्टा किया जाता है। जाँचें MACHINE: MAC->CAM, H यथावत, INE->ENI -> CAMHENI। MONSTER पर लगाएँ: MON->NOM, S यथावत, TER->RET -> NOMSRET। सही उत्तर (A) NOMSRET है।"
+    },
+    {
+      "id": "PINNACLE-CODING-6",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a code language, BACHELOR is written as SNMDIBBA. How will COHESION be written as in that language?",
+      "questionTextHindi": "एक कूट भाषा में BACHELOR को SNMDIBBA लिखा जाता है। उसी भाषा में COHESION को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "ONIFTJBP",
+          "textHi": "ONIFTJBP",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "ONJRFGPB",
+          "textHi": "ONJRFGPB",
+          "isCorrect": true
+        },
+        {
+          "key": "C",
+          "text": "NPHTDIND",
+          "textHi": "NPHTDIND",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "BPJTFINO",
+          "textHi": "BPJTFINO",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "B",
+      "explanation": "First the word is reversed, then the letters are alternately moved +1 and -1 in the alphabet (1st +1, 2nd -1, ...). Check BACHELOR: reversed = ROLEHCAB; applying +1,-1,... gives R->S, O->N, L->M, E->D, H->I, C->B, A->B, B->A = SNMDIBBA. Apply to COHESION: reversed = NOISEHOC; +1,-1,... gives N->O, O->N, I->J, S->R, E->F, H->G, O->P, C->B = ONJRFGPB. Hence the answer is (B) ONJRFGPB.",
+      "explanationHindi": "पहले शब्द को उल्टा किया जाता है, फिर अक्षरों को बारी-बारी से +1 और -1 खिसकाया जाता है (पहला +1, दूसरा -1, ...)। BACHELOR: उल्टा = ROLEHCAB; +1,-1,... लगाने पर R->S, O->N, L->M, E->D, H->I, C->B, A->B, B->A = SNMDIBBA। COHESION: उल्टा = NOISEHOC; +1,-1,... -> N->O, O->N, I->J, S->R, E->F, H->G, O->P, C->B = ONJRFGPB। सही उत्तर (B) ONJRFGPB है।"
+    },
+    {
+      "id": "PINNACLE-CODING-7",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If CAB = 13 and FEED = 41, then JADE = ________.",
+      "questionTextHindi": "यदि CAB = 13 और FEED = 41 है, तो JADE = ________ होगा।",
+      "options": [
+        {
+          "key": "A",
+          "text": "35",
+          "textHi": "35",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "43",
+          "textHi": "43",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "41",
+          "textHi": "41",
+          "isCorrect": true
+        },
+        {
+          "key": "D",
+          "text": "45",
+          "textHi": "45",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "C",
+      "explanation": "Each letter is replaced by its alphabet position; the sum is doubled and 1 is added. Check CAB: (3+1+2)=6, 2x6+1 = 13. FEED: (6+5+5+4)=20, 2x20+1 = 41. For JADE: (10+1+4+5)=20, 2x20+1 = 41. Hence the answer is (C) 41.",
+      "explanationHindi": "प्रत्येक अक्षर को उसकी वर्णमाला-स्थिति से बदला जाता है; योग को दोगुना कर उसमें 1 जोड़ा जाता है। CAB: (3+1+2)=6, 2x6+1 = 13। FEED: (6+5+5+4)=20, 2x20+1 = 41। JADE: (10+1+4+5)=20, 2x20+1 = 41। सही उत्तर (C) 41 है।"
+    },
+    {
+      "id": "PINNACLE-CODING-8",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If DIG=41 and GOAD=55, then FACT=____.",
+      "questionTextHindi": "यदि DIG = 41 और GOAD = 55 है, तो FACT = ____ होगा।",
+      "options": [
+        {
+          "key": "A",
+          "text": "45",
+          "textHi": "45",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "61",
+          "textHi": "61",
+          "isCorrect": true
+        },
+        {
+          "key": "C",
+          "text": "53",
+          "textHi": "53",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "63",
+          "textHi": "63",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "B",
+      "explanation": "Each letter is replaced by its alphabet position; the sum is doubled and 1 is added. Check DIG: (4+9+7)=20, 2x20+1 = 41. GOAD: (7+15+1+4)=27, 2x27+1 = 55. For FACT: (6+1+3+20)=30, 2x30+1 = 61. Hence the answer is (B) 61.",
+      "explanationHindi": "प्रत्येक अक्षर को उसकी वर्णमाला-स्थिति से बदला जाता है; योग को दोगुना कर 1 जोड़ा जाता है। DIG: (4+9+7)=20, 2x20+1 = 41। GOAD: (7+15+1+4)=27, 2x27+1 = 55। FACT: (6+1+3+20)=30, 2x30+1 = 61। सही उत्तर (B) 61 है।"
+    },
+    {
+      "id": "PINNACLE-CODING-9",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If 'DONKEY' is coded as '88' and 'SPARROW' is coded as '79', then how will 'PEGION' be coded?",
+      "questionTextHindi": "यदि 'DONKEY' को '88' और 'SPARROW' को '79' कूटबद्ध किया जाता है, तो 'PEGION' को कैसे कूटबद्ध किया जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "73",
+          "textHi": "73",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "96",
+          "textHi": "96",
+          "isCorrect": true
+        },
+        {
+          "key": "C",
+          "text": "85",
+          "textHi": "85",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "91",
+          "textHi": "91",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "B",
+      "explanation": "Each letter is given its reverse position value (A=26, B=25, ..., Z=1, i.e. 27 - normal position) and these are added. Check DONKEY: D=23, O=12, N=13, K=16, E=22, Y=2 -> sum = 88. SPARROW: S=8, P=11, A=26, R=9, R=9, O=12, W=4 -> sum = 79. For PEGION: P=11, E=22, G=20, I=18, O=12, N=13 -> sum = 96. Hence the answer is (B) 96.",
+      "explanationHindi": "प्रत्येक अक्षर को उसका उल्टा स्थिति-मान दिया जाता है (A=26, B=25, ..., Z=1, अर्थात 27 - सामान्य स्थिति) और इन्हें जोड़ा जाता है। DONKEY: D=23, O=12, N=13, K=16, E=22, Y=2 -> योग = 88। SPARROW: S=8, P=11, A=26, R=9, R=9, O=12, W=4 -> योग = 79। PEGION: P=11, E=22, G=20, I=18, O=12, N=13 -> योग = 96। सही उत्तर (B) 96 है।"
+    },
+    {
+      "id": "PINNACLE-CODING-10",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a code language, CONCERT is written as CNEROCT. How will SMARTER be written in that language?",
+      "questionTextHindi": "एक कूट भाषा में CONCERT को CNEROCT लिखा जाता है। उसी भाषा में SMARTER को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "RATESMR",
+          "textHi": "RATESMR",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "RATEMSR",
+          "textHi": "RATEMSR",
+          "isCorrect": true
+        },
+        {
+          "key": "C",
+          "text": "RATMESR",
+          "textHi": "RATMESR",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "RETRAMS",
+          "textHi": "RETRAMS",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "B",
+      "explanation": "The seven letters are rearranged in a fixed order: the new word is formed by taking the original letters in the position order 4-3-5-6-2-1-7. Check CONCERT (C-O-N-C-E-R-T): positions 4,3,5,6,2,1,7 give C,N,E,R,O,C,T = CNEROCT. Apply the same order to SMARTER (S-M-A-R-T-E-R): positions 4,3,5,6,2,1,7 give R,A,T,E,M,S,R = RATEMSR. Hence the answer is (B) RATEMSR.",
+      "explanationHindi": "सात अक्षरों को एक निश्चित क्रम में पुनर्व्यवस्थित किया जाता है: नया शब्द मूल अक्षरों को स्थिति-क्रम 4-3-5-6-2-1-7 में लेकर बनता है। जाँचें CONCERT (C-O-N-C-E-R-T): स्थितियाँ 4,3,5,6,2,1,7 -> C,N,E,R,O,C,T = CNEROCT। यही क्रम SMARTER (S-M-A-R-T-E-R) पर लगाएँ -> R,A,T,E,M,S,R = RATEMSR। सही उत्तर (B) RATEMSR है।"
+    },
+    {
+      "id": "PINNACLE-CODING-11",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If MADE is coded as 12236 and BAD is coded as 123, then how will DECK be coded as?",
+      "questionTextHindi": "यदि MADE को 12236 और BAD को 123 कूटबद्ध किया जाता है, तो DECK को कैसे कूटबद्ध किया जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "36212",
+          "textHi": "36212",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "34312",
+          "textHi": "34312",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "36201",
+          "textHi": "36201",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "44412",
+          "textHi": "44412",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "",
+      "explanation": "Here consonants are replaced by (alphabet position - 1) and vowels by (alphabet position + 1). Check MADE: M(13-1)=12, A(1+1)=2, D(4-1)=3, E(5+1)=6 -> 12236. BAD: B(2-1)=1, A(1+1)=2, D(4-1)=3 -> 123. Applying the same rule to DECK: D(4-1)=3, E(5+1)=6, C(3-1)=2, K(11-1)=10 -> 36210. NOTE: none of the given options exactly equals 36210 (closest is 36212); the option list appears to have a misprint, so this question is flagged for human review instead of forcing a wrong option.",
+      "explanationHindi": "यहाँ व्यंजनों को (वर्णमाला-स्थिति - 1) और स्वरों को (वर्णमाला-स्थिति + 1) से बदला जाता है। MADE: M(13-1)=12, A(1+1)=2, D(4-1)=3, E(5+1)=6 -> 12236। BAD: B(2-1)=1, A(1+1)=2, D(4-1)=3 -> 123। यही नियम DECK पर: D=3, E=6, C=2, K(11-1)=10 -> 36210। ध्यान दें: दिए गए विकल्पों में से कोई भी ठीक 36210 नहीं है (निकटतम 36212); विकल्पों में मुद्रण-त्रुटि प्रतीत होती है, अतः इस प्रश्न को गलत विकल्प चुनने के बजाय मानव-समीक्षा हेतु चिह्नित किया गया है।",
+      "needsReview": true,
+      "reviewNote": "Derived code 36210 does not match any given option (closest 36212); options likely misprinted."
+    },
+    {
+      "id": "PINNACLE-CODING-12",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a code language, MONKEY is written as LPMLDZ. How will STROKE be written as in that language?",
+      "questionTextHindi": "एक कूट भाषा में MONKEY को LPMLDZ लिखा जाता है। उसी भाषा में STROKE को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "TSSNLD",
+          "textHi": "TSSNLD",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "RUQFJP",
+          "textHi": "RUQFJP",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "RUQNLD",
+          "textHi": "RUQNLD",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "RUQPJF",
+          "textHi": "RUQPJF",
+          "isCorrect": true
+        }
+      ],
+      "correctAnswer": "D",
+      "explanation": "The letters are alternately moved -1 and +1 in the alphabet (1st -1, 2nd +1, 3rd -1, ...). Check MONKEY: M->L, O->P, N->M, K->L, E->D, Y->Z = LPMLDZ. Apply to STROKE: S->R, T->U, R->Q, O->P, K->J, E->F = RUQPJF. Hence the answer is (D) RUQPJF.",
+      "explanationHindi": "अक्षरों को बारी-बारी से -1 और +1 खिसकाया जाता है (पहला -1, दूसरा +1, तीसरा -1, ...)। MONKEY: M->L, O->P, N->M, K->L, E->D, Y->Z = LPMLDZ। STROKE: S->R, T->U, R->Q, O->P, K->J, E->F = RUQPJF। सही उत्तर (D) RUQPJF है।"
+    },
+    {
+      "id": "PINNACLE-CODING-13",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a code language, EXPLAIN is written as XEALPNI. How will FACTORY be written in that language?",
+      "questionTextHindi": "एक कूट भाषा में EXPLAIN को XEALPNI लिखा जाता है। उसी भाषा में FACTORY को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "AFTCROY",
+          "textHi": "AFTCROY",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "CAFOTYR",
+          "textHi": "CAFOTYR",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "AFOTCYR",
+          "textHi": "AFOTCYR",
+          "isCorrect": true
+        },
+        {
+          "key": "D",
+          "text": "AFTOCYR",
+          "textHi": "AFTOCYR",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "C",
+      "explanation": "The word is processed in three parts: the first two letters are swapped, the middle three letters are reversed, and the last two letters are swapped. Check EXPLAIN: EX->XE, PLA->ALP, IN->NI -> XEALPNI. Apply to FACTORY: FA->AF, CTO->OTC, RY->YR -> AFOTCYR. Hence the answer is (C) AFOTCYR.",
+      "explanationHindi": "शब्द को तीन भागों में बदला जाता है: पहले दो अक्षर आपस में बदले जाते हैं, बीच के तीन अक्षर उल्टे किए जाते हैं, और अंतिम दो अक्षर आपस में बदले जाते हैं। EXPLAIN: EX->XE, PLA->ALP, IN->NI -> XEALPNI। FACTORY: FA->AF, CTO->OTC, RY->YR -> AFOTCYR। सही उत्तर (C) AFOTCYR है।"
+    },
+    {
+      "id": "PINNACLE-CODING-14",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If FATHER = 7 and DAUGHTER = 9, then DISTANT = ______.",
+      "questionTextHindi": "यदि FATHER = 7 और DAUGHTER = 9 है, तो DISTANT = ______ होगा।",
+      "options": [
+        {
+          "key": "A",
+          "text": "6",
+          "textHi": "6",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "10",
+          "textHi": "10",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "8",
+          "textHi": "8",
+          "isCorrect": true
+        },
+        {
+          "key": "D",
+          "text": "7",
+          "textHi": "7",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "C",
+      "explanation": "The code is simply the number of letters in the word plus 1. Check: FATHER has 6 letters -> 6+1 = 7. DAUGHTER has 8 letters -> 8+1 = 9. DISTANT has 7 letters -> 7+1 = 8. Hence the answer is (C) 8.",
+      "explanationHindi": "कूट केवल शब्द के अक्षरों की संख्या में 1 जोड़ने पर मिलता है। FATHER में 6 अक्षर -> 6+1 = 7। DAUGHTER में 8 अक्षर -> 8+1 = 9। DISTANT में 7 अक्षर -> 7+1 = 8। सही उत्तर (C) 8 है।"
+    },
+    {
+      "id": "PINNACLE-CODING-15",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If DRIVE is coded as 59372, and SPUR is coded as 6489, what will be code for PRIDE?",
+      "questionTextHindi": "यदि DRIVE को 59372 और SPUR को 6489 कूटबद्ध किया जाता है, तो PRIDE का कूट क्या होगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "49235",
+          "textHi": "49235",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "94532",
+          "textHi": "94532",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "49352",
+          "textHi": "49352",
+          "isCorrect": true
+        },
+        {
+          "key": "D",
+          "text": "43925",
+          "textHi": "43925",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "C",
+      "explanation": "Each letter has a fixed digit code. From DRIVE = 59372 we get D=5, R=9, I=3, V=7, E=2; from SPUR = 6489 we get S=6, P=4, U=8, R=9 (R agrees). For PRIDE: P=4, R=9, I=3, D=5, E=2 -> 49352. Hence the answer is (C) 49352.",
+      "explanationHindi": "प्रत्येक अक्षर का एक निश्चित अंक-कूट है। DRIVE = 59372 से D=5, R=9, I=3, V=7, E=2; SPUR = 6489 से S=6, P=4, U=8, R=9 (R समान)। PRIDE के लिए: P=4, R=9, I=3, D=5, E=2 -> 49352। सही उत्तर (C) 49352 है।"
+    },
+    {
+      "id": "PINNACLE-CODING-16",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a code language PENCIL is written as PNEICL, How will MOTHER be written in that language?",
+      "questionTextHindi": "एक कूट भाषा में PENCIL को PNEICL लिखा जाता है। उसी भाषा में MOTHER को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "MTOREH",
+          "textHi": "MTOREH",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "MHTORE",
+          "textHi": "MHTORE",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "OMHTRE",
+          "textHi": "OMHTRE",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "MTOEHR",
+          "textHi": "MTOEHR",
+          "isCorrect": true
+        }
+      ],
+      "correctAnswer": "D",
+      "explanation": "The first and last letters stay in place, while the middle letters are swapped in pairs - the 2nd with the 3rd and the 4th with the 5th. Check PENCIL: P stays, E<->N gives N,E, C<->I gives I,C, L stays -> PNEICL. Apply to MOTHER: M stays, O<->T gives T,O, H<->E gives E,H, R stays -> MTOEHR. Hence the answer is (D) MTOEHR.",
+      "explanationHindi": "पहला और अंतिम अक्षर यथावत रहते हैं, जबकि बीच के अक्षर जोड़ियों में बदले जाते हैं - दूसरा तीसरे के साथ और चौथा पाँचवें के साथ। PENCIL: P यथावत, E<->N -> N,E, C<->I -> I,C, L यथावत -> PNEICL। MOTHER: M यथावत, O<->T -> T,O, H<->E -> E,H, R यथावत -> MTOEHR। सही उत्तर (D) MTOEHR है।"
+    },
+    {
+      "id": "PINNACLE-CODING-17",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If AN=14 and CAT=60, then BEG=?",
+      "questionTextHindi": "यदि AN = 14 और CAT = 60 है, तो BEG = ? होगा।",
+      "options": [
+        {
+          "key": "A",
+          "text": "68",
+          "textHi": "68",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "72",
+          "textHi": "72",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "74",
+          "textHi": "74",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "70",
+          "textHi": "70",
+          "isCorrect": true
+        }
+      ],
+      "correctAnswer": "D",
+      "explanation": "Each letter is replaced by its alphabet position and the values are multiplied. Check AN: A(1)xN(14) = 14. CAT: C(3)xA(1)xT(20) = 60. For BEG: B(2)xE(5)xG(7) = 70. Hence the answer is (D) 70.",
+      "explanationHindi": "प्रत्येक अक्षर को उसकी वर्णमाला-स्थिति से बदलकर मानों को गुणा किया जाता है। AN: A(1)xN(14) = 14। CAT: C(3)xA(1)xT(20) = 60। BEG: B(2)xE(5)xG(7) = 70। सही उत्तर (D) 70 है।"
+    },
+    {
+      "id": "PINNACLE-CODING-18",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a certain language EMBEZZLE is coded as MEEBZZEL. How will MAXIMIZE be coded in the same language?",
+      "questionTextHindi": "एक निश्चित कूट भाषा में EMBEZZLE को MEEBZZEL लिखा जाता है। उसी भाषा में MAXIMIZE को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "AIMXMIEZ",
+          "textHi": "AIMXMIEZ",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "AMIXIMEZ",
+          "textHi": "AMIXIMEZ",
+          "isCorrect": true
+        },
+        {
+          "key": "C",
+          "text": "AMIMIXEZ",
+          "textHi": "AMIMIXEZ",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "EMIXIMEM",
+          "textHi": "EMIXIMEM",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "B",
+      "explanation": "The letters are swapped in consecutive pairs: 1st<->2nd, 3rd<->4th, 5th<->6th, 7th<->8th. Check EMBEZZLE: EM->ME, BE->EB, ZZ->ZZ, LE->EL -> MEEBZZEL. Apply to MAXIMIZE: MA->AM, XI->IX, MI->IM, ZE->EZ -> AMIXIMEZ. Hence the answer is (B) AMIXIMEZ.",
+      "explanationHindi": "अक्षरों को क्रमागत जोड़ियों में आपस में बदला जाता है: पहला<->दूसरा, तीसरा<->चौथा, पाँचवाँ<->छठा, सातवाँ<->आठवाँ। EMBEZZLE: EM->ME, BE->EB, ZZ->ZZ, LE->EL -> MEEBZZEL। MAXIMIZE: MA->AM, XI->IX, MI->IM, ZE->EZ -> AMIXIMEZ। सही उत्तर (B) AMIXIMEZ है।"
+    },
+    {
+      "id": "PINNACLE-CODING-19",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "If in a certain code ‘OPERATION’ is written as ‘BWDATXPBJ’ and ‘PARENT’ is written as ‘WTADJX’, how will ‘ORIENT’ be written in that code?",
+      "questionTextHindi": "यदि किसी कूट में 'OPERATION' को 'BWDATXPBJ' और 'PARENT' को 'WTADJX' लिखा जाता है, तो 'ORIENT' को उस कूट में कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "PSJFOU",
+          "textHi": "PSJFOU",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "BAPDJX",
+          "textHi": "BAPDJX",
+          "isCorrect": true
+        },
+        {
+          "key": "C",
+          "text": "BPADJX",
+          "textHi": "BPADJX",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "BWPDJX",
+          "textHi": "BWPDJX",
+          "isCorrect": false
+        }
+      ],
+      "correctAnswer": "B",
+      "explanation": "Each letter maps to a fixed letter, read off from the two given words: O->B, P->W, E->D, R->A, A->T, T->X, I->P, N->J (consistent across OPERATION->BWDATXPBJ and PARENT->WTADJX). For ORIENT: O->B, R->A, I->P, E->D, N->J, T->X -> BAPDJX. Hence the answer is (B) BAPDJX.",
+      "explanationHindi": "प्रत्येक अक्षर एक निश्चित अक्षर में बदलता है, जिसे दिए गए दो शब्दों से पढ़ा जा सकता है: O->B, P->W, E->D, R->A, A->T, T->X, I->P, N->J (OPERATION->BWDATXPBJ तथा PARENT->WTADJX दोनों में संगत)। ORIENT के लिए: O->B, R->A, I->P, E->D, N->J, T->X -> BAPDJX। सही उत्तर (B) BAPDJX है।"
+    },
+    {
+      "id": "PINNACLE-CODING-20",
+      "subject": "Reasoning",
+      "topic": "Coding-Decoding",
+      "exam": "SSC CPO",
+      "year": "2019",
+      "difficulty": "MEDIUM",
+      "questionText": "In a certain code language ‘CANDLE’ is written as ‘D1OEM2’ and ‘MODERN’ is written as N4E2SO. How will ‘BEWARE’ be written in the same code language?",
+      "questionTextHindi": "एक निश्चित कूट भाषा में 'CANDLE' को 'D1OEM2' और 'MODERN' को 'N4E2SO' लिखा जाता है। उसी कूट भाषा में 'BEWARE' को कैसे लिखा जाएगा?",
+      "options": [
+        {
+          "key": "A",
+          "text": "D2OEM2",
+          "textHi": "D2OEM2",
+          "isCorrect": false
+        },
+        {
+          "key": "B",
+          "text": "C2X2S2",
+          "textHi": "C2X2S2",
+          "isCorrect": false
+        },
+        {
+          "key": "C",
+          "text": "CFY2S2",
+          "textHi": "CFY2S2",
+          "isCorrect": false
+        },
+        {
+          "key": "D",
+          "text": "C2X1S2",
+          "textHi": "C2X1S2",
+          "isCorrect": true
+        }
+      ],
+      "correctAnswer": "D",
+      "explanation": "Each consonant is moved one step forward in the alphabet, while each vowel is replaced by its serial number among the vowels (A=1, E=2, I=3, O=4, U=5). Check CANDLE: C->D, A->1, N->O, D->E, L->M, E->2 -> D1OEM2. Check MODERN: M->N, O->4, D->E, E->2, R->S, N->O -> N4E2SO. For BEWARE: B->C, E->2, W->X, A->1, R->S, E->2 -> C2X1S2. Hence the answer is (D) C2X1S2.",
+      "explanationHindi": "प्रत्येक व्यंजन को वर्णमाला में एक स्थान आगे बढ़ाया जाता है, जबकि प्रत्येक स्वर को स्वरों में उसके क्रमांक से बदला जाता है (A=1, E=2, I=3, O=4, U=5)। CANDLE: C->D, A->1, N->O, D->E, L->M, E->2 -> D1OEM2। MODERN: M->N, O->4, D->E, E->2, R->S, N->O -> N4E2SO। BEWARE: B->C, E->2, W->X, A->1, R->S, E->2 -> C2X1S2। सही उत्तर (D) C2X1S2 है।"
+    }
+  ]
+}

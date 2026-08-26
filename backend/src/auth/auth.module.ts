@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { MailService } from './mail.service';
 import { OtpService } from './otp.service';
+import { ReferralModule } from '../referral/referral.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { OtpService } from './otp.service';
           },
         }) as JwtModuleOptions,
     }),
+    ReferralModule,
   ],
   providers: [AuthService, MailService, OtpService],
   controllers: [AuthController],
