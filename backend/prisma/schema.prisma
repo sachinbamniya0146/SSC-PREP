@@ -192,22 +192,31 @@ model DeviceSession {
   lastActiveAt DateTime @default(now())
   createdAt    DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // FIX Error #4: back-relation so a session's refresh tokens can be
+  // revoked when the session is deactivated.
+  refreshTokens RefreshToken[]
 
   @@index([userId, platform, isActive])
   @@map("device_sessions")
 }
 
 model RefreshToken {
-  id        String   @id @default(uuid())
-  userId    String
-  tokenHash String   @unique
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime @default(now())
+  id              String    @id @default(uuid())
+  userId          String
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  // FIX Error #4: link each refresh token to the DeviceSession it was
+  // issued for, so that logging in on a new device can revoke ONLY the
+  // old device's refresh tokens (not all of the user's tokens).
+  deviceSessionId String?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceSession DeviceSession? @relation(fields: [deviceSessionId], references: [id], onDelete: Cascade)
 
+  @@index([deviceSessionId])
   @@map("refresh_tokens")
 }
 
