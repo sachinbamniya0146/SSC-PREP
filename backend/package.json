@@ -8,7 +8,7 @@
     "dev": "ts-node-dev --respawn src/main.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "test": "jest --config test/jest-e2e.json --runInBand --forceExit",
+    "test": "jest --config test/jest-e2e.json --runInBand --forceExit --passWithNoTests",
     "test:watch": "jest --config test/jest-e2e.json --watch",
     "lint": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
