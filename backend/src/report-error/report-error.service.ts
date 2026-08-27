@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, ErrorReportStatus } from '@prisma/client';
+import { SearchService } from '../search/search.service';
 
 // v5 §37.4 — Report Error loop
 // A question is auto soft-suspended once OPEN reports cross the threshold.
@@ -9,7 +10,33 @@ const SOFT_SUSPEND_THRESHOLD = 3;
 
 @Injectable()
 export class ReportErrorService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ReportErrorService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly search: SearchService,
+  ) {}
+
+  // BUG FIX (found while closing the "autoSuspended leaks into search"
+  // gap — see search.service.ts): every place below that flips
+  // Question.autoSuspended in Postgres was never telling Meilisearch about
+  // it. search.service.ts's index only gets a question's current
+  // isApproved/isActive/autoSuspended values when indexQuestion() (single
+  // doc, admin-triggered) or indexAllApproved() (full rebuild) runs — a
+  // plain `prisma.question.update()` here does not touch the search index
+  // at all. So a question a student got auto-suspended, or an admin
+  // CONFIRMED as wrong, stayed fully findable via search (and, before the
+  // autoSuspended filter fix in search.service.ts, was never even excluded
+  // once found) until someone happened to run a full re-index. Re-index
+  // the single affected question right after every autoSuspended change so
+  // search stays in sync in real time. Best-effort / fire-and-forget: a
+  // Meilisearch hiccup must never block the report/resolve/unsuspend flow
+  // itself.
+  private reindexAfterVisibilityChange(questionId: string) {
+    this.search.indexQuestion(questionId).catch((e) =>
+      this.logger.warn(`Failed to re-index question ${questionId} after visibility change: ${e?.message || e}`),
+    );
+  }
 
   async getExports() {
     return { SOFT_SUSPEND_THRESHOLD };
@@ -54,6 +81,8 @@ export class ReportErrorService {
         suspendedAt: nowSuspended ? new Date() : undefined,
       },
     });
+
+    if (nowSuspended) this.reindexAfterVisibilityChange(questionId);
 
     return {
       report,
@@ -104,6 +133,7 @@ export class ReportErrorService {
         where: { id: report.questionId },
         data: { autoSuspended: true, suspendedAt: new Date() },
       });
+      this.reindexAfterVisibilityChange(report.questionId);
     }
     // On REJECTED: all reports were false alarms — lift the suspension, keep the audit trail
     if (status === 'REJECTED') {
@@ -111,6 +141,7 @@ export class ReportErrorService {
         where: { id: report.questionId },
         data: { autoSuspended: false, suspendedAt: null },
       });
+      this.reindexAfterVisibilityChange(report.questionId);
     }
     return { report };
   }
@@ -162,6 +193,7 @@ export class ReportErrorService {
       where: { id: questionId },
       data: { autoSuspended: false, suspendedAt: null, errorReportCount: 0 },
     });
+    this.reindexAfterVisibilityChange(questionId);
 
     await this.prisma.auditLog.create({
       data: {
