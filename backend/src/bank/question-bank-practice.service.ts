@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 
 export interface PracticeQuestion {
   id: string;
@@ -180,7 +181,7 @@ export class QuestionBankPracticeService {
     examId?: string
   ): Promise<any[]> {
     const where: any = {
-      isApproved: true,
+      ...PUBLISHED_QUESTION_WHERE,
       questionTextHindi: { not: null },
     };
 
@@ -550,14 +551,14 @@ export class QuestionBankPracticeService {
     const subjects = await this.prisma.subject.findMany({
       where: {
         questions: {
-          some: { isApproved: true, questionTextHindi: { not: '' } },
+          some: { ...PUBLISHED_QUESTION_WHERE, questionTextHindi: { not: '' } },
         },
       },
       include: {
         chapters: {
           where: {
             questions: {
-              some: { isApproved: true, questionTextHindi: { not: '' } },
+              some: { ...PUBLISHED_QUESTION_WHERE, questionTextHindi: { not: '' } },
             },
           },
           select: { id: true, name: true },
