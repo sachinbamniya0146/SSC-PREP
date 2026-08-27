@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 
 @Injectable()
 export class AnalyticsService {
@@ -161,7 +162,7 @@ export class AnalyticsService {
   async getWeakChapterDrill(userId: string, chapterId: string) {
     void userId;
     const questions = await this.prisma.question.findMany({
-      where: { chapterId, isApproved: true, isActive: true }, // v7 §4 — approved only (never AI_DRAFT)
+      where: { chapterId, ...PUBLISHED_QUESTION_WHERE }, // v7 §4 — approved only (never AI_DRAFT)
       take: 35,
       orderBy: { id: 'asc' },
     });
