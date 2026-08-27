@@ -3,6 +3,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { AttemptStatus } from '@prisma/client';
 import { cacheGet, cacheSet } from '../common/cache';
+import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 
 export interface QuestionCard {
   id: string;
@@ -35,18 +36,22 @@ export class BankService {
     const cached = cacheGet<any>('bank:meta');
     if (cached) return cached;
     const [exams, subjects, total, totalHi, patterns] = await Promise.all([
+      // FIX Error #8: raw SQL now matches PUBLISHED_QUESTION_WHERE
+      // (isApproved AND isActive AND NOT autoSuspended), not isApproved alone.
       this.prisma.$queryRaw`
         SELECT e.id, e.name, e.slug, COUNT(q.id)::int AS count
-        FROM exams e LEFT JOIN questions q ON q."examId" = e.id AND q."isApproved" = true
+        FROM exams e LEFT JOIN questions q ON q."examId" = e.id
+          AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
         GROUP BY e.id ORDER BY e.name;`,
       this.prisma.$queryRaw`
         SELECT s.id, s.name, s.slug, COUNT(q.id)::int AS count
-        FROM subjects s LEFT JOIN questions q ON q."subjectId" = s.id AND q."isApproved" = true
+        FROM subjects s LEFT JOIN questions q ON q."subjectId" = s.id
+          AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
         GROUP BY s.id ORDER BY s.name;`,
-      this.prisma.question.count({ where: { isApproved: true } }),
+      this.prisma.question.count({ where: { ...PUBLISHED_QUESTION_WHERE } }),
       // v7 §5 — Hindi = non-empty; the DB stores '' not NULL for missing Hindi
       this.prisma.question.count({
-        where: { isApproved: true, questionTextHindi: { not: '' } },
+        where: { ...PUBLISHED_QUESTION_WHERE, questionTextHindi: { not: '' } },
       }),
       this.prisma.examPattern.findMany({
         where: { isActive: true },
@@ -73,7 +78,8 @@ export class BankService {
              COUNT(q.id)::int AS "questionCount",
              COUNT(DISTINCT q."chapterId")::int AS "chapterCount"
       FROM subjects s
-      LEFT JOIN questions q ON q."subjectId" = s.id AND q."isApproved" = true
+      LEFT JOIN questions q ON q."subjectId" = s.id
+           AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
            AND (${examId}::text IS NULL OR q."examId" = ${examId})
       GROUP BY s.id ORDER BY s.name;`;
     cacheSet(cacheKey, out, 300_000);
@@ -87,7 +93,9 @@ export class BankService {
       SELECT c.id, c.name, c.slug, sub.name AS subject, COUNT(q.id)::int AS count
       FROM chapters c
       JOIN subjects sub ON sub.id = c."subjectId"
-      LEFT JOIN questions q ON q."chapterId" = c.id AND q."isApproved" = true AND (${examId}::text IS NULL OR q."examId" = ${examId})
+      LEFT JOIN questions q ON q."chapterId" = c.id
+           AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+           AND (${examId}::text IS NULL OR q."examId" = ${examId})
       WHERE (${subjectId}::text IS NULL OR c."subjectId" = ${subjectId})
       GROUP BY c.id, sub.name
       HAVING COUNT(q.id) > 0
@@ -98,7 +106,9 @@ export class BankService {
   async browse(f: { examId?: string; subjectId?: string; chapterId?: string; skip?: number; take?: number }) {
     const take = Math.min(f.take ?? 20, 50);
     const skip = f.skip ?? 0;
-    const where: any = { isApproved: true };
+    // FIX Error #6: was { isApproved: true } only — auto-suspended /
+    // deactivated questions could still be served here.
+    const where: any = { ...PUBLISHED_QUESTION_WHERE };
     if (f.examId) where.examId = f.examId;
     if (f.chapterId) where.chapterId = f.chapterId;
     else if (f.subjectId) where.subjectId = f.subjectId;
@@ -134,8 +144,9 @@ export class BankService {
 
   // Single question + its solution (for display during review)
   async getById(id: string) {
+    // FIX Error #6/#8: apply the shared visibility filter here too.
     const q = await this.prisma.question.findFirst({
-      where: { id, isApproved: true },
+      where: { id, ...PUBLISHED_QUESTION_WHERE },
       include: { chapter: { select: { name: true } } },
     });
     if (!q) throw new NotFoundException('Question not found');
@@ -145,7 +156,7 @@ export class BankService {
     let prevRefs = { count: 0, years: [] as number[], acrossYears: 0 };
     if (q.chapterId) {
       const refs = await this.prisma.question.findMany({
-        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, isApproved: true, id: { not: q.id } },
+        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, ...PUBLISHED_QUESTION_WHERE, id: { not: q.id } },
         select: { year: true },
         take: 500,
       });
@@ -160,10 +171,10 @@ export class BankService {
     let expectedFrequency: { askedTimes: number | null; lastFiveYearsCount: number; yearsCovered: number } | null = null;
     if (q.chapterId) {
       const last5 = await this.prisma.question.count({
-        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, isApproved: true, year: { gte: now - 5 } },
+        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, ...PUBLISHED_QUESTION_WHERE, year: { gte: now - 5 } },
       });
       const covered = await this.prisma.question.count({
-        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, isApproved: true, year: { not: null } },
+        where: { examId: q.examId ?? undefined, chapterId: q.chapterId, ...PUBLISHED_QUESTION_WHERE, year: { not: null } },
       });
       expectedFrequency = { askedTimes: last5 > 0 ? last5 : null, lastFiveYearsCount: last5, yearsCovered: covered };
     }
@@ -191,7 +202,7 @@ export class BankService {
     if (!dto.questionId || !dto.selectedOption) {
       throw new BadRequestException('questionId and selectedOption required');
     }
-    const q = await this.prisma.question.findFirst({ where: { id: dto.questionId, isApproved: true } });
+    const q = await this.prisma.question.findFirst({ where: { id: dto.questionId, ...PUBLISHED_QUESTION_WHERE } });
     if (!q) throw new NotFoundException('Question not found');
 
     const option = dto.selectedOption.trim().toUpperCase();
@@ -256,7 +267,7 @@ export class BankService {
   async chapterPyq(f: { chapterId: string; examId?: string; year?: number; skip?: number; take?: number }) {
     const take = Math.min(f.take ?? 25, 50);
     const skip = f.skip ?? 0;
-    const where: any = { isApproved: true, chapterId: f.chapterId };
+    const where: any = { ...PUBLISHED_QUESTION_WHERE, chapterId: f.chapterId };
     if (f.examId) where.examId = f.examId;
     if (f.year) where.year = f.year;
     const rows = await this.prisma.question.findMany({
@@ -269,7 +280,7 @@ export class BankService {
     const total = await this.prisma.question.count({ where });
     const years = await this.prisma.question.groupBy({
       by: ['year'],
-      where: { isApproved: true, chapterId: f.chapterId, year: { not: null } },
+      where: { ...PUBLISHED_QUESTION_WHERE, chapterId: f.chapterId, year: { not: null } },
       _count: true,
       orderBy: { year: 'desc' },
     });
@@ -339,7 +350,7 @@ export class BankService {
     const rows = await this.prisma.question.groupBy({
       by: ['answerVerificationStatus'],
       _count: true,
-      where: { isApproved: true },
+      where: { ...PUBLISHED_QUESTION_WHERE },
     });
     const allStatuses = ['VERIFIED_OFFICIAL', 'VERIFIED_MULTI_SOURCE', 'VERIFIED_COMPUTED', 'UNVERIFIED_SINGLE_SOURCE', 'DISPUTED'];
     const stats: Record<string, number> = {};
@@ -372,7 +383,7 @@ export class BankService {
 
   async getSet(f: { examId?: string; subjectId?: string; count?: number }) {
     const takeN = Math.min(f.count ?? 10, 25);
-    const where: any = { isApproved: true, questionTextHindi: { not: '' } }; // bilingual gate (v3 §3): empty/NULL dono exclude
+    const where: any = { ...PUBLISHED_QUESTION_WHERE, questionTextHindi: { not: '' } }; // bilingual gate (v3 §3): empty/NULL dono exclude
     if (f.examId) where.examId = f.examId;
     else where.examId = { not: null }; // spec §3: exam badge har question par
     if (f.subjectId) where.subjectId = f.subjectId;
@@ -537,7 +548,8 @@ export class BankService {
 
   /** v5 §40 — Topic weightage analytics: question counts by exam × subject × chapter. */
   async getTopicWeightage(examId?: string) {
-    const where: any = { isApproved: true, isActive: true };
+    // FIX: was missing autoSuspended check (only had isApproved + isActive)
+    const where: any = { ...PUBLISHED_QUESTION_WHERE };
     if (examId) where.examId = examId;
 
     const rows = await this.prisma.question.groupBy({
