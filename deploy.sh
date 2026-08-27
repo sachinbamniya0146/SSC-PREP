@@ -31,6 +31,10 @@ sleep 20
 echo "🗄️ Running database migrations..."
 docker exec ssc-backend npx prisma migrate deploy
 
+# Restart nginx to pick up any config changes
+echo "🔄 Restarting nginx..."
+docker compose restart nginx
+
 # Health checks
 echo "🏥 Running health checks..."
 for i in {1..10}; do

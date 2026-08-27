@@ -116,8 +116,8 @@ model User {
   hintQuota        Int             @default(3)
 
   // User preferences
-  darkMode         Boolean         @default(false)  // Light mode is default
-  preferredLanguage String         @default("en")   // "en" or "hi"
+  darkMode         Boolean         @default(false) @map("darkmode")  // Light mode is default
+  preferredLanguage String         @default("en") @map("preferredlanguage")   // "en" or "hi"
   
   // User's personal OpenRouter API key for AI explanations
   openrouterApiKey String?         // Encrypted API key for personal AI usage
@@ -457,14 +457,15 @@ model TestTemplate {
   totalMarks       Float         @default(200.0)
   isPremium        Boolean       @default(false)
   isActive         Boolean       @default(true)
+  priceInr         Int           @default(0)  // Price in INR for premium tests
   
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
-
+  
   attempts         TestAttempt[]
   pdfExports       TestPdfExport[]
   attemptStats     TestAttemptStats?
-
+  
   @@map("test_templates")
 }
 

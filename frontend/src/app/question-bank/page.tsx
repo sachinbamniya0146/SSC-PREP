@@ -270,6 +270,10 @@ export default function QuestionBankPage() {
       if (chapterId) params.append("chapterId", chapterId);
       else if (subjectId) params.append("subjectId", subjectId);
       const r = await fetchAuth(`${apiBase()}/bank/questions?${params}`, { headers: getAuthHeaders() });
+      if (!r.ok) {
+        const errBody = await r.json().catch(() => ({}));
+        throw new Error(errBody.message || `Failed to load questions (${r.status})`);
+      }
       const d = await r.json();
       setQuestions(d.data || []);
       setTotal(d.total || 0);

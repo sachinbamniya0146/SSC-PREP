@@ -152,7 +152,7 @@ export class MonetizationService {
     } else if (input.mockTemplateId) {
       const tpl = await this.prisma.testTemplate.findUnique({ where: { id: input.mockTemplateId } });
       if (!tpl) throw new BadRequestException('Mock template not found');
-      const price = tpl.isPremium ? 10 : 0;
+      const price = tpl.isPremium ? (tpl.priceInr ?? 0) : 0;
       amountInr = price;
       productInfo = `SSC Prep Hub - Mock Test: ${tpl.title}`;
       mockTitle = tpl.title;
