@@ -10,7 +10,7 @@ import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
 
 // Global BigInt JSON serialization fix for Prisma BigInt fields (Telegram chatId)
-BigInt.prototype.toJSON = function () {
+(BigInt.prototype as unknown as { toJSON: () => string }).toJSON = function () {
   return this.toString();
 };
 
