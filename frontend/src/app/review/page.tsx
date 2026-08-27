@@ -26,6 +26,15 @@ type ReviewCardData = {
 
 type Grade = "again" | "hard" | "good" | "easy";
 
+type AIExplanation = {
+  explanation: string;
+  explanationHindi: string;
+  stepByStepSolution: string;
+  stepByStepSolutionHindi: string;
+  keyConcepts: string[];
+  keyConceptsHindi: string[];
+};
+
 function VideoPlayer({ url, title }: { url: string; title?: string | null }) {
   let src = url;
   try {
@@ -60,6 +69,9 @@ export default function ReviewPage() {
   const [revealed, setRevealed] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
+  const [aiExplanation, setAiExplanation] = React.useState<AIExplanation | null>(null);
+  const [aiLoading, setAiLoading] = React.useState(false);
+  const [aiError, setAiError] = React.useState<string | null>(null);
 
   const apiBase = API_BASE;
   const headers = (): Record<string, string> => {
@@ -78,6 +90,8 @@ export default function ReviewPage() {
         setCards(d.due || []);
         setStats(d.stats || null);
         setRevealed(false);
+        setAiExplanation(null);
+        setAiError(null);
       } else {
         setMsg({ ok: false, text: "Could not load review queue — login pehle karo." });
       }
@@ -104,6 +118,8 @@ export default function ReviewPage() {
       });
       if (res.ok) {
         setRevealed(false);
+        setAiExplanation(null);
+        setAiError(null);
         await load();
       } else {
         const d = await res.json().catch(() => ({}));
@@ -113,6 +129,26 @@ export default function ReviewPage() {
       setMsg({ ok: false, text: "Network error." });
     } finally {
       setBusy(false);
+    }
+  };
+
+  const getAiExplanation = async (questionId: string) => {
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch(`${apiBase}/ai-explanation/questions/${questionId}`, {
+        headers: headers(),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setAiExplanation(d as AIExplanation);
+      } else {
+        setAiError(d.message || "AI explanation abhi available nahi hai is question ke liye.");
+      }
+    } catch {
+      setAiError("Network error fetching AI explanation.");
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -204,6 +240,33 @@ export default function ReviewPage() {
                   <p className="mt-2 whitespace-pre-line text-muted-foreground">
                     🇮🇳 {card.question.explanationHindi}
                   </p>
+                )}
+              </div>
+            )}
+
+            {revealed && !card.question.explanation && !card.question.explanationHindi && (
+              <div className="mt-4">
+                {!aiExplanation && (
+                  <button
+                    onClick={() => getAiExplanation(card.question.id)}
+                    disabled={aiLoading}
+                    className="w-full rounded-lg border border-primary/30 bg-primary/5 py-2.5 text-sm font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
+                  >
+                    {aiLoading ? "Loading…" : "🤖 Get AI Explanation"}
+                  </button>
+                )}
+                {aiError && !aiLoading && (
+                  <p className="mt-2 text-center text-xs text-muted-foreground">{aiError}</p>
+                )}
+                {aiExplanation && (
+                  <div className="mt-2 rounded-lg bg-primary/10 p-3 text-sm leading-relaxed">
+                    <p className="whitespace-pre-line">{aiExplanation.stepByStepSolution}</p>
+                    {aiExplanation.stepByStepSolutionHindi && (
+                      <p className="mt-2 whitespace-pre-line text-muted-foreground">
+                        🇮🇳 {aiExplanation.stepByStepSolutionHindi}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
