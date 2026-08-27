@@ -2,6 +2,7 @@
 // v6 §7 — Test paper + Answer-key PDF export with mandatory 4-pass QA gate.
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { PdfRenderer } from './pdf-renderer';
 import { buildPaperHtml, buildAnswerKeyHtml, PdfQuestion, PdfTestMeta } from './pdf-templates';
 
@@ -20,7 +21,7 @@ export class PdfExportService {
   ): Promise<{ questions: PdfQuestion[]; meta: PdfTestMeta }> {
     const rows = await this.prisma.question.findMany({
       where: {
-        isApproved: true,
+        ...PUBLISHED_QUESTION_WHERE,
         questionTextHindi: { not: '' },
         examId: { not: null },
       },
@@ -228,7 +229,7 @@ export class PdfExportService {
     }
 
     const rows: any[] = await this.prisma.question.findMany({
-      where: { isApproved: true, chapterId, questionTextHindi: { not: '' } },
+      where: { ...PUBLISHED_QUESTION_WHERE, chapterId, questionTextHindi: { not: '' } },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
       orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
       take: 150,
@@ -282,4 +283,3 @@ export class PdfExportService {
     return { buffer, filename: `SSC_${safe}_${questions.length}Q.pdf` };
   }
 }
-
