@@ -11,6 +11,21 @@ import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /**
+ * Shape of the JWT payload issued by AuthService.issueTokens(). Kept in
+ * sync with the `base` object built in backend/src/auth/auth.service.ts.
+ */
+interface AccessTokenPayload {
+  sub: string;
+  email: string;
+  role: string;
+  sid: string;
+  platform?: string;
+  type: string;
+  iat?: number;
+  exp?: number;
+}
+
+/**
  * JwtAuthGuard — verifies the access token (type: "access") and attaches
  * the user to the request. Skips routes marked @Public().
  *
@@ -47,9 +62,9 @@ export class JwtAuthGuard implements CanActivate {
     }
     const token = authHeader.slice(7).trim();
 
-    let payload: any;
+    let payload: AccessTokenPayload;
     try {
-      payload = await this.jwtService.verifyAsync(token);
+      payload = await this.jwtService.verifyAsync<AccessTokenPayload>(token);
       if (payload.type !== 'access' || !payload.sub) {
         throw new UnauthorizedException('Invalid token type');
       }
