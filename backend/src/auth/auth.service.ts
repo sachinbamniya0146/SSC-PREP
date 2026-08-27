@@ -279,6 +279,18 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Refresh token expired');
     }
 
+    // FIX Error #4: even if the refresh token row itself isn't revoked,
+    // the DeviceSession it belongs to might have been deactivated by a
+    // newer login elsewhere. Previously this was never checked here,
+    // which is exactly how an old device could keep silently refreshing
+    // forever after being "logged out" on paper.
+    const session = await this.prisma.deviceSession.findUnique({
+      where: { id: payload.sid },
+    });
+    if (!session || !session.isActive) {
+      throw new UnauthorizedException('Session has been logged out');
+    }
+
     // Rotation: revoke current, issue new pair bound to the same session.
     await this.prisma.refreshToken.update({
       where: { id: stored.id },
@@ -295,6 +307,7 @@ export class AuthService implements OnModuleInit {
         userId: user.id,
         tokenHash: newHash,
         expiresAt: this.refreshExpiryDate(),
+        deviceSessionId: payload.sid,
       },
     });
     return pair;
@@ -398,10 +411,22 @@ export class AuthService implements OnModuleInit {
       where: { userId: user.id, platform, isActive: true },
     });
     if (old) {
-      await this.prisma.deviceSession.update({
-        where: { id: old.id },
-        data: { isActive: false },
-      });
+      // FIX Error #4: previously only DeviceSession.isActive was flipped to
+      // false, but that flag was never actually checked anywhere, and the
+      // old device's refresh token was never revoked - so the old device
+      // kept working (access token until natural expiry, and could keep
+      // refreshing forever) even after a new device logged in. Now we also
+      // revoke every un-revoked refresh token tied to that old session.
+      await this.prisma.$transaction([
+        this.prisma.deviceSession.update({
+          where: { id: old.id },
+          data: { isActive: false },
+        }),
+        this.prisma.refreshToken.updateMany({
+          where: { deviceSessionId: old.id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        }),
+      ]);
       const oldKeys = await this.redis.keys(`user:${user.id}:*:${old.id}`);
       if (oldKeys.length) await this.redis.del(...oldKeys);
     }
@@ -429,6 +454,9 @@ export class AuthService implements OnModuleInit {
         userId: user.id,
         tokenHash,
         expiresAt: this.refreshExpiryDate(),
+        // FIX Error #4: link this refresh token to the session it belongs
+        // to, so a future login on another device can revoke it precisely.
+        deviceSessionId: session.id,
       },
     });
 
