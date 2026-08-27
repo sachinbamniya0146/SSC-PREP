@@ -2,6 +2,7 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 // Use synchronous require for ESM package - avoids __importStar wrapper issue
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const MeiliSearchClass = require('meilisearch').Meilisearch;
@@ -146,7 +147,7 @@ export class SearchService implements OnModuleInit {
     let skip = 0;
     while (true) {
       const questions = await this.prisma.question.findMany({
-        where: { isApproved: true, isActive: true },
+        where: { ...PUBLISHED_QUESTION_WHERE },
         include: { subject: true, chapter: true, topic: true, subTopic: true, exam: true },
         take: batchSize,
         skip,
