@@ -3,6 +3,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { cacheGet, cacheSet } from '../common/cache';
+import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 
 @Injectable()
 export class TestsService {
@@ -529,7 +530,7 @@ async saveAnswers(
       const subjectId = slugToId.get(sec.subjectSlug);
       if (!subjectId) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
       const rows: any[] = await this.prisma.question.findMany({
-        where: { isApproved: true, subjectId, questionTextHindi: { not: '' }, examId: { not: null } },
+        where: { ...PUBLISHED_QUESTION_WHERE, subjectId, questionTextHindi: { not: '' }, examId: { not: null } },
         include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
         orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
         take: 500,
@@ -633,7 +634,7 @@ async saveAnswers(
       if (!subjectId) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
       const rows: any[] = await this.prisma.question.findMany({
         where: {
-          isApproved: true,
+          ...PUBLISHED_QUESTION_WHERE,
           subjectId,
           questionTextHindi: { not: '' },
           examId: { not: null },
@@ -739,7 +740,7 @@ async saveAnswers(
     const take = Math.min(Math.max(count, 5), 100);
     const rows: any[] = await this.prisma.question.findMany({
       where: {
-        isApproved: true,
+        ...PUBLISHED_QUESTION_WHERE,
         subjectId,
         questionTextHindi: { not: '' },
         examId: { not: null },
@@ -893,7 +894,7 @@ async saveAnswers(
 
     for (const ch of weakChapters) {
       const where: any = {
-        isApproved: true,
+        ...PUBLISHED_QUESTION_WHERE,
         chapterId: ch.chapterId,
         questionTextHindi: { not: '' },
         examId: { not: null },
