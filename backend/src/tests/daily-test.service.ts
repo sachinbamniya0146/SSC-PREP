@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 
 /**
  * v3 §6.4 — Daily Test (Live mode).
@@ -214,7 +215,7 @@ export class DailyTestService {
   private async composeIds(examId: string, subjectId: string | undefined, n: number): Promise<string[]> {
     const rows: any[] = await this.prisma.question.findMany({
       where: {
-        isApproved: true,
+        ...PUBLISHED_QUESTION_WHERE,
         examId,
         ...(subjectId ? { subjectId } : {}),
         questionTextHindi: { not: '' },
