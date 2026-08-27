@@ -114,6 +114,7 @@ export class SearchService implements OnModuleInit {
       negativeMarks: q.negativeMarks,
       searchHash: q.searchHash,
       isActive: q.isActive,
+      autoSuspended: q.autoSuspended,
       videoUrl: q.videoUrl || '',
       videoSource: q.videoSource || '',
       videoTitle: q.videoTitle || '',

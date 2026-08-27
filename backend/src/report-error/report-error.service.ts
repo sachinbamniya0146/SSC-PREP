@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, ErrorReportStatus } from '@prisma/client';
 import { SearchService } from '../search/search.service';
@@ -11,32 +11,10 @@ const SOFT_SUSPEND_THRESHOLD = 3;
 @Injectable()
 export class ReportErrorService {
   private readonly logger = new Logger(ReportErrorService.name);
-
   constructor(
     private readonly prisma: PrismaService,
-    private readonly search: SearchService,
+    private readonly searchService: SearchService,
   ) {}
-
-  // BUG FIX (found while closing the "autoSuspended leaks into search"
-  // gap — see search.service.ts): every place below that flips
-  // Question.autoSuspended in Postgres was never telling Meilisearch about
-  // it. search.service.ts's index only gets a question's current
-  // isApproved/isActive/autoSuspended values when indexQuestion() (single
-  // doc, admin-triggered) or indexAllApproved() (full rebuild) runs — a
-  // plain `prisma.question.update()` here does not touch the search index
-  // at all. So a question a student got auto-suspended, or an admin
-  // CONFIRMED as wrong, stayed fully findable via search (and, before the
-  // autoSuspended filter fix in search.service.ts, was never even excluded
-  // once found) until someone happened to run a full re-index. Re-index
-  // the single affected question right after every autoSuspended change so
-  // search stays in sync in real time. Best-effort / fire-and-forget: a
-  // Meilisearch hiccup must never block the report/resolve/unsuspend flow
-  // itself.
-  private reindexAfterVisibilityChange(questionId: string) {
-    this.search.indexQuestion(questionId).catch((e) =>
-      this.logger.warn(`Failed to re-index question ${questionId} after visibility change: ${e?.message || e}`),
-    );
-  }
 
   async getExports() {
     return { SOFT_SUSPEND_THRESHOLD };
@@ -82,7 +60,9 @@ export class ReportErrorService {
       },
     });
 
-    if (nowSuspended) this.reindexAfterVisibilityChange(questionId);
+    if (nowSuspended) {
+      this.reindexAfterVisibilityChange(questionId);
+    }
 
     return {
       report,
@@ -193,7 +173,6 @@ export class ReportErrorService {
       where: { id: questionId },
       data: { autoSuspended: false, suspendedAt: null, errorReportCount: 0 },
     });
-    this.reindexAfterVisibilityChange(questionId);
 
     await this.prisma.auditLog.create({
       data: {
@@ -205,7 +184,17 @@ export class ReportErrorService {
       },
     });
 
+    // Re-index in Meilisearch to reflect visibility change
+    this.reindexAfterVisibilityChange(questionId);
+
     return { success: true, message: 'Question unsuspended and error reports cleared' };
+  }
+
+  /** Re-index a question in Meilisearch after its visibility changed (autoSuspended flip) */
+  private reindexAfterVisibilityChange(questionId: string) {
+    this.searchService.indexQuestion(questionId).catch((e) => {
+      this.logger.warn(`Failed to re-index question ${questionId} after visibility change: ${e.message}`);
+    });
   }
 
   /** v5 §40 — error-type classification stats for the admin accuracy dashboard. */

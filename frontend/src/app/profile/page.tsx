@@ -2,22 +2,7 @@
 
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
-import { api, authHeaders } from "@/lib/api";
-
-const TELEGRAM_TYPES: { type: string; label: string }[] = [
-  { type: "daily_practice", label: "Daily Practice Question" },
-  { type: "mock_results", label: "Mock Test Results" },
-  { type: "leaderboard", label: "Leaderboard / Rank Updates" },
-  { type: "announcements", label: "Announcements" },
-];
-
-interface TelegramAccount {
-  chatId: string;
-  username?: string | null;
-  firstName?: string | null;
-  isActive: boolean;
-  subscriptions: { type: string; isActive: boolean }[];
-}
+import { api } from "@/lib/api";
 
 interface UserProfile {
   id: string;
@@ -46,61 +31,27 @@ export default function ProfilePage() {
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
-  const [telegram, setTelegram] = React.useState<TelegramAccount | null | undefined>(undefined);
+  // Telegram state
+  const [telegram, setTelegram] = React.useState<{
+    userId: string;
+    chatId: string;
+    username?: string;
+    firstName?: string;
+    lastName?: string;
+    isActive: boolean;
+    subscriptions: { type: string; isActive: boolean }[];
+  } | null | undefined>(undefined);
   const [chatIdInput, setChatIdInput] = React.useState("");
   const [tgLinking, setTgLinking] = React.useState(false);
   const [tgError, setTgError] = React.useState("");
   const [tgBusyType, setTgBusyType] = React.useState<string | null>(null);
 
-  async function loadTelegram() {
-    try {
-      const data = await api<TelegramAccount | null>("/telegram/account", { headers: authHeaders() });
-      setTelegram(data);
-    } catch (err) {
-      console.error("Failed to load Telegram account", err);
-      setTelegram(null);
-    }
-  }
-
-  async function linkTelegram() {
-    const chatId = Number(chatIdInput.trim());
-    if (!chatIdInput.trim() || Number.isNaN(chatId)) {
-      setTgError("Enter a valid numeric Telegram Chat ID");
-      return;
-    }
-    setTgLinking(true);
-    setTgError("");
-    try {
-      await api("/telegram/link", {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ chatId }),
-      });
-      setChatIdInput("");
-      await loadTelegram();
-    } catch (err) {
-      setTgError(err instanceof Error ? err.message : "Failed to link Telegram account");
-    } finally {
-      setTgLinking(false);
-    }
-  }
-
-  async function toggleSubscription(type: string, currentlyOn: boolean) {
-    setTgBusyType(type);
-    setTgError("");
-    try {
-      const res = await api<{ ok: boolean; error?: string }>(
-        `/telegram/${currentlyOn ? "unsubscribe" : "subscribe"}/${type}`,
-        { method: "POST", headers: authHeaders() },
-      );
-      if (!res.ok) setTgError(res.error || "Failed to update subscription");
-      await loadTelegram();
-    } catch (err) {
-      setTgError(err instanceof Error ? err.message : "Failed to update subscription");
-    } finally {
-      setTgBusyType(null);
-    }
-  }
+  const TELEGRAM_TYPES = [
+    { key: "daily_practice", label: "📝 Daily Practice Questions" },
+    { key: "mock_results", label: "📊 Mock Test Results" },
+    { key: "leaderboard", label: "🏆 Leaderboard Updates" },
+    { key: "announcements", label: "📢 Announcements" },
+  ] as const;
 
   async function loadProfile() {
     try {
@@ -111,6 +62,85 @@ export default function ProfilePage() {
       if (data.user.phone) setPhone(data.user.phone);
     } catch (err) {
       console.error("Failed to load profile", err);
+    }
+  }
+
+  async function loadTelegram() {
+    try {
+      const token = localStorage.getItem("ssc_access_token");
+      if (!token) return;
+      const data = await api<{
+        userId: string;
+        chatId: number;
+        username?: string;
+        firstName?: string;
+        lastName?: string;
+        isActive: boolean;
+        subscriptions: { type: string; isActive: boolean }[];
+      }>("/telegram/account", { headers: { Authorization: `Bearer ${token}` } });
+      if (data && data.userId) {
+        setTelegram({
+          userId: data.userId,
+          chatId: String(data.chatId),
+          username: data.username,
+          firstName: data.firstName,
+          lastName: data.lastName,
+          isActive: data.isActive,
+          subscriptions: data.subscriptions || [],
+        });
+      } else {
+        setTelegram(null);
+      }
+    } catch (err) {
+      console.error("Failed to load telegram", err);
+      setTelegram(null);
+    }
+  }
+
+  async function linkTelegram() {
+    if (!chatIdInput.trim()) {
+      setTgError("Please enter your Telegram Chat ID");
+      return;
+    }
+    setTgLinking(true);
+    setTgError("");
+    try {
+      const token = localStorage.getItem("ssc_access_token");
+      await api("/telegram/link", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: Number(chatIdInput) }),
+      });
+      await loadTelegram();
+      setChatIdInput("");
+      setTgError("");
+    } catch (err) {
+      setTgError(err instanceof Error ? err.message : "Failed to link Telegram");
+    } finally {
+      setTgLinking(false);
+    }
+  }
+
+  async function toggleSubscription(type: string, currentlyOn: boolean) {
+    setTgBusyType(type);
+    try {
+      const token = localStorage.getItem("ssc_access_token");
+      if (currentlyOn) {
+        await api(`/telegram/unsubscribe/${type}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } else {
+        await api(`/telegram/subscribe/${type}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+      await loadTelegram();
+    } catch (err) {
+      setTgError(err instanceof Error ? err.message : `Failed to ${currentlyOn ? "unsubscribe" : "subscribe"}`);
+    } finally {
+      setTgBusyType(null);
     }
   }
 
@@ -169,6 +199,7 @@ export default function ProfilePage() {
 
   React.useEffect(() => {
     loadProfile();
+    loadTelegram();
   }, []);
 
   if (!user) {
@@ -279,6 +310,96 @@ export default function ProfilePage() {
             <p className="mt-2 text-xs text-muted-foreground">Current: {user.phone}</p>
           ) : (
             <p className="mt-2 text-xs text-red-500">⚠️ Mobile number is mandatory. Please add your mobile number.</p>
+          )}
+        </div>
+
+        {/* Telegram Notifications */}
+        <div className="mt-6 rounded-xl border border-border bg-card p-6">
+          <h2 className="text-lg font-semibold">📲 Telegram Notifications</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Link your Telegram to receive daily practice questions, mock results, and announcements
+          </p>
+
+          {tgError && (
+            <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">
+              {tgError}
+            </div>
+          )}
+
+          {telegram === undefined ? (
+            <div className="mt-4 flex items-center justify-center">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
+            </div>
+          ) : telegram === null ? (
+            <div className="mt-4 space-y-4 max-w-md">
+              <p className="text-sm text-muted-foreground">
+                Your Telegram account is not linked yet. To link it, you need your numeric Telegram Chat ID.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                💡 To find your Chat ID: Open Telegram and message <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer" className="underline text-primary hover:text-primary/80">@userinfobot</a> — it will reply with your numeric Chat ID. Copy and paste it below.
+              </p>
+              <div className="flex flex-wrap gap-4 items-end">
+                <div className="flex-1 min-w-[250px]">
+                  <label className="mb-1.5 block text-sm font-medium">Telegram Chat ID</label>
+                  <input
+                    type="number"
+                    value={chatIdInput}
+                    onChange={(e) => setChatIdInput(e.target.value)}
+                    placeholder="123456789"
+                    className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                    inputMode="numeric"
+                    required
+                  />
+                </div>
+                <button
+                  onClick={linkTelegram}
+                  disabled={tgLinking || !chatIdInput.trim()}
+                  className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                >
+                  {tgLinking ? "Linking…" : "Link Telegram"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">
+                    {telegram.username ? `@${telegram.username}` : telegram.firstName ? `${telegram.firstName} ${telegram.lastName || ""}` : "Telegram User"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Chat ID: {telegram.chatId}</p>
+                </div>
+                <span className={`rounded-full px-3 py-1 text-xs font-medium ${telegram.isActive ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"}`}>
+                  {telegram.isActive ? "✅ Linked & Active" : "⏸️ Linked but Inactive"}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {TELEGRAM_TYPES.map((t) => {
+                  const sub = telegram.subscriptions.find((s) => s.type === t.key);
+                  const isActive = sub?.isActive ?? false;
+                  return (
+                    <div key={t.key} className="flex items-center justify-between p-3 rounded-lg border border-border bg-background/50">
+                      <label className="text-sm font-medium cursor-pointer">{t.label}</label>
+                      <button
+                        onClick={() => toggleSubscription(t.key, isActive)}
+                        disabled={tgBusyType === t.key}
+                        className={`relative w-11 h-6 rounded-full transition-colors ${
+                          isActive ? "bg-primary" : "bg-muted"
+                        } disabled:opacity-50`}
+                        aria-label={isActive ? "Disable" : "Enable"}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-md transition-transform ${
+                            isActive ? "translate-x-5" : "translate-x-0.5"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           )}
         </div>
 

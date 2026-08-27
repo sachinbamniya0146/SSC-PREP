@@ -134,12 +134,7 @@ export class TelegramService {
   }
 
   async getTelegramUserByUserId(userId: string) {
-    // include subscriptions so the profile page can render each notification
-    // type's current on/off state without a second round trip.
-    return this.prisma.telegramUser.findUnique({
-      where: { userId },
-      include: { subscriptions: true },
-    });
+    return this.prisma.telegramUser.findUnique({ where: { userId }, include: { subscriptions: true } });
   }
 
   async subscribe(chatId: number, type: string) {

@@ -3,7 +3,6 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { cacheGet, cacheSet } from '../common/cache';
-import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 
 @Injectable()
 export class TestsService {
@@ -530,7 +529,7 @@ async saveAnswers(
       const subjectId = slugToId.get(sec.subjectSlug);
       if (!subjectId) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
       const rows: any[] = await this.prisma.question.findMany({
-        where: { ...PUBLISHED_QUESTION_WHERE, subjectId, questionTextHindi: { not: '' }, examId: { not: null } },
+        where: { isApproved: true, subjectId, questionTextHindi: { not: '' }, examId: { not: null } },
         include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
         orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
         take: 500,
@@ -634,7 +633,7 @@ async saveAnswers(
       if (!subjectId) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
       const rows: any[] = await this.prisma.question.findMany({
         where: {
-          ...PUBLISHED_QUESTION_WHERE,
+          isApproved: true,
           subjectId,
           questionTextHindi: { not: '' },
           examId: { not: null },
@@ -723,25 +722,14 @@ async saveAnswers(
   }
 
   // Subjects with approved+bilingual counts (for the sectional picker UI).
-  //
-  // FIX (same "dropdown count vs load count" class as question-bank-practice
-  // .service.ts's subject/chapter checks — see handoff #3): this raw SQL join
-  // hand-wrote `q."isApproved" = true` and never went through
-  // PUBLISHED_QUESTION_WHERE, so it was still missing the isActive/autoSuspended
-  // checks that sectional() (below) already enforces. Net effect: a subject
-  // whose only "approved" questions were suspended after student error-reports
-  // would still show a non-zero questionCount in the picker, and then
-  // sectional() would correctly filter them all out — a subject the student
-  // can see and tap, but that silently returns fewer (or zero) questions than
-  // advertised. Raw SQL can't spread the shared TS constant, so the same three
-  // conditions are inlined here explicitly instead.
   async sectionalSubjects() {
     const rows = await this.prisma.$queryRaw`
       SELECT s.id, s.name, s.slug,
              COUNT(q.id)::int AS "questionCount"
       FROM subjects s
-      LEFT JOIN questions q ON q."subjectId" = s.id
-        AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+      LEFT JOIN questions q ON q."subjectId" = s.id AND q."isApproved" = true
+        AND q."isActive" = true
+        AND q."autoSuspended" = false
         AND q."questionTextHindi" IS NOT NULL AND q."questionTextHindi" <> ''
       GROUP BY s.id ORDER BY s.name;`;
     return rows;
@@ -753,7 +741,7 @@ async saveAnswers(
     const take = Math.min(Math.max(count, 5), 100);
     const rows: any[] = await this.prisma.question.findMany({
       where: {
-        ...PUBLISHED_QUESTION_WHERE,
+        isApproved: true,
         subjectId,
         questionTextHindi: { not: '' },
         examId: { not: null },
@@ -907,7 +895,7 @@ async saveAnswers(
 
     for (const ch of weakChapters) {
       const where: any = {
-        ...PUBLISHED_QUESTION_WHERE,
+        isApproved: true,
         chapterId: ch.chapterId,
         questionTextHindi: { not: '' },
         examId: { not: null },
