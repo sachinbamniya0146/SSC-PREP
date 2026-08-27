@@ -61,6 +61,7 @@ export class SearchService implements OnModuleInit {
           'difficulty',
           'isApproved',
           'isActive',
+          'autoSuspended',
           'explanationSource',
         ],
         sortableAttributes: ['year', 'createdAt', 'updatedAt'],
@@ -107,6 +108,7 @@ export class SearchService implements OnModuleInit {
       answerVerificationStatus: q.answerVerificationStatus,
       lastVerifiedAt: q.lastVerifiedAt?.toISOString() || null,
       isApproved: q.isApproved,
+      autoSuspended: q.autoSuspended,
       difficulty: q.difficulty,
       marks: q.marks,
       negativeMarks: q.negativeMarks,
@@ -184,8 +186,16 @@ export class SearchService implements OnModuleInit {
     if (params.year) filter.push(`year = ${params.year}`);
     if (params.difficulty) filter.push(`difficulty = ${params.difficulty}`);
     if (params.explanationSource) filter.push(`explanationSource = ${params.explanationSource}`);
+    // FIX: filter was missing autoSuspended — a question soft-suspended after
+    // student error-reports (report-error.service.ts) stayed isApproved/isActive
+    // true, so it would still surface in search results. autoSuspended is now
+    // also declared in filterableAttributes above and populated in
+    // transformQuestion(), and report-error.service.ts re-indexes/removes the
+    // document whenever autoSuspended changes so this filter has fresh data to
+    // filter against.
     filter.push('isApproved = true');
     filter.push('isActive = true');
+    filter.push('autoSuspended = false');
 
     try {
       this.initClient();
