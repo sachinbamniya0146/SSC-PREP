@@ -346,8 +346,43 @@ export class MonetizationService {
     return { ok: true, ignored: true, reason: 'unhandled_status' };
   }
 
-  /** Shared fulfillment: Payment PENDING → Subscription / ChapterPurchase / MockAccess. */
+  /**
+   * Shared fulfillment: Payment PENDING → Subscription / ChapterPurchase / MockAccess.
+   *
+   * FIX Error #5 follow-up (CRITICAL — race condition in the "fix"):
+   * The previous version of this method wrote `status: 'SUCCESS'` as its
+   * SECOND-TO-LAST step, AFTER already creating the subscription / chapter
+   * purchase / mock credits / referral payout. verifyPayment() and
+   * handleWebhook() each read `payment.status` via a separate `findUnique`
+   * BEFORE calling fulfill(). If the browser's verify call and PayU's
+   * webhook land close together (the exact scenario Error #5 describes —
+   * that's the whole reason this guard exists), BOTH reads can happen
+   * while status is still PENDING, so both callers pass the `=== 'SUCCESS'`
+   * check and both run this method fully, double-granting everything
+   * before either write finishes. The per-request check alone cannot
+   * close this window — only an atomic, conditional write can.
+   *
+   * Fix: CLAIM the row first, with a single atomic conditional UPDATE
+   * (`status: { not: 'SUCCESS' }` in the WHERE clause). Postgres executes
+   * that as one atomic statement, so if two requests race, only one of
+   * them can ever see `count === 1`; the other sees `count === 0` and
+   * exits immediately without granting anything twice.
+   */
   private async fulfill(payment: any, payuPaymentId: string) {
+    const claim = await this.prisma.payment.updateMany({
+      where: { id: payment.id, status: { not: 'SUCCESS' } },
+      data: {
+        razorpayPaymentId: payuPaymentId,
+        status: 'SUCCESS',
+        invoiceUrl: `https://sscprephub.in/invoice/${payment.id}`,
+      },
+    });
+    if (claim.count === 0) {
+      // Someone else (the other of browser-verify / webhook) already
+      // claimed and fulfilled this payment. Do not grant anything again.
+      return;
+    }
+
     const userId = payment.userId;
     const meta = (payment.metadataJson as any) || {};
 
@@ -386,11 +421,6 @@ export class MonetizationService {
         update: { paidPacksPurchased: { increment: 1 } },
       });
     }
-
-    await this.prisma.payment.update({
-      where: { id: payment.id },
-      data: { razorpayPaymentId: payuPaymentId, status: 'SUCCESS', invoiceUrl: `https://sscprephub.in/invoice/${payment.id}` },
-    });
 
     // consume coupon if any
     if (meta.couponCode) {
