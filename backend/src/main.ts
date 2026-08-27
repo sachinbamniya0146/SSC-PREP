@@ -9,6 +9,22 @@ import compression from 'compression';
 import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
 
+// BUG FIX (found while wiring the frontend to /telegram/*): TelegramUser.chatId
+// and TelegramSubscription.chatId are Prisma `BigInt` columns (Telegram chat IDs
+// can exceed Number.MAX_SAFE_INTEGER). Node's JSON.stringify — which Express's
+// res.json() uses under the hood for every NestJS response — throws
+// "TypeError: Do not know how to serialize a BigInt" the moment a BigInt value
+// is present anywhere in the response body. There was no handling for this
+// anywhere in the codebase, so ANY endpoint returning a TelegramUser row
+// (GET /telegram/account, POST /telegram/link, etc.) would 500 on every call,
+// even though the Prisma/service code itself was correct. Fixed once, globally,
+// here — the same single-source-of-truth approach used by
+// PUBLISHED_QUESTION_WHERE — instead of patching every call site that touches
+// a TelegramUser/TelegramSubscription.
+(BigInt.prototype as unknown as { toJSON: () => string }).toJSON = function () {
+  return this.toString();
+};
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const logger = new Logger('Bootstrap');
