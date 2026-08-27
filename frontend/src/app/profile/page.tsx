@@ -2,7 +2,22 @@
 
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
-import { api } from "@/lib/api";
+import { api, authHeaders } from "@/lib/api";
+
+const TELEGRAM_TYPES: { type: string; label: string }[] = [
+  { type: "daily_practice", label: "Daily Practice Question" },
+  { type: "mock_results", label: "Mock Test Results" },
+  { type: "leaderboard", label: "Leaderboard / Rank Updates" },
+  { type: "announcements", label: "Announcements" },
+];
+
+interface TelegramAccount {
+  chatId: string;
+  username?: string | null;
+  firstName?: string | null;
+  isActive: boolean;
+  subscriptions: { type: string; isActive: boolean }[];
+}
 
 interface UserProfile {
   id: string;
@@ -30,6 +45,62 @@ export default function ProfilePage() {
   const [info, setInfo] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+
+  const [telegram, setTelegram] = React.useState<TelegramAccount | null | undefined>(undefined);
+  const [chatIdInput, setChatIdInput] = React.useState("");
+  const [tgLinking, setTgLinking] = React.useState(false);
+  const [tgError, setTgError] = React.useState("");
+  const [tgBusyType, setTgBusyType] = React.useState<string | null>(null);
+
+  async function loadTelegram() {
+    try {
+      const data = await api<TelegramAccount | null>("/telegram/account", { headers: authHeaders() });
+      setTelegram(data);
+    } catch (err) {
+      console.error("Failed to load Telegram account", err);
+      setTelegram(null);
+    }
+  }
+
+  async function linkTelegram() {
+    const chatId = Number(chatIdInput.trim());
+    if (!chatIdInput.trim() || Number.isNaN(chatId)) {
+      setTgError("Enter a valid numeric Telegram Chat ID");
+      return;
+    }
+    setTgLinking(true);
+    setTgError("");
+    try {
+      await api("/telegram/link", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ chatId }),
+      });
+      setChatIdInput("");
+      await loadTelegram();
+    } catch (err) {
+      setTgError(err instanceof Error ? err.message : "Failed to link Telegram account");
+    } finally {
+      setTgLinking(false);
+    }
+  }
+
+  async function toggleSubscription(type: string, currentlyOn: boolean) {
+    setTgBusyType(type);
+    setTgError("");
+    try {
+      const res = await api<{ ok: boolean; error?: string }>(
+        `/telegram/${currentlyOn ? "unsubscribe" : "subscribe"}/${type}`,
+        { method: "POST", headers: authHeaders() },
+      );
+      if (!res.ok) setTgError(res.error || "Failed to update subscription");
+      await loadTelegram();
+    } catch (err) {
+      setTgError(err instanceof Error ? err.message : "Failed to update subscription");
+    } finally {
+      setTgBusyType(null);
+    }
+  }
 
   async function loadProfile() {
     try {
