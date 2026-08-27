@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // P2 — monetization service: PayU orders, coupons, subscription plans, chapter purchases.
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ReferralService } from '../referral/referral.service';
 import * as crypto from 'crypto';
 
 interface PayUConfig {
@@ -16,7 +17,14 @@ interface PayUConfig {
 export class MonetizationService {
   private payuConfig: PayUConfig;
 
-  constructor(private prisma: PrismaService) {
+  constructor(
+    private prisma: PrismaService,
+    // FIX Error #7: inject ReferralService so fulfill() can trigger the
+    // referral reward. forwardRef() avoids a circular-dependency crash if
+    // ReferralModule also imports MonetizationModule (or vice versa).
+    @Inject(forwardRef(() => ReferralService))
+    private referralService: ReferralService,
+  ) {
     this.payuConfig = {
       merchantId: process.env.PAYU_MERCHANT_KEY || '',
       merchantKey: process.env.PAYU_MERCHANT_KEY || 'eUXkOt',
@@ -248,6 +256,15 @@ export class MonetizationService {
     if (!payment) throw new NotFoundException('Order not found');
     if (payment.userId !== userId) throw new BadRequestException('Order belongs to another user');
 
+    // FIX Error #5 (CRITICAL): handleWebhook() already guarded against
+    // double-processing but verifyPayment() did not. Both the browser
+    // (verify) and PayU's server (webhook) can confirm the same payment,
+    // and a page refresh/retry could call verify twice — without this
+    // guard fulfill() ran unconditionally each time, granting double
+    // subscription duration, double mock-test credits, and double coupon
+    // decrements from a single real payment.
+    if (payment.status === 'SUCCESS') return { ok: true, duplicate: true };
+
     // Verify hash
     const verifyParams = {
       status: input.status,
@@ -350,6 +367,12 @@ export class MonetizationService {
       await this.prisma.subscription.create({
         data: { userId, planId: plan.id, status: 'ACTIVE', startsAt: new Date(), endsAt },
       });
+
+      // FIX Error #7: referral.service.ts's onPaidPurchase() was fully
+      // implemented but never called from anywhere — referrers never
+      // received their promised free subscription. Trigger it here, right
+      // after a successful PLAN purchase is recorded.
+      await this.referralService.onPaidPurchase(userId);
     } else if (meta.kind === 'CHAPTER') {
       await this.prisma.chapterPurchase.upsert({
         where: { userId_chapterId: { userId, chapterId: meta.chapterId } },
