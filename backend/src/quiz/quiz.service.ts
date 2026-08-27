@@ -23,8 +23,11 @@ export class QuizService {
     let quiz = await this.prisma.dailyQuiz.findUnique({ where: { date: today } });
     if (!quiz) {
       // Pull a balanced set of 10 random active questions
+      // FIX Error #8: raw SQL was missing "autoSuspended" = false check
+      // (only had isActive + isApproved), same gap flagged in bank.service.ts.
       const questions = await this.prisma.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM questions WHERE "isActive" = true AND "isApproved" = true
+        SELECT id FROM questions
+        WHERE "isActive" = true AND "isApproved" = true AND "autoSuspended" = false
         ORDER BY random() LIMIT 10`;
       if (questions.length === 0) {
         throw new BadRequestException('No approved questions available yet');
