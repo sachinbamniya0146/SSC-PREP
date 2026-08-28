@@ -1,0 +1,29 @@
+# OmniRoute AI Gateway - Production Docker Compose Addition
+# Add this to your docker-compose.prod.yml or run separately
+
+services:
+  omniroute:
+    image: diegosouzapw/omniroute:latest
+    container_name: ssc-omniroute
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:20128:20128"
+    environment:
+      # CHANGE THIS PASSWORD IMMEDIATELY AFTER FIRST START!
+      - INITIAL_PASSWORD=${OMNIROUTE_PASSWORD:-CHANGEME}
+    volumes:
+      - omniroute_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:20128/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  omniroute_data:
