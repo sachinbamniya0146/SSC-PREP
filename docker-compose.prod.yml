@@ -1,0 +1,147 @@
+# Production Docker Compose for SSC Prep Hub
+# Uses pre-built GHCR images - NO build on VPS
+# Run with: docker compose -f docker-compose.prod.yml up -d
+#
+# Prerequisites on VPS:
+# - docker & docker compose installed
+# - .env file present with all secrets
+# - GHCR authentication configured (docker login ghcr.io)
+# - SSL certificates in ./nginx/ssl/fullchain.pem and ./nginx/ssl/privkey.pem
+# - ./files directory exists for persistent PDF storage
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ssc-postgres
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      # Only Docker-internal hostnames stay here — these are NOT secrets
+      POSTGRES_USER: postgres
+      POSTGRES_DB: ssc_prep_hub
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ssc-redis
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    container_name: ssc-meilisearch
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: meilisearch --no-analytics
+    env_file:
+      - .env
+    volumes:
+      - meilisearch_data:/meili_data
+    ports:
+      - "127.0.0.1:7700:7700"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  backend:
+    image: ghcr.io/sachinbamniya0146/ssc-prep-backend:latest
+    container_name: ssc-backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      # Only Docker-internal hostnames stay here — these are NOT secrets
+      REDIS_HOST: redis
+      MEILISEARCH_HOST: http://meilisearch:7700
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./files:/app/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/sachinbamniya0146/ssc-prep-frontend:latest
+    container_name: ssc-frontend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: ssc-nginx
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/www:/var/www:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  meilisearch_data:
