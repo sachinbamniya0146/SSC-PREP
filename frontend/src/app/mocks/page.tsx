@@ -45,21 +45,44 @@ export default function MocksPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // SECURITY FIX: this used to POST straight to /mocks/purchase, which
+  // instantly granted access with a fake, unverified "payment" (no PayU
+  // involved at all — see backend/src/mocks/mocks.controller.ts for the
+  // full explanation). That endpoint is now admin-only. Real purchases go
+  // through the same PayU order-creation + hash-verified flow the
+  // subscription checkout (/premium) already uses: create an order for
+  // this mockTemplateId, then hand off to PayU's hosted payment page.
+  // PayU redirects back to /payment/success, which calls /payments/verify
+  // and only then unlocks access server-side.
   const purchase = async (m: Mock) => {
     const token = localStorage.getItem("ssc_access_token");
-    const res = await fetch(
-      `${API_BASE}/mocks/purchase`,
-      {
+    try {
+      const res = await fetch(`${API_BASE}/payments/order`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ testTemplateId: m.id }),
-      },
-    );
-    if (res.ok) {
-      alert(`✅ Mock unlocked! ₹${m.offerPriceInr} for ${m.offerDays} days access.`);
-      load();
-    } else {
-      alert("⚠️ Payment failed. Try again.");
+        body: JSON.stringify({ mockTemplateId: m.id }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "⚠️ Could not start payment. Try again.");
+        return;
+      }
+      const payuForm = await res.json();
+
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = payuForm.payuUrl;
+      Object.entries(payuForm.formData || {}).forEach(([key, value]) => {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = key;
+        input.value = String(value);
+        form.appendChild(input);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    } catch (e) {
+      alert("⚠️ Could not start payment. Try again.");
     }
   };
 
