@@ -22,10 +22,31 @@ export class MocksService {
     const usedByTemplate = new Map(accessRows.filter((r) => r.testTemplateId).map((r) => [r.testTemplateId!, r.mocksUsed]));
     const packs = await this.prisma.pricePack.findMany({ where: { isActive: true } });
 
+    // FIX: this endpoint never checked whether the user holds an ACTIVE
+    // subscription — it only looked at per-template free-quota usage. That
+    // meant a paying subscriber still saw every premium mock as
+    // "locked"/"PAID" here, even though tests.service.ts's
+    // assertMockEntitled() would have let them start it (subscription
+    // check happens there). Result: user pays for premium, but the mocks
+    // list keeps showing a paywall — looks completely broken. Now this
+    // mirrors the same subscription check used at attempt-start time.
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { subscriptions: { where: { status: 'ACTIVE' }, select: { endsAt: true }, take: 1 } },
+    });
+    const hasActiveSubscription = !!(
+      user?.subscriptions?.[0] && new Date(user.subscriptions[0].endsAt) > new Date()
+    );
+
     const mocks = tests.map((t) => {
       const isFreeByType = t.type === 'PREVIOUS_YEAR' || t.type === 'YEAR_WISE';
       if (isFreeByType || !t.isPremium) {
         return { id: t.id, title: t.title, description: t.description, type: t.type, durationMinutes: t.durationMinutes, totalQuestions: t.totalQuestions, totalMarks: t.totalMarks, free: true, locked: false, reason: 'FREE' };
+      }
+      // Active subscribers get every premium mock unlocked, regardless of
+      // per-template free-quota usage.
+      if (hasActiveSubscription) {
+        return { id: t.id, title: t.title, description: t.description, type: t.type, durationMinutes: t.durationMinutes, totalQuestions: t.totalQuestions, totalMarks: t.totalMarks, free: true, locked: false, reason: 'PREMIUM_SUBSCRIPTION' };
       }
       const used = usedByTemplate.get(t.id) ?? 0;
       const locked = used >= FREE_MOCKS_PER_EXAM;
@@ -50,6 +71,7 @@ export class MocksService {
 
     return {
       freeMocksPerExam: FREE_MOCKS_PER_EXAM,
+      hasActiveSubscription,
       mockAccess: mocks,
       examPacks: {
         name: packs[0]?.name ?? 'Mock Access Pack',
