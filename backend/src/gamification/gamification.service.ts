@@ -24,13 +24,27 @@ export class GamificationService {
     const today = istDateKey(new Date());
     const last = user.lastPracticeDate ? istDateKey(user.lastPracticeDate) : null;
 
-    let currentStreak = user.currentStreak;
+    // FIX (double-XP bug): previously, when `last === today` the streak was
+    // correctly left unchanged, but execution still fell through to the
+    // `xp: { increment: bonusXp } ` update below — so every additional call
+    // on the same IST day (re-tapping "check in", or submitting a 2nd/3rd
+    // mock test that day, since awardTestXp() also calls checkIn()) granted
+    // another full daily bonus. A student submitting N tests in one day
+    // could farm N× the intended once-per-day XP with no cap.
+    // Fix: return early once already checked in today — no streak change,
+    // no XP, no lastPracticeDate write. Callers (awardTestXp) already treat
+    // this as best-effort via .catch(), so a no-op return is safe for them.
     if (last === today) {
-      // already checked in today — streak unchanged
-    } else {
-      const yesterday = istDateKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
-      currentStreak = last === yesterday ? currentStreak + 1 : 1;
+      return {
+        currentStreak: user.currentStreak,
+        longestStreak: user.longestStreak,
+        bonusXp: 0,
+        checkedInToday: true,
+      };
     }
+
+    const yesterday = istDateKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    const currentStreak = last === yesterday ? user.currentStreak + 1 : 1;
 
     const longestStreak = Math.max(user.longestStreak, currentStreak);
     // Daily check-in bonus: 5 XP + streak bonus (streak * 2, capped at 20)
@@ -46,7 +60,7 @@ export class GamificationService {
       },
     });
 
-    return { currentStreak, longestStreak, bonusXp, checkedInToday: last === today };
+    return { currentStreak, longestStreak, bonusXp, checkedInToday: false };
   }
 
   /** Award XP for a submitted attempt (10/correct + streak multiplier on first daily). */
