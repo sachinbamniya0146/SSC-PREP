@@ -1360,7 +1360,19 @@ async saveAnswers(
       _count: true,
     });
 
-    const percentile = await this.prisma.testAttempt.count({
+    // BUG FIX (audit round 4, item 3): rank and percentile were both INVERTED.
+    // Old code counted attempts with score < yours and called that `percentile`,
+    // then set yourRank = that count + 1 — so a top scorer (almost everyone
+    // below them) ended up with the WORST rank (e.g. rank 10 of 10), and
+    // yourPercentile = (total - belowCount) / total, which for a top scorer
+    // rounds to ~0% ("you beat ~0% of test takers") instead of ~100%.
+    // Correct definitions: rank = 1 + (number of attempts that scored HIGHER
+    // than you); percentile = % of attempts you scored better than (i.e. the
+    // number of attempts with a LOWER score, divided by total).
+    const scoredHigher = await this.prisma.testAttempt.count({
+      where: { testTemplateId: templateId, status: 'SUBMITTED', score: { gt: latest.score } },
+    });
+    const scoredLower = await this.prisma.testAttempt.count({
       where: { testTemplateId: templateId, status: 'SUBMITTED', score: { lt: latest.score } },
     });
     const total = await this.prisma.testAttempt.count({
@@ -1370,8 +1382,8 @@ async saveAnswers(
     return {
       yourScore: latest.score ?? 0,
       yourAccuracy: latest.accuracyPercent ?? 0,
-      yourRank: percentile + 1,
-      yourPercentile: total > 0 ? Math.round(((total - percentile) / total) * 1000) / 10 : 100,
+      yourRank: scoredHigher + 1,
+      yourPercentile: total > 0 ? Math.round((scoredLower / total) * 1000) / 10 : 100,
       totalAttempts: total,
       averageScore: Math.round((stats._avg.score || 0) * 10) / 10,
       averageAccuracy: Math.round((stats._avg.accuracyPercent || 0) * 10) / 10,
