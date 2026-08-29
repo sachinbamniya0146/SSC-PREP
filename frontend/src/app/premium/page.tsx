@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { fetchAuth } from "@/lib/api";
+import { fetchAuth, API_BASE } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -49,16 +49,19 @@ export default function PremiumPage() {
   const loadData = async () => {
     try {
       const [plansRes, subRes] = await Promise.all([
-        fetchAuth("/payments/plans"),
-        fetchAuth("/payments/subscription"),
+        fetchAuth(`${API_BASE}/payments/plans`),
+        fetchAuth(`${API_BASE}/payments/subscription`),
       ]);
+      if (!plansRes.ok || !subRes.ok) {
+        throw new Error("Failed to load plans");
+      }
       const plansData = await plansRes.json();
       const subData = await subRes.json();
       setPlans(plansData.filter((p: Plan) => p.isActive));
       setSubscription(subData);
     } catch (e) {
       console.error(e);
-      setError("Failed to load plans");
+      setError("Failed to load plans. Please refresh the page.");
     } finally {
       setLoading(false);
     }
@@ -81,7 +84,7 @@ export default function PremiumPage() {
     }
     setCouponError("");
     try {
-      const res = await fetchAuth("/payments/coupon/validate", {
+      const res = await fetchAuth(`${API_BASE}/payments/coupon/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: couponCode, amountInr: selectedPlan.priceInr }),
@@ -103,7 +106,7 @@ export default function PremiumPage() {
     setProcessing(true);
     setError("");
     try {
-      const res = await fetchAuth("/payments/order", {
+      const res = await fetchAuth(`${API_BASE}/payments/order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
