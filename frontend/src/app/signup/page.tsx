@@ -21,6 +21,19 @@ export default function SignupPage() {
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
+  // BUG FIX (audit round 3): the signup page had NO referral-code field at
+  // all, and never read the "?ref=" query param that referral share links
+  // use — so referralCode was never sent to POST /auth/signup, meaning the
+  // entire referral-reward system (fully working on the backend) could
+  // never actually be triggered by a real signup. Prefill from the link if
+  // present, and let the user type/paste one manually either way.
+  const [referralCode, setReferralCode] = React.useState("");
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get("ref");
+    if (ref) setReferralCode(ref.trim().toUpperCase());
+  }, []);
 
   // Google Sign-Up (Google Identity Services) — mirrors login/page.tsx's
   // implementation exactly, added for parity: the signup page previously
@@ -171,7 +184,13 @@ export default function SignupPage() {
     try {
       const data = await api<AuthResponse>("/auth/signup", {
         method: "POST",
-        body: JSON.stringify({ fullName, email, phone, password }),
+        body: JSON.stringify({
+          fullName,
+          email,
+          phone,
+          password,
+          ...(referralCode.trim() ? { referralCode: referralCode.trim().toUpperCase() } : {}),
+        }),
       });
       localStorage.setItem("ssc_access_token", data.accessToken);
       localStorage.setItem("ssc_refresh_token", data.refreshToken);
@@ -263,6 +282,20 @@ export default function SignupPage() {
             />
             <p className="mt-1 text-xs text-muted-foreground">
               Required for account security & notifications.
+            </p>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">
+              Referral Code <span className="font-normal text-muted-foreground">(optional)</span>
+            </label>
+            <input
+              value={referralCode}
+              onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+              placeholder="e.g. RAHUL123"
+              className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm uppercase outline-none focus:border-primary"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Got a code from a friend? Enter it here — it auto-fills if you came from a referral link.
             </p>
           </div>
           <div>
