@@ -77,3 +77,15 @@ npm run dev                  # http://localhost:3000
 2. AI-generated content is always tagged `AI_GENERATED` / `AI_INFERRED` until admin approval.
 3. No secrets in code — everything from env config.
 4. Every destructive admin action is logged and reversible.
+
+## Production Auto-Deploy (Oracle VPS)
+
+GitHub Actions workflow `.github/workflows/deploy.yml` now deploys automatically on `main` pushes with a **30-minute delay**.
+
+Required GitHub repository secrets:
+
+- `DEPLOY_SSH_KEY` → SSH private key of deploy user
+- `DEPLOY_USER` → VPS SSH username (example: `ubuntu`)
+- `DEPLOY_HOST` → VPS public IP/domain
+- `DEPLOY_ALLOWED_HOSTS` → comma/newline separated allowlist of approved deploy IPs/domains (must include `DEPLOY_HOST`)
+- `PRODUCTION_ENV` → production `.env` file content

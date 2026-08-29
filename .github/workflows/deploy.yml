@@ -9,17 +9,59 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
+
 jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      DEPLOY_DELAY_SECONDS: 1800
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Validate approved deploy host/IP
+        env:
+          TARGET_HOST: ${{ secrets.DEPLOY_HOST }}
+          ALLOWED_HOSTS: ${{ secrets.DEPLOY_ALLOWED_HOSTS }}
+        run: |
+          if [ -z "${TARGET_HOST}" ]; then
+            echo "❌ Missing secret DEPLOY_HOST"
+            exit 1
+          fi
+          if [ -z "${ALLOWED_HOSTS}" ]; then
+            echo "❌ Missing secret DEPLOY_ALLOWED_HOSTS (comma/newline-separated list of approved IPs/domains)"
+            exit 1
+          fi
+
+          allowed="false"
+          while IFS= read -r host; do
+            host="$(echo "$host" | xargs)"
+            [ -z "$host" ] && continue
+            if [ "$host" = "${TARGET_HOST}" ]; then
+              allowed="true"
+              break
+            fi
+          done < <(echo "${ALLOWED_HOSTS}" | tr ',;' '\n')
+
+          if [ "${allowed}" != "true" ]; then
+            echo "❌ DEPLOY_HOST '${TARGET_HOST}' is not in DEPLOY_ALLOWED_HOSTS"
+            exit 1
+          fi
+          echo "✅ Deploy host validated"
+
+      - name: Delay auto deploy by 30 minutes
+        if: github.event_name == 'push'
+        run: |
+          echo "⏳ Push detected. Waiting ${DEPLOY_DELAY_SECONDS}s before deployment..."
+          sleep "${DEPLOY_DELAY_SECONDS}"
       
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
