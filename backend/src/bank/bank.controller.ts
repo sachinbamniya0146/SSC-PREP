@@ -98,9 +98,17 @@ export class BankController {
   }
 
   // ---- Video Solution Endpoints ----
+  // BUG FIX (audit round 3): add/removeVideoSolution had only the
+  // class-level @UseGuards(JwtAuthGuard) — i.e. ANY logged-in student
+  // (not just admins/moderators) could attach or wipe the video-solution
+  // link on any question in the bank. Locked down to ADMIN/MODERATOR,
+  // matching the pattern already used a few lines below for verifyQuestion.
+  // getVideoSolution (read) is intentionally left open to any logged-in
+  // user — students are supposed to be able to watch the video solution.
 
   @Post('questions/:id/video')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
   addVideoSolution(
     @Param('id') id: string,
     @Body() dto: { 
@@ -126,7 +134,8 @@ export class BankController {
   }
 
   @Delete('questions/:id/video')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
   removeVideoSolution(
     @Param('id') id: string,
     @Req() req: any,
