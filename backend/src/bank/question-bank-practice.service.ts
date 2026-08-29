@@ -171,6 +171,9 @@ export class QuestionBankPracticeService {
       skippedAnswers: 0,
     });
 
+    // BUGFIX: a brand-new set has zero answers recorded yet, so no question in
+    // it should reveal correctAnswer/explanation. formatSet() strips those
+    // fields for any question not present in `answers` (see formatSet below).
     return this.formatSet(newSet, questions);
   }
 
@@ -349,7 +352,10 @@ export class QuestionBankPracticeService {
       });
     }
 
-    // Get next question if not complete
+    // Get next question if not complete.
+    // BUGFIX: the upcoming question has NOT been answered yet, so its
+    // correctAnswer/explanation must never be sent to the client here
+    // (previously formatQuestion() always included them — answer key leak).
     let nextQuestion: PracticeQuestion | undefined;
     if (!isComplete) {
       const nextQ = await this.prisma.question.findUnique({
@@ -357,7 +363,7 @@ export class QuestionBankPracticeService {
         include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
       });
       if (nextQ) {
-        nextQuestion = this.formatQuestion(nextQ);
+        nextQuestion = this.formatQuestion(nextQ, false);
       }
     }
 
@@ -410,19 +416,24 @@ export class QuestionBankPracticeService {
       },
     });
 
+    // BUGFIX: skipped question's own answer key is fine to leak nowhere here —
+    // but the NEXT question (unanswered) must not reveal its correctAnswer.
     let nextQuestion: PracticeQuestion | undefined;
     if (!isComplete) {
       const nextQ = await this.prisma.question.findUnique({
         where: { id: questionIds[nextIndex] },
         include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
       });
-      if (nextQ) nextQuestion = this.formatQuestion(nextQ);
+      if (nextQ) nextQuestion = this.formatQuestion(nextQ, false);
     }
 
     return { nextQuestion, isComplete, progress: { current: nextIndex + 1, total: questionIds.length } };
   }
 
   // Go to previous question
+  // BUGFIX: previous questions were always already answered/skipped (you can
+  // only move forward via answer/skip), so it's safe and expected to reveal
+  // their correctAnswer/explanation for review here.
   async previousQuestion(userId: string, setId: string): Promise<{
     question?: PracticeQuestion;
     progress: { current: number; total: number };
@@ -436,8 +447,11 @@ export class QuestionBankPracticeService {
 
     const prevIndex = set.currentIndex - 1;
     const questionIds = set.questions as string[];
+    const prevQuestionId = questionIds[prevIndex];
+    const answers = (set.answers as Record<string, string>) || {};
+    const wasAnswered = Object.prototype.hasOwnProperty.call(answers, prevQuestionId);
     const prevQ = await this.prisma.question.findUnique({
-      where: { id: questionIds[prevIndex] },
+      where: { id: prevQuestionId },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
     });
 
@@ -447,12 +461,15 @@ export class QuestionBankPracticeService {
     });
 
     return {
-      question: prevQ ? this.formatQuestion(prevQ) : undefined,
+      question: prevQ ? this.formatQuestion(prevQ, wasAnswered) : undefined,
       progress: { current: prevIndex + 1, total: questionIds.length },
     };
   }
 
   // Go to specific question index
+  // BUGFIX: only reveal correctAnswer/explanation if THAT specific question
+  // has already been answered/skipped — jumping ahead to an unattempted
+  // question (e.g. via the question palette) must not leak its answer.
   async goToQuestion(userId: string, setId: string, index: number): Promise<{
     question?: PracticeQuestion;
     progress: { current: number; total: number };
@@ -467,8 +484,12 @@ export class QuestionBankPracticeService {
       throw new BadRequestException('Invalid question index');
     }
 
+    const targetQuestionId = questionIds[index];
+    const answers = (set.answers as Record<string, string>) || {};
+    const wasAnswered = Object.prototype.hasOwnProperty.call(answers, targetQuestionId);
+
     const q = await this.prisma.question.findUnique({
-      where: { id: questionIds[index] },
+      where: { id: targetQuestionId },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
     });
 
@@ -478,7 +499,7 @@ export class QuestionBankPracticeService {
     });
 
     return {
-      question: q ? this.formatQuestion(q) : undefined,
+      question: q ? this.formatQuestion(q, wasAnswered) : undefined,
       progress: { current: index + 1, total: questionIds.length },
     };
   }
@@ -651,10 +672,17 @@ export class QuestionBankPracticeService {
     });
   }
 
-  // Format set for response
+  // Format set for response.
+  // BUGFIX: previously every question in the set — including ones the user
+  // hasn't reached yet — was serialized with its correctAnswer + explanation,
+  // effectively handing out the full answer key the moment a set was started
+  // or resumed. Now a question only reveals those fields once the user has
+  // actually answered/skipped it (or the whole set is completed, in which
+  // case reviewing all answers is expected behaviour).
   private formatSet(set: any, questions?: any[], meta?: { subjectName?: string; chapterName?: string; examName?: string }): PracticeSet {
+    const answers = (set.answers as Record<string, string>) || {};
     const formattedQuestions = questions
-      ? questions.map(q => this.formatQuestion(q))
+      ? questions.map(q => this.formatQuestion(q, set.isCompleted || Object.prototype.hasOwnProperty.call(answers, q.id)))
       : [];
 
     return {
@@ -677,8 +705,11 @@ export class QuestionBankPracticeService {
     };
   }
 
-  // Format question for response
-  private formatQuestion(q: any): PracticeQuestion {
+  // Format question for response.
+  // `revealAnswer` MUST be false for any question the user has not answered
+  // or skipped yet — otherwise the correct answer leaks to the client before
+  // it's supposed to (visible in the network tab even if the UI hides it).
+  private formatQuestion(q: any, revealAnswer = false): PracticeQuestion {
     return {
       id: q.id,
       questionText: q.questionText,
@@ -694,9 +725,9 @@ export class QuestionBankPracticeService {
       shift: q.shift ?? null,
       marks: q.marks ?? 1,
       negativeMarks: q.negativeMarks ?? 0.25,
-      correctAnswer: q.correctAnswer ?? null,
-      explanation: q.explanation ?? null,
-      explanationHindi: q.explanationHindi ?? null,
+      correctAnswer: revealAnswer ? (q.correctAnswer ?? null) : null,
+      explanation: revealAnswer ? (q.explanation ?? null) : null,
+      explanationHindi: revealAnswer ? (q.explanationHindi ?? null) : null,
       subjectId: q.subjectId,
     };
   }
