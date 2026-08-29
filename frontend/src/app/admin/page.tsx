@@ -87,11 +87,19 @@ export default function AdminPage() {
   }
 
   async function loadPlans() {
+    // FIX: was calling /payments/plans, which returns a bare array
+    // (Plan[]), while this expected { plans: Plan[] }. That mismatch
+    // meant `data.plans` was always undefined, setPlans(undefined) wiped
+    // the plans list, and every screen that reads `plans` (price cards,
+    // Add Subscription modal, bulk-assign dropdown) rendered empty or
+    // crashed. /admin/plans is the correct admin-facing endpoint and
+    // already returns the { plans } shape this code expects.
     try {
-      const data = await api<{ plans: SubscriptionPlan[] }>("/payments/plans");
-      setPlans(data.plans);
+      const data = await api<{ plans: SubscriptionPlan[] }>("/admin/plans");
+      setPlans(data.plans || []);
     } catch (err) {
       console.error("Failed to load plans", err);
+      setPlans([]);
     }
   }
 
