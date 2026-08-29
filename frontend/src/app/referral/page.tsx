@@ -46,8 +46,11 @@ export default function ReferralPage() {
 
   const copyLink = async () => {
     try {
+      // BUG FIX (audit round 3): /register is not a real route (the signup
+      // page lives at /signup) — this fallback link 404'd for anyone whose
+      // shareLink hadn't loaded yet. Backend's shareLink is fixed too.
       await navigator.clipboard.writeText(
-        shareLink || `https://sscprephub.in/register?ref=${code}`,
+        shareLink || `https://sscprephub.in/signup?ref=${code}`,
       );
       alert("🔗 Referral link copied! Share with friends.");
     } catch {
