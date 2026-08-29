@@ -14,6 +14,7 @@ export default function DashboardPage() {
   // v7 §2 — pattern label comes from ExamPattern (meta), never hardcoded
   const [cglPattern, setCglPattern] = React.useState<string | null>(null);
   const [examsWithQuestions, setExamsWithQuestions] = React.useState<Array<{id: string; name: string; count: number}>>([]);
+  const [subscription, setSubscription] = React.useState<{ active: boolean; plan?: { name: string; priceInr: number }; endsAt?: string } | null>(null);
 
   React.useEffect(() => {
     (async () => {
@@ -52,6 +53,16 @@ export default function DashboardPage() {
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => d && setGami(d))
+        .catch(() => undefined);
+      // Subscription status — was previously fetched nowhere on the
+      // dashboard, so there was no visible "you're on the free plan" /
+      // "Premium active until X" indicator anywhere the student would
+      // actually see it day-to-day.
+      fetch(`${API_BASE}/payments/subscription`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d && setSubscription(d))
         .catch(() => undefined);
     }
   }, []);
@@ -114,7 +125,40 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-3">
+        {/* FIX: previously the dashboard had no link to Mock Tests, no
+            subscription status, and no "Buy Premium" call-to-action
+            anywhere — a logged-in student had no visible way to find
+            /mocks or /premium at all unless they already knew the URL. */}
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <a
+            href="/mocks"
+            className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 hover:shadow-md transition"
+          >
+            <h2 className="font-semibold">📝 Mock Tests</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Full-length timed mocks — a few free per exam, unlock more anytime.
+            </p>
+          </a>
+          <a
+            href="/premium"
+            className={`rounded-xl border p-5 hover:shadow-md transition ${
+              subscription?.active
+                ? "border-emerald-500/40 bg-emerald-500/5"
+                : "border-primary/40 bg-primary/5 hover:border-primary"
+            }`}
+          >
+            <h2 className="font-semibold">
+              {subscription?.active ? "⭐ Premium Active" : "🚀 Go Premium"}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {subscription?.active
+                ? `${subscription.plan?.name || "Plan"} — active${subscription.endsAt ? ` until ${new Date(subscription.endsAt).toLocaleDateString()}` : ""}`
+                : "Unlimited mocks, sectional tests & PYQs — see plans & pricing."}
+            </p>
+          </a>
+        </div>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
           <div className="rounded-xl border border-border bg-card p-6 lg:col-span-2">
             <h2 className="font-semibold">📚 Choose Your Exam</h2>
             <p className="mt-2 text-sm text-muted-foreground">
