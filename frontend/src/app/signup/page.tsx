@@ -22,6 +22,62 @@ export default function SignupPage() {
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
 
+  // Google Sign-Up (Google Identity Services) — mirrors login/page.tsx's
+  // implementation exactly, added for parity: the signup page previously
+  // had no Google option at all while the login page did, which is
+  // confusing (a new visitor who wants Google sign-in has no way to start
+  // that flow from the signup page). Same env var, same script, same
+  // /auth/google backend endpoint — signing up and logging in via Google
+  // are the same server-side call (it creates the account on first use).
+  const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+
+  const handleGoogleCredential = React.useCallback(async (credential: string) => {
+    setError(""); setLoading(true);
+    try {
+      const data = await api<AuthResponse>("/auth/google", {
+        method: "POST",
+        body: JSON.stringify({ idToken: credential, platform: "WEB" }),
+      });
+      localStorage.setItem("ssc_access_token", data.accessToken);
+      localStorage.setItem("ssc_refresh_token", data.refreshToken);
+      localStorage.setItem("ssc_user", JSON.stringify(data.user));
+      window.location.href = "/dashboard";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google sign-up failed");
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!googleClientId) return;
+    const existing = document.getElementById("gsi-script");
+    if (existing) {
+      // Script already loaded (e.g. user navigated from /login) — just render the button.
+      const g = (window as any).google;
+      if (g?.accounts?.id) {
+        const el = document.getElementById("google-signup-btn");
+        if (el) g.accounts.id.renderButton(el, { theme: "outline", size: "large", width: 320, shape: "pill", text: "signup_with" });
+      }
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = "gsi-script";
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true;
+    s.onload = () => {
+      const g = (window as any).google;
+      if (!g?.accounts?.id) return;
+      g.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: (resp: any) => handleGoogleCredential(resp?.credential ?? ""),
+        auto_select: false,
+      });
+      const el = document.getElementById("google-signup-btn");
+      if (el) g.accounts.id.renderButton(el, { theme: "outline", size: "large", width: 320, shape: "pill", text: "signup_with" });
+    };
+    document.head.appendChild(s);
+  }, [googleClientId, handleGoogleCredential]);
+
   // Email domain validation helper
   const isAllowedDomain = (email: string): boolean => {
     const domain = email.split('@')[1]?.toLowerCase();
@@ -159,6 +215,14 @@ export default function SignupPage() {
         )}
 
         <form onSubmit={handleSignup} className="space-y-4">
+          {googleClientId && (
+            <>
+              <div className="flex justify-center" id="google-signup-btn" />
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" /> or <span className="h-px flex-1 bg-border" />
+              </div>
+            </>
+          )}
           <div>
             <label className="mb-1.5 block text-sm font-medium">Full Name</label>
             <input
