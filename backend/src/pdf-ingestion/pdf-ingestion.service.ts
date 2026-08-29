@@ -204,7 +204,7 @@ export class PdfIngestionService {
   async getBatchQuestions(batchId: string, page = 1, limit = 50, status?: string) {
     const where: any = { importBatchId: batchId };
     if (status === 'APPROVED') where.isApproved = true;
-    if (status === 'REJECTED') where.isApproved = false;
+    if (status === 'REJECTED') where.reviewStatus = 'REJECTED';
     if (status === 'VERIFIED') where.answerVerificationStatus = 'VERIFIED_OFFICIAL';
 
     const [questions, total] = await Promise.all([
@@ -351,6 +351,7 @@ export class PdfIngestionService {
       where: { id: { in: eligibleIds } },
       data: {
         isApproved: true,
+        reviewStatus: 'APPROVED', // human/admin gate passed (bug fix: was missing, caused stale reviewStatus after bulk-approve)
         lastVerifiedAt: new Date(),
       },
     });
@@ -374,6 +375,7 @@ export class PdfIngestionService {
       where: { id: dto.questionId },
       data: {
         isApproved: false,
+        reviewStatus: 'REJECTED', // bug fix: was never set, so rejected questions stayed indistinguishable from unreviewed AI_DRAFT ones
       },
     });
 
