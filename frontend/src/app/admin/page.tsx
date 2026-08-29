@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
-import { api } from "@/lib/api";
+import { api, API_BASE, fetchAuth } from "@/lib/api";
 
 interface User {
   id: string;
@@ -22,6 +22,15 @@ interface UsersResponse {
   page: number;
   limit: number;
   totalPages: number;
+}
+
+interface UploadResult {
+  success: boolean;
+  total: number;
+  created: number;
+  failed: number;
+  errors: { row: number; error: string }[];
+  warnings: { row: number; message: string }[];
 }
 
 interface SubscriptionPlan {
@@ -66,6 +75,17 @@ export default function AdminPage() {
   const [planName, setPlanName] = React.useState("");
   const [planPriceInr, setPlanPriceInr] = React.useState("");
   const [planDurationMonths, setPlanDurationMonths] = React.useState("");
+
+  // Bulk Question Upload — the backend (BankUploadService) always had the
+  // Excel/CSV/JSON/Text/Word parsing + duplicate-detection logic, but it was
+  // never wired to a controller and this page had zero UI for it, so admins
+  // had no working way to add questions in bulk. Fixed on the backend
+  // (bank-upload.controller.ts + bank.module.ts) — this is the UI for it.
+  const [uploadFormat, setUploadFormat] = React.useState<"excel" | "csv" | "json" | "text" | "word">("excel");
+  const [uploadFile, setUploadFile] = React.useState<File | null>(null);
+  const [uploading, setUploading] = React.useState(false);
+  const [uploadResult, setUploadResult] = React.useState<UploadResult | null>(null);
+  const [templateDownloading, setTemplateDownloading] = React.useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -197,6 +217,62 @@ export default function AdminPage() {
     }
   }
 
+  // Template downloads need the Authorization header (GET /admin/help/templates/*
+  // is ADMIN/MODERATOR-only), so a plain <a href> can't be used — it wouldn't
+  // send the bearer token. Fetch as a blob instead and trigger the download.
+  async function downloadTemplate(format: "excel" | "csv" | "json" | "text") {
+    setTemplateDownloading(true);
+    setError("");
+    try {
+      const res = await fetchAuth(`${API_BASE}/admin/help/templates/${format}`);
+      if (!res.ok) throw new Error(`Failed to download template (HTTP ${res.status})`);
+      const blob = await res.blob();
+      const ext = format === "excel" ? "xlsx" : format;
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `question_bulk_upload_template.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to download template");
+    } finally {
+      setTemplateDownloading(false);
+    }
+  }
+
+  async function submitUpload() {
+    if (!uploadFile) {
+      setError("Pehle koi file select karein (Excel/CSV/JSON/Text/Word)");
+      return;
+    }
+    setUploading(true);
+    setError("");
+    setUploadResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadFile);
+      const res = await fetchAuth(`${API_BASE}/bank/admin/upload/${uploadFormat}`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error((data as { message?: string } | null)?.message || `Upload failed (HTTP ${res.status})`);
+      }
+      setUploadResult(data as UploadResult);
+      if ((data as UploadResult).created > 0) {
+        setInfo(`${(data as UploadResult).created} question(s) upload ho gaye`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   React.useEffect(() => {
     loadUsers();
     loadPlans();
@@ -265,6 +341,90 @@ export default function AdminPage() {
               <p className="text-sm text-muted-foreground">No plans yet — click "+ New Plan" to create one.</p>
             )}
           </div>
+        </div>
+
+        {/* Bulk Question Upload — was fully built on the backend but never
+            wired to a controller/module and had no UI at all. Now working:
+            download a template in the format you want, fill it in, upload it. */}
+        <div className="mb-6 rounded-xl border border-border bg-card p-4">
+          <h2 className="mb-1 font-semibold">📤 Bulk Question Upload</h2>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Pehle format select karke template download karein, usme questions (answer, explanation, Hindi translation sab included) bhar ke wapas upload karein.
+          </p>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {(["excel", "csv", "json", "text"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => downloadTemplate(f)}
+                disabled={templateDownloading}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
+              >
+                ⬇️ {f.toUpperCase()} Template
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">File Format</label>
+              <select
+                value={uploadFormat}
+                onChange={(e) => setUploadFormat(e.target.value as typeof uploadFormat)}
+                className="rounded-lg border border-border bg-background px-4 py-2 text-sm outline-none focus:border-primary"
+              >
+                <option value="excel">Excel (.xlsx)</option>
+                <option value="csv">CSV (.csv)</option>
+                <option value="json">JSON (.json)</option>
+                <option value="text">Text (.txt, tab-separated)</option>
+                <option value="word">Word (.docx)</option>
+              </select>
+            </div>
+            <div className="flex-1 min-w-[220px]">
+              <label className="mb-1.5 block text-sm font-medium">Question File</label>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv,.json,.txt,.docx"
+                onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+            </div>
+            <button
+              onClick={submitUpload}
+              disabled={uploading || !uploadFile}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {uploading ? "Uploading..." : "Upload Questions"}
+            </button>
+          </div>
+
+          {uploadResult && (
+            <div className="mt-4 rounded-lg border border-border bg-background p-3 text-sm">
+              <div className="flex flex-wrap gap-4">
+                <span>Total: <strong>{uploadResult.total}</strong></span>
+                <span className="text-emerald-600 dark:text-emerald-400">Created: <strong>{uploadResult.created}</strong></span>
+                <span className="text-red-600 dark:text-red-400">Failed: <strong>{uploadResult.failed}</strong></span>
+              </div>
+              {uploadResult.errors.length > 0 && (
+                <div className="mt-2">
+                  <div className="mb-1 text-xs font-semibold text-red-500">Errors:</div>
+                  <ul className="max-h-40 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                    {uploadResult.errors.map((e, i) => (
+                      <li key={i}>Row {e.row}: {e.error}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {uploadResult.warnings.length > 0 && (
+                <div className="mt-2">
+                  <div className="mb-1 text-xs font-semibold text-amber-500">Warnings:</div>
+                  <ul className="max-h-40 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                    {uploadResult.warnings.map((w, i) => (
+                      <li key={i}>Row {w.row}: {w.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Filters */}
