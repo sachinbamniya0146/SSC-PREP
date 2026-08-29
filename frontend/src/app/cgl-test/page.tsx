@@ -50,6 +50,10 @@ export default function CglTestPage() {
   // Server-scored attempt result (P0: scoring is server-side only).
   const [result, setResult] = React.useState<any>(null);
   const [submitting, setSubmitting] = React.useState(false);
+  // BUG FIX (audit round 4, item 4): track submit failures separately so a
+  // failed submission never gets silently shown to the student as "0.0"
+  // (see computeResults below).
+  const [submitError, setSubmitError] = React.useState("");
   // ---- per-question pacing (v6 §6: avg time/question, rushing/balanced/slow) ----
   const [timeSpent, setTimeSpent] = React.useState<{ [qid: string]: number }>({});
   const qEnterRef = React.useRef<{ qid: string; at: number }>({ qid: "", at: 0 });
@@ -178,6 +182,7 @@ export default function CglTestPage() {
     if (!exam || submitting) return;
     setSubmitting(true);
     setRunning(false);
+    setSubmitError("");
     try {
       // P0: submit answers to the server — scoring happens server-side against
       // the DB answer key (client never receives correctAnswer before submit).
@@ -191,7 +196,15 @@ export default function CglTestPage() {
           });
         });
       });
-      const r = await fetch(
+      // BUG FIX (audit round 4, item 4): this call used plain `fetch()` instead
+      // of `fetchAuth()`. A full CGL run takes a full 60 minutes (4×15-min
+      // sections), so by the time the exam ends the access token has very
+      // likely expired — plain fetch has no refresh logic, so submit silently
+      // got a 401. The old code never checked `r.ok` either, so it just did
+      // `d.score ?? 0` on an error body and showed the student a fake
+      // "Total Score: 0.0" with no indication the submission actually failed
+      // and no way to retry — a full hour of work could vanish silently.
+      const r = await fetchAuth(
         attemptId
           ? `${apiBase()}/tests/attempts/${attemptId}/submit`
           : `${apiBase()}/tests/attempts`,
@@ -208,6 +221,10 @@ export default function CglTestPage() {
           ),
         },
       );
+      if (!r.ok) {
+        const errBody = await r.json().catch(() => ({}));
+        throw new Error(errBody?.message || `Submit failed (${r.status})`);
+      }
       const d = await r.json();
       setResult(d);
       setFinalScore(d.score ?? 0);
@@ -222,9 +239,10 @@ export default function CglTestPage() {
         return secScore;
       });
       setSectionScores(perSec);
-    } catch {
-      setFinalScore(0);
-      setSectionScores(exam.sections.map(() => 0));
+    } catch (e: any) {
+      // Do NOT overwrite a previous successful result, and do NOT fake a
+      // "0.0" score — surface the real error with a Retry button instead.
+      setSubmitError(e?.message || "Could not submit your exam — check your connection and retry.");
     } finally {
       setSubmitting(false);
       setPhase("results");
@@ -331,28 +349,49 @@ export default function CglTestPage() {
         <main className="mx-auto max-w-3xl px-4 py-10">
           <div className="card p-6 text-center">
             <p className="text-4xl">🎉</p>
-            <h1 className="mt-2 text-2xl font-bold">Exam Complete — Thank You!</h1>
-            <p className="mt-1 text-sm text-muted-foreground">SSC CGL Tier 1 (Based on 2025) · 100 Qs · 200 Marks</p>
-            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="Total Score" value={`${finalScore.toFixed(1)}`} />
-              <Stat label="Correct" value={String(result?.totalCorrect ?? 0)} />
-              <Stat label="Wrong" value={String(result?.totalWrong ?? 0)} />
-              <Stat label="Skipped" value={String(result?.totalSkipped ?? 0)} />
-            </div>
-            {submitting && <p className="mt-3 text-sm text-muted-foreground">Scoring on server…</p>}
-            <h3 className="mt-6 text-left text-sm font-semibold">Section-wise Score</h3>
-            <div className="mt-2 space-y-2 text-left">
-              {exam.sections.map((s, i) => (
-                <div key={s.part} className="flex items-center justify-between rounded-lg border border-border px-4 py-2 text-sm">
-                  <span>Part {s.part} — {s.name}</span>
-                  <span className="font-bold">{sectionScores[i]?.toFixed(1) ?? "0.0"} / {s.marks}</span>
+            {submitError ? (
+              <>
+                <h1 className="mt-2 text-2xl font-bold text-danger">Submission Failed</h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Your answers are still saved in this browser tab — nothing is lost. {submitError}
+                </p>
+                <div className="mt-6 flex justify-center gap-3">
+                  <button
+                    onClick={computeResults}
+                    disabled={submitting}
+                    className="btn bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                  >
+                    {submitting ? "Retrying…" : "Retry Submit"}
+                  </button>
+                  <a href="/dashboard" className="btn border border-border px-5 py-2 text-sm hover:bg-muted">Dashboard</a>
                 </div>
-              ))}
-            </div>
-            <div className="mt-6 flex justify-center gap-3">
-              <a href="/dashboard" className="btn border border-border px-5 py-2 text-sm hover:bg-muted">Dashboard</a>
-              <a href="/cgl-test" className="btn bg-primary px-5 py-2 text-sm text-primary-foreground hover:opacity-90">Retake</a>
-            </div>
+              </>
+            ) : (
+              <>
+                <h1 className="mt-2 text-2xl font-bold">Exam Complete — Thank You!</h1>
+                <p className="mt-1 text-sm text-muted-foreground">SSC CGL Tier 1 (Based on 2025) · 100 Qs · 200 Marks</p>
+                <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Stat label="Total Score" value={`${finalScore.toFixed(1)}`} />
+                  <Stat label="Correct" value={String(result?.totalCorrect ?? 0)} />
+                  <Stat label="Wrong" value={String(result?.totalWrong ?? 0)} />
+                  <Stat label="Skipped" value={String(result?.totalSkipped ?? 0)} />
+                </div>
+                {submitting && <p className="mt-3 text-sm text-muted-foreground">Scoring on server…</p>}
+                <h3 className="mt-6 text-left text-sm font-semibold">Section-wise Score</h3>
+                <div className="mt-2 space-y-2 text-left">
+                  {exam.sections.map((s, i) => (
+                    <div key={s.part} className="flex items-center justify-between rounded-lg border border-border px-4 py-2 text-sm">
+                      <span>Part {s.part} — {s.name}</span>
+                      <span className="font-bold">{sectionScores[i]?.toFixed(1) ?? "0.0"} / {s.marks}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-6 flex justify-center gap-3">
+                  <a href="/dashboard" className="btn border border-border px-5 py-2 text-sm hover:bg-muted">Dashboard</a>
+                  <a href="/cgl-test" className="btn bg-primary px-5 py-2 text-sm text-primary-foreground hover:opacity-90">Retake</a>
+                </div>
+              </>
+            )}
           </div>
         </main>
       </div>
