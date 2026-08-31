@@ -295,6 +295,9 @@ export default function AdminPage() {
             SSC<span className="text-primary">PrepHub</span> Admin
           </span>
           <div className="flex items-center gap-3 text-sm">
+            <a href="/admin/api-keys" className="rounded-lg border border-border px-3 py-2 text-sm">
+              🔑 API Keys
+            </a>
             <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm">
               {theme === "dark" ? "☀️" : "🌙"}
             </button>

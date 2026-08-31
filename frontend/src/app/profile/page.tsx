@@ -403,6 +403,22 @@ export default function ProfilePage() {
           )}
         </div>
 
+        {/* Personal OpenRouter API key — used for AI explanations instead of
+            the shared admin key pool. See settings/api-key/page.tsx. */}
+        <div className="mt-6 rounded-xl border border-border bg-card p-6">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold">🔑 AI Explanation API Key</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Optionally add your own free OpenRouter key so your AI explanations use it instead of the shared pool.
+              </p>
+            </div>
+            <a href="/settings/api-key" className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted whitespace-nowrap">
+              Manage →
+            </a>
+          </div>
+        </div>
+
         {/* Change Password */}
         <div className="mt-6 rounded-xl border border-border bg-card p-6">
           <h2 className="text-lg font-semibold">🔐 Change Password</h2>

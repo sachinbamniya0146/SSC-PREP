@@ -67,14 +67,24 @@ export class UserService {
     });
   }
 
-  async updateOpenrouterApiKey(userId: string, apiKey: string) {
+  async updateOpenrouterApiKey(userId: string, apiKey: string | null) {
+    const trimmed = apiKey?.trim() || null;
     await this.prisma.user.update({
       where: { id: userId },
-      data: { openrouterApiKey: apiKey },
+      data: { openrouterApiKey: trimmed },
     });
 
     cacheSet(`user:${userId}`, null, 0);
-    return { hasOpenrouterApiKey: true };
+    return { hasOpenrouterApiKey: !!trimmed };
+  }
+
+  /** Masked status only — never returns the raw key to the client. */
+  async getOpenrouterApiKeyStatus(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { openrouterApiKey: true } });
+    const key = user?.openrouterApiKey;
+    if (!key) return { hasOpenrouterApiKey: false, maskedKey: null };
+    const masked = key.length <= 12 ? `${key.substring(0, 3)}...` : `${key.substring(0, 8)}...${key.substring(key.length - 4)}`;
+    return { hasOpenrouterApiKey: true, maskedKey: masked };
   }
 
   async getStats(userId: string) {

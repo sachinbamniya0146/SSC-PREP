@@ -383,6 +383,8 @@ model Question {
   explanation        String?
   explanationHindi   String?
   explanationSource  ExplanationSource @default(PDF)
+  explanationModel   String? // e.g. "meta-llama/llama-3.3-70b-instruct:free" — which free model generated/last-improved this
+  explanationGeneratedAt DateTime? // when the current explanation text was (re)generated
   translationStatus  TranslationStatus @default(HUMAN_VERIFIED)
   answerVerificationStatus String @default("UNVERIFIED_SINGLE_SOURCE") // VERIFIED_OFFICIAL, VERIFIED_MULTI_SOURCE, VERIFIED_COMPUTED, UNVERIFIED_SINGLE_SOURCE, DISPUTED
   lastVerifiedAt DateTime?
@@ -1046,5 +1048,36 @@ model AdminApiKey {
   updatedAt    DateTime @updatedAt
   createdBy    String? // Admin user ID
 
+  // --- Rotation / health tracking (bulk-key pool support) ---
+  // A provider can have many keys added at once (bulk upload). Requests
+  // rotate across all isActive=true keys for that provider (isPrimary
+  // first, then least-recently-used) instead of only ever using one key.
+  usageCount     Int       @default(0) // successful calls served by this key
+  failureCount   Int       @default(0) // failed calls (any reason)
+  lastUsedAt     DateTime? // used to pick the least-recently-used key next
+  lastFailureAt  DateTime?
+  lastErrorMessage String? // most recent provider error (quota/invalid/etc.)
+  exhaustedAt    DateTime? // set when auto-disabled after a quota/auth failure
+                           // (distinct from an admin manually toggling isActive)
+
+  @@index([provider, isActive])
   @@map("admin_api_keys")
+}
+
+// Raised automatically when the admin API key pool is running low, so the
+// admin can add a new key BEFORE every key in the pool is exhausted rather
+// than finding out only after AI features stop working for everyone.
+model AdminAlert {
+  id           String    @id @default(uuid())
+  type         String // "API_KEY_LOW" | "API_KEY_EXHAUSTED" | "API_KEY_ALL_EXHAUSTED"
+  severity     String    @default("WARNING") // INFO | WARNING | CRITICAL
+  message      String
+  messageHindi String?
+  metadataJson Json?
+  isResolved   Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+
+  @@index([isResolved, type])
+  @@map("admin_alerts")
 }
