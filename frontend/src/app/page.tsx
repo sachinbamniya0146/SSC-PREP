@@ -134,7 +134,7 @@ const leaderboardPreview: { rank: number; name: string; score: number; you: bool
 const pricing = [
   {
     name: "Monthly Pass",
-    price: "₹19",
+    price: "₹11",
     period: "/month",
     features: [
       "Unlimited chapter & topic tests",
@@ -146,7 +146,7 @@ const pricing = [
   },
   {
     name: "Super Pass",
-    price: "₹199",
+    price: "₹151",
     period: "/24 months",
     features: [
       "Everything in Monthly Pass",
@@ -279,7 +279,7 @@ export default function HomePage() {
             className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground"
           >
             Real exam-format tests, lakhs of PYQ questions, instant results,
-            all-India rank &amp; a personal AI study plan — starting at just ₹19.
+            all-India rank &amp; a personal AI study plan — starting at just ₹11.
           </motion.p>
           <motion.div
             variants={fadeUp}
@@ -334,7 +334,7 @@ export default function HomePage() {
           className="mx-auto mt-3 max-w-2xl text-center text-sm text-muted-foreground"
         >
           Click any exam to start. <strong>3 free mock tests + 3 free sectional tests</strong> on every exam.
-          Unlimited access with a plan — starting at just ₹19/month.
+          Unlimited access with a plan — starting at just ₹11/month.
         </motion.p>
         <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {exams.map((exam, i) => (
@@ -385,7 +385,7 @@ export default function HomePage() {
             on every SSC exam — no payment required. Each mock gives you an
             all-India rank, detailed analytics, and a personalized study plan.
             When you're ready, unlock unlimited tests, PDF downloads, and full
-            analytics with a plan starting at just ₹19/month.
+            analytics with a plan starting at just ₹11/month.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-6 text-center">
             <div>
@@ -399,7 +399,7 @@ export default function HomePage() {
             </div>
             <div className="mx-4 my-1 h-10 w-px bg-border" />
             <div>
-              <div className="text-2xl font-bold text-primary">₹19</div>
+              <div className="text-2xl font-bold text-primary">₹11</div>
               <div className="text-xs text-muted-foreground">per month (unlimited)</div>
             </div>
           </div>
@@ -464,7 +464,7 @@ export default function HomePage() {
               <span className="text-xl font-bold">3</span>
             </div>
             <h3 className="mt-3 font-semibold">Upgrade for Unlimited</h3>
-            <p className="mt-2 text-sm text-muted-foreground">From ₹19/month — unlock all tests, analytics, PDF downloads.</p>
+            <p className="mt-2 text-sm text-muted-foreground">From ₹11/month — unlock all tests, analytics, PDF downloads.</p>
           </motion.div>
         </div>
       </section>

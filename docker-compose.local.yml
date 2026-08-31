@@ -45,14 +45,14 @@ services:
       dockerfile: Dockerfile.dev
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ssc_prep_hub?schema=public&connection_limit=20
+      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/ssc_prep_hub?schema=public&connection_limit=20"
       REDIS_HOST: redis
       MEILISEARCH_HOST: http://meilisearch:7700
       MEILI_MASTER_KEY: masterKey
       PORT: 4000
       JWT_SECRET: dev-secret-change-in-production-32chars-minimum
-      JWT_REFRESH_SECRET: dev-refresh-secret-change-in-production-32chars-minimum
       JWT_ACCESS_SECRET: dev-access-secret-change-in-production-32chars-minimum
+      JWT_REFRESH_SECRET: dev-refresh-secret-change-in-production-32chars-minimum
       ADMIN_EMAIL: admin@sscprephub.in
       ADMIN_PASSWORD: Admin@123456
       ADMIN_PASSWORDS: '["Admin@123456"]'
@@ -80,13 +80,8 @@ services:
       NEXT_PUBLIC_GOOGLE_CLIENT_ID: ""
     ports:
       - "127.0.0.1:3001:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
     depends_on:
       - backend
-    command: npm run dev
 
   nginx:
     image: nginx:alpine
