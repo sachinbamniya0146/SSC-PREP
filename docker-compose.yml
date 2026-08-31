@@ -13,6 +13,7 @@ services:
       # Only Docker-internal hostnames stay here — these are NOT secrets
       POSTGRES_USER: postgres
       POSTGRES_DB: ssc_prep_hub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -78,6 +79,7 @@ services:
       # Only Docker-internal hostnames stay here — these are NOT secrets
       REDIS_HOST: redis
       MEILISEARCH_HOST: http://meilisearch:7700
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ssc_prep_hub?schema=public&connection_limit=20
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
