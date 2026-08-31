@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
 
@@ -166,7 +166,6 @@ const fadeUp = {
 export default function HomePage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [isLoggedIn, setIsLoggedIn] = React.useState(false);
-  const [modalExam, setModalExam] = React.useState<typeof exams[0] | null>(null);
   const [leaderboardPreview, setLeaderboardPreview] = React.useState<{ rank: number; name: string; score: number; you: boolean }[]>([]);
 
   React.useEffect(() => {
@@ -198,15 +197,9 @@ export default function HomePage() {
     fetchLeaderboard();
   }, []);
 
-  // Exam card click handler — shows login prompt or free tier info
+  // Exam card click handler — redirect to question bank with exam filter
   const handleExamClick = (exam: typeof exams[0]) => {
-    if (!isLoggedIn) {
-      // Not logged in → redirect to login
-      window.location.href = "/login";
-      return;
-    }
-    // Logged in → show free tier modal
-    setModalExam(exam);
+    window.location.href = `/question-bank?exam=${exam.id}`;
   };
 
   return (
@@ -412,11 +405,11 @@ export default function HomePage() {
           </div>
           <div className="mt-6">
             <a
-              href={isLoggedIn ? "/dashboard" : "/signup"}
+              href="/question-bank?exam=exam-cgl"
               className="inline-flex items-center gap-2 rounded-xl bg-primary px-8 py-3 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/30 transition hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0"
             >
               <IconUsers className="h-4 w-4" />
-              {isLoggedIn ? "Go to Dashboard →" : "Start Free Practice →"}
+              Start Free Practice →
             </a>
           </div>
         </motion.div>
@@ -622,71 +615,6 @@ export default function HomePage() {
         </div>
       </footer>
 
-      {/* ===== EXAM FREE TIER MODAL ===== */}
-      <AnimatePresence>
-        {modalExam && (
-          <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setModalExam(null)}
-          >
-            <motion.div
-              className="relative w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl"
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                onClick={() => setModalExam(null)}
-                className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
-              >
-                ✕
-              </button>
-              <h3 className="text-xl font-bold">{modalExam.name} — Free Tier</h3>
-              <div className="mt-4 space-y-3">
-                <div className="flex items-center gap-3 rounded-lg border border-border p-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-success/15 text-success">📝</div>
-                  <div className="flex-1">
-                    <div className="font-semibold">3 Free Mock Tests</div>
-                    <div className="text-xs text-muted-foreground">Real exam-format full-length mocks with all-India rank</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 rounded-lg border border-border p-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-success/15 text-success">🎯</div>
-                  <div className="flex-1">
-                    <div className="font-semibold">3 Free Sectional Tests</div>
-                    <div className="text-xs text-muted-foreground">Practice specific sections: Reasoning, GA, Quant, English</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 rounded-lg border border-dashed border-border p-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-muted-foreground"><IconLock className="h-4 w-4" /></div>
-                  <div className="flex-1">
-                    <div className="font-semibold text-muted-foreground">Unlimited access</div>
-                    <div className="text-xs text-muted-foreground">Upgrade to Super Pass (₹199) for all mocks, PDFs & analytics</div>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-6 flex gap-3">
-                <a
-                  href={`/question-bank?exam=${modalExam.id}`}
-                  className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-center text-sm font-semibold text-primary-foreground hover:opacity-90"
-                >
-                  Start PYQ Practice →
-                </a>
-                <a
-                  href="/signup"
-                  className="flex-1 rounded-xl border border-border px-4 py-2.5 text-center text-sm font-semibold hover:bg-muted"
-                >
-                  Upgrade (₹19/mo)
-                </a>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
