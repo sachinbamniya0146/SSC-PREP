@@ -127,13 +127,9 @@ const features = [
   },
 ];
 
-const leaderboardPreview = [
-  { rank: 1, name: "Amit S.", score: 187, you: false },
-  { rank: 2, name: "Priya K.", score: 184, you: false },
-  { rank: 3, name: "Rahul V.", score: 181, you: false },
-  { rank: 4, name: "You", score: 179, you: true },
-  { rank: 5, name: "Neha P.", score: 176, you: false },
-];
+// Dynamic leaderboard preview - fetched from API to avoid fake data
+// This will be populated client-side via useEffect calling /tests/leaderboard
+const leaderboardPreview: { rank: number; name: string; score: number; you: boolean }[] = [];
 
 const pricing = [
   {
@@ -171,10 +167,35 @@ export default function HomePage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [isLoggedIn, setIsLoggedIn] = React.useState(false);
   const [modalExam, setModalExam] = React.useState<typeof exams[0] | null>(null);
+  const [leaderboardPreview, setLeaderboardPreview] = React.useState<{ rank: number; name: string; score: number; you: boolean }[]>([]);
 
   React.useEffect(() => {
     const token = localStorage.getItem("ssc_access_token");
     setIsLoggedIn(!!token);
+  }, []);
+
+  // Fetch real leaderboard data for the preview
+  React.useEffect(() => {
+    const fetchLeaderboard = async () => {
+      try {
+        const res = await fetch("/api/v1/tests/leaderboard?limit=5");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.data && Array.isArray(data.data)) {
+            setLeaderboardPreview(data.data.map((u: any, i: number) => ({
+              rank: u.rank || i + 1,
+              name: u.name || `User ${u.userId?.slice(0, 6)}`,
+              score: u.score || 0,
+              you: false // Don't mark as "you" on landing page
+            })));
+          }
+        }
+      } catch (e) {
+        // Silently fail - empty leaderboard is better than fake data
+        console.debug("Leaderboard preview fetch failed:", e);
+      }
+    };
+    fetchLeaderboard();
   }, []);
 
   // Exam card click handler — shows login prompt or free tier info
@@ -484,42 +505,44 @@ export default function HomePage() {
                 <p className="mt-2 text-sm text-muted-foreground">{f.desc}</p>
               </motion.div>
             ))}
-            {/* Live Leaderboard feature card */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.35, delay: 0.16 }}
-              className="card overflow-hidden transition hover:-translate-y-1 hover:shadow-md"
-            >
-              <div className="p-6">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-warning/10 text-warning">
-                  <IconTrophy className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold">Live All-India Leaderboard</h3>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Realtime rank vs 1 lakh+ aspirants after every mock.
-                </p>
-              </div>
-              <div className="mx-6 mb-6 space-y-1.5 rounded-xl border border-border bg-background/60 p-3">
-                {leaderboardPreview.map((row) => (
-                  <div
-                    key={row.rank}
-                    className={`flex items-center justify-between rounded-lg px-3 py-1.5 text-xs ${
-                      row.you
-                        ? "bg-primary/15 font-semibold text-primary"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="w-3 font-bold">{row.rank}</span>
-                      <span>{row.name}</span>
-                    </span>
-                    <span className="font-mono">{row.score}</span>
+            {/* Live Leaderboard feature card - only show with real data */}
+            {leaderboardPreview.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.35, delay: 0.16 }}
+                className="card overflow-hidden transition hover:-translate-y-1 hover:shadow-md"
+              >
+                <div className="p-6">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-warning/10 text-warning">
+                    <IconTrophy className="h-5 w-5" />
                   </div>
-                ))}
-              </div>
-            </motion.div>
+                  <h3 className="mt-3 font-semibold">Live All-India Leaderboard</h3>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Realtime rank vs 1 lakh+ aspirants after every mock.
+                  </p>
+                </div>
+                <div className="mx-6 mb-6 space-y-1.5 rounded-xl border border-border bg-background/60 p-3">
+                  {leaderboardPreview.map((row) => (
+                    <div
+                      key={row.rank}
+                      className={`flex items-center justify-between rounded-lg px-3 py-1.5 text-xs ${
+                        row.you
+                          ? "bg-primary/15 font-semibold text-primary"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="w-3 font-bold">{row.rank}</span>
+                        <span>{row.name}</span>
+                      </span>
+                      <span className="font-mono">{row.score}</span>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
           </div>
         </div>
       </section>
