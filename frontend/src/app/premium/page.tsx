@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { fetchAuth } from "@/lib/api";
+import { fetchAuth, API_BASE } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -41,6 +41,12 @@ export default function PremiumPage() {
   const [processing, setProcessing] = React.useState(false);
   const [error, setError] = React.useState("");
   const [success, setSuccess] = React.useState("");
+  // BUG FIX: if the user already has an active subscription, buying another
+  // plan does NOT extend it — backend's fulfill() cancels the current
+  // subscription and starts the new one from today (see monetization.service.ts),
+  // so any remaining paid days are silently lost. Require explicit confirmation
+  // before letting an already-premium user proceed to payment.
+  const [confirmReplace, setConfirmReplace] = React.useState(false);
 
   React.useEffect(() => {
     loadData();
@@ -49,16 +55,19 @@ export default function PremiumPage() {
   const loadData = async () => {
     try {
       const [plansRes, subRes] = await Promise.all([
-        fetchAuth("/payments/plans"),
-        fetchAuth("/payments/subscription"),
+        fetchAuth(`${API_BASE}/payments/plans`),
+        fetchAuth(`${API_BASE}/payments/subscription`),
       ]);
+      if (!plansRes.ok || !subRes.ok) {
+        throw new Error("Failed to load plans");
+      }
       const plansData = await plansRes.json();
       const subData = await subRes.json();
       setPlans(plansData.filter((p: Plan) => p.isActive));
       setSubscription(subData);
     } catch (e) {
       console.error(e);
-      setError("Failed to load plans");
+      setError("Failed to load plans. Please refresh the page.");
     } finally {
       setLoading(false);
     }
@@ -70,6 +79,7 @@ export default function PremiumPage() {
     setCouponResult(null);
     setCouponError("");
     setPayuForm(null);
+    setConfirmReplace(false);
     setError("");
     setSuccess("");
   };
@@ -81,7 +91,7 @@ export default function PremiumPage() {
     }
     setCouponError("");
     try {
-      const res = await fetchAuth("/payments/coupon/validate", {
+      const res = await fetchAuth(`${API_BASE}/payments/coupon/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: couponCode, amountInr: selectedPlan.priceInr }),
@@ -100,10 +110,16 @@ export default function PremiumPage() {
 
   const createOrder = async () => {
     if (!selectedPlan) return;
+    // BUG FIX: block accidental double-purchase — an active subscriber must
+    // explicitly acknowledge that this replaces (not extends) their current plan.
+    if (subscription?.active && !confirmReplace) {
+      setError("Please confirm you understand your current plan will be replaced before proceeding.");
+      return;
+    }
     setProcessing(true);
     setError("");
     try {
-      const res = await fetchAuth("/payments/order", {
+      const res = await fetchAuth(`${API_BASE}/payments/order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
@@ -299,6 +315,27 @@ export default function PremiumPage() {
               Total: {couponResult ? formatPrice(couponResult.finalAmountInr) : formatPrice(selectedPlan.priceInr)}
             </div>
 
+            {/* BUG FIX: warn active subscribers before they lose remaining paid days */}
+            {subscription?.active && (
+              <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
+                <p className="text-sm text-amber-800 font-medium">
+                  You already have an active plan{subscription.endsAt ? ` (expires ${new Date(subscription.endsAt).toLocaleDateString()})` : ""}.
+                </p>
+                <p className="text-sm text-amber-700 mt-1">
+                  Buying a new plan replaces your current one starting today — any remaining days on your
+                  current plan will not be added or refunded.
+                </p>
+                <label className="flex items-center gap-2 mt-2 text-sm text-amber-900">
+                  <input
+                    type="checkbox"
+                    checked={confirmReplace}
+                    onChange={(e) => setConfirmReplace(e.target.checked)}
+                  />
+                  I understand my current plan will be replaced, not extended.
+                </label>
+              </div>
+            )}
+
             {payuForm && (
               <div className="space-y-4 p-4 rounded-lg border bg-muted/50">
                 <p className="text-sm text-muted-foreground">
@@ -320,7 +357,7 @@ export default function PremiumPage() {
             {!payuForm && (
               <button
                 onClick={createOrder}
-                disabled={processing}
+                disabled={processing || (!!subscription?.active && !confirmReplace)}
                 className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 disabled:opacity-50"
               >
                 {processing ? "Creating Order..." : "Proceed to Payment"}

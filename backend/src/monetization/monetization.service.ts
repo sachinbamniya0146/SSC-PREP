@@ -422,12 +422,52 @@ export class MonetizationService {
       });
     }
 
-    // consume coupon if any
+    // consume coupon if any.
+    //
+    // BUGFIX (bonus grep, item a — check happens once, the actual grant
+    // isn't atomically protected against a race, same root cause as the
+    // checkIn() double-XP bug fixed earlier): maxUses was only checked in
+    // validateCoupon() at ORDER-CREATION time. If two orders for the same
+    // single-use coupon (maxUses: 1) were created concurrently — two tabs,
+    // or two different users racing a limited promo code — both could pass
+    // validation while usesCount was still 0, both complete real PayU
+    // payments, and both land here incrementing usesCount past maxUses.
+    // The coupon's own limit was silently bypassed by the race window
+    // between "check" and "increment".
+    //
+    // Both payments are already genuinely captured by PayU at this point,
+    // so we can't refuse to grant what was actually paid for — the fix is
+    // to atomically re-check maxUses at the moment of consuming it (same
+    // conditional-updateMany pattern already used just above for the
+    // Payment row's SUCCESS claim) and flag the overage for admin
+    // visibility via the audit log, instead of silently letting usesCount
+    // drift past its stated limit with no record of it happening.
     if (meta.couponCode) {
-      await this.prisma.coupon.updateMany({
-        where: { code: meta.couponCode },
-        data: { usesCount: { increment: 1 } },
-      });
+      const coupon = await this.prisma.coupon.findUnique({ where: { code: meta.couponCode } });
+      if (coupon) {
+        const claim = await this.prisma.coupon.updateMany({
+          where: {
+            code: meta.couponCode,
+            OR: [{ maxUses: { lte: 0 } }, { usesCount: { lt: coupon.maxUses } }],
+          },
+          data: { usesCount: { increment: 1 } },
+        });
+        if (claim.count === 0) {
+          // Coupon's maxUses was already exhausted by a racing/earlier
+          // redemption — this purchase still goes through (already paid),
+          // but log it so finance/admin can see the coupon was
+          // over-redeemed rather than the limit silently not applying.
+          await this.prisma.auditLog.create({
+            data: {
+              userId,
+              action: 'COUPON_OVER_REDEEMED',
+              targetEntity: 'Coupon',
+              entityId: coupon.id,
+              metadataJson: { code: meta.couponCode, maxUses: coupon.maxUses, paymentId: payment.id },
+            },
+          });
+        }
+      }
     }
 
     // Log invoice generation

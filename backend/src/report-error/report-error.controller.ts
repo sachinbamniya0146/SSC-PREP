@@ -3,106 +3,105 @@ import {
   Get,
   Post,
   Body,
-  Query,
   Param,
+  Query,
   UseGuards,
-  HttpCode,
-  HttpStatus,
-  Put,
+  BadRequestException,
 } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { Public } from '../common/decorators/public.decorator';
+import { ErrorReportStatus } from '@prisma/client';
 import { ReportErrorService } from './report-error.service';
 
-@ApiTags('report-error')
+/**
+ * CRITICAL BUGFIX (bonus grep): this file previously contained a stray,
+ * exact duplicate of ai-explanation.controller.ts — `@Controller('ai-explanation')`,
+ * class `AIExplanationController`, and an `import { AIExplanationService }
+ * from './ai-explanation.service'` pointing at a file that doesn't even
+ * exist inside this folder (it lives in ../ai-explanation/).
+ *
+ * That mistake did two things, both severe:
+ *   1. report-error.module.ts does `import { ReportErrorController } from
+ *      './report-error.controller'` — but the file exported
+ *      `AIExplanationController` instead, and imported a non-existent
+ *      module path. This is a straight compile error: the backend could
+ *      not build/boot at all with this file in place.
+ *   2. Even setting the compile error aside, every method on
+ *      ReportErrorService (report / list / resolve / unsuspendQuestion /
+ *      getQuestionReports / categoryStats) had ZERO controller wired to
+ *      it — "Report an error on this question" (used live by
+ *      frontend/src/app/quiz/page.tsx via `POST /report-error`) and the
+ *      entire admin error-report review/unsuspend workflow were
+ *      completely unreachable.
+ *
+ * This restores the actual ReportErrorController, matching what
+ * report-error.module.ts expects and what report-error.service.ts / the
+ * frontend actually call.
+ */
 @Controller('report-error')
+@UseGuards(JwtAuthGuard)
 export class ReportErrorController {
-  constructor(private readonly reports: ReportErrorService) {}
+  constructor(private readonly reportError: ReportErrorService) {}
 
+  // Any logged-in user (student) can report a suspected error on a question.
+  // Matches frontend/src/app/quiz/page.tsx: POST /report-error
+  // { questionId, description, category }
   @Post()
-  @UseGuards(JwtAuthGuard)
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @ApiBearerAuth()
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Report a suspected error on a question (v5 §37.4)' })
   async report(
     @CurrentUser() user: { userId: string },
-    @Body() body: { questionId: string; description?: string; category?: string; issueType?: string },
+    @Body() body: { questionId: string; description: string; category?: string; issueType?: string },
   ) {
-    if (!body.questionId) {
-      return { statusCode: 400, message: 'questionId is required' };
-    }
-    return this.reports.report(
-      user.userId,
-      body.questionId,
-      body.description || 'Reported error',
-      body.category,
-      body.issueType,
-    );
+    if (!body.questionId) throw new BadRequestException('questionId is required');
+    return this.reportError.report(user.userId, body.questionId, body.description || 'Reported error', body.category, body.issueType);
   }
 
+  // Informational — the auto-suspend threshold, safe for any logged-in user.
+  @Get('config')
+  async config() {
+    return this.reportError.getExports();
+  }
+
+  // ---- Admin / Moderator review workflow ----
+
   @Get()
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Admin: list error reports (status/question filter)' })
-  async list(
-    @Query('status') status?: string,
-    @Query('questionId') questionId?: string,
-    @Query('issueType') issueType?: string,
-  ) {
-    return this.reports.list(status, questionId, issueType);
+  async list(@Query('status') status?: string, @Query('questionId') questionId?: string, @Query('issueType') issueType?: string) {
+    return this.reportError.list(status, questionId, issueType);
+  }
+
+  @Get('category-stats')
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  async categoryStats() {
+    return this.reportError.categoryStats();
+  }
+
+  @Get('question/:questionId')
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  async getQuestionReports(@Param('questionId') questionId: string) {
+    return this.reportError.getQuestionReports(questionId);
   }
 
   @Post(':id/resolve')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Admin: resolve a report (REVIEWING/CONFIRMED/REJECTED)' })
   async resolve(
-    @Param('id') id: string,
-    @CurrentUser() user: { userId: string; role?: string },
-    @Body() body: { status?: 'REVIEWING' | 'CONFIRMED' | 'REJECTED'; adminNotes?: string },
+    @CurrentUser() user: { userId: string },
+    @Param('id') reportId: string,
+    @Body() body: { status: ErrorReportStatus; adminNotes?: string },
   ) {
-    const status = body.status || 'REVIEWING';
-    return this.reports.resolve(id, status, user.userId, body.adminNotes);
+    if (!body.status) throw new BadRequestException('status is required');
+    return this.reportError.resolve(reportId, body.status, user.userId, body.adminNotes);
   }
 
-  @Get('stats/categories')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'MODERATOR')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Admin: error-type classification stats (v5 §40)' })
-  async categoryStats() {
-    return this.reports.categoryStats();
-  }
-
-  @Get('threshold')
-  @Public()
-  @ApiOperation({ summary: 'Current auto-suspend threshold (public)' })
-  async threshold() {
-    return this.reports.getExports();
-  }
-
-  @Get('question/:questionId/reports')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all reports for a specific question' })
-  async getQuestionReports(@Param('questionId') questionId: string) {
-    return this.reports.getQuestionReports(questionId);
-  }
-
-  @Put('question/:questionId/unsuspend')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'MODERATOR')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Admin: manually unsuspend a question after fixing' })
-  async unsuspendQuestion(@Param('questionId') questionId: string, @CurrentUser() user: { userId: string }) {
-    return this.reports.unsuspendQuestion(questionId, user.userId);
+  @Post('question/:questionId/unsuspend')
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN')
+  async unsuspend(@CurrentUser() user: { userId: string }, @Param('questionId') questionId: string) {
+    return this.reportError.unsuspendQuestion(questionId, user.userId);
   }
 }

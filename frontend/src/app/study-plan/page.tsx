@@ -201,9 +201,13 @@ export default function StudyPlanPage() {
             </div>
 
             {/* Plan Details */}
+            {/* BUGFIX: this used to show plan.plan.examId (a raw database ID
+                like "ckx9a2j4b0001...") in the "Exam" row instead of the
+                exam's actual name — the exact "exam ka naam nahi aa raha"
+                problem, just showing up here on the study-plan page too. */}
             <div className="card divide-y divide-border overflow-hidden">
               {[
-                ["Exam", plan.plan.examId],
+                ["Exam", exams.find((e) => e.id === plan.plan.examId)?.name || plan.plan.examId],
                 ["Type", plan.plan.type === "COMBINED" ? "Combined (All Subjects)" : "Subject-wise"],
                 ["Daily Target", `${plan.plan.dailyTarget} questions`],
                 ["Start Date", new Date(plan.plan.startDate).toLocaleDateString()],
@@ -219,7 +223,12 @@ export default function StudyPlanPage() {
             </div>
 
             {/* CTA */}
-            <a href="/test" className="block w-full rounded-xl bg-primary py-4 text-center text-lg font-bold text-primary-foreground transition hover:opacity-90">
+            {/* BUGFIX: this linked to plain "/test" (no ?daily=1), so clicking
+                it never actually started the plan-based Daily Test — it fell
+                through to a generic random 10-question set instead, even
+                though the button text promised "N questions today" tied to
+                the study plan. */}
+            <a href="/test?daily=1" className="block w-full rounded-xl bg-primary py-4 text-center text-lg font-bold text-primary-foreground transition hover:opacity-90">
               🎯 Practice Now ({daily.dailyTarget} questions today)
             </a>
           </div>

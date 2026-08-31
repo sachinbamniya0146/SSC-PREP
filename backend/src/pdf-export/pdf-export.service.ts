@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // v6 §7 — Test paper + Answer-key PDF export with mandatory 4-pass QA gate.
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { PdfRenderer } from './pdf-renderer';
@@ -11,6 +12,11 @@ export class PdfExportService {
   constructor(
     private prisma: PrismaService,
     private renderer: PdfRenderer,
+    // BUGFIX below (download()) needs to optionally verify a caller's
+    // identity even though the route stays @Public() for plain <a href>
+    // links — JwtModule is registered `global: true` in auth.module.ts so
+    // this is injectable here with no module wiring changes needed.
+    private jwt: JwtService,
   ) {}
 
   // Compose questions for a template from CANONICAL bank data (same source as live test:
@@ -178,14 +184,81 @@ export class PdfExportService {
     return this.toStatus(row);
   }
 
-  // Download: paper or answer key (bilingual). Public route — served ONLY when published.
-  async download(templateId: string, kind: 'paper' | 'answerkey'): Promise<{ buffer: Buffer; filename: string }> {
-    const row = await this.prisma.testPdfExport.findUnique({ where: { testTemplateId: templateId } });
+  /**
+   * BUGFIX (bonus grep, item b — unauthenticated premium answer-key leak,
+   * the most severe variant of this pattern found in the whole audit):
+   *
+   * `/tests/:testTemplateId/pdf/paper` and `.../answerkey` are `@Public()`
+   * (deliberately — so a plain browser `<a href>` download link works
+   * without JS attaching an Authorization header). This method used to
+   * check ONLY `row.isPublished` (the QA-pipeline gate) before handing
+   * back the buffer — it never looked at whether the underlying
+   * TestTemplate was premium/paid, and being `@Public()` there was no
+   * logged-in user to check entitlement for even if it had tried.
+   *
+   * Net effect: anyone on the internet, with zero login and zero payment,
+   * could download the full question paper AND the complete answer key
+   * PDF for any premium mock test the moment it passed QA — just by
+   * knowing (or enumerating) its testTemplateId. This bypassed every
+   * paywall in the app (subscription, mock-access pack, PayU) at once.
+   *
+   * Fix: free (non-premium) templates keep working exactly as before —
+   * no auth needed, plain links still work, matching the original intent.
+   * For a PREMIUM template, the caller must now supply `?token=<access
+   * token>` on the URL (query param, since a plain link can't send a
+   * header) — verified here the same way JwtAuthGuard verifies it
+   * (signature/type/session-active), then checked against the exact same
+   * entitlement rule tests.service.ts's assertMockEntitled() uses
+   * (active subscription OR a mockAccess grant with paid packs or
+   * remaining free trial). Anything short of that → 403, no buffer sent.
+   */
+  async download(templateId: string, kind: 'paper' | 'answerkey', token?: string): Promise<{ buffer: Buffer; filename: string }> {
+    const [row, template] = await Promise.all([
+      this.prisma.testPdfExport.findUnique({ where: { testTemplateId: templateId } }),
+      this.prisma.testTemplate.findUnique({ where: { id: templateId }, select: { id: true, isPremium: true } }),
+    ]);
     if (!row) throw new NotFoundException('PDF export not found');
     if (!row.isPublished) throw new BadRequestException('PDF not published yet — QA gate incomplete');
+
+    if (template?.isPremium) {
+      await this.assertEntitledForPremiumDownload(templateId, token);
+    }
+
     const buf = kind === 'paper' ? row.paperPdf : row.answerKeyPdf;
     if (!buf) throw new NotFoundException('PDF not generated yet');
     return { buffer: Buffer.from(buf), filename: `${templateId}-${kind}.pdf` };
+  }
+
+  /** Verify `token` and require the same entitlement tests.service.ts's assertMockEntitled() requires, for a premium PDF download. */
+  private async assertEntitledForPremiumDownload(testTemplateId: string, token?: string): Promise<void> {
+    if (!token) throw new ForbiddenException('This test is premium. Log in with an active subscription or purchased access to download it.');
+
+    let userId: string;
+    try {
+      const payload = await this.jwt.verifyAsync<{ sub: string; type: string; sid: string }>(token);
+      if (payload.type !== 'access' || !payload.sub) throw new Error('bad token type');
+      const session = await this.prisma.deviceSession.findUnique({ where: { id: payload.sid } });
+      if (!session || !session.isActive) throw new Error('session inactive');
+      userId = payload.sub;
+    } catch {
+      throw new ForbiddenException('Invalid or expired access token');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { subscriptions: { where: { status: 'ACTIVE' }, select: { endsAt: true }, take: 1 } },
+    });
+    const subActive = user?.subscriptions?.[0] && new Date(user.subscriptions[0].endsAt) > new Date();
+    if (subActive) return;
+
+    const mock = await this.prisma.mockAccess.findUnique({
+      where: { userId_testTemplateId: { userId, testTemplateId } },
+      select: { paidPacksPurchased: true, freeMocksAllowed: true, mocksUsed: true },
+    });
+    if (mock && mock.paidPacksPurchased > 0) return;
+    if (mock && mock.mocksUsed < mock.freeMocksAllowed) return;
+
+    throw new ForbiddenException('This test is premium. Purchase access to download it.');
   }
 
   private toStatus(row: any): any {

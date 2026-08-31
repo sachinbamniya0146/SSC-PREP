@@ -9,6 +9,11 @@ interface ApiKeyInput {
   isPrimary?: boolean;
 }
 
+function maskKey(apiKey: string | null | undefined): string {
+  if (!apiKey) return '';
+  return `${apiKey.substring(0, 8)}...${apiKey.substring(apiKey.length - 4)}`;
+}
+
 @Injectable()
 export class AdminApiKeyService {
   constructor(private readonly prisma: PrismaService) {}
@@ -33,10 +38,7 @@ export class AdminApiKeyService {
       orderBy: { isPrimary: 'desc' },
     });
 
-    return keys.map((k) => ({
-      ...k,
-      apiKey: k.apiKey ? `${k.apiKey.substring(0, 8)}...${k.apiKey.substring(k.apiKey.length - 4)}` : '',
-    }));
+    return keys.map((k) => ({ ...k, apiKey: maskKey(k.apiKey) }));
   }
 
   async addKey(dto: ApiKeyInput, _createdBy: string) {
@@ -47,7 +49,7 @@ export class AdminApiKeyService {
       });
     }
 
-    return this.prisma.adminApiKey.create({
+    const created = await this.prisma.adminApiKey.create({
       data: {
         provider: dto.provider,
         keyName: dto.keyName,
@@ -66,6 +68,11 @@ export class AdminApiKeyService {
         createdAt: true,
       },
     });
+    // BUGFIX: getKeys() masks apiKey before returning it, but this response
+    // (and updateKey()'s below) returned the full plaintext key — an
+    // inconsistent leak of the very secret the list endpoint deliberately
+    // hides. Masked the same way here.
+    return { ...created, apiKey: maskKey(created.apiKey) };
   }
 
   async updateKey(id: string, dto: Partial<ApiKeyInput> & { isPrimary?: boolean; isActive?: boolean }, _createdBy: string) {
@@ -79,7 +86,7 @@ export class AdminApiKeyService {
       });
     }
 
-    return this.prisma.adminApiKey.update({
+    const updated = await this.prisma.adminApiKey.update({
       where: { id },
       data: {
         keyName: dto.keyName,
@@ -99,6 +106,7 @@ export class AdminApiKeyService {
         createdAt: true,
       },
     });
+    return { ...updated, apiKey: maskKey(updated.apiKey) };
   }
 
   async deleteKey(id: string) {

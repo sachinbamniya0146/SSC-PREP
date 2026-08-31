@@ -48,7 +48,31 @@ export class ReferralService {
     return true;
   }
 
-  /** Called when a referee makes a PAID purchase — only PAID counts toward reward. */
+  /**
+   * Called when a referee makes a PAID purchase — only PAID counts toward reward.
+   *
+   * FIX #1 (wrong threshold, feature basically never worked): the reward is
+   * documented — everywhere else in this file, in getStats() below, and in
+   * the ReferralStatus comment in schema.prisma — as "10 DISTINCT referred
+   * users who paid". The old code instead compared `purchasesCount` on this
+   * ONE referral row (i.e. how many times THIS SAME referee re-purchased)
+   * against the threshold. A referrer with 50 different paying friends would
+   * never see a reward, since no single referee re-buys 10 times. Fixed to
+   * count distinct referrals with status PAIDED/REWARDED for this referrer.
+   *
+   * FIX #2 (race → duplicate free subscriptions): reward-granting was a
+   * classic "check status !== REWARDED, then later write REWARDED" pattern
+   * with no atomicity. If a referrer's last two qualifying referees paid at
+   * nearly the same moment, both requests could read the pre-reward state,
+   * both pass the check, and both go on to create a free Subscription row —
+   * double (or more) rewarding the same referrer. Fixed with the same
+   * atomic-claim pattern used for coupon over-redemption in
+   * monetization.service.ts: an `updateMany` conditioned on
+   * `freeSubFromReferral: false` acts as a compare-and-swap — only the
+   * request whose update actually flips the flag (count === 1) proceeds to
+   * mark the referral REWARDED and create the subscription; any concurrent
+   * loser sees count === 0 and backs off.
+   */
   async onPaidPurchase(userId: string): Promise<void> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user?.referredByCode) return;
@@ -62,33 +86,47 @@ export class ReferralService {
     });
     if (!referral) return;
 
-    const updated = await this.prisma.referral.update({
+    // Atomic per-referral counter bump. Never downgrade a referral that has
+    // already been counted toward (or already earned) the reward.
+    await this.prisma.referral.update({
       where: { id: referral.id },
       data: {
         purchasesCount: { increment: 1 },
-        status: 'PAIDED',
+        status: referral.status === 'REWARDED' ? undefined : 'PAIDED',
       },
     });
 
-    // Reward: 10 PAID referrals → grant free subscription
-    if (updated.purchasesCount >= REFERRAL_REWARD_THRESHOLD && updated.status !== 'REWARDED') {
-      await this.prisma.referral.update({
-        where: { id: referral.id },
-        data: { status: 'REWARDED', rewardedAt: new Date() },
+    if (referrer.freeSubFromReferral) return; // already rewarded, nothing to do
+
+    // Reward rule is "N distinct paid referrals", not "N purchases from one
+    // referee" — count how many of this referrer's referrals have ever gone
+    // PAID or REWARDED.
+    const paidReferralsCount = await this.prisma.referral.count({
+      where: { referrerId: referrer.id, status: { in: ['PAIDED', 'REWARDED'] } },
+    });
+    if (paidReferralsCount < REFERRAL_REWARD_THRESHOLD) return;
+
+    // Atomic claim: of any concurrent callers that reach here for the same
+    // referrer, only the one whose updateMany actually flips false -> true
+    // gets count === 1 and proceeds. Everyone else gets 0 and returns.
+    const claim = await this.prisma.user.updateMany({
+      where: { id: referrer.id, freeSubFromReferral: false },
+      data: { freeSubFromReferral: true },
+    });
+    if (claim.count === 0) return;
+
+    await this.prisma.referral.update({
+      where: { id: referral.id },
+      data: { status: 'REWARDED', rewardedAt: new Date() },
+    });
+    // Create a free 30-day subscription
+    const plan = await this.prisma.plan.findFirst({ where: { isActive: true } });
+    if (plan) {
+      const now = new Date();
+      const ends = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
+      await this.prisma.subscription.create({
+        data: { userId: referrer.id, planId: plan.id, status: 'ACTIVE', startsAt: now, endsAt: ends },
       });
-      await this.prisma.user.update({
-        where: { id: referrer.id },
-        data: { freeSubFromReferral: true },
-      });
-      // Create a free 30-day subscription
-      const plan = await this.prisma.plan.findFirst({ where: { isActive: true } });
-      if (plan) {
-        const now = new Date();
-        const ends = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
-        await this.prisma.subscription.create({
-          data: { userId: referrer.id, planId: plan.id, status: 'ACTIVE', startsAt: now, endsAt: ends },
-        });
-      }
     }
   }
 
@@ -110,7 +148,11 @@ export class ReferralService {
 
     return {
       referralCode: code,
-      shareLink: `https://sscprephub.in/register?ref=${code}`,
+      // BUG FIX (audit round 3, signup-page item): this pointed to
+      // /register, which is not a route anywhere in the frontend (the real
+      // signup route is /signup) — every referral link ever shared 404'd.
+      // Fixed to /signup?ref=CODE, which the signup page now reads on load.
+      shareLink: `https://sscprephub.in/signup?ref=${code}`,
       stats: {
         totalReferrals: referrals.length,
         paidReferrals: paidCount,

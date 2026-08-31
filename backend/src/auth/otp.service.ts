@@ -13,7 +13,7 @@ import { MailService } from './mail.service';
 const OTP_TTL_SECONDS = 10 * 60; // 10 min
 const MAX_ATTEMPTS = 5; // 5 attempts to verify OTP
 const RESEND_COOLDOWN_SECONDS = 60; // 1 min cooldown
-const HOURLY_LIMIT = 1; // max 1 OTP per hour per email for forgot password
+const HOURLY_LIMIT = 3; // max 3 OTPs per hour per email for forgot password
 const HOURLY_WINDOW_SECONDS = 60 * 60; // 1 hour
 
 /**

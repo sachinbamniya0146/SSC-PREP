@@ -1,34 +1,102 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
+import { TelegramService } from '../telegram/telegram.service';
 
 @Injectable()
 export class TestsService {
   constructor(
     private prisma: PrismaService,
     private gamification: GamificationService,
+    // Requirement 5, part (a) — submitAttempt() below needs to trigger the
+    // auto-PDF-send. TelegramModule already imports TestsModule (for
+    // /report + /pdf + the weak-topic-analysis job), so importing
+    // TelegramModule back here would be a straight A→B→A module cycle.
+    // forwardRef() on BOTH sides — this constructor AND telegram.module.ts's
+    // import of TestsModule — breaks that cycle by deferring resolution
+    // until both modules have finished registering, same fix pattern as
+    // monetization.service.ts ↔ referral.service.ts. Only ONE side using
+    // forwardRef() is not enough; the import in telegram.module.ts must be
+    // wrapped too, or Nest still throws "cannot resolve dependencies" at
+    // boot.
+    @Inject(forwardRef(() => TelegramService))
+    private telegram: TelegramService,
   ) {}
 
   // ---- P0 — premium entitlement enforcement (server-side, never trust FE) ----
   // A premium template requires: an ACTIVE subscription (endsAt in future)
   // OR a paid MockAccess row for that template (or free trial pack).
+  //
+  // BUGFIX (bonus grep, item a — the free trial was completely unusable):
+  // This method only ever READ mockAccess and expected mocksUsed to already
+  // reflect prior free-trial usage. The only place that INCREMENTED
+  // mocksUsed was MocksService.recordMockUse(), exposed as `POST
+  // /mocks/use` — a separate, client-triggered call the frontend never
+  // makes anywhere (verified: zero references in frontend/src). So for
+  // every first-time user, no MockAccess row existed at all when they hit
+  // a premium template here; `mock` was `null`, both `mock && ...` checks
+  // short-circuited to false, and this threw "purchase access to take it"
+  // immediately — even though FREE_MOCKS_PER_EXAM (mocks.service.ts)
+  // promises 2 free attempts and the /mocks list screen (which defaults
+  // missing usage to 0) shows the same template as unlocked/free. The
+  // promised free trial could never actually be started by anyone.
+  //
+  // Fix: this is the one authoritative place that gates starting an
+  // attempt, so it now also atomically CONSUMES one free-trial use here —
+  // create the row on first-ever attempt, or conditionally increment
+  // mocksUsed only if still under freeMocksAllowed (race-safe: the
+  // increment's WHERE re-checks the limit at write time, not just at read
+  // time, so two concurrent attempt-starts can't both slip through on the
+  // last remaining free use). recordMockUse()/`POST /mocks/use` is left in
+  // place as a harmless legacy no-op-equivalent in case anything else
+  // calls it, but nothing depends on it anymore.
+  // ADMIN BYPASS: role is now selected alongside subscriptions in the same
+  // query (no extra DB round-trip) and short-circuits every premium/mock
+  // entitlement check below. An ADMIN account should never be blocked by
+  // "purchase access to take it" — that's a real bug students would hit,
+  // but an admin hitting it usually means they're testing/managing content
+  // and got wrongly paywalled like a free student.
   private async assertMockEntitled(userId: string, template: { id: string; isPremium?: boolean | null }) {
     if (!template.isPremium) return;
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { subscriptions: { where: { status: 'ACTIVE' }, select: { endsAt: true }, take: 1 } },
+      select: {
+        role: true,
+        subscriptions: { where: { status: 'ACTIVE' }, select: { endsAt: true }, take: 1 },
+      },
     });
+    if (user?.role === 'ADMIN') return;
     const subActive = user?.subscriptions?.[0] && new Date(user.subscriptions[0].endsAt) > new Date();
     if (subActive) return;
+
     const mock = await this.prisma.mockAccess.findUnique({
       where: { userId_testTemplateId: { userId, testTemplateId: template.id } },
       select: { paidPacksPurchased: true, freeMocksAllowed: true, mocksUsed: true },
     });
     if (mock && mock.paidPacksPurchased > 0) return;
-    if (mock && mock.mocksUsed < mock.freeMocksAllowed) return; // free trial pack
+
+    if (!mock) {
+      // First-ever attempt on this template for this user — create the
+      // row and consume free-trial use #1 in the same write.
+      await this.prisma.mockAccess.create({
+        data: { userId, testTemplateId: template.id, mocksUsed: 1 },
+      });
+      return;
+    }
+
+    if (mock.mocksUsed < mock.freeMocksAllowed) {
+      const claim = await this.prisma.mockAccess.updateMany({
+        where: { userId, testTemplateId: template.id, mocksUsed: { lt: mock.freeMocksAllowed } },
+        data: { mocksUsed: { increment: 1 } },
+      });
+      if (claim.count > 0) return; // successfully claimed a free-trial use
+      // else: someone else (a racing concurrent start) claimed the last
+      // remaining free use between our read and write — fall through to reject.
+    }
+
     throw new BadRequestException('This mock is premium. Purchase access to take it.');
   }
 
@@ -179,7 +247,29 @@ async submitAttempt(
 
   this.gamification.awardTestXp(userId, totalCorrect, 'mock').catch(() => undefined);
 
+  // Requirement 5, part (a) — auto-send the result PDF on Telegram right
+  // after submit, for premium+linked users. Subscription-active + linked
+  // checks happen INSIDE notifyTelegramAttemptPdf() below (not here) so a
+  // free/unlinked user's submit doesn't even attempt the lookup twice.
+  // Fire-and-forget with .catch(() => undefined) — same pattern as the XP
+  // award one line above — so a PDF-render failure (Chromium crash,
+  // Telegram API hiccup, rate limit) can never fail or delay the submit
+  // response the student is waiting on.
+  this.notifyTelegramAttemptPdf(userId, updated.id).catch(() => undefined);
+
   return { ...updated, expired };
+}
+
+// Requirement 5, part (a) helper — gate + send. Mirrors the exact
+// "linked? → active? → send" order used by /pdf in telegram.controller.ts,
+// so behavior stays identical whether the PDF was requested on-demand or
+// fired automatically on submit.
+private async notifyTelegramAttemptPdf(userId: string, attemptId: string) {
+  const tgUser = await this.telegram.getTelegramUserByUserId(userId);
+  if (!tgUser) return; // not linked — nothing to do
+  const active = await this.telegram.hasActiveSubscription(userId);
+  if (!active) return; // lapsed/free — same gate used everywhere else
+  await this.telegram.sendAttemptPdf(userId, Number(tgUser.chatId), attemptId);
 }
 
 // Live server-side remaining-time check (client countdown is cosmetic only).
@@ -498,6 +588,21 @@ async saveAnswers(
   // 4×25 in 60min; MTS = 20/25/25/20 in 90min), matching the real exam
   // blueprint. Questions: approved, bilingual, exactly 4 non-empty options,
   // multi-year round-robin, cross-section dedup. NEVER returns correctAnswer.
+  // BUG FIX (root cause of "Subject not found: quantitative-aptitude" on
+  // Start Mock): the subjectSlug values below used to be hyphenated
+  // ('quantitative-aptitude', 'english-comprehension', 'general-awareness')
+  // but every real Subject row in the database — created by the actual
+  // data-seeding pipeline (backend/scripts/seed-patterns.mjs and the
+  // question-import scripts) — uses underscores instead
+  // ('quantitative_aptitude', 'general_awareness') or a shorter slug
+  // ('english', not 'english-comprehension'). 'reasoning' happened to match
+  // by coincidence, which is why only the OTHER three sections crashed.
+  // Confirmed directly against production: GET /bank/meta returned subject
+  // slugs computer/english/general_awareness/hindi/quantitative_aptitude/
+  // reasoning — none of which are 'quantitative-aptitude',
+  // 'general-awareness', or 'english-comprehension'. Corrected here (both
+  // in paper() and the identical blueprint in sectionalExamForFamily()
+  // below) to the slugs that actually exist.
   async paper(userId: string, templateId: string) {
     const template = await this.prisma.testTemplate.findUnique({
       where: { id: templateId },
@@ -509,16 +614,16 @@ async saveAnswers(
     const sections =
       fam === 'mts'
         ? [
-            { part: 'A', name: 'Numerical and Mathematical Ability', subjectSlug: 'quantitative-aptitude', q: 20, marks: 20, min: 20 },
+            { part: 'A', name: 'Numerical and Mathematical Ability', subjectSlug: 'quantitative_aptitude', q: 20, marks: 20, min: 20 },
             { part: 'B', name: 'Reasoning Ability and Problem Solving', subjectSlug: 'reasoning', q: 25, marks: 25, min: 25 },
-            { part: 'C', name: 'English Comprehension', subjectSlug: 'english-comprehension', q: 25, marks: 25, min: 25 },
-            { part: 'D', name: 'General Awareness', subjectSlug: 'general-awareness', q: 20, marks: 20, min: 20 },
+            { part: 'C', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 25, min: 25 },
+            { part: 'D', name: 'General Awareness', subjectSlug: 'general_awareness', q: 20, marks: 20, min: 20 },
           ]
         : [
             { part: 'A', name: 'General Intelligence and Reasoning', subjectSlug: 'reasoning', q: 25, marks: 50, min: 15 },
-            { part: 'B', name: 'General Awareness', subjectSlug: 'general-awareness', q: 25, marks: 50, min: 15 },
-            { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative-aptitude', q: 25, marks: 50, min: 15 },
-            { part: 'D', name: 'English Comprehension', subjectSlug: 'english-comprehension', q: 25, marks: 50, min: 15 },
+            { part: 'B', name: 'General Awareness', subjectSlug: 'general_awareness', q: 25, marks: 50, min: 15 },
+            { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', q: 25, marks: 50, min: 15 },
+            { part: 'D', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 50, min: 15 },
           ];
 
     const subs = await this.prisma.subject.findMany({ select: { id: true, slug: true, name: true } });
@@ -541,8 +646,24 @@ async saveAnswers(
           r.optionsJson.length === 4 &&
           r.optionsJson.every((o: any) => o && o.text && String(o.text).trim().length > 0),
       );
-      if (validRows.length < sec.q)
+      // BUGFIX: this used to hard-fail the ENTIRE mock (all 4 sections, 100
+      // questions) the moment ANY single section came up short — e.g. "Not
+      // enough 4-option bilingual questions for General Intelligence and
+      // Reasoning (0/25)" blocked SSC CPO Full Mock 1 even though the other
+      // 3 sections had plenty of approved questions. While the question bank
+      // is still being filled in, a student should still be able to take a
+      // shorter version of the section instead of being blocked outright.
+      // Only genuinely block when a section has ZERO usable questions at all
+      // (nothing to serve), and require a sane minimum (sec.min) otherwise.
+      if (validRows.length === 0)
+        throw new BadRequestException(`No approved bilingual questions available yet for ${sec.name}. Please try again later.`);
+      if (validRows.length < sec.min)
         throw new BadRequestException(`Not enough 4-option bilingual questions for ${sec.name} (${validRows.length}/${sec.q})`);
+      if (validRows.length < sec.q) {
+        const originalQ = sec.q;
+        sec.q = validRows.length;
+        sec.marks = Math.round((sec.marks * sec.q) / originalQ);
+      }
       const byYear = new Map<number, any[]>();
       for (const r of validRows) {
         if (usedAcross.has(r.id)) continue;
@@ -595,33 +716,74 @@ async saveAnswers(
           shift: r.shift,
           examName: r.exam?.name,
           chapter: r.chapter?.name,
-          explanation: r.explanation,
-          explanationHindi: r.explanationHindi,
+          // BUGFIX (bonus grep, item b/f — same answer-leak-gate pattern found
+          // repeatedly this audit, this time in the main "take a test" flow
+          // itself): explanation/explanationHindi were sent here even though
+          // the comment right below explicitly says "NEVER returns
+          // correctAnswer" — but explanation text almost always states or
+          // heavily implies the correct answer in prose ("The correct answer
+          // is (B) because..."), so withholding correctAnswer alone did
+          // nothing. Explanations are correctly revealed after submission via
+          // attemptDetail() (the results/review screen) — they don't belong
+          // in the pre-attempt paper.
         })),
       });
     }
 
+    // Report the ACTUAL composed totals (which may be slightly lower than
+    // the template's advertised totals if a section had to be shortened
+    // above due to a temporary content gap) rather than the static
+    // template.totalMarks, so the exam header/results screen never shows
+    // a max-marks figure the paper doesn't actually contain.
+    const actualTotalMarks = out.reduce((s, sec) => s + sec.marks, 0);
     return {
       templateId: template.id,
       title: template.title,
       description: template.description,
       type: template.type,
       durationMinutes: template.durationMinutes,
-      totalMarks: template.totalMarks,
+      totalMarks: actualTotalMarks || template.totalMarks,
       isPremium: template.isPremium,
       sections: out,
     };
   }
 
-  // Compose the SSC CGL Tier 1 2025 exam: 4 sections × 25 Qs (Reasoning, GA, Quant,
-  // English), 15-min sectional timers, 200 marks, cross-section + within-section dedup.
+  // Compose a full sectional exam (v1: SSC CGL Tier 1 2025 hardcoded, 4
+  // sections x 25 Qs). GENERALIZED below — see sectionalExamForFamily() —
+  // to also cover CHSL/MTS/CPO, reusing the exact family-section blueprints
+  // paper() already defines. cglExam() is kept as the exact original
+  // route/behaviour (backward compatible with the existing
+  // `/tests/sectional/cgl` route the frontend already calls).
   async cglExam() {
-    const sections = [
-      { part: 'A', name: 'General Intelligence and Reasoning', subjectSlug: 'reasoning', q: 25, marks: 50, min: 15 },
-      { part: 'B', name: 'General Awareness', subjectSlug: 'general-awareness', q: 25, marks: 50, min: 15 },
-      { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative-aptitude', q: 25, marks: 50, min: 15 },
-      { part: 'D', name: 'English Comprehension', subjectSlug: 'english-comprehension', q: 25, marks: 50, min: 15 },
-    ];
+    return this.sectionalExamForFamily('cgl');
+  }
+
+  // BUGFIX (bonus grep — "sari exams ke test dena ka option"): the full
+  // mock-paper flow (paper(), above) already recognises 4 exam families —
+  // cgl/chsl/mts/cpo — and gives each its own real section blueprint. But
+  // the SECTIONAL practice-exam flow (this method, `/tests/sectional/cgl`)
+  // only ever built the CGL blueprint — there was no way to take a proper
+  // CHSL/MTS/CPO sectional practice exam even though the question bank and
+  // full-mock flow both already support those exams. This generalizes the
+  // same composition logic (multi-year round-robin, cross-section dedup,
+  // 4-option validation) across all 4 recognised families, using the SAME
+  // section blueprints paper() uses, so behaviour stays consistent between
+  // "take a full paper" and "practice one exam sectionally".
+  async sectionalExamForFamily(family: 'cgl' | 'chsl' | 'mts' | 'cpo') {
+    const sections =
+      family === 'mts'
+        ? [
+            { part: 'A', name: 'Numerical and Mathematical Ability', subjectSlug: 'quantitative_aptitude', q: 20, marks: 20, min: 20 },
+            { part: 'B', name: 'Reasoning Ability and Problem Solving', subjectSlug: 'reasoning', q: 25, marks: 25, min: 25 },
+            { part: 'C', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 25, min: 25 },
+            { part: 'D', name: 'General Awareness', subjectSlug: 'general_awareness', q: 20, marks: 20, min: 20 },
+          ]
+        : [
+            { part: 'A', name: 'General Intelligence and Reasoning', subjectSlug: 'reasoning', q: 25, marks: 50, min: 15 },
+            { part: 'B', name: 'General Awareness', subjectSlug: 'general_awareness', q: 25, marks: 50, min: 15 },
+            { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', q: 25, marks: 50, min: 15 },
+            { part: 'D', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 50, min: 15 },
+          ];
     const subs = await this.prisma.subject.findMany({
       select: { id: true, slug: true, name: true },
     });
@@ -646,6 +808,7 @@ async saveAnswers(
       // real exam rule: exactly 4 options, each with non-empty text — filter bad rows
       const validRows = rows.filter(
         (r) =>
+
           Array.isArray(r.optionsJson) &&
           r.optionsJson.length === 4 &&
           r.optionsJson.every((o: any) => o && o.text && String(o.text).trim().length > 0),
@@ -699,8 +862,11 @@ async saveAnswers(
           options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
           // NOTE: correctAnswer deliberately NOT sent — answer key must never
           // reach the client before submit (server-side scoring only).
-          explanation: r.explanation,
-          explanationHindi: r.explanationHindi,
+          // BUGFIX: explanation/explanationHindi used to be sent right here
+          // too, which defeats the point above — explanation text almost
+          // always states or heavily implies the correct answer in prose.
+          // Removed; it's correctly revealed after submission via
+          // attemptDetail() (results/review screen), same as paper().
           examName: r.exam?.name,
           chapter: r.chapter?.name,
           year: r.year,
@@ -711,15 +877,13 @@ async saveAnswers(
         })),
       });
     }
-    return {
-      type: 'CGL_TIER1_2025',
-      title: 'SSC CGL Tier 1 — Based on 2025',
-      durationMinutes: 60,
-      totalQuestions: 100,
-      totalMarks: 200,
-      negativeMarks: 0.5,
-      sections: out,
-    };
+    const meta = {
+      cgl: { type: 'CGL_TIER1_2025', title: 'SSC CGL Tier 1 — Based on 2025', durationMinutes: 60, totalQuestions: 100, totalMarks: 200, negativeMarks: 0.5 },
+      chsl: { type: 'CHSL_TIER1', title: 'SSC CHSL Tier 1', durationMinutes: 60, totalQuestions: 100, totalMarks: 200, negativeMarks: 0.5 },
+      mts: { type: 'MTS_PAPER1', title: 'SSC MTS Paper 1', durationMinutes: 90, totalQuestions: 90, totalMarks: 90, negativeMarks: 0.25 },
+      cpo: { type: 'CPO_PAPER1', title: 'SSC CPO Paper 1', durationMinutes: 60, totalQuestions: 100, totalMarks: 200, negativeMarks: 0.5 },
+    }[family];
+    return { ...meta, sections: out };
   }
 
   // Subjects with approved+bilingual counts (for the sectional picker UI).
@@ -1360,7 +1524,19 @@ async saveAnswers(
       _count: true,
     });
 
-    const percentile = await this.prisma.testAttempt.count({
+    // BUG FIX (audit round 4, item 3): rank and percentile were both INVERTED.
+    // Old code counted attempts with score < yours and called that `percentile`,
+    // then set yourRank = that count + 1 — so a top scorer (almost everyone
+    // below them) ended up with the WORST rank (e.g. rank 10 of 10), and
+    // yourPercentile = (total - belowCount) / total, which for a top scorer
+    // rounds to ~0% ("you beat ~0% of test takers") instead of ~100%.
+    // Correct definitions: rank = 1 + (number of attempts that scored HIGHER
+    // than you); percentile = % of attempts you scored better than (i.e. the
+    // number of attempts with a LOWER score, divided by total).
+    const scoredHigher = await this.prisma.testAttempt.count({
+      where: { testTemplateId: templateId, status: 'SUBMITTED', score: { gt: latest.score } },
+    });
+    const scoredLower = await this.prisma.testAttempt.count({
       where: { testTemplateId: templateId, status: 'SUBMITTED', score: { lt: latest.score } },
     });
     const total = await this.prisma.testAttempt.count({
@@ -1370,8 +1546,8 @@ async saveAnswers(
     return {
       yourScore: latest.score ?? 0,
       yourAccuracy: latest.accuracyPercent ?? 0,
-      yourRank: percentile + 1,
-      yourPercentile: total > 0 ? Math.round(((total - percentile) / total) * 1000) / 10 : 100,
+      yourRank: scoredHigher + 1,
+      yourPercentile: total > 0 ? Math.round((scoredLower / total) * 1000) / 10 : 100,
       totalAttempts: total,
       averageScore: Math.round((stats._avg.score || 0) * 10) / 10,
       averageAccuracy: Math.round((stats._avg.accuracyPercent || 0) * 10) / 10,

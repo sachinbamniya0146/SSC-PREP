@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AttemptStatus } from '@prisma/client';
+import { AttemptStatus, Prisma } from '@prisma/client';
 import { cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 
@@ -17,9 +17,97 @@ export interface QuestionCard {
   isAnswered?: boolean;
 }
 
+// BUG FIX ("Subject not found: quantitative-aptitude" crash on Start Mock):
+// TestsService.paper()/sectionalExamForFamily() look up subjects by slug and
+// hard-throw a BadRequestException if a row is missing. The real production
+// database (confirmed via GET /bank/meta) already has 6 Subject rows —
+// computer, english, general_awareness, hindi, quantitative_aptitude,
+// reasoning — using UNDERSCORE slugs (except 'english', which has no
+// '-comprehension' suffix at all). TestsService has been corrected to use
+// these exact slugs instead of the hyphenated ones it had before. This
+// seed list is kept in sync with that same underscore convention purely as
+// a safety net for a brand-new/empty database (e.g. first-ever deploy
+// before any import script has run) — on an existing DB like the current
+// production one, every one of these already exists so nothing is created.
+const CORE_SUBJECTS: { slug: string; name: string }[] = [
+  { slug: 'reasoning', name: 'Reasoning' },
+  { slug: 'quantitative_aptitude', name: 'Quantitative Aptitude' },
+  { slug: 'english', name: 'English' },
+  { slug: 'general_awareness', name: 'General Awareness' },
+];
+
 @Injectable()
-export class BankService {
+export class BankService implements OnModuleInit {
+  private readonly logger = new Logger(BankService.name);
+
   constructor(private prisma: PrismaService) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.seedCoreSubjects();
+  }
+
+  /** Idempotent: create any of the 4 core subjects that don't exist yet. */
+  private async seedCoreSubjects(): Promise<void> {
+    for (const s of CORE_SUBJECTS) {
+      const existing = await this.prisma.subject.findUnique({ where: { slug: s.slug } });
+      if (existing) continue;
+      await this.prisma.subject.create({ data: { slug: s.slug, name: s.name } });
+      this.logger.log(`Seeded missing core subject: ${s.slug}`);
+    }
+  }
+
+  /**
+   * FIX (CRITICAL answer-key leak — same bug class already fixed in
+   * bookmarks.service.ts / search.service.ts / question-bank-practice.service.ts,
+   * but never applied here even though this is the PRIMARY question-browsing
+   * surface): browse(), getById(), chapterPyq() and getSet() below used to
+   * return `correctAnswer` + `explanation` unconditionally to any logged-in
+   * user, with no check that the user had ever actually attempted the
+   * question. Any free (non-premium) logged-in student could page through
+   * `/bank/questions?skip=0..N` and dump the entire answer key for the
+   * whole question bank without answering a single question — completely
+   * bypassing the "reveal only after answered/skipped/completed" rule the
+   * rest of the app enforces on purpose. The `isAnswered` field already
+   * declared on the QuestionCard interface above is the tell that this gate
+   * was intended from day one but never wired up.
+   *
+   * This mirrors bookmarks.service.ts's list() gate exactly: a question's
+   * answer counts as "revealed" once the student has a genuine attempt
+   * record for it — either a scored TestAttempt (mock/sectional/daily-test,
+   * via AttemptAnswer) or an in-progress/completed question-bank practice
+   * set whose `answers` blob includes that question.
+   */
+  private async getAttemptedQuestionIds(userId: string | undefined | null, questionIds: string[]): Promise<Set<string>> {
+    const attempted = new Set<string>();
+    if (!userId || questionIds.length === 0) return attempted;
+
+    const answeredInAttempts = await this.prisma.attemptAnswer.findMany({
+      where: { testAttempt: { userId }, questionId: { in: questionIds } },
+      select: { questionId: true },
+    });
+    for (const a of answeredInAttempts) attempted.add(a.questionId);
+
+    if (attempted.size < questionIds.length) {
+      const practiceSets = await this.prisma.questionBankSet.findMany({
+        // Prisma 5.x: a nullable Json column can't be filtered with a plain
+        // `null` literal (TS2322) — it must be one of Prisma.DbNull /
+        // Prisma.JsonNull / Prisma.AnyNull. AnyNull excludes both possible
+        // "no value" representations (SQL NULL and a stored literal JSON
+        // null), which is exactly the "has answers" behavior this had before.
+        where: { userId, answers: { not: Prisma.AnyNull } },
+        select: { answers: true },
+      });
+      for (const set of practiceSets) {
+        const answered = set.answers as Record<string, unknown> | null;
+        if (!answered) continue;
+        for (const qid of questionIds) {
+          if (attempted.has(qid)) continue;
+          if (Object.prototype.hasOwnProperty.call(answered, qid)) attempted.add(qid);
+        }
+      }
+    }
+    return attempted;
+  }
 
   // ---- v4 §18 — SearchMiss demand log (user searched, nothing matched) ----
   async logSearchMiss(query?: string, exam?: string, userId?: string | null) {
@@ -69,6 +157,57 @@ export class BankService {
     return out;
   }
 
+  // ---- Content coverage report (admin) ----
+  // Answers exactly: "kitne question kis exam ke kis subject ke available
+  // hain, aur unme se kitne translate (Hindi) hain" — a per exam × per
+  // subject breakdown that neither meta() nor subjects() gives on its own
+  // (meta() only totals exam-wise OR subject-wise separately, never both
+  // together; neither one reports translation status). No endpoint like
+  // this existed before, so the only way to answer this question was a
+  // manual SQL query against the live DB.
+  async contentCoverageReport() {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        examName: string | null;
+        subjectName: string | null;
+        totalQuestions: number;
+        approvedLive: number;
+        hindiTranslated: number;
+        humanVerifiedTranslation: number;
+      }>
+    >`
+      SELECT
+        e.name AS "examName",
+        s.name AS "subjectName",
+        COUNT(q.id)::int AS "totalQuestions",
+        COUNT(q.id) FILTER (
+          WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+        )::int AS "approvedLive",
+        COUNT(q.id) FILTER (
+          WHERE q."questionTextHindi" IS NOT NULL AND q."questionTextHindi" <> ''
+        )::int AS "hindiTranslated",
+        COUNT(q.id) FILTER (
+          WHERE q."translationStatus" = 'HUMAN_VERIFIED'
+        )::int AS "humanVerifiedTranslation"
+      FROM questions q
+      LEFT JOIN exams e ON e.id = q."examId"
+      LEFT JOIN subjects s ON s.id = q."subjectId"
+      GROUP BY e.name, s.name
+      ORDER BY e.name NULLS LAST, s.name NULLS LAST;
+    `;
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.totalQuestions += r.totalQuestions;
+        acc.approvedLive += r.approvedLive;
+        acc.hindiTranslated += r.hindiTranslated;
+        acc.humanVerifiedTranslation += r.humanVerifiedTranslation;
+        return acc;
+      },
+      { totalQuestions: 0, approvedLive: 0, hindiTranslated: 0, humanVerifiedTranslation: 0 },
+    );
+    return { rows, totals };
+  }
+
   async subjects(examId?: string) {
     const cacheKey = examId ? `bank:subjects:${examId}` : 'bank:subjects';
     const cached = cacheGet<any>(cacheKey);
@@ -102,8 +241,51 @@ export class BankService {
       ORDER BY c.name;`;
   }
 
+  // ---- Admin chapter management ----
+  // MISSING-FEATURE FIX: bulk question upload (bank-upload.service.ts)
+  // *requires* a valid, pre-existing chapterId on every row/object — it
+  // will not create one on the fly (see validateReferences()). But there
+  // was no way anywhere in the API to actually CREATE a chapter. The
+  // upload template's own instructions sheet even tells admins to fetch
+  // IDs from "GET /api/v1/admin/exams" and "GET /api/v1/admin/subjects" —
+  // routes that don't exist either; the real equivalents are the public
+  // /bank/meta and /bank/subjects endpoints. On a brand-new database with
+  // zero chapters (like the current one), this made bulk question upload
+  // completely impossible: every row would fail validateReferences() with
+  // "chapterId not found" and there was no way to fix that. These two
+  // methods (+ their /bank/admin/chapters routes below) close that gap.
+  //
+  // listAllChaptersForAdmin() deliberately does NOT filter by
+  // `HAVING COUNT(q.id) > 0` the way chapters() above does (that filter is
+  // for the student-facing browse UI, which shouldn't show empty chapters)
+  // — an admin managing content needs to see freshly-created, still-empty
+  // chapters too, otherwise a chapter they just created would look like it
+  // never got created.
+  async listAllChaptersForAdmin(subjectId?: string) {
+    return this.prisma.chapter.findMany({
+      where: subjectId ? { subjectId } : undefined,
+      select: { id: true, name: true, slug: true, subjectId: true, subject: { select: { name: true, slug: true } } },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  /** Idempotent by (subjectId, slug): re-creating with the same name is a no-op, returns the existing row. */
+  async createChapter(subjectId: string, name: string): Promise<{ id: string; name: string; slug: string; subjectId: string }> {
+    const subject = await this.prisma.subject.findUnique({ where: { id: subjectId } });
+    if (!subject) throw new BadRequestException(`Subject not found: ${subjectId}`);
+    const trimmedName = (name ?? '').trim();
+    if (!trimmedName) throw new BadRequestException('Chapter name is required');
+    const slug = trimmedName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '') || 'chapter';
+    const existing = await this.prisma.chapter.findUnique({ where: { subjectId_slug: { subjectId, slug } } });
+    if (existing) return existing;
+    return this.prisma.chapter.create({ data: { subjectId, name: trimmedName, slug } });
+  }
+
   // Browse questions by filters (exam/subject/chapter), bilingual rows.
-  async browse(f: { examId?: string; subjectId?: string; chapterId?: string; skip?: number; take?: number }) {
+  async browse(f: { examId?: string; subjectId?: string; chapterId?: string; skip?: number; take?: number }, userId?: string | null) {
     const take = Math.min(f.take ?? 20, 50);
     const skip = f.skip ?? 0;
     // FIX Error #6: was { isApproved: true } only — auto-suspended /
@@ -120,36 +302,44 @@ export class BankService {
       take,
     });
     const total = await this.prisma.question.count({ where });
-    const data = rows.map((r: any) => ({
-      id: r.id,
-      questionText: r.questionText,
-      questionTextHindi: r.questionTextHindi,
-      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
-      correctAnswer: r.correctAnswer,
-      explanation: r.explanation,
-      explanationHindi: r.explanationHindi,
-      chapter: r.chapter?.name ?? '',
-      exam: r.exam?.name ?? null,
-      year: r.year,
-      shift: r.shift,
-      subject: r.subject?.name ?? null,
-      difficulty: r.difficulty,
-      marks: r.marks,
-      negativeMarks: r.negativeMarks,
-      answerVerificationStatus: r.answerVerificationStatus ?? 'UNVERIFIED_SINGLE_SOURCE',
-      lastVerifiedAt: r.lastVerifiedAt ?? null,
-    }));
+    const attemptedSet = await this.getAttemptedQuestionIds(userId, rows.map((r: any) => r.id));
+    const data = rows.map((r: any) => {
+      const canReveal = attemptedSet.has(r.id);
+      return {
+        id: r.id,
+        questionText: r.questionText,
+        questionTextHindi: r.questionTextHindi,
+        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+        // Only revealed once this user has a genuine attempt for this
+        // question elsewhere — never sent up-front from a browse listing.
+        correctAnswer: canReveal ? r.correctAnswer : null,
+        explanation: canReveal ? r.explanation : null,
+        explanationHindi: canReveal ? r.explanationHindi : null,
+        isAnswered: canReveal,
+        chapter: r.chapter?.name ?? '',
+        exam: r.exam?.name ?? null,
+        year: r.year,
+        shift: r.shift,
+        subject: r.subject?.name ?? null,
+        difficulty: r.difficulty,
+        marks: r.marks,
+        negativeMarks: r.negativeMarks,
+        answerVerificationStatus: r.answerVerificationStatus ?? 'UNVERIFIED_SINGLE_SOURCE',
+        lastVerifiedAt: r.lastVerifiedAt ?? null,
+      };
+    });
     return { total, data };
   }
 
   // Single question + its solution (for display during review)
-  async getById(id: string) {
+  async getById(id: string, userId?: string | null) {
     // FIX Error #6/#8: apply the shared visibility filter here too.
     const q = await this.prisma.question.findFirst({
       where: { id, ...PUBLISHED_QUESTION_WHERE },
       include: { chapter: { select: { name: true } } },
     });
     if (!q) throw new NotFoundException('Question not found');
+    const canReveal = (await this.getAttemptedQuestionIds(userId, [q.id])).has(q.id);
 
     // v2 §7.6 — Previous SSC References: real-DB computation, never static text.
     // Same exam + same chapter across the other years in the bank.
@@ -184,9 +374,10 @@ export class BankService {
       questionText: q.questionText,
       questionTextHindi: q.questionTextHindi,
       options: (q.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
-      correctAnswer: q.correctAnswer,
-      explanation: q.explanation,
-      explanationHindi: q.explanationHindi,
+      correctAnswer: canReveal ? q.correctAnswer : null,
+      explanation: canReveal ? q.explanation : null,
+      explanationHindi: canReveal ? q.explanationHindi : null,
+      isAnswered: canReveal,
       chapter: q.chapter?.name ?? '',
       year: q.year,
       shift: q.shift,
@@ -264,6 +455,13 @@ export class BankService {
   }
 
   // Chapter-wise PYQ: get all questions for a chapter, with year filters
+  //
+  // NOTE (bonus-grep pass): unlike browse()/getById() above, this endpoint's
+  // only frontend consumer is /test's chapter-wise-PYQ practice mode, which
+  // deliberately shows a "Show Answer" / "AI Hint" button per question
+  // *before* the student picks an option — that is the feature, not a bug,
+  // so correctAnswer/explanation are intentionally left ungated here. Do not
+  // apply the browse()/getById() attempted-gate to this method.
   async chapterPyq(f: { chapterId: string; examId?: string; year?: number; skip?: number; take?: number }) {
     const take = Math.min(f.take ?? 25, 50);
     const skip = f.skip ?? 0;
@@ -381,6 +579,11 @@ export class BankService {
     };
   }
 
+  // NOTE (bonus-grep pass): this "quick set" is /test's default random-mix
+  // question source, which — same as chapterPyq() above — has a deliberate
+  // "Show Answer" / "AI Hint" self-check button per question before the
+  // student answers. correctAnswer/explanation are intentionally left
+  // ungated here; do not apply the browse()/getById() attempted-gate.
   async getSet(f: { examId?: string; subjectId?: string; count?: number }) {
     const takeN = Math.min(f.count ?? 10, 25);
     const where: any = { ...PUBLISHED_QUESTION_WHERE, questionTextHindi: { not: '' } }; // bilingual gate (v3 §3): empty/NULL dono exclude

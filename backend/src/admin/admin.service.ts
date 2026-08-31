@@ -2,11 +2,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { startOfDay, subDays } from 'date-fns';
-import * as XLSX from 'xlsx';
+import { BankUploadService } from '../bank/bank-upload.service';
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private uploadService: BankUploadService,
+  ) {}
 
   /** Get comprehensive dashboard statistics */
   async getDashboardStats(days: number = 30) {
@@ -147,25 +150,20 @@ export class AdminService {
     };
   }
 
-  /** Get format examples for admin help */
+  // FIX (bonus grep item c — dedupe with BankUploadService's template
+  // generator, see AdminHelpController for the full writeup): this used
+  // to hand-list its own header set here, which had already drifted from
+  // reality (missing topicId/subTopicId/paperCode, present in the real
+  // parser). Now derived straight from BankUploadService.getTemplates() —
+  // the same source the download routes and the upload parser both use —
+  // so this documentation endpoint can never drift out of sync again.
   async getFormatExamples() {
+    const templates = this.uploadService.getTemplates();
     return {
-      excel: {
-        headers: ['examId*', 'subjectId*', 'chapterId*', 'questionText*', 'optionA*', 'optionB*', 'optionC*', 'optionD*', 'correctAnswer*'],
-        description: 'Excel template with columns for exam, subject, chapter, question, options, and correct answer',
-      },
-      csv: {
-        headers: ['examId*', 'subjectId*', 'chapterId*', 'questionText*', 'optionA*', 'optionB*', 'optionC*', 'optionD*', 'correctAnswer*'],
-        description: 'CSV template with comma-separated values',
-      },
-      json: {
-        format: '{ examId: string, subjectId: string, chapterId: string, questionText: string, options: [{key: string, text: string}], correctAnswer: string }[]',
-        description: 'JSON array of question objects',
-      },
-      text: {
-        format: 'tab-separated values with header row',
-        description: 'Text file with tab-separated columns',
-      },
+      excel: { headers: templates.excel.headers, description: templates.excel.description },
+      csv: { headers: templates.csv.headers, description: templates.csv.description },
+      json: { format: templates.json.headers.join(', '), description: templates.json.description },
+      text: { format: 'tab-separated values with header row', headers: templates.text.headers, description: templates.text.description },
     };
   }
 
@@ -189,61 +187,6 @@ export class AdminService {
         description: 'Use to identify topics needing improvement',
       },
     };
-  }
-
-  /** Generate Excel template */
-  generateExcelTemplate(): Buffer {
-    const headers = ['examId*', 'subjectId*', 'chapterId*', 'questionText*', 'questionTextHindi', 'optionA*', 'optionA_Hindi', 'optionB*', 'optionB_Hindi', 'optionC*', 'optionC_Hindi', 'optionD*', 'optionD_Hindi', 'correctAnswer*', 'explanation', 'explanationHindi', 'year', 'shift', 'marks', 'negativeMarks', 'difficulty'];
-    const sampleRow = ['cgl', 'quantitative-aptitude', 'percentage', 'What is 20% of 150?', '150 का 20% क्या है?', '30', '30', '25', '25', '35', '35', '40', '40', 'A', '20% of 150 = 30', '150 का 20% = 30', '2023', 'Shift 1', '2', '0.5', 'EASY'];
-
-    const workbook = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([headers, sampleRow]);
-    XLSX.utils.book_append_sheet(workbook, ws, 'Template');
-
-    return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-  }
-
-  /** Generate CSV template */
-  generateCSVTemplate(): Buffer {
-    const headers = 'examId*,subjectId*,chapterId*,questionText*,questionTextHindi,optionA*,optionA_Hindi,optionB*,optionB_Hindi,optionC*,optionC_Hindi,optionD*,optionD_Hindi,correctAnswer*,explanation,explanationHindi,year,shift,marks,negativeMarks,difficulty';
-    const sampleRow = 'cgl,quantitative-aptitude,percentage,What is 20% of 150?,150 का 20% क्या है?,30,30,25,25,35,35,40,40,A,20% of 150 = 30,150 का 20% = 30,2023,Shift 1,2,0.5,EASY';
-
-    return Buffer.from(`${headers}\n${sampleRow}`, 'utf-8');
-  }
-
-  /** Generate JSON template */
-  generateJSONTemplate(): Buffer {
-    const template = [{
-      examId: 'cgl',
-      subjectId: 'quantitative-aptitude',
-      chapterId: 'percentage',
-      questionText: 'What is 20% of 150?',
-      questionTextHindi: '150 का 20% क्या है?',
-      options: [
-        { key: 'A', text: '30', textHi: '30' },
-        { key: 'B', text: '25', textHi: '25' },
-        { key: 'C', text: '35', textHi: '35' },
-        { key: 'D', text: '40', textHi: '40' },
-      ],
-      correctAnswer: 'A',
-      explanation: '20% of 150 = 30',
-      explanationHindi: '150 का 20% = 30',
-      year: 2023,
-      shift: 'Shift 1',
-      marks: 2,
-      negativeMarks: 0.5,
-      difficulty: 'EASY',
-    }];
-
-    return Buffer.from(JSON.stringify(template, null, 2), 'utf-8');
-  }
-
-  /** Generate text template */
-  generateTextTemplate(): Buffer {
-    const headers = 'examId\tsubjectId\tchapterId\tquestionText\tquestionTextHindi\toptionA\toptionB\toptionC\toptionD\tcorrectAnswer\texplanation\texplanationHindi\tyear\tshift\tmarks\tnegativeMarks\tdifficulty';
-    const sampleRow = 'cgl\tquantitative-aptitude\tpercentage\tWhat is 20% of 150?\t150 का 20% क्या है?\t30\t25\t35\t40\tA\t20% of 150 = 30\t150 का 20% = 30\t2023\tShift 1\t2\t0.5\tEASY';
-
-    return Buffer.from(`${headers}\n${sampleRow}`, 'utf-8');
   }
 
   /** Get daily quiz stats */

@@ -9,8 +9,12 @@ type Bm = {
     questionText: string;
     questionTextHindi: string | null;
     options: { key: string; text: string }[];
-    correctAnswer: string;
+    // Backend only fills these in once you've actually attempted the
+    // question elsewhere (mock/sectional/daily-test/practice) — null until
+    // then, so bookmarking alone can never reveal the answer key.
+    correctAnswer: string | null;
     explanation: string | null;
+    attempted: boolean;
     examName?: string;
     subject: string | null;
     year?: number | null;
@@ -101,18 +105,28 @@ export default function BookmarksPage() {
                     <div
                       key={o.key}
                       className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
-                        o.key === b.question.correctAnswer ? "border-success bg-success/10" : "border-border"
+                        b.question.attempted && o.key === b.question.correctAnswer
+                          ? "border-success bg-success/10"
+                          : "border-border"
                       }`}
                     >
                       <span className="font-bold">{o.key}.</span>
                       <span>{o.text}</span>
-                      {o.key === b.question.correctAnswer && <span className="ml-auto text-xs font-bold text-success">✓ Answer</span>}
+                      {b.question.attempted && o.key === b.question.correctAnswer && (
+                        <span className="ml-auto text-xs font-bold text-success">✓ Answer</span>
+                      )}
                     </div>
                   ))}
                 </div>
-                {b.question.explanation && (
+                {b.question.attempted ? (
+                  b.question.explanation && (
+                    <p className="mt-3 rounded-lg bg-muted/30 p-3 text-xs text-muted-foreground">
+                      💡 {b.question.explanation}
+                    </p>
+                  )
+                ) : (
                   <p className="mt-3 rounded-lg bg-muted/30 p-3 text-xs text-muted-foreground">
-                    💡 {b.question.explanation}
+                    🔒 Attempt this question in a test or practice set to reveal the answer & explanation here.
                   </p>
                 )}
               </div>

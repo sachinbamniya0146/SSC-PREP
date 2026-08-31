@@ -9,6 +9,7 @@ import * as path from 'path';
 import { S3Service } from '../s3/s3.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { extractPdfText } from './pdf-text';
+import { SearchService } from '../search/search.service';
 
 @Injectable()
 export class PdfIngestionService {
@@ -20,6 +21,7 @@ export class PdfIngestionService {
     private s3: S3Service,
     private audit: AuditLogService,
     private config: ConfigService,
+    private searchService: SearchService,
     @InjectQueue('pdf-extraction') private extractionQueue: Queue,
     @InjectQueue('question-review') private reviewQueue: Queue,
     @InjectQueue('explanation-generation') private explanationQueue: Queue,
@@ -204,7 +206,7 @@ export class PdfIngestionService {
   async getBatchQuestions(batchId: string, page = 1, limit = 50, status?: string) {
     const where: any = { importBatchId: batchId };
     if (status === 'APPROVED') where.isApproved = true;
-    if (status === 'REJECTED') where.isApproved = false;
+    if (status === 'REJECTED') where.reviewStatus = 'REJECTED';
     if (status === 'VERIFIED') where.answerVerificationStatus = 'VERIFIED_OFFICIAL';
 
     const [questions, total] = await Promise.all([
@@ -351,6 +353,7 @@ export class PdfIngestionService {
       where: { id: { in: eligibleIds } },
       data: {
         isApproved: true,
+        reviewStatus: 'APPROVED', // human/admin gate passed (bug fix: was missing, caused stale reviewStatus after bulk-approve)
         lastVerifiedAt: new Date(),
       },
     });
@@ -374,6 +377,7 @@ export class PdfIngestionService {
       where: { id: dto.questionId },
       data: {
         isApproved: false,
+        reviewStatus: 'REJECTED', // bug fix: was never set, so rejected questions stayed indistinguishable from unreviewed AI_DRAFT ones
       },
     });
 
@@ -441,6 +445,15 @@ export class PdfIngestionService {
       where: { importBatchId: batchId },
       data: { isActive: false },
     });
+
+    // BUG FIX: rolled-back questions were never removed from the Meilisearch
+    // index, so a soft-deleted (isActive:false) question could keep showing
+    // up in public search results until a full manual reindex happened.
+    for (const q of batch.questions) {
+      await this.searchService.deleteQuestion(q.id).catch((e) =>
+        this.logger.error(`Failed to remove rolled-back question ${q.id} from search index`, e),
+      );
+    }
 
     await this.audit.log({
       userId: adminId,

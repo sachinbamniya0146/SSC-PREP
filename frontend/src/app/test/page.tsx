@@ -156,11 +156,91 @@ export default function TestPage() {
 
   const [paused, setPaused] = React.useState(false);
 
+  // ---- Pre-start metadata (BUGFIX: instructions screen used to show a
+  // hardcoded "SSC CGL Tier I" title + fake "5 minutes / 10 Questions"
+  // for EVERY entry point — daily test, every mock template, chapter
+  // practice — because real numbers only existed after clicking Start.
+  // Now we fetch the real template/daily-test info up front so the
+  // screen matches what was actually clicked on /mocks. ----
+  const [preMeta, setPreMeta] = React.useState<{
+    title: string;
+    durationMinutes: number;
+    totalQuestions: number;
+    totalMarks: number;
+  } | null>(null);
+  // If the Daily Test is locked (no study plan yet, or already taken today),
+  // we show that inline instead of a generic instructions form that would
+  // just fail with a browser alert() once "Start Test" was clicked.
+  const [dailyGate, setDailyGate] = React.useState<string | null>(null);
+
   // practice-mode aids (v6 §5: Show Answer + AI Hint, hint capped at 3/session)
   const [showAns, setShowAns] = React.useState<{ [qid: string]: boolean }>({});
   const [hintUsed, setHintUsed] = React.useState<{ [qid: string]: boolean }>({});
   const [hintQuota, setHintQuota] = React.useState(3);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
+
+  // ---- Load real title/duration/marks for the instructions screen before
+  // the user ever clicks Start (BUGFIX — see preMeta/dailyGate above) ----
+  React.useEffect(() => {
+    (async () => {
+      try {
+        if (typeof window === "undefined") return;
+        const sp = new URLSearchParams(window.location.search);
+        const isDaily = sp.get("daily") === "1";
+        const tplId = sp.get("template");
+        const chapId = sp.get("chapter");
+
+        if (isDaily) {
+          const r = await fetchAuth(`${apiBase()}/tests/daily-test/status`, {
+            headers: getAuthHeaders(),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) return;
+          if (!d?.hasPlan) {
+            setDailyGate(d?.message || "Create a study plan on the dashboard to unlock your Daily Test.");
+            return;
+          }
+          if (d?.takenToday) {
+            setDailyGate("Aapka aaj ka Daily Test ho chuka hai — kal dobara try karo.");
+            return;
+          }
+          const q = d?.dailyTarget || 10;
+          setPreMeta({
+            title: `Daily Test — ${d?.examName || "Your Study Plan"}`,
+            durationMinutes: Math.max(5, Math.round(q * 1.2)),
+            totalQuestions: q,
+            totalMarks: q * 2,
+          });
+          return;
+        }
+
+        if (tplId) {
+          const r = await fetchAuth(`${apiBase()}/tests`, { headers: getAuthHeaders() });
+          const list = await r.json().catch(() => []);
+          const tpl = Array.isArray(list) ? list.find((t: any) => t.id === tplId) : null;
+          if (tpl) {
+            setPreMeta({
+              title: tpl.title || "Mock Test",
+              durationMinutes: tpl.durationMinutes || 60,
+              totalQuestions: tpl.totalQuestions || 25,
+              totalMarks: tpl.totalMarks || tpl.totalQuestions || 25,
+            });
+          }
+          return;
+        }
+
+        if (chapId) {
+          setPreMeta({ title: "Chapter-wise Practice", durationMinutes: 15, totalQuestions: 25, totalMarks: 25 });
+          return;
+        }
+
+        setPreMeta({ title: "Practice Test", durationMinutes: 5, totalQuestions: 10, totalMarks: 10 });
+      } catch {
+        /* keep generic fallback below if this fails */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---- per-question pacing (v6 §6: avg time/question, rushing/balanced/slow) ----
   const [qEnterRef] = React.useState<{ qid: string; at: number }>({ qid: "", at: 0 });
@@ -639,76 +719,96 @@ export default function TestPage() {
             <a href="/dashboard" className="btn btn-outline">Back to Dashboard</a>
           </div>
 
-          <h1 className="mt-10 text-3xl font-extrabold">SSC CGL Tier I — Practice Mock Test</h1>
+          <h1 className="mt-10 text-3xl font-extrabold">{preMeta?.title || "Practice Test"}</h1>
           <p className="mt-1 text-sm text-muted-foreground">Bilingual · Full Mock Experience</p>
 
-          {/* Instructions table — real values, no hardcode (v6 §1) */}
-          <div className="card mt-8 divide-y divide-border overflow-hidden">
-            {(() => {
-              const durSec = Math.max(60, (total || 10) * 30);
-              const durMin = durSec / 60;
-              const maxMarks = questions.reduce((s, q) => s + (q.marks ?? 1), 0);
-              const negM = questions[0]?.negativeMarks ?? 0.25;
-              const posM = questions[0]?.marks ?? 1;
-              return [
-                ["Duration", `${durMin % 1 === 0 ? durMin : durMin.toFixed(1)} minutes`],
-                ["Total Questions", `${total || 10} Questions`],
-                ["Max Marks", `${maxMarks} Marks`],
-                ["Negative Marking", `−${negM} per wrong answer`],
-                ["Marking", `+${posM} per correct answer`],
-              ].map(([k, v]) => (
-                <div key={k} className="flex items-center justify-between px-5 py-3">
-                  <span className="text-sm text-muted-foreground">{k}</span>
-                  <span className="text-sm font-semibold">{v}</span>
-                </div>
-              ));
-            })()}
-          </div>
-
-          {/* Bilingual language rule note */}
-          <div className="card mt-6 border-info/30 bg-info/5 p-5 text-sm">
-            <p className="font-semibold text-info">📘 Bilingual Questions</p>
-            <p className="mt-2 text-muted-foreground">
-              Har question English <b>aur</b> हिंदी dono mein ek saath dikhta hai
-              — kisi language toggle ki zaroorat nahi. Options bhi bilingual hain.
-              Matching the real SSC bilingual paper experience.
-            </p>
-          </div>
-
-          <div className="card mt-6 p-5">
-            <label className="text-sm font-semibold">Exam Format</label>
-            <div className="mt-3 flex gap-3">
-              <button
-                className="flex-1 rounded-xl border border-primary bg-primary/10 px-4 py-3 text-sm font-semibold text-primary"
+          {dailyGate ? (
+            // BUGFIX: previously this state didn't exist — the page rendered the
+            // full generic instructions form (wrong title/numbers) and only told
+            // the student the Daily Test was locked via a browser alert() AFTER
+            // they clicked Start. Now we check status up front and show this
+            // instead of the (misleading) instructions form.
+            <div className="card mt-8 border-warning/40 bg-warning/5 p-6">
+              <p className="font-semibold text-warning">⚠️ Daily Test locked</p>
+              <p className="mt-2 text-sm text-muted-foreground">{dailyGate}</p>
+              <a
+                href="/study-plan"
+                className="mt-4 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
               >
-                Bilingual (EN + हिंदी)
-              </button>
+                Create Study Plan →
+              </a>
             </div>
-            <label className="mt-5 flex items-start gap-3 text-sm">
-              <input
-                type="checkbox"
-                checked={agreed}
-                onChange={(e) => setAgreed(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-              />
-              <span className="text-muted-foreground">
-                I have read and understood the instructions. I agree not to use any
-                unfair means during this test. All questions will be auto-submitted
-                when the timer reaches zero.
-              </span>
-            </label>
-            <button
-              disabled={!agreed || starting}
-              onClick={startTest}
-              className="mt-6 w-full rounded-xl bg-primary px-6 py-3.5 text-base font-bold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {starting
-                ? "Loading questions…"
-                : agreed
-                  ? "Start Test →"
-                  : "Agree to start"}
-            </button>
-          </div>
+          ) : (
+            <>
+              {/* Instructions table — real values from preMeta when known, no hardcode (v6 §1) */}
+              <div className="card mt-8 divide-y divide-border overflow-hidden">
+                {(() => {
+                  const durMin = preMeta?.durationMinutes || Math.max(1, Math.round((total || 10) * 0.5));
+                  const totalQ = preMeta?.totalQuestions || total || 10;
+                  const maxMarks = preMeta?.totalMarks || questions.reduce((s, q) => s + (q.marks ?? 1), 0) || totalQ;
+                  const negM = questions[0]?.negativeMarks ?? 0.25;
+                  const posM = questions[0]?.marks ?? 1;
+                  return [
+                    ["Duration", `${durMin} minutes`],
+                    ["Total Questions", `${totalQ} Questions`],
+                    ["Max Marks", `${maxMarks} Marks`],
+                    ["Negative Marking", `−${negM} per wrong answer`],
+                    ["Marking", `+${posM} per correct answer`],
+                  ].map(([k, v]) => (
+                    <div key={k} className="flex items-center justify-between px-5 py-3">
+                      <span className="text-sm text-muted-foreground">{k}</span>
+                      <span className="text-sm font-semibold">{v}</span>
+                    </div>
+                  ));
+                })()}
+              </div>
+
+              {/* Bilingual language rule note */}
+              <div className="card mt-6 border-info/30 bg-info/5 p-5 text-sm">
+                <p className="font-semibold text-info">📘 Bilingual Questions</p>
+                <p className="mt-2 text-muted-foreground">
+                  Har question English <b>aur</b> हिंदी dono mein ek saath dikhta hai
+                  — kisi language toggle ki zaroorat nahi. Options bhi bilingual hain.
+                  Matching the real SSC bilingual paper experience.
+                </p>
+              </div>
+
+              <div className="card mt-6 p-5">
+                <label className="text-sm font-semibold">Exam Format</label>
+                <div className="mt-3 flex gap-3">
+                  <button
+                    className="flex-1 rounded-xl border border-primary bg-primary/10 px-4 py-3 text-sm font-semibold text-primary"
+                  >
+                    Bilingual (EN + हिंदी)
+                  </button>
+                </div>
+                <label className="mt-5 flex items-start gap-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={agreed}
+                    onChange={(e) => setAgreed(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
+                  />
+                  <span className="text-muted-foreground">
+                    I have read and understood the instructions. I agree not to use any
+                    unfair means during this test. All questions will be auto-submitted
+                    when the timer reaches zero.
+                  </span>
+                </label>
+                <button
+                  disabled={!agreed || starting}
+                  onClick={startTest}
+                  className="mt-6 w-full rounded-xl bg-primary px-6 py-3.5 text-base font-bold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {starting
+                    ? "Loading questions…"
+                    : agreed
+                      ? "Start Test →"
+                      : "Agree to start"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -969,7 +1069,7 @@ export default function TestPage() {
           </div>
 
           <div className="text-center">
-            <p className="text-sm font-bold leading-tight">SSC CGL Tier I — Practice Mock</p>
+            <p className="text-sm font-bold leading-tight">{preMeta?.title || "Practice Mock"}</p>
             <div className="mt-0.5 flex items-center justify-center gap-2">
               <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-bold text-success">
                 +{questions[0]?.marks ?? 1} / −{questions[0]?.negativeMarks ?? 0.25}

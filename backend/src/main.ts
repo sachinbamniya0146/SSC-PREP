@@ -36,15 +36,35 @@ async function bootstrap() {
     cors({
       // 2026-08-12: restrict to allow-list. Dev allows LAN IPs for phone testing.
       // Production: set FRONTEND_URL env var to your domain.
+      //
+      // FIX (found during a production CORS incident — signup/login on
+      // https://sscprephub.in returned 500 "Not allowed by CORS" because the
+      // production .env was missing FRONTEND_URL, so this fell back to
+      // 'http://localhost:3000', which the real browser origin
+      // (https://sscprephub.in) never matches):
+      //   1. The fallback default is now the real production domain instead
+      //      of a dev localhost URL, so a missing/forgotten FRONTEND_URL in
+      //      production fails SAFE (site keeps working) instead of failing
+      //      closed (every browser request rejected). Local dev is
+      //      unaffected — 'http://localhost:3001'/'http://127.0.0.1:3001'
+      //      (the actual dev frontend port per docker-compose.yml) and the
+      //      LAN-IP allowance below still cover it regardless of this
+      //      default.
+      //   2. Still strongly recommended: set FRONTEND_URL explicitly in the
+      //      production .env — this default is a safety net, not a
+      //      substitute for correct configuration.
       origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const frontendUrl = process.env.FRONTEND_URL || 'https://sscprephub.in';
         const allowList = [
           frontendUrl,
           frontendUrl.replace('localhost', '127.0.0.1'),
           // Add www variant for production
           frontendUrl.replace('https://', 'https://www.'),
           frontendUrl.replace('https://', 'https://www.').replace('localhost', '127.0.0.1'),
-          // Docker maps frontend 3000->3001, so allow both
+          // Local dev — docker-compose.yml maps the dev frontend container
+          // to host port 3001 (see "frontend" service, ports: 3001:3000)
+          'http://localhost:3000',
+          'http://127.0.0.1:3000',
           'http://localhost:3001',
           'http://127.0.0.1:3001',
         ];
@@ -56,7 +76,17 @@ async function bootstrap() {
         const lanPrefixes = ['192.168.', '10.', '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.'];
         const isLan = lanPrefixes.some((prefix) => origin.startsWith(`http://${prefix}`) || origin.startsWith(`https://${prefix}`));
         if (isLan) return callback(null, true);
-        callback(new Error('Not allowed by CORS'), false);
+        // FIX: previously this threw an Error which the 'cors' package
+        // propagates to Express's default error handler — NestJS then
+        // returns a raw, unhelpful 500 "Internal server error" for a
+        // rejected CORS preflight (this is what was actually observed in
+        // production: OPTIONS .../auth/signup -> 500). A rejected origin
+        // should fail the CORS check (no ACAO header, browser blocks the
+        // request client-side — the standard, expected CORS-denied
+        // behavior) without a server-side 500. Logging server-side for
+        // visibility, but not throwing.
+        logger.warn(`CORS: rejected origin "${origin}" (allowed: ${frontendUrl} and its variants)`);
+        callback(null, false);
       },
       credentials: true,
     }),

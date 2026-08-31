@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Controller, Get, Post, Put, Body, Query, Param } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Query, Param, BadRequestException } from '@nestjs/common';
 import { TestsService } from './tests.service';
 import { TestStatsService } from './test-stats.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -94,6 +94,20 @@ export class TestsController {
   @Get('sectional/cgl')
   cglExam() {
     return this.testsService.cglExam();
+  }
+
+  // BUGFIX (bonus grep — "sari exams ke test dena ka option"): generalizes
+  // the sectional-exam flow beyond CGL to the other 3 exam families the
+  // full-paper flow (paper(), above) already supports. Additive route —
+  // /tests/sectional/cgl above is untouched and keeps working exactly as
+  // before for the existing frontend.
+  @Get('sectional/exam/:family')
+  sectionalExamForFamily(@Param('family') family: string) {
+    const f = family.toLowerCase();
+    if (f !== 'cgl' && f !== 'chsl' && f !== 'mts' && f !== 'cpo') {
+      throw new BadRequestException(`Unknown exam family: ${family}. Supported: cgl, chsl, mts, cpo`);
+    }
+    return this.testsService.sectionalExamForFamily(f as 'cgl' | 'chsl' | 'mts' | 'cpo');
   }
 
   // v7 §NEW — Wrong/Skipped Auto-Practice: practice from weak chapters

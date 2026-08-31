@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Patch, Delete } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Patch, Delete, BadRequestException } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -499,7 +499,8 @@ export class AdminController {
       } : null,
       couponCode: meta.couponCode,
       discount: meta.discount,
-      paymentMethod: 'Razorpay',
+      // Payment gateway is PayU (see monetization.service.ts payuConfig) — not Razorpay.
+      paymentMethod: 'PayU',
       razorpayOrderId: payment.razorpayOrderId,
       razorpayPaymentId: payment.razorpayPaymentId,
     };
@@ -663,4 +664,92 @@ export class AdminController {
         timestamp: new Date(),
       };
     }
+
+  // ---- Exam Patterns ----
+  // BUGFIX (bonus grep — "sari exams ke test dena ka option"): ExamPattern
+  // rows (durationMinutes/totalQuestions/sections JSON per exam) are read
+  // in several places — bank.service.ts's meta(), daily-test.service.ts,
+  // and now tests.service.ts's sectionalExamForFamily() — but there was NO
+  // admin endpoint anywhere to create/edit/delete one. An admin literally
+  // could not configure a pattern for CHSL/MTS/CPO/any new exam through
+  // the API; the table could only ever be touched by hand in the database.
+  @Get('exam-patterns')
+  async listExamPatterns(@Query('examId') examId?: string) {
+    return this.prisma.examPattern.findMany({
+      where: examId ? { examId } : undefined,
+      include: { exam: { select: { name: true, slug: true, code: true } } },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  @Post('exam-patterns')
+  async createExamPattern(
+    @Body()
+    body: {
+      examId: string;
+      name: string;
+      totalQuestions: number;
+      totalMarks: number;
+      durationMinutes: number;
+      negativeMarks?: number;
+      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number }>;
+    },
+  ) {
+    if (!body.examId || !body.name || !Array.isArray(body.sections) || body.sections.length === 0) {
+      throw new BadRequestException('examId, name, and a non-empty sections array are required');
+    }
+    const exam = await this.prisma.exam.findUnique({ where: { id: body.examId } });
+    if (!exam) throw new BadRequestException('Exam not found');
+
+    return this.prisma.examPattern.create({
+      data: {
+        examId: body.examId,
+        name: body.name,
+        totalQuestions: body.totalQuestions,
+        totalMarks: body.totalMarks,
+        durationMinutes: body.durationMinutes,
+        negativeMarks: body.negativeMarks ?? 0.25,
+        sections: body.sections as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  @Patch('exam-patterns/:id')
+  async updateExamPattern(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body()
+    body: Partial<{
+      name: string;
+      totalQuestions: number;
+      totalMarks: number;
+      durationMinutes: number;
+      negativeMarks: number;
+      isActive: boolean;
+      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number }>;
+    }>,
+  ) {
+    const existing = await this.prisma.examPattern.findUnique({ where: { id } });
+    if (!existing) throw new BadRequestException('Exam pattern not found');
+
+    return this.prisma.examPattern.update({
+      where: { id },
+      data: {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.totalQuestions !== undefined ? { totalQuestions: body.totalQuestions } : {}),
+        ...(body.totalMarks !== undefined ? { totalMarks: body.totalMarks } : {}),
+        ...(body.durationMinutes !== undefined ? { durationMinutes: body.durationMinutes } : {}),
+        ...(body.negativeMarks !== undefined ? { negativeMarks: body.negativeMarks } : {}),
+        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+        ...(body.sections !== undefined ? { sections: body.sections as unknown as Prisma.InputJsonValue } : {}),
+      },
+    });
+  }
+
+  @Delete('exam-patterns/:id')
+  async deleteExamPattern(@Param('id', ParseUUIDPipe) id: string) {
+    const existing = await this.prisma.examPattern.findUnique({ where: { id } });
+    if (!existing) throw new BadRequestException('Exam pattern not found');
+    await this.prisma.examPattern.delete({ where: { id } });
+    return { ok: true };
+  }
   }

@@ -356,9 +356,20 @@ export class BankUploadService {
     const requiredHeaders = ['examId', 'subjectId', 'chapterId', 'questionText', 'correctAnswer'];
     const optionHeaders = ['optionA', 'optionB', 'optionC', 'optionD'];
 
-    // Map column indices
+    // Map column indices.
+    // BUGFIX (bonus grep, item c — a "template" that its own parser
+    // rejects): getTemplates()/generateExcelTemplate()/generateCSVTemplate()/
+    // generateTextTemplate() all write the header row with a trailing `*`
+    // on required columns ('examId*', 'optionA*', ...) as a visual "this is
+    // required" marker. But this parser built headerMap from the RAW header
+    // cells and only ever looked up unstarred keys ('examId', 'optionA',
+    // ...) via parseQuestionRow()'s get(). An admin who downloaded the
+    // app's own template, filled it in exactly as given, and re-uploaded it
+    // always hit "Missing required column: examId" — the bundled template
+    // could never actually be used. Strip a trailing '*' (plus whitespace)
+    // when indexing headers so both starred and unstarred header rows work.
     const headerMap: Record<string, number> = {};
-    headers.forEach((h, i) => { headerMap[h.trim()] = i; });
+    headers.forEach((h, i) => { headerMap[String(h).trim().replace(/\*\s*$/, '')] = i; });
 
     // Validate required headers
     for (const req of requiredHeaders) {
@@ -411,8 +422,14 @@ export class BankUploadService {
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
 
         // Create question
-        await this.createQuestion(question, adminId);
+        const { published } = await this.createQuestion(question, adminId);
         result.created++;
+        if (!published) {
+          result.warnings.push({
+            row: rowNum,
+            message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
+          });
+        }
       } catch (error) {
         result.failed++;
         result.errors.push({
@@ -464,8 +481,14 @@ export class BankUploadService {
       try {
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
-        await this.createQuestion(question, adminId);
+        const { published } = await this.createQuestion(question, adminId);
         result.created++;
+        if (!published) {
+          result.warnings.push({
+            row: rowNum,
+            message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
+          });
+        }
       } catch (error) {
         result.failed++;
         result.errors.push({
@@ -641,8 +664,31 @@ export class BankUploadService {
 
   /**
    * Create a question in the database
+   *
+   * FIX (Session 6 bonus-grep item 8e — verification-gate bypass): this used
+   * to unconditionally set isApproved: true (= live/published to students)
+   * while ALSO writing answerVerificationStatus: 'UNVERIFIED_SINGLE_SOURCE'
+   * and reviewStatus: 'PENDING' on the very same row — a direct contradiction
+   * (a question can't simultaneously be "pending review" and "already live").
+   * Every other path that publishes a question (question-review.worker.ts,
+   * fixed in Session 6) requires a bilingual gate — Hindi translation present
+   * — before it's allowed to go live; this manual admin bulk-upload path had
+   * no such check at all, so an admin CSV/Excel/JSON-paste (including AI-
+   * generated question sets pasted straight in, per the controller's own
+   * comment) could publish English-only, single-source, never-cross-checked
+   * answers straight to students with zero gate.
+   *
+   * Fix: reuse the same bilingual gate. A row only goes live immediately
+   * (isApproved: true, reviewStatus: 'APPROVED') if it actually has a Hindi
+   * translation. Without one, it's created as isApproved: false / reviewStatus
+   * 'PENDING' — visible to admins/moderators to translate-and-approve, but
+   * never served to students via PUBLISHED_QUESTION_WHERE until it clears
+   * that gate. answerVerificationStatus stays 'UNVERIFIED_SINGLE_SOURCE'
+   * either way (admin-typed data is still only a single, uncross-checked
+   * source) — that label was already correct, only the two contradictory
+   * "is it live" fields needed to agree with each other.
    */
-  private async createQuestion(question: BulkUploadQuestion, adminId: string): Promise<void> {
+  private async createQuestion(question: BulkUploadQuestion, adminId: string): Promise<{ published: boolean }> {
     // Check for duplicates first
     const duplicateCheck = await this.checkDuplicate(question);
     if (duplicateCheck.isDuplicate) {
@@ -669,6 +715,10 @@ export class BankUploadService {
       .join('|');
     const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
 
+    // Bilingual gate — same condition pdf-export.service.ts and
+    // question-review.worker.ts use (questionTextHindi present and non-empty).
+    const hasHindiTranslation = !!(question.questionTextHindi && question.questionTextHindi.trim() !== '');
+
     await this.prisma.question.create({
       data: {
         examId: question.examId,
@@ -688,9 +738,9 @@ export class BankUploadService {
         marks: question.marks,
         negativeMarks: question.negativeMarks,
         difficulty: question.difficulty,
-        isApproved: true,
+        isApproved: hasHindiTranslation,
         answerVerificationStatus: 'UNVERIFIED_SINGLE_SOURCE',
-        reviewStatus: 'PENDING',
+        reviewStatus: hasHindiTranslation ? 'APPROVED' : 'PENDING',
         searchHash,
       },
     });
@@ -704,6 +754,8 @@ export class BankUploadService {
         metadataJson: { questionText: question.questionText.substring(0, 100) } as any,
       },
     });
+
+    return { published: hasHindiTranslation };
   }
 
   /**

@@ -208,8 +208,25 @@ export class SearchService implements OnModuleInit {
         highlightPreTag: '<mark>',
         highlightPostTag: '</mark>',
       });
+      // BUG FIX: this endpoint is @Public() (no login required), so the raw
+      // Meilisearch hits — which include correctAnswer/explanation/explanationHindi
+      // because those fields must stay indexed for search-relevance/filtering —
+      // must NOT be forwarded as-is to the client. Same reveal-gate principle as
+      // practice mode / bookmarks: strip answer-revealing fields here before
+      // they leave the service, since no attempt record exists to justify reveal.
+      const sanitizedHits = (result.hits || []).map((hit: any) => {
+        const { correctAnswer, explanation, explanationHindi, _formatted, ...safeHit } = hit;
+        if (_formatted) {
+          // _formatted mirrors every field (highlighted where applicable) — Meilisearch
+          // also highlights explanation/explanationHindi per attributesToHighlight above,
+          // so this must be scrubbed too, or the leak survives inside _formatted.
+          const { correctAnswer: _ca, explanation: _exp, explanationHindi: _expHi, ...safeFormatted } = _formatted;
+          return { ...safeHit, _formatted: safeFormatted };
+        }
+        return safeHit;
+      });
       return {
-        hits: result.hits,
+        hits: sanitizedHits,
         estimatedTotalHits: result.estimatedTotalHits,
         query: result.query,
         processingTimeMs: result.processingTimeMs,

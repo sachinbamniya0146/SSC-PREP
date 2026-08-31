@@ -34,9 +34,19 @@ export const envValidationSchema = Joi.object({
   JWT_ACCESS_EXPIRES_IN: Joi.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
 
-  // Admin seed
+  // Admin seed — single admin (legacy, still supported)
   ADMIN_DEFAULT_EMAIL: Joi.string().email().default('admin@sscprephub.in'),
   ADMIN_DEFAULT_PASSWORD: Joi.string().min(8).default('ChangeMeInProduction123!'),
+
+  // Admin seed — MULTIPLE admins (new). Comma-separated, matched by position:
+  //   ADMIN_EMAILS=a@x.com,b@x.com,c@x.com
+  //   ADMIN_PASSWORDS=PassA1!,PassB1!,PassC1!
+  // Every email in this list gets role=ADMIN on server boot — either created
+  // fresh (password from here) or, if the account already exists, promoted
+  // to ADMIN in-place without touching its existing password. See
+  // auth.service.ts#seedAdmin for the full logic.
+  ADMIN_EMAILS: Joi.string().allow('').default(''),
+  ADMIN_PASSWORDS: Joi.string().allow('').default(''),
 
   // SMTP (email OTP delivery) — optional; dev falls back to console log
   SMTP_HOST: Joi.string().allow('').default(''),
@@ -49,10 +59,18 @@ export const envValidationSchema = Joi.object({
   GOOGLE_CLIENT_ID: Joi.string().allow('').default(''),
   GOOGLE_CLIENT_SECRET: Joi.string().allow('').default(''),
 
-  // Razorpay — Phase 5
+  // Razorpay — OPTIONAL. Not required if you use PayU instead (see below);
+  // leave these blank and the Razorpay module simply won't be reachable.
   RAZORPAY_KEY_ID: Joi.string().allow('').default(''),
   RAZORPAY_KEY_SECRET: Joi.string().allow('').default(''),
   RAZORPAY_WEBHOOK_SECRET: Joi.string().allow('').default(''),
+
+  // PayU — the payment gateway this deployment actually uses
+  // (monetization.service.ts calls PayU, not Razorpay).
+  PAYU_MERCHANT_KEY: Joi.string().allow('').default(''),
+  PAYU_MERCHANT_SALT: Joi.string().allow('').default(''),
+  PAYU_BASE_URL: Joi.string().allow('').default('https://test.payu.in'),
+  PAYU_TEST_MODE: Joi.string().allow('').default('true'),
 
   // Storage — Phase 3
   S3_ENDPOINT: Joi.string().allow('').default(''),
@@ -65,7 +83,11 @@ export const envValidationSchema = Joi.object({
   MEILISEARCH_HOST: Joi.string().allow('').default('http://localhost:7700'),
   MEILISEARCH_MASTER_KEY: Joi.string().allow('').default(''),
 
-  // AI / OpenRouter — optional; provides AI-powered explanations & study plans
+  // AI / OpenRouter — optional; provides AI-powered explanations & study plans.
+  // Default model is a FREE OpenRouter endpoint (NVIDIA Nemotron 3 Ultra) —
+  // study-plan.service.ts's FREE_MODELS list always uses free-tier models
+  // only, with automatic fallback if one is rate-limited. Set OPENROUTER_MODEL
+  // only to override with a DIFFERENT free model (must end in ":free").
   OPENROUTER_API_KEY: Joi.string().allow('').default(''),
-  OPENROUTER_MODEL: Joi.string().allow('').default('openai/gpt-4o-mini'),
+  OPENROUTER_MODEL: Joi.string().allow('').default('nvidia/nemotron-3-ultra-550b-a55b:free'),
 }).unknown(true);

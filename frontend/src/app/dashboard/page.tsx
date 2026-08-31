@@ -14,6 +14,7 @@ export default function DashboardPage() {
   // v7 §2 — pattern label comes from ExamPattern (meta), never hardcoded
   const [cglPattern, setCglPattern] = React.useState<string | null>(null);
   const [examsWithQuestions, setExamsWithQuestions] = React.useState<Array<{id: string; name: string; count: number}>>([]);
+  const [subscription, setSubscription] = React.useState<{ active: boolean; plan?: { name: string; priceInr: number }; endsAt?: string } | null>(null);
 
   React.useEffect(() => {
     (async () => {
@@ -25,9 +26,16 @@ export default function DashboardPage() {
           const m = cgl.pattern.name.match(/\((\d{4})\)/);
           setCglPattern(m ? `${m[1]} Pattern` : cgl.pattern.name);
         }
-        // Load exams with questions
+        // Load exams with questions.
+        // BUGFIX: threshold was e.count > 100, so while the question bank is
+        // still being filled in (most exams have fewer than 100 approved
+        // questions so far), EVERY exam got filtered out and "Choose Your
+        // Exam" showed nothing at all — not even the fallback link, because
+        // that fallback only exists in this file, not yet on the live site.
+        // Lowering the bar to >= 10 means an exam shows up as soon as it has
+        // a genuinely usable practice set, instead of waiting for 100+.
         if (Array.isArray(d?.exams)) {
-          const exams = d.exams.filter((e: any) => e.count > 100).sort((a: any, b: any) => b.count - a.count);
+          const exams = d.exams.filter((e: any) => e.count >= 10).sort((a: any, b: any) => b.count - a.count);
           setExamsWithQuestions(exams.map((e: any) => ({ id: e.id, name: e.name, count: e.count })));
         }
       } catch {}
@@ -52,6 +60,16 @@ export default function DashboardPage() {
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => d && setGami(d))
+        .catch(() => undefined);
+      // Subscription status — was previously fetched nowhere on the
+      // dashboard, so there was no visible "you're on the free plan" /
+      // "Premium active until X" indicator anywhere the student would
+      // actually see it day-to-day.
+      fetch(`${API_BASE}/payments/subscription`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d && setSubscription(d))
         .catch(() => undefined);
     }
   }, []);
@@ -114,26 +132,76 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-3">
+        {/* FIX: previously the dashboard had no link to Mock Tests, no
+            subscription status, and no "Buy Premium" call-to-action
+            anywhere — a logged-in student had no visible way to find
+            /mocks or /premium at all unless they already knew the URL. */}
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <a
+            href="/mocks"
+            className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 hover:shadow-md transition"
+          >
+            <h2 className="font-semibold">📝 Mock Tests</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Full-length timed mocks — a few free per exam, unlock more anytime.
+            </p>
+          </a>
+          <a
+            href="/premium"
+            className={`rounded-xl border p-5 hover:shadow-md transition ${
+              subscription?.active
+                ? "border-emerald-500/40 bg-emerald-500/5"
+                : "border-primary/40 bg-primary/5 hover:border-primary"
+            }`}
+          >
+            <h2 className="font-semibold">
+              {subscription?.active ? "⭐ Premium Active" : "🚀 Go Premium"}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {subscription?.active
+                ? `${subscription.plan?.name || "Plan"} — active${subscription.endsAt ? ` until ${new Date(subscription.endsAt).toLocaleDateString()}` : ""}`
+                : "Unlimited mocks, sectional tests & PYQs — see plans & pricing."}
+            </p>
+          </a>
+        </div>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
           <div className="rounded-xl border border-border bg-card p-6 lg:col-span-2">
             <h2 className="font-semibold">📚 Choose Your Exam</h2>
             <p className="mt-2 text-sm text-muted-foreground">
               Select an exam to see its PYQs, mock tests, and sectional practice
             </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {examsWithQuestions.map((e) => (
-                <a
-                  key={e.id}
-                  href={`/question-bank?exam=${encodeURIComponent(e.id)}`}
-                  className="rounded-xl border border-border bg-card p-4 hover:border-primary/50 hover:shadow-md transition"
-                >
-                  <div className="font-semibold text-lg">{e.name}</div>
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    {e.count}+ questions
-                  </div>
+            {/* BUG FIX: when the exams-with-questions API call fails, is
+                still loading, or every exam simply has fewer than 100
+                approved questions so far, examsWithQuestions stays an empty
+                array and this whole block used to render nothing — no
+                cards, no text, no link, nothing clickable ("kese click
+                karu, kuch available nahi hai"). Always show a fallback so
+                there's at least one way forward: a direct link into the
+                full question bank, which works with no exam filter. */}
+            {examsWithQuestions.length > 0 ? (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {examsWithQuestions.map((e) => (
+                  <a
+                    key={e.id}
+                    href={`/question-bank?exam=${encodeURIComponent(e.id)}`}
+                    className="rounded-xl border border-border bg-card p-4 hover:border-primary/50 hover:shadow-md transition"
+                  >
+                    <div className="font-semibold text-lg">{e.name}</div>
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      {e.count}+ questions
+                    </div>
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+                Exam list is still loading or being set up.{" "}
+                <a href="/question-bank" className="font-semibold text-primary underline">
+                  Browse the full question bank instead →
                 </a>
-              ))}
-            </div>
+              </div>
+            )}
           </div>
           <div className="rounded-xl border border-border bg-card p-6">
             <h2 className="font-semibold">🎯 Weak Areas Practice</h2>

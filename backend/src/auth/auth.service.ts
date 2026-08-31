@@ -64,27 +64,91 @@ export class AuthService implements OnModuleInit {
     await this.seedAdmin();
   }
 
-  /** Seed the admin account from env (idempotent). */
+  /**
+   * Seed one or MORE admin accounts from env (idempotent), and keep their
+   * role correct on every restart.
+   *
+   * MULTI-ADMIN SUPPORT: set comma-separated lists —
+   *   ADMIN_EMAILS=admin1@x.com,admin2@x.com,admin3@x.com
+   *   ADMIN_PASSWORDS=Pass1!,Pass2!,Pass3!
+   * (Nth email pairs with Nth password, by position.) The old single-admin
+   * vars ADMIN_DEFAULT_EMAIL / ADMIN_DEFAULT_PASSWORD still work and are
+   * merged into this same list for backward compatibility, so existing
+   * setups keep working unchanged.
+   *
+   * BUGFIX ("admin id password se login nahi ho raha"): the old version
+   * only ever created the account ONCE — if it already existed (even from
+   * a placeholder .env value, or because the person signed up normally
+   * first) every later env change was silently ignored, and — critically —
+   * an account that existed with role STUDENT never got promoted to ADMIN.
+   * That is the #1 real-world cause of "I put the right email/password in
+   * .env but I still can't log in as admin": the password DOES match, but
+   * the account's role is not ADMIN, so admin-only screens/routes 403.
+   * Fixed below: on every boot, for every configured admin email that
+   * already exists, we now PROMOTE role -> ADMIN if it isn't already
+   * (safe — never touches the password of an existing account). Only a
+   * brand-new email gets its password set from env; existing passwords are
+   * still never silently overwritten (use "Forgot Password" OTP to change
+   * one), which stays intentional for security.
+   */
   private async seedAdmin(): Promise<void> {
-    const email = this.config.get<string>('ADMIN_DEFAULT_EMAIL');
-    const password = this.config.get<string>('ADMIN_DEFAULT_PASSWORD');
-    if (!email || !password) return;
+    const emailsRaw = this.config.get<string>('ADMIN_EMAILS') || '';
+    const passwordsRaw = this.config.get<string>('ADMIN_PASSWORDS') || '';
+    const emails = emailsRaw.split(',').map((e) => e.trim()).filter(Boolean);
+    const passwords = passwordsRaw.split(',').map((p) => p.trim()).filter(Boolean);
 
-    const normalized = email.toLowerCase().trim();
-    const existing = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
-    if (existing) return;
+    // Merge legacy single-admin vars in as an extra entry (back-compat).
+    const legacyEmail = this.config.get<string>('ADMIN_DEFAULT_EMAIL');
+    const legacyPassword = this.config.get<string>('ADMIN_DEFAULT_PASSWORD');
+    if (legacyEmail && legacyPassword && !emails.includes(legacyEmail)) {
+      emails.push(legacyEmail);
+      passwords.push(legacyPassword);
+    }
 
-    const passwordHash = await bcrypt.hash(password, 12);
-    await this.prisma.user.create({
-      data: {
-        email: normalized,
-        fullName: 'Platform Admin',
-        passwordHash,
-        role: 'ADMIN',
-        isEmailVerified: true,
-      },
-    });
-    this.logger.log(`Seeded admin account: ${normalized}`);
+    if (emails.length === 0) return;
+
+    for (let i = 0; i < emails.length; i++) {
+      const normalized = emails[i].toLowerCase().trim();
+      const password = passwords[i]; // may be undefined if lists are mismatched lengths
+      const existing = await this.prisma.user.findFirst({
+        where: { email: { equals: normalized, mode: 'insensitive' } },
+      });
+
+      if (existing) {
+        if (existing.role !== 'ADMIN') {
+          await this.prisma.user.update({ where: { id: existing.id }, data: { role: 'ADMIN' } });
+          this.logger.warn(`Promoted existing account ${normalized} to ADMIN (role was ${existing.role}).`);
+        } else {
+          this.logger.log(`Admin account ${normalized} already active — password from env NOT reapplied.`);
+        }
+        this.logger.warn(
+          `If login for ${normalized} still fails, the password on record does not match ADMIN_PASSWORDS ` +
+            `(env only sets the password the FIRST time an account is created) — use "Forgot Password" OTP ` +
+            `on the login page to set a new password for this account.`,
+        );
+        continue;
+      }
+
+      if (!password) {
+        this.logger.error(
+          `ADMIN_EMAILS has more emails than ADMIN_PASSWORDS has passwords — skipped creating ${normalized}. ` +
+            `Make sure both comma-separated lists are the same length and in the same order.`,
+        );
+        continue;
+      }
+
+      const passwordHash = await bcrypt.hash(password, 12);
+      await this.prisma.user.create({
+        data: {
+          email: normalized,
+          fullName: 'Platform Admin',
+          passwordHash,
+          role: 'ADMIN',
+          isEmailVerified: true,
+        },
+      });
+      this.logger.log(`Seeded new admin account: ${normalized}`);
+    }
   }
 
   // ---------------------------------------------------------------- signup
