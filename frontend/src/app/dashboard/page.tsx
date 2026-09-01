@@ -144,7 +144,7 @@ export default function DashboardPage() {
                 ReviewCard/dueAt/intervalDays/easeFactor — SM-2 style
                 revision of a student's own wrong answers). Only linking to
                 pages that are genuinely admin-only and already built. */}
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <a
                 href="/admin"
                 className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
@@ -154,6 +154,20 @@ export default function DashboardPage() {
                   Users, plans, bulk question upload
                 </div>
               </a>
+              {/* SESSION 13 FIX: backend/src/pdf-ingestion/pdf-ingestion.controller.ts
+                  had 15 working endpoints (upload, batch progress, chunk retry,
+                  approve/reject, translation queue) with NO frontend page at all —
+                  an admin could not upload a single PDF through the UI. Now wired
+                  to /admin/pdf-studio. */}
+              <a
+                href="/admin/pdf-studio"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">📄 PDF Ingestion Studio</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Upload PDFs, track extraction batches, review AI-drafted questions
+                </div>
+              </a>
               <a
                 href="/verification"
                 className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
@@ -161,6 +175,33 @@ export default function DashboardPage() {
                 <div className="font-semibold">✅ Question Verification</div>
                 <div className="mt-1 text-sm text-muted-foreground">
                   Approve/reject questions, PDF ingestion batches, solver recompute
+                </div>
+              </a>
+              {/* SESSION 13 FIX: backend/src/report-error already had the full
+                  student-report review workflow (list/resolve/unsuspend) working —
+                  students could report a wrong question via /quiz, but no admin
+                  page existed to see or act on those reports. Now wired to
+                  /admin/error-reports. */}
+              <a
+                href="/admin/error-reports"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">🚩 Error Reports</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Review student-reported errors, unsuspend auto-flagged questions
+                </div>
+              </a>
+              {/* SESSION 13 FIX: GET /bank/admin/coverage (backend/src/bank/bank.service.ts
+                  contentCoverageReport()) already ran the full exam×subject ×
+                  translation-coverage SQL — nobody could see the result without
+                  querying the DB by hand. Now wired to /admin/coverage. */}
+              <a
+                href="/admin/coverage"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">📊 Content Coverage</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Exam × subject question counts and Hindi translation coverage
                 </div>
               </a>
             </div>
