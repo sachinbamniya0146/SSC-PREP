@@ -30,7 +30,6 @@ import {
   BulkApproveQuestionsDto,
   RejectQuestionDto,
   ImportBatchQueryDto,
-  ChunkRetryDto,
 } from './dto/pdf-ingestion.dto';
 
 @ApiTags('pdf-ingestion')
@@ -122,9 +121,20 @@ export class PdfIngestionController {
     return this.service.rejectQuestion(dto, req.user.id);
   }
 
+  // SESSION 14 CLEANUP (see next-session-prompt-session14.md pending item #7):
+  // ChunkRetryDto.chunkId was accepted in the request body and validated by
+  // the global ValidationPipe, but the service call below only ever used the
+  // path param `id` — the validated body field was never read. Confirmed
+  // non-blocking (frontend already sends { chunkId } matching the path id,
+  // so validation always passed), but it was dead/misleading: the path id is
+  // the sole source of truth here, so the body + DTO are removed to match
+  // what the code actually does. Frontend (`admin/pdf-studio/[id]/page.tsx`
+  // retryChunk()) still sends a JSON body; that's harmless — an extra field
+  // in the body no longer has a DTO to validate against, and Nest doesn't
+  // reject a body on a route with no @Body() decorator.
   @Post('chunks/:id/retry')
   @ApiOperation({ summary: 'Retry a failed chunk' })
-  async retryChunk(@Param('id') id: string, @Body() dto: ChunkRetryDto, @Req() req: any) {
+  async retryChunk(@Param('id') id: string, @Req() req: any) {
     return this.service.retryChunk(id, req.user.id);
   }
 
