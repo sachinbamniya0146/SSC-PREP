@@ -2,8 +2,39 @@
 -- and traceability on Question for AI-generated explanations so a shared
 -- solution can be identified/improved later without guessing.
 --
+-- FIX (2026-08-31): the original version of this migration only ran
+-- ALTER TABLE "admin_api_keys" ADD COLUMN ... — but no earlier migration
+-- ever CREATEd the "admin_api_keys" table itself (grep across the entire
+-- prisma/migrations/ history confirms it). On any environment where that
+-- table doesn't already exist (a fresh DB, or production, which had never
+-- had this table), Postgres throws "relation admin_api_keys does not
+-- exist", `prisma migrate deploy` exits non-zero, and the backend Docker
+-- container's start command (`npx prisma migrate deploy && node
+-- dist/main.js`) never reaches `node dist/main.js` — so the whole backend
+-- never boots => nginx can't reach it => HTTP 502 on every request
+-- (login included, since that's usually the first API call a user makes).
+--
+-- This version CREATEs "admin_api_keys" first (IF NOT EXISTS, so it's
+-- also safe to re-run on a dev DB where the table might already exist
+-- from `prisma db push`), matching the full AdminApiKey model in
+-- schema.prisma, THEN applies the rotation/health-tracking columns.
 -- Nothing here breaks existing data: every new column is nullable or has
 -- a default, and no existing column/table is renamed or dropped.
+
+-- 0) Base table — was missing from migration history entirely.
+CREATE TABLE IF NOT EXISTS "admin_api_keys" (
+  "id"            TEXT NOT NULL,
+  "provider"      TEXT NOT NULL,
+  "keyName"       TEXT NOT NULL,
+  "apiKey"        TEXT NOT NULL,
+  "isActive"      BOOLEAN NOT NULL DEFAULT true,
+  "isPrimary"     BOOLEAN NOT NULL DEFAULT false,
+  "freeModelOnly" BOOLEAN NOT NULL DEFAULT false,
+  "createdAt"     TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt"     TIMESTAMP(3) NOT NULL,
+  "createdBy"     TEXT,
+  CONSTRAINT "admin_api_keys_pkey" PRIMARY KEY ("id")
+);
 
 -- 1) AdminApiKey: usage/failure tracking so requests can rotate across a
 --    whole pool of keys (added one-by-one or in bulk) instead of only ever
