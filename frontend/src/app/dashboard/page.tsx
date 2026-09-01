@@ -137,7 +137,14 @@ export default function DashboardPage() {
             <p className="mt-1 text-sm text-muted-foreground">
               Logged in as {user?.role} — these panels are hidden from regular students.
             </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {/* CORRECTION: an earlier version of this section linked to
+                "/review", assuming it was an admin moderation queue. It is
+                not — /review is the STUDENT-facing spaced-repetition
+                practice queue (backend/src/review/review.service.ts,
+                ReviewCard/dueAt/intervalDays/easeFactor — SM-2 style
+                revision of a student's own wrong answers). Only linking to
+                pages that are genuinely admin-only and already built. */}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <a
                 href="/admin"
                 className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
@@ -153,16 +160,7 @@ export default function DashboardPage() {
               >
                 <div className="font-semibold">✅ Question Verification</div>
                 <div className="mt-1 text-sm text-muted-foreground">
-                  Approve/reject questions before they go live
-                </div>
-              </a>
-              <a
-                href="/review"
-                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
-              >
-                <div className="font-semibold">📋 Review Queue</div>
-                <div className="mt-1 text-sm text-muted-foreground">
-                  Spaced-repetition & flagged question review
+                  Approve/reject questions, PDF ingestion batches, solver recompute
                 </div>
               </a>
             </div>
