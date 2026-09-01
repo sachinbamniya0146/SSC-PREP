@@ -7,16 +7,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = React.useState<"light" | "dark">("light");
 
   React.useEffect(() => {
+    // BUG FIX: this used to fall back to the OS/browser's
+    // prefers-color-scheme when no explicit choice was stored, so any
+    // visitor whose device was set to dark mode saw the site in dark mode
+    // on their very first visit — even though the product default is
+    // light. The site should always open in LIGHT mode unless the user
+    // has explicitly toggled to dark before (and that choice was saved).
     const stored = localStorage.getItem("theme");
-    const prefersDark = window.matchMedia(
-      "(prefers-color-scheme: dark)",
-    ).matches;
-    const resolved: "light" | "dark" =
-      stored === "dark" || stored === "light"
-        ? stored
-        : prefersDark
-          ? "dark"
-          : "light";
+    const resolved: "light" | "dark" = stored === "dark" ? "dark" : "light";
     setTheme(resolved);
     document.documentElement.classList.toggle("dark", resolved === "dark");
   }, []);
