@@ -354,6 +354,18 @@ export default function AdminPage() {
           <p className="mb-3 text-xs text-muted-foreground">
             Pehle format select karke template download karein, usme questions (answer, explanation, Hindi translation sab included) bhar ke wapas upload karein.
           </p>
+          {/* SESSION 14 FIX: every row in the upload template needs a
+              pre-existing chapterId (BankUploadService.validateReferences()
+              rejects unknown ones — it never creates chapters on the fly).
+              On a fresh subject with zero chapters there was previously no
+              way to get one at all. Point admins at the new panel before
+              they hit that wall. */}
+          <a
+            href="/admin/chapters"
+            className="mb-3 inline-block rounded-lg border border-primary/40 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+          >
+            🧩 Chapter IDs chahiye upload se pehle? Manage Chapters →
+          </a>
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
               <button
