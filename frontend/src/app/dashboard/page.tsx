@@ -9,6 +9,7 @@ export default function DashboardPage() {
   const [user, setUser] = React.useState<{
     fullName: string;
     email: string;
+    role?: string;
   } | null>(null);
   const [gami, setGami] = React.useState<{ currentStreak: number; longestStreak: number; xp: number; coins: number; hintQuota: number; rank: number } | null>(null);
   // v7 §2 — pattern label comes from ExamPattern (meta), never hardcoded
@@ -74,6 +75,14 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // BUG FIX: an ADMIN/MODERATOR account saw the exact same dashboard as a
+  // plain student — no link anywhere to /admin, /verification, or /review,
+  // even though `user.role` was already being returned by the login API
+  // and stored in localStorage ("ssc_user"). It just wasn't being read
+  // here. Without this, an admin had no visible way into their own tools
+  // unless they already knew the raw URLs by heart.
+  const isAdmin = user?.role === "ADMIN" || user?.role === "MODERATOR";
+
   const stats = [
     { label: "Your Rank", value: gami ? `#${gami.rank}` : "—" },
     { label: "XP Points", value: gami ? `${gami.xp}` : "—" },
@@ -119,6 +128,46 @@ export default function DashboardPage() {
         <p className="mt-1 text-sm text-muted-foreground">
           Your daily practice goal: 10 questions
         </p>
+
+        {isAdmin && (
+          <div className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/5 p-5">
+            <h2 className="font-semibold text-amber-600 dark:text-amber-400">
+              🛠️ Admin Tools
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Logged in as {user?.role} — these panels are hidden from regular students.
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <a
+                href="/admin"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">⚙️ Admin Panel</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Users, plans, bulk question upload
+                </div>
+              </a>
+              <a
+                href="/verification"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">✅ Question Verification</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Approve/reject questions before they go live
+                </div>
+              </a>
+              <a
+                href="/review"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">📋 Review Queue</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Spaced-repetition & flagged question review
+                </div>
+              </a>
+            </div>
+          </div>
+        )}
 
         <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
           {stats.map((s) => (
