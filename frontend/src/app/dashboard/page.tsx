@@ -144,7 +144,7 @@ export default function DashboardPage() {
                 ReviewCard/dueAt/intervalDays/easeFactor — SM-2 style
                 revision of a student's own wrong answers). Only linking to
                 pages that are genuinely admin-only and already built. */}
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <a
                 href="/admin"
                 className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
@@ -202,6 +202,23 @@ export default function DashboardPage() {
                 <div className="font-semibold">📊 Content Coverage</div>
                 <div className="mt-1 text-sm text-muted-foreground">
                   Exam × subject question counts and Hindi translation coverage
+                </div>
+              </a>
+              {/* SESSION 14 FIX (pending item #1 from Session 13's handoff):
+                  bank-upload.service.ts's validateReferences() requires a
+                  pre-existing chapterId on every uploaded question row and
+                  never creates one on the fly — but nothing in the UI could
+                  create a chapter, which blocked Bulk Question Upload
+                  entirely on any subject with zero chapters. Backend
+                  (bank.controller.ts GET/POST /bank/admin/chapters) already
+                  existed; now wired to /admin/chapters. */}
+              <a
+                href="/admin/chapters"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">🧩 Chapter Management</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Create chapters so Bulk Question Upload has a valid chapterId to target
                 </div>
               </a>
             </div>
