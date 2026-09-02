@@ -257,12 +257,26 @@ export class BankUploadService {
   }
 
   /**
-   * Generate Excel template file for download
+   * Generate Excel template file for download.
+   *
+   * BUGFIX (this session — "example file ka guide" gap): the "Reference
+   * IDs" sheet below used to be hard-coded placeholder rows —
+   * literally the string '...' repeated — instead of real data, even
+   * though the admin API to fetch real exam/subject/chapter/topic/
+   * sub-topic IDs was one query away. An admin downloading this template
+   * for the first time had a sheet that LOOKED like it should contain the
+   * IDs they need but told them nothing; they had to separately call 4-5
+   * different admin endpoints (or open Manage Chapters) just to find one
+   * valid chapterId. Made async and now genuinely populates this sheet
+   * with every real exam/subject/chapter/topic/sub-topic name+ID pair
+   * currently in the database, so the downloaded file is a real,
+   * self-contained example/guide — not just a shape with a promise to go
+   * look elsewhere.
    */
-  generateExcelTemplate(): Buffer {
+  async generateExcelTemplate(): Promise<Buffer> {
     const template = this.getTemplates().excel;
     const workbook = XLSX.utils.book_new();
-    
+
     // Main template sheet
     const sheetData = [template.headers, ...template.sampleRows.map(r => JSON.parse(r))];
     const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
@@ -274,50 +288,181 @@ export class BankUploadService {
       [''],
       ['Instructions:'],
       ['1. Fill in the required fields (marked with *) for each question'],
-      ['2. Hindi fields (questionTextHindi, optionX_Hindi, explanationHindi) are optional'],
-      ['3. correctAnswer must be A, B, C, or D'],
+      ['2. Hindi fields (questionTextHindi, optionX_Hindi, explanationHindi) are optional,'],
+      ['   BUT a question with no questionTextHindi is saved as UNPUBLISHED (not shown to'],
+      ['   students) until a Hindi translation is added — this is intentional (bilingual gate).'],
+      ['3. correctAnswer must be A, B, C, or D — and that option\'s text must not be blank.'],
       ['4. difficulty must be EASY, MEDIUM, or HARD'],
-      ['5. year should be a valid year (e.g., 2023, 2024)'],
-      ['6. marks default to 1, negativeMarks default to 0.25'],
-      ['7. examId, subjectId, chapterId must exist in the database'],
-      ['8. topicId and subTopicId are optional but recommended for better organization'],
+      ['5. year should be a valid year (e.g., 2023, 2024) — set this to enable Year-wise PYQ tests.'],
+      ['6. shift + paperCode are optional but help students filter/identify the exact paper.'],
+      ['7. marks default to 1, negativeMarks default to 0.25'],
+      ['8. examId, subjectId, chapterId MUST exactly match an existing ID — see the'],
+      ['   "Reference IDs" sheet (next tab) for every real ID currently in the database.'],
+      ['9. topicId and subTopicId are optional but recommended — Year-wise custom tests let'],
+      ['   students filter down to a specific topic, which only works if this is set.'],
+      ['10. Duplicate questions (same text + same options + same answer) are auto-detected'],
+      ['    and rejected on upload — re-uploading the same file twice is safe, nothing'],
+      ['    gets duplicated in the question bank.'],
       [''],
-      ['Get valid IDs from Admin API:'],
-      ['- GET /api/v1/admin/exams'],
-      ['- GET /api/v1/admin/subjects'],
-      ['- GET /api/v1/admin/chapters'],
-      ['- GET /api/v1/admin/topics'],
-      ['- GET /api/v1/admin/sub-topics'],
+      ['Want to see everything already in the question bank before adding more?'],
+      ['Use the "⬇️ Download Full Question Bank" button next to this template download —'],
+      ['it exports every existing question in this exact same format.'],
     ];
     const instrSheet = XLSX.utils.aoa_to_sheet(instructions);
     XLSX.utils.book_append_sheet(workbook, instrSheet, 'Instructions');
 
-    // Reference data sheet
-    const refData = [
+    // Reference data sheet — populated with REAL ids/names from the DB.
+    const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
+      this.prisma.exam.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      this.prisma.subject.findMany({ select: { id: true, name: true, examId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.chapter.findMany({ select: { id: true, name: true, subjectId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.topic.findMany({ select: { id: true, name: true, chapterId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.subTopic.findMany({ select: { id: true, name: true, topicId: true }, orderBy: { name: 'asc' } }),
+    ]);
+
+    const refData: (string | number)[][] = [
       ['Reference: Valid Exam IDs'],
       ['examId', 'name'],
-      ['...', '...'],
+      ...(exams.length ? exams.map(e => [e.id, e.name]) : [['(no exams yet)', '']]),
       [''],
       ['Reference: Valid Subject IDs'],
       ['subjectId', 'name', 'examId'],
-      ['...', '...', '...'],
+      ...(subjects.length ? subjects.map(s => [s.id, s.name, s.examId]) : [['(no subjects yet)', '', '']]),
       [''],
       ['Reference: Valid Chapter IDs'],
       ['chapterId', 'name', 'subjectId'],
-      ['...', '...', '...'],
+      ...(chapters.length ? chapters.map(c => [c.id, c.name, c.subjectId]) : [['(no chapters yet)', '', '']]),
       [''],
       ['Reference: Valid Topic IDs'],
       ['topicId', 'name', 'chapterId'],
-      ['...', '...', '...'],
+      ...(topics.length ? topics.map(t => [t.id, t.name, t.chapterId]) : [['(no topics yet)', '', '']]),
       [''],
       ['Reference: Valid Sub-Topic IDs'],
       ['subTopicId', 'name', 'topicId'],
-      ['...', '...', '...'],
+      ...(subTopics.length ? subTopics.map(t => [t.id, t.name, t.topicId]) : [['(no sub-topics yet)', '', '']]),
     ];
     const refSheet = XLSX.utils.aoa_to_sheet(refData);
     XLSX.utils.book_append_sheet(workbook, refSheet, 'Reference IDs');
 
     return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  }
+
+  /**
+   * NEW (this session) — export every existing question in the bank, in the
+   * exact same column shape as the upload templates, so the admin can:
+   *  (a) see everything already in the bank in one file before adding more,
+   *  (b) sanity-check/spot-fix answers or Hindi translations offline, and
+   *  (c) know at a glance what NOT to re-type — the upload path already
+   *      auto-skips exact duplicates (checkDuplicate()), but reviewing this
+   *      export first avoids wasting time typing something that's already
+   *      there.
+   * Supports the same optional filters as the rest of the bank module
+   * (examId/subjectId/chapterId/year) so a full-bank export isn't the only
+   * option on a large bank. Capped at 20,000 rows per export as a sane
+   * safety limit — filter down (by exam/year) for anything bigger.
+   */
+  async exportQuestionBank(
+    filters: { examId?: string; subjectId?: string; chapterId?: string; year?: number },
+    format: 'json' | 'excel' | 'csv',
+  ): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
+    const EXPORT_ROW_CAP = 20000;
+    const where: any = {};
+    if (filters.examId) where.examId = filters.examId;
+    if (filters.subjectId) where.subjectId = filters.subjectId;
+    if (filters.chapterId) where.chapterId = filters.chapterId;
+    if (filters.year) where.year = filters.year;
+
+    const questions = await this.prisma.question.findMany({
+      where,
+      orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
+      take: EXPORT_ROW_CAP,
+      select: {
+        id: true,
+        examId: true,
+        subjectId: true,
+        chapterId: true,
+        topicId: true,
+        subTopicId: true,
+        questionText: true,
+        questionTextHindi: true,
+        optionsJson: true,
+        correctAnswer: true,
+        explanation: true,
+        explanationHindi: true,
+        year: true,
+        shift: true,
+        paperCode: true,
+        marks: true,
+        negativeMarks: true,
+        difficulty: true,
+        isApproved: true,
+        reviewStatus: true,
+        answerVerificationStatus: true,
+      },
+    });
+
+    const rowsAsObjects = questions.map((q) => {
+      const opts = (q.optionsJson as any[]) ?? [];
+      const byKey = (k: string) => opts.find((o) => o.key === k) ?? { text: '', textHi: '' };
+      return {
+        id: q.id, // included for reference only — NOT a recognized upload column; harmless if re-uploaded, ignored by the parser
+        examId: q.examId,
+        subjectId: q.subjectId,
+        chapterId: q.chapterId,
+        topicId: q.topicId ?? '',
+        subTopicId: q.subTopicId ?? '',
+        questionText: q.questionText,
+        questionTextHindi: q.questionTextHindi ?? '',
+        optionA: byKey('A').text ?? '', optionA_Hindi: byKey('A').textHi ?? '',
+        optionB: byKey('B').text ?? '', optionB_Hindi: byKey('B').textHi ?? '',
+        optionC: byKey('C').text ?? '', optionC_Hindi: byKey('C').textHi ?? '',
+        optionD: byKey('D').text ?? '', optionD_Hindi: byKey('D').textHi ?? '',
+        correctAnswer: q.correctAnswer,
+        explanation: q.explanation ?? '',
+        explanationHindi: q.explanationHindi ?? '',
+        year: q.year ?? '',
+        shift: q.shift ?? '',
+        paperCode: q.paperCode ?? '',
+        marks: q.marks,
+        negativeMarks: q.negativeMarks,
+        difficulty: q.difficulty,
+        // Status columns — informational only, ignored on re-upload:
+        isPublishedToStudents: q.isApproved,
+        reviewStatus: q.reviewStatus,
+        answerVerificationStatus: q.answerVerificationStatus,
+      };
+    });
+
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    if (format === 'json') {
+      const buffer = Buffer.from(JSON.stringify(rowsAsObjects, null, 2), 'utf-8');
+      return { buffer, contentType: 'application/json', filename: `question_bank_export_${stamp}.json` };
+    }
+
+    if (format === 'csv') {
+      const headers = rowsAsObjects.length ? Object.keys(rowsAsObjects[0]) : [];
+      const lines = [headers.join(',')];
+      for (const row of rowsAsObjects) {
+        lines.push(this.escapeCSVRow(headers.map((h) => String((row as any)[h] ?? ''))));
+      }
+      const buffer = Buffer.from(lines.join('\n'), 'utf-8');
+      return { buffer, contentType: 'text/csv', filename: `question_bank_export_${stamp}.csv` };
+    }
+
+    // excel
+    const workbook = XLSX.utils.book_new();
+    const headers = rowsAsObjects.length
+      ? Object.keys(rowsAsObjects[0])
+      : ['id', 'examId', 'subjectId', 'chapterId', 'topicId', 'subTopicId', 'questionText', 'questionTextHindi',
+         'optionA', 'optionA_Hindi', 'optionB', 'optionB_Hindi', 'optionC', 'optionC_Hindi', 'optionD', 'optionD_Hindi',
+         'correctAnswer', 'explanation', 'explanationHindi', 'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
+         'difficulty', 'isPublishedToStudents', 'reviewStatus', 'answerVerificationStatus'];
+    const sheetData = [headers, ...rowsAsObjects.map((row) => headers.map((h) => (row as any)[h]))];
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Question Bank Export');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    return { buffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename: `question_bank_export_${stamp}.xlsx` };
   }
 
   /**
@@ -689,6 +834,39 @@ export class BankUploadService {
    * "is it live" fields needed to agree with each other.
    */
   private async createQuestion(question: BulkUploadQuestion, adminId: string): Promise<{ published: boolean }> {
+    // BUGFIX (this session — "student ko question dikhta hai par answer nahi
+    // de pa raha" root cause #1): NOTHING anywhere in the 5 upload paths
+    // (Excel/CSV/Text/JSON-file/JSON-paste/Word — they ALL funnel through
+    // this one method) ever checked that questionText or all four option
+    // texts were actually non-empty. parseQuestionRow() only validated that
+    // correctAnswer was one of A/B/C/D — a row with a blank/typo'd optionC
+    // cell (missing tab in a .txt paste, empty Excel cell, admin skipped a
+    // field) sailed straight through, and if questionTextHindi happened to
+    // be filled in, hasHindiTranslation made it isApproved: true — LIVE to
+    // students — with a blank option button on the test screen. If that
+    // blank option happened to be the correct one, the question became
+    // mathematically impossible to answer correctly; if it was a distractor,
+    // a student would think their screen was buggy. Same for a blank
+    // questionText slipping through as a published no-text question card.
+    // Gate this here, once, so every upload format is protected instead of
+    // duplicating the check in parseQuestionRow (Excel/CSV/Text) AND
+    // processStructuredQuestions (JSON/Word), which only cover a subset.
+    if (!question.questionText || !question.questionText.trim()) {
+      throw new Error('questionText is empty — question text cannot be blank.');
+    }
+    const missingOptions = question.options
+      .filter((o) => !o.text || !o.text.trim())
+      .map((o) => o.key);
+    if (missingOptions.length > 0) {
+      throw new Error(
+        `Option${missingOptions.length > 1 ? 's' : ''} ${missingOptions.join(', ')} ${missingOptions.length > 1 ? 'are' : 'is'} empty — all four options (A–D) must have text.`,
+      );
+    }
+    const correctOption = question.options.find((o) => o.key === question.correctAnswer);
+    if (!correctOption || !correctOption.text.trim()) {
+      throw new Error(`correctAnswer is "${question.correctAnswer}" but option ${question.correctAnswer} has no text.`);
+    }
+
     // Check for duplicates first
     const duplicateCheck = await this.checkDuplicate(question);
     if (duplicateCheck.isDuplicate) {
