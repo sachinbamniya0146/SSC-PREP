@@ -110,6 +110,34 @@ export class TestsController {
     return this.testsService.sectionalExamForFamily(f as 'cgl' | 'chsl' | 'mts' | 'cpo');
   }
 
+  // Session 18+ — Year-wise custom test: exam+year (+ optional subject/
+  // chapter/topic narrowing, or `full: true` for the whole year's paper).
+  // Returns an attemptId immediately (ad-hoc TestTemplate under the hood),
+  // so the live test page + submit + attemptDetail analysis all work
+  // exactly like every other test type.
+  @Post('year-wise/start')
+  yearWiseStart(
+    @CurrentUser() user: { userId: string },
+    @Body()
+    body: {
+      examId: string;
+      year: number;
+      subjectIds?: string[];
+      chapterIds?: string[];
+      topicIds?: string[];
+      full?: boolean;
+    },
+  ) {
+    return this.testsService.yearWiseStart(user.userId, {
+      examId: body.examId,
+      year: Number(body.year),
+      subjectIds: body.subjectIds,
+      chapterIds: body.chapterIds,
+      topicIds: body.topicIds,
+      full: !!body.full,
+    });
+  }
+
   // v7 §NEW — Wrong/Skipped Auto-Practice: practice from weak chapters
   @Get('weak-areas/practice')
   weakAreasPractice(
