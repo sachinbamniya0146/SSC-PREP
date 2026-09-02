@@ -10,6 +10,9 @@
 import {
   Controller,
   Post,
+  Get,
+  Query,
+  Res,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -17,6 +20,7 @@ import {
   Req,
   BadRequestException,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -83,5 +87,30 @@ export class BankUploadController {
   async uploadWord(@UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.docx) is required');
     return this.uploadService.uploadFromWord(file.buffer, this.adminId(req));
+  }
+
+  // NEW (this session) — "admin ek click me poora question bank download kar
+  // sake" so re-uploads only ever add genuinely new questions. Exports in
+  // the exact same column shape as the upload templates (uses examId/
+  // subjectId/chapterId/year filters to keep an export scoped/manageable on
+  // a large bank; omit all filters for the full bank, capped at 20,000 rows
+  // — see BankUploadService.exportQuestionBank()).
+  @Get('export')
+  async exportBank(
+    @Query('format') format: string | undefined,
+    @Query('examId') examId: string | undefined,
+    @Query('subjectId') subjectId: string | undefined,
+    @Query('chapterId') chapterId: string | undefined,
+    @Query('year') year: string | undefined,
+    @Res() res: Response,
+  ) {
+    const fmt = (format === 'json' || format === 'csv' || format === 'excel') ? format : 'excel';
+    const { buffer, contentType, filename } = await this.uploadService.exportQuestionBank(
+      { examId, subjectId, chapterId, year: year ? parseInt(year, 10) : undefined },
+      fmt,
+    );
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   }
 }
