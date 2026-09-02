@@ -275,8 +275,15 @@ export class DailyTestService {
         shift: r.shift,
         marks: r.marks,
         negativeMarks: r.negativeMarks,
-        explanation: r.explanation,
-        explanationHindi: r.explanationHindi,
+        // BUGFIX (answer-key leak): explanation/explanationHindi used to be
+        // sent here even though this payload goes out BEFORE submit (both
+        // start() and resumed paper() use this same loadQuestions()
+        // helper). Explanation text almost always states or heavily implies
+        // the correct answer in prose, so a student could read the answer
+        // key from the Network tab before submitting. correctAnswer itself
+        // was never leaked here — only this. Removed; explanation is
+        // correctly revealed only after submission via attemptDetail() (the
+        // results/review screen), matching the pattern in tests.service.ts.
       }));
   }
 }
