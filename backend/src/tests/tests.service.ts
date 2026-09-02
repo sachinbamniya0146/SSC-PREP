@@ -611,6 +611,22 @@ async saveAnswers(
     if (!template) throw new BadRequestException('Template not found');
     await this.assertMockEntitled(userId, template);
     const fam = templateId.includes('mts') ? 'mts' : templateId.includes('chsl') ? 'chsl' : templateId.includes('cpo') ? 'cpo' : 'cgl';
+    // BUGFIX (Session 20 — "exam-wise button should only give that exam's
+    // PYQs" audit): every section query below used to filter only by
+    // subjectId + `examId: { not: null }` — i.e. "tagged with SOME exam",
+    // not "tagged with THIS exam". A student opening the "SSC CGL Tier 1"
+    // mock could silently be served CHSL/MTS/CPO questions mixed in (any
+    // exam with a matching subject qualified), which directly contradicts
+    // the paper's own title/blueprint. Resolve the exam this family
+    // actually maps to (slug matches the exam-import scripts' convention,
+    // same 'cgl'/'chsl'/'mts'/'cpo' slugs used across seed-patterns.mjs and
+    // the dashboard's own exam lookup) and require every question to carry
+    // THAT exam's id. If the exam row itself doesn't exist yet, fail loudly
+    // instead of silently degrading to a cross-exam mix.
+    const famExam = await this.prisma.exam.findUnique({ where: { slug: fam }, select: { id: true, name: true } });
+    if (!famExam) {
+      throw new BadRequestException(`Exam not set up for "${fam}" yet — cannot compose an exam-specific paper.`);
+    }
     const sections =
       fam === 'mts'
         ? [
@@ -635,7 +651,12 @@ async saveAnswers(
       const subjectId = slugToId.get(sec.subjectSlug);
       if (!subjectId) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
       const rows: any[] = await this.prisma.question.findMany({
-        where: { ...PUBLISHED_QUESTION_WHERE, subjectId, questionTextHindi: { not: '' }, examId: { not: null } },
+        // examId now pinned to famExam.id (see BUGFIX comment above the
+        // exam lookup) instead of the old `examId: { not: null }`, which
+        // matched a question from ANY exam that happened to share this
+        // subject — the actual root cause of a "CGL" paper being able to
+        // contain CHSL/MTS/CPO questions.
+        where: { ...PUBLISHED_QUESTION_WHERE, subjectId, examId: famExam.id, questionTextHindi: { not: '' } },
         include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
         orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
         take: 500,
@@ -784,6 +805,18 @@ async saveAnswers(
             { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', q: 25, marks: 50, min: 15 },
             { part: 'D', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 50, min: 15 },
           ];
+    // BUGFIX (Session 20 — same root cause as paper() above): resolve the
+    // actual exam this family maps to and pin every section's query to it.
+    // Previously this method only checked `examId: { not: null }`, so a
+    // "CHSL sectional" or "MTS sectional" practice paper could be composed
+    // out of any exam's questions as long as the subject matched — the
+    // sectional-practice sibling of the exact same cross-exam-mixing bug
+    // fixed in paper().
+    const famExam = await this.prisma.exam.findUnique({ where: { slug: family }, select: { id: true, name: true } });
+    if (!famExam) {
+      throw new BadRequestException(`Exam not set up for "${family}" yet — cannot compose an exam-specific sectional paper.`);
+    }
+
     const subs = await this.prisma.subject.findMany({
       select: { id: true, slug: true, name: true },
     });
@@ -798,8 +831,8 @@ async saveAnswers(
         where: {
           ...PUBLISHED_QUESTION_WHERE,
           subjectId,
+          examId: famExam.id,
           questionTextHindi: { not: '' },
-          examId: { not: null },
         },
         include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
         orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
