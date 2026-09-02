@@ -39,7 +39,10 @@ export class AdminHelpController {
   @Get('templates/excel')
   @Roles('ADMIN', 'MODERATOR')
   async downloadExcelTemplate(@Res() res: Response) {
-    const buffer = this.uploadService.generateExcelTemplate();
+    // generateExcelTemplate() is now async (this session) — it queries the
+    // DB to fill the "Reference IDs" sheet with real exam/subject/chapter/
+    // topic/sub-topic IDs instead of placeholder '...' rows. Must be awaited.
+    const buffer = await this.uploadService.generateExcelTemplate();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="question_bulk_upload_template.xlsx"');
     res.send(buffer);
