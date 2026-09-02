@@ -56,9 +56,12 @@ export class BankController {
   }
 
   // Session 18+ — year-wise custom test picker: topics under a chapter.
+  // BUGFIX (Session 20): examId now threaded through — see BankService.topics()
+  // doc comment for why this was missing while subjects/chapters/years all
+  // already had it.
   @Get('topics')
-  topics(@Query('chapterId') chapterId?: string) {
-    return this.bank.topics(chapterId);
+  topics(@Query('chapterId') chapterId?: string, @Query('examId') examId?: string) {
+    return this.bank.topics(chapterId, examId);
   }
 
   // Admin chapter management — see BankService.createChapter/
