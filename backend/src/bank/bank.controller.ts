@@ -49,6 +49,18 @@ export class BankController {
     return this.bank.chapters(subjectId, examId);
   }
 
+  // Session 18+ — year-wise custom test picker: distinct years for an exam.
+  @Get('years')
+  years(@Query('examId') examId?: string) {
+    return this.bank.years(examId);
+  }
+
+  // Session 18+ — year-wise custom test picker: topics under a chapter.
+  @Get('topics')
+  topics(@Query('chapterId') chapterId?: string) {
+    return this.bank.topics(chapterId);
+  }
+
   // Admin chapter management — see BankService.createChapter/
   // listAllChaptersForAdmin doc comment for why this was missing and why
   // it's required before bulk question upload can work at all.
