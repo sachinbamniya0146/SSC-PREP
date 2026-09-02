@@ -963,8 +963,19 @@ async saveAnswers(
       options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
       // NOTE: correctAnswer deliberately NOT sent — answer key must never
       // reach the client before submit (server-side scoring only).
-      explanation: r.explanation,
-      explanationHindi: r.explanationHindi,
+      // BUGFIX (session 18 audit — same answer-leak-gate pattern found
+      // repeatedly in this file, see paper()/sectionalExamForFamily() above
+      // and daily-test.service.ts's loadQuestions()): explanation/
+      // explanationHindi were being sent here even though the comment right
+      // above explicitly says the answer key must never reach the client
+      // before submit. Explanation text almost always states or heavily
+      // implies the correct answer in prose, so a student could open
+      // sessionStorage("ssc_sectional_set") or the Network tab and read the
+      // answer key before attempting a single question. This path (subject-
+      // wise sectional test) was the one composer in this file that had NOT
+      // been fixed yet. Removed; explanation is correctly revealed only
+      // after submission via attemptDetail() (results/review screen), same
+      // as every other test type.
       examName: r.exam?.name,
       chapter: r.chapter?.name,
       year: r.year,
@@ -978,6 +989,128 @@ async saveAnswers(
       count: questions.length,
       years: yearKeys.filter((y) => y !== 0),
       questions,
+    };
+  }
+
+  // ============ YEAR-WISE CUSTOM TEST (session 18+) ============
+  // Students pick one exam + one year (from the PYQ metadata admins already
+  // set on upload — no new admin workflow needed), then optionally narrow
+  // to specific subjects/chapters/topics, OR hit "Full Paper" to attempt
+  // every question tagged with that exam+year as one paper — exactly what
+  // was missing per the dashboard-navigation audit ("koi bhi frontend flow
+  // nahi hai jahan student sirf ek specific year ka paper de sake").
+  //
+  // Design choice: an ad-hoc TestTemplate row (type YEAR_WISE) is created
+  // per request, then startAttempt() is reused as-is. This means year-wise
+  // tests get the EXACT SAME server-authoritative timer, autosave, submit,
+  // and — most importantly — the full attemptDetail() analysis screen
+  // (rank, percentile, topper comparison, per-question review with
+  // explanations revealed post-submit) as every other test type, for free.
+  // No parallel scoring/analysis code to maintain or get out of sync.
+  async yearWiseStart(
+    userId: string,
+    opts: { examId: string; year: number; subjectIds?: string[]; chapterIds?: string[]; topicIds?: string[]; full?: boolean },
+  ) {
+    const { examId, year } = opts;
+    if (!examId) throw new BadRequestException('examId is required');
+    if (!year) throw new BadRequestException('year is required');
+
+    const where: any = {
+      ...PUBLISHED_QUESTION_WHERE,
+      examId,
+      year,
+      questionTextHindi: { not: '' },
+    };
+    // "full" (attempt the whole year's paper) always wins over any
+    // subject/chapter/topic narrowing the UI may still have selected —
+    // matches the button's label ("Attempt Full Paper").
+    if (!opts.full) {
+      // Most specific filter wins: topic > chapter > subject. A student
+      // picking a topic almost certainly wants just that topic, not every
+      // question in the parent chapter/subject too.
+      if (opts.topicIds?.length) where.topicId = { in: opts.topicIds };
+      else if (opts.chapterIds?.length) where.chapterId = { in: opts.chapterIds };
+      else if (opts.subjectIds?.length) where.subjectId = { in: opts.subjectIds };
+    }
+
+    const rows = await this.prisma.question.findMany({
+      where,
+      include: {
+        exam: { select: { name: true } },
+        subject: { select: { name: true } },
+        chapter: { select: { name: true } },
+      },
+      orderBy: [{ subjectId: 'asc' }, { createdAt: 'asc' }],
+    });
+    const validRows = rows.filter(
+      (r) =>
+        Array.isArray(r.optionsJson) &&
+        r.optionsJson.length === 4 &&
+        r.optionsJson.every((o: any) => o && o.text && String(o.text).trim().length > 0),
+    );
+    if (validRows.length === 0) {
+      throw new BadRequestException(
+        'No bilingual questions available for this selection yet. Try a different year, or widen your subject/chapter/topic choice.',
+      );
+    }
+
+    const exam = await this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } });
+    const totalMarks = validRows.reduce((s, r) => s + (r.marks ?? 2), 0);
+    // Same pacing ratio as the family full-mocks in paper() (60 min / 100 Q
+    // = 0.6 min/Q), with a sane floor so a tiny topic-wise set doesn't get a
+    // useless 1-minute timer.
+    const durationMinutes = Math.max(10, Math.round(validRows.length * 0.6));
+
+    const scopeLabel = opts.full
+      ? 'Full Paper'
+      : opts.topicIds?.length
+        ? 'Topic-wise'
+        : opts.chapterIds?.length
+          ? 'Chapter-wise'
+          : opts.subjectIds?.length
+            ? 'Subject-wise'
+            : 'All Subjects';
+
+    const template = await this.prisma.testTemplate.create({
+      data: {
+        title: `${exam?.name ?? 'Exam'} ${year} — ${scopeLabel}`,
+        type: 'YEAR_WISE',
+        durationMinutes,
+        totalQuestions: validRows.length,
+        totalMarks,
+        isPremium: false,
+        description: `Custom year-wise test — ${exam?.name ?? ''} ${year} (${scopeLabel})`,
+      },
+    });
+
+    // Reuses the exact same server-authoritative session start as every
+    // other test type: stamps startedAt/expiresAt, handles resume-on-refresh.
+    const attempt = await this.startAttempt(userId, template.id);
+
+    return {
+      attemptId: attempt.id,
+      templateId: template.id,
+      title: template.title,
+      durationMinutes,
+      totalMarks,
+      resumed: attempt.resumed,
+      questions: validRows.map((r) => ({
+        id: r.id,
+        questionText: r.questionText,
+        questionTextHindi: r.questionTextHindi,
+        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+        // NOTE: correctAnswer/explanation deliberately NOT sent — same rule
+        // as every other pre-attempt paper composer in this file. Revealed
+        // only after submit, via attemptDetail().
+        examName: r.exam?.name,
+        subject: r.subject?.name,
+        subjectId: r.subjectId,
+        chapter: r.chapter?.name,
+        year: r.year,
+        shift: r.shift,
+        marks: r.marks ?? 2,
+        negativeMarks: r.negativeMarks ?? 0.5,
+      })),
     };
   }
 
