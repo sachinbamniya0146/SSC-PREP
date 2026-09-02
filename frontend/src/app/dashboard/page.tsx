@@ -270,6 +270,44 @@ export default function DashboardPage() {
           </a>
         </div>
 
+        {/* BUGFIX (student-facing "test nahi de pa raha" audit): /sectional,
+            /cgl-test, and /year-wise are all fully working, server-verified
+            test-taking flows (timer, autosave, submit, full attemptDetail()
+            analysis) — but NONE of them had a dashboard link. A student had
+            no way to reach them unless they already knew the exact URL, so
+            in practice these features were dead to every real user even
+            though the code behind them worked. Added here, same card
+            pattern as Mock Tests/Premium above. */}
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <a
+            href="/sectional"
+            className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 hover:shadow-md transition"
+          >
+            <h2 className="font-semibold">🧩 Sectional Practice</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Pick a subject, get a multi-year mixed set — quick focused practice.
+            </p>
+          </a>
+          <a
+            href="/cgl-test"
+            className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 hover:shadow-md transition"
+          >
+            <h2 className="font-semibold">📄 Full Sectional Paper (CGL)</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Real exam-format sectional mock — sections, per-section timer, language toggle.
+            </p>
+          </a>
+          <a
+            href="/year-wise"
+            className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 hover:shadow-md transition"
+          >
+            <h2 className="font-semibold">📅 Year-wise PYQ Test</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Choose exam + year, optionally narrow to subject/chapter/topic, or attempt the full paper.
+            </p>
+          </a>
+        </div>
+
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
           <div className="rounded-xl border border-border bg-card p-6 lg:col-span-2">
             <h2 className="font-semibold">📚 Choose Your Exam</h2>
