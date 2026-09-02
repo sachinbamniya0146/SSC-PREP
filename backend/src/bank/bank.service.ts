@@ -265,12 +265,31 @@ export class BankService implements OnModuleInit {
   // Topic picker for the year-wise test builder's "chapter → topic"
   // drill-down. Same HAVING-count-> 0 pattern as chapters() above so the UI
   // never offers a topic with zero actual questions in it.
-  async topics(chapterId?: string) {
+  //
+  // BUGFIX (Session 20 — "exam-wise button should only give that exam's
+  // PYQs" audit): unlike subjects()/chapters()/years() just above — which
+  // all accept an optional examId and filter by it — this method never did.
+  // /year-wise stashes an examId as soon as the student picks an exam and
+  // DOES pass it into every other picker (subjects/chapters/years), but the
+  // topics fetch was the one call in that same drill-down that silently
+  // dropped it. Result: a topic's listed count (and whether it even shows
+  // up at all) came from questions across EVERY exam, not just the one the
+  // student selected. A student could pick a topic that looked non-empty,
+  // then hit "Start Customised Test" and get "No bilingual questions
+  // available for this selection yet" from yearWiseStart() — because
+  // yearWiseStart() DOES correctly scope by examId, so a topic whose
+  // questions all belonged to a different exam produced zero real rows for
+  // this exam+year+topic combination. Adding the same optional examId
+  // parameter here, same pattern as subjects()/chapters()/years(), closes
+  // that gap so the topic list a student sees is always honest for the
+  // exam they actually picked.
+  async topics(chapterId?: string, examId?: string) {
     return this.prisma.$queryRaw`
       SELECT t.id, t.name, t.slug, COUNT(q.id)::int AS count
       FROM topics t
       LEFT JOIN questions q ON q."topicId" = t.id
            AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+           AND (${examId}::text IS NULL OR q."examId" = ${examId})
       WHERE (${chapterId}::text IS NULL OR t."chapterId" = ${chapterId})
       GROUP BY t.id
       HAVING COUNT(q.id) > 0
