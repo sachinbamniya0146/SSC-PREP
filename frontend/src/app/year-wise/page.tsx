@@ -125,6 +125,15 @@ export default function YearWisePage() {
   }, [selectedSubjects, examId]);
 
   // Step 5 — load topics when chapters are (de)selected
+  // BUGFIX (Session 20 — "exam-wise button should only give that exam's
+  // PYQs" audit): this call never sent examId even though the exam is
+  // already known at this point (same as the chapters fetch right above,
+  // which does send it). Without it, the topic list/counts came from every
+  // exam sharing this chapter, not just the one the student picked — a
+  // topic could look non-empty here and still produce zero questions when
+  // yearWiseStart() (which DOES filter by examId) tried to compose the
+  // actual test. See BankService.topics() doc comment for the backend half
+  // of this fix.
   React.useEffect(() => {
     if (selectedChapters.size === 0) {
       setTopics([]);
@@ -135,7 +144,7 @@ export default function YearWisePage() {
       try {
         const results = await Promise.all(
           Array.from(selectedChapters).map((cid) =>
-            fetchAuth(`${apiBase()}/bank/topics?chapterId=${cid}`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : [])),
+            fetchAuth(`${apiBase()}/bank/topics?chapterId=${cid}&examId=${examId}`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : [])),
           ),
         );
         const merged: TopicRow[] = ([] as TopicRow[]).concat(...results.filter(Array.isArray));
@@ -145,7 +154,7 @@ export default function YearWisePage() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChapters]);
+  }, [selectedChapters, examId]);
 
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, id: string) => {
     const next = new Set(set);
