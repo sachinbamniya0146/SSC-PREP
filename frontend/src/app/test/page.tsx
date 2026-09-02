@@ -292,6 +292,41 @@ export default function TestPage() {
         setAttemptId(attemptId);
         if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
       }
+      // Session 18+ — year-wise custom test: /test?yearwise=1, config stashed
+      // by /year-wise page. Server composes the exam+year(+subject/chapter/
+      // topic-narrowed or full) paper AND opens a server-authoritative timed
+      // attempt in one call — same shape as the isDaily branch above.
+      const isYearWise =
+        typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("yearwise") === "1" : false;
+      if (isYearWise && qs.length === 0) {
+        const cfgRaw = typeof window !== "undefined" ? sessionStorage.getItem("ssc_yearwise_config") : null;
+        const cfg = cfgRaw ? JSON.parse(cfgRaw) : null;
+        if (!cfg) {
+          alert("⚠️ Year-wise test setup expired — please choose again.");
+          setLoading(false);
+          setStarting(false);
+          window.location.href = "/year-wise";
+          return;
+        }
+        const yr = await fetchAuth(`${apiBase()}/tests/year-wise/start`, {
+          method: "POST",
+          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(cfg),
+        });
+        const yd = await yr.json().catch(() => ({}));
+        if (!yr.ok) {
+          alert(`⚠️ ${yd?.message || "Could not compose this year-wise test."}`);
+          setLoading(false);
+          setStarting(false);
+          return;
+        }
+        sessionStorage.removeItem("ssc_yearwise_config");
+        qs = Array.isArray(yd?.questions) ? yd.questions : [];
+        durationSec = (yd?.durationMinutes || 60) * 60;
+        attemptId = yd?.attemptId ?? null;
+        setAttemptId(attemptId);
+        if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
+      }
       // v6 §2a — full shift paper: /test?template=<id> composes the template's paper
       // server-side (real exam blueprint, no answer key) + opens a server-authoritative
       // timed attempt.
