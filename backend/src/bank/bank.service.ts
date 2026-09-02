@@ -241,6 +241,42 @@ export class BankService implements OnModuleInit {
       ORDER BY c.name;`;
   }
 
+  // Session 18+ — Year-wise custom test picker: distinct years available
+  // for an exam, from the PYQ metadata already set on upload (SourcePdf/
+  // Question.year) — no new admin workflow needed. Powers the year
+  // dropdown on /year-wise before the student narrows by subject/chapter/
+  // topic or hits "Full Paper".
+  async years(examId?: string) {
+    const cacheKey = examId ? `bank:years:${examId}` : 'bank:years';
+    const cached = cacheGet<any>(cacheKey);
+    if (cached) return cached;
+    const out = await this.prisma.$queryRaw`
+      SELECT q.year AS year, COUNT(q.id)::int AS "questionCount"
+      FROM questions q
+      WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+        AND q.year IS NOT NULL
+        AND (${examId}::text IS NULL OR q."examId" = ${examId})
+      GROUP BY q.year
+      ORDER BY q.year DESC;`;
+    cacheSet(cacheKey, out, 300_000);
+    return out;
+  }
+
+  // Topic picker for the year-wise test builder's "chapter → topic"
+  // drill-down. Same HAVING-count-> 0 pattern as chapters() above so the UI
+  // never offers a topic with zero actual questions in it.
+  async topics(chapterId?: string) {
+    return this.prisma.$queryRaw`
+      SELECT t.id, t.name, t.slug, COUNT(q.id)::int AS count
+      FROM topics t
+      LEFT JOIN questions q ON q."topicId" = t.id
+           AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+      WHERE (${chapterId}::text IS NULL OR t."chapterId" = ${chapterId})
+      GROUP BY t.id
+      HAVING COUNT(q.id) > 0
+      ORDER BY t.name;`;
+  }
+
   // ---- Admin chapter management ----
   // MISSING-FEATURE FIX: bulk question upload (bank-upload.service.ts)
   // *requires* a valid, pre-existing chapterId on every row/object — it
