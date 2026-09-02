@@ -86,6 +86,10 @@ export default function AdminPage() {
   const [uploading, setUploading] = React.useState(false);
   const [uploadResult, setUploadResult] = React.useState<UploadResult | null>(null);
   const [templateDownloading, setTemplateDownloading] = React.useState(false);
+  // NEW (this session) — "poora question bank ek click me download" so the
+  // admin can see what's already in the bank before adding more. Backend:
+  // GET /bank/admin/upload/export (BankUploadService.exportQuestionBank()).
+  const [bankExportDownloading, setBankExportDownloading] = React.useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -243,6 +247,35 @@ export default function AdminPage() {
     }
   }
 
+  // Full question-bank export — same auth-header-needed reasoning as
+  // downloadTemplate() above (GET /bank/admin/upload/export is ADMIN/
+  // MODERATOR-only). Defaults to Excel since that's the easiest to skim;
+  // admin can re-download as JSON/CSV by editing the format if needed.
+  async function downloadBankExport() {
+    setBankExportDownloading(true);
+    setError("");
+    try {
+      const res = await fetchAuth(`${API_BASE}/bank/admin/upload/export?format=excel`);
+      if (!res.ok) throw new Error(`Failed to export question bank (HTTP ${res.status})`);
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="(.+)"/);
+      const filename = match ? match[1] : "question_bank_export.xlsx";
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to export question bank");
+    } finally {
+      setBankExportDownloading(false);
+    }
+  }
+
   async function submitUpload() {
     if (!uploadFile) {
       setError("Pehle koi file select karein (Excel/CSV/JSON/Text/Word)");
@@ -351,9 +384,24 @@ export default function AdminPage() {
             download a template in the format you want, fill it in, upload it. */}
         <div className="mb-6 rounded-xl border border-border bg-card p-4">
           <h2 className="mb-1 font-semibold">📤 Bulk Question Upload</h2>
+          {/* NEW (this session) — expanded from one line into a real
+              step-by-step guide, per admin request: "kis format me upload
+              hoga uska guide bhi, example file bhi available ho". */}
+          <div className="mb-3 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground">
+            <p className="mb-1 font-semibold text-foreground">Kaise upload karein (step-by-step):</p>
+            <ol className="list-decimal space-y-1 pl-4">
+              <li>Pehle "⬇️ Download Full Question Bank" se dekh lein ki kaunse questions already maujood hain — dobara wahi type karne ki zaroorat nahi (duplicate apne aap reject ho jaata hai upload ke time).</li>
+              <li>Ek format select karke uska Template download karein — Excel template mein ab ek "Reference IDs" sheet bhi hai jisme har exam/subject/chapter/topic ki real ID di hui hai, seedhe copy-paste kar sakte hain.</li>
+              <li>Template mein ek hi file mein sab kuch bhar sakte hain — question, options (A–D), correctAnswer, explanation, Hindi translation, year, shift, paperCode — sab columns ek saath.</li>
+              <li>Hindi translation (questionTextHindi) zaroor bharein — iske bina question save to hoga lekin students ko dikhega NAHI (bilingual gate), jab tak translation add na ho.</li>
+              <li>Year bharne se woh question automatically Year-wise PYQ Test aur sectional practice dono mein count hoga — koi extra step nahi.</li>
+              <li>File wapas upload karke format select karke "Upload Questions" dabayein — result mein kitne create hue, kitne fail/duplicate the, sab dikhega.</li>
+            </ol>
+          </div>
           <p className="mb-3 text-xs text-muted-foreground">
             Pehle format select karke template download karein, usme questions (answer, explanation, Hindi translation sab included) bhar ke wapas upload karein.
           </p>
+
           {/* SESSION 14 FIX: every row in the upload template needs a
               pre-existing chapterId (BankUploadService.validateReferences()
               rejects unknown ones — it never creates chapters on the fly).
@@ -377,6 +425,14 @@ export default function AdminPage() {
                 ⬇️ {f.toUpperCase()} Template
               </button>
             ))}
+            <button
+              onClick={downloadBankExport}
+              disabled={bankExportDownloading}
+              className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/10 disabled:opacity-50 dark:text-emerald-400"
+              title="Poora question bank isi upload-format mein download karein — dekhein kya already maujood hai"
+            >
+              {bankExportDownloading ? "Exporting..." : "⬇️ Download Full Question Bank"}
+            </button>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div>
