@@ -225,6 +225,49 @@ async submitAttempt(
   const accuracyPercent =
     totalCorrect + totalWrong > 0 ? Math.round((totalCorrect / (totalCorrect + totalWrong)) * 1000) / 10 : 0;
 
+  // BUG FIX (Session 21 — "analysis showing wrong selected answer" audit):
+  // this used to write scoredAnswers with a single nested
+  // `{ createMany: { data: scoredAnswers, skipDuplicates: true } }`. That
+  // comment ("autosaved rows already exist") is true, but skipDuplicates
+  // means exactly what it says — for any question that ALREADY has an
+  // AttemptAnswer row from a prior autosave, the createMany silently drops
+  // that row entirely instead of updating it. If the student changed an
+  // answer (or hit Clear Response) in the last moment before Submit — after
+  // the debounced autosave last fired but before it fired again — the
+  // in-memory `merged` map (and therefore the score/totalCorrect/totalWrong
+  // saved directly on TestAttempt below) correctly reflects that final
+  // change, but the persisted AttemptAnswer row for that one question was
+  // silently left at its STALE pre-change value. Net effect: the score
+  // shown right after Submit was right, but attemptDetail() (the
+  // review/analysis screen, which reads per-question data straight from
+  // AttemptAnswer) would show the OLD "you selected X" for that question —
+  // contradicting the score the student was just given. Fixed by upserting
+  // every scored answer individually (same create-or-update pattern
+  // saveAnswers() already uses above), so both brand-new and
+  // already-autosaved rows always end up holding the final, correctly
+  // scored answer before the TestAttempt itself is marked SUBMITTED.
+  if (scoredAnswers.length) {
+    await Promise.all(
+      scoredAnswers.map((a) =>
+        this.prisma.attemptAnswer.upsert({
+          where: { testAttemptId_questionId: { testAttemptId: attempt.id, questionId: a.questionId } },
+          create: {
+            testAttemptId: attempt.id,
+            questionId: a.questionId,
+            selectedOption: a.selectedOption,
+            isCorrect: a.isCorrect,
+            timeSpentSeconds: a.timeSpentSeconds,
+          },
+          update: {
+            selectedOption: a.selectedOption,
+            isCorrect: a.isCorrect,
+            ...(a.timeSpentSeconds > 0 ? { timeSpentSeconds: a.timeSpentSeconds } : {}),
+          },
+        }),
+      ),
+    );
+  }
+
   const updated = await this.prisma.testAttempt.update({
     where: { id: attempt.id },
     data: {
@@ -235,9 +278,6 @@ async submitAttempt(
       totalSkipped,
       accuracyPercent,
       submittedAt: now,
-      answers: scoredAnswers.length
-        ? { createMany: { data: scoredAnswers, skipDuplicates: true } } // autosaved rows already exist
-        : undefined,
     },
     include: {
       testTemplate: { select: { id: true, title: true, totalQuestions: true, totalMarks: true } },
@@ -488,6 +528,8 @@ async saveAnswers(
                 id: true,
                 questionText: true,
                 questionTextHindi: true,
+                questionDiagramType: true, // Session 22 — Venn/figure stem diagrams
+                questionDiagramLabels: true,
                 optionsJson: true,
                 correctAnswer: true,
                 explanation: true,
@@ -539,13 +581,24 @@ async saveAnswers(
     // v6 §6 — per-question review data, ordered with topic/exam labels.
     const questions = attempt.answers.map((a) => {
       const q = a.question;
+      // Session 22 — pass diagramType/diagramLabels through untouched when
+      // present (ordinary text options simply don't have these keys, so
+      // this is a no-op for the ~99% non-diagram case).
       const opts = Array.isArray(q.optionsJson)
-        ? (q.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null }))
+        ? (q.optionsJson as any[]).map((o: any) => ({
+            key: o.key,
+            text: o.text,
+            textHi: o.textHi ?? null,
+            diagramType: o.diagramType ?? null,
+            diagramLabels: o.diagramLabels ?? null,
+          }))
         : [];
       return {
         questionId: q.id,
         questionText: q.questionText,
         questionTextHindi: q.questionTextHindi,
+        questionDiagramType: (q as any).questionDiagramType ?? null,
+        questionDiagramLabels: (q as any).questionDiagramLabels ?? null,
         options: opts,
         selectedOption: a.selectedOption,
         correctAnswer: q.correctAnswer,
@@ -665,7 +718,7 @@ async saveAnswers(
         (r) =>
           Array.isArray(r.optionsJson) &&
           r.optionsJson.length === 4 &&
-          r.optionsJson.every((o: any) => o && o.text && String(o.text).trim().length > 0),
+          r.optionsJson.every((o: any) => o && ((o.text && String(o.text).trim().length > 0) || o.diagramType)),
       );
       // BUGFIX: this used to hard-fail the ENTIRE mock (all 4 sections, 100
       // questions) the moment ANY single section came up short — e.g. "Not
@@ -729,7 +782,9 @@ async saveAnswers(
           id: r.id,
           questionText: r.questionText,
           questionTextHindi: r.questionTextHindi,
-          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text })),
+          questionDiagramType: r.questionDiagramType ?? null,
+          questionDiagramLabels: r.questionDiagramLabels ?? null,
+          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
           optionsHi: (r.optionsHi as any[]) || null,
           marks: r.marks ?? 2,
           negativeMarks: r.negativeMarks ?? 0.5,
@@ -844,7 +899,7 @@ async saveAnswers(
 
           Array.isArray(r.optionsJson) &&
           r.optionsJson.length === 4 &&
-          r.optionsJson.every((o: any) => o && o.text && String(o.text).trim().length > 0),
+          r.optionsJson.every((o: any) => o && ((o.text && String(o.text).trim().length > 0) || o.diagramType)),
       );
       if (validRows.length < sec.q) throw new BadRequestException(`Not enough 4-option bilingual questions for ${sec.name} (${validRows.length}/${sec.q})`);
       // multi-year round-robin + cross-section dedup
@@ -892,7 +947,9 @@ async saveAnswers(
           id: r.id,
           questionText: r.questionText,
           questionTextHindi: r.questionTextHindi,
-          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+          questionDiagramType: r.questionDiagramType ?? null,
+          questionDiagramLabels: r.questionDiagramLabels ?? null,
+          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
           // NOTE: correctAnswer deliberately NOT sent — answer key must never
           // reach the client before submit (server-side scoring only).
           // BUGFIX: explanation/explanationHindi used to be sent right here
@@ -993,7 +1050,9 @@ async saveAnswers(
       id: r.id,
       questionText: r.questionText,
       questionTextHindi: r.questionTextHindi,
-      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+      questionDiagramType: r.questionDiagramType ?? null,
+      questionDiagramLabels: r.questionDiagramLabels ?? null,
+      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
       // NOTE: correctAnswer deliberately NOT sent — answer key must never
       // reach the client before submit (server-side scoring only).
       // BUGFIX (session 18 audit — same answer-leak-gate pattern found
@@ -1079,7 +1138,7 @@ async saveAnswers(
       (r) =>
         Array.isArray(r.optionsJson) &&
         r.optionsJson.length === 4 &&
-        r.optionsJson.every((o: any) => o && o.text && String(o.text).trim().length > 0),
+        r.optionsJson.every((o: any) => o && ((o.text && String(o.text).trim().length > 0) || o.diagramType)),
     );
     if (validRows.length === 0) {
       throw new BadRequestException(
@@ -1131,7 +1190,9 @@ async saveAnswers(
         id: r.id,
         questionText: r.questionText,
         questionTextHindi: r.questionTextHindi,
-        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+        questionDiagramType: r.questionDiagramType ?? null,
+        questionDiagramLabels: r.questionDiagramLabels ?? null,
+        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
         // NOTE: correctAnswer/explanation deliberately NOT sent — same rule
         // as every other pre-attempt paper composer in this file. Revealed
         // only after submit, via attemptDetail().
@@ -1245,7 +1306,7 @@ async saveAnswers(
         (r) =>
           Array.isArray(r.optionsJson) &&
           r.optionsJson.length === 4 &&
-          r.optionsJson.every((o: any) => o && o.text && String(o.text).trim().length > 0),
+          r.optionsJson.every((o: any) => o && ((o.text && String(o.text).trim().length > 0) || o.diagramType)),
       );
 
       for (const r of validRows) {
@@ -1254,7 +1315,9 @@ async saveAnswers(
           id: r.id,
           questionText: r.questionText,
           questionTextHindi: r.questionTextHindi,
-          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null })),
+          questionDiagramType: r.questionDiagramType ?? null,
+          questionDiagramLabels: r.questionDiagramLabels ?? null,
+          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
           chapter: r.chapter?.name ?? '',
           examName: r.exam?.name ?? null,
           year: r.year,
