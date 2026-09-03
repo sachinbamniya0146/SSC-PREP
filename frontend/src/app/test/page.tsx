@@ -4,12 +4,22 @@ import { fetchAuth } from "@/lib/api";
 import * as React from "react";
 import { motion } from "framer-motion";
 import { API_BASE } from "@/lib/api";
+import DiagramVenn from "@/components/DiagramVenn";
 
 type UgQ = {
   id: string;
   questionText: string;
   questionTextHindi?: string | null;
-  options: { key: string; text: string; textHi?: string | null }[];
+  // Session 22 — Venn/figure diagram support. When questionDiagramType is
+  // set, the STEM is a diagram (render it above questionText, which is
+  // usually short link text like "उस वेन आरेख का चयन करें..."). When an
+  // individual option carries diagramType, THAT option is a diagram
+  // instead of a text choice — this is the common case (4 diagram
+  // choices). Both are null/absent for ordinary text questions — no
+  // change in that case, which is still ~99% of the bank.
+  questionDiagramType?: string | null;
+  questionDiagramLabels?: (string | null)[] | null;
+  options: { key: string; text: string; textHi?: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null }[];
   chapter: string;
   examName?: string | null;
   year?: number | null;
@@ -349,6 +359,8 @@ export default function TestPage() {
                 id: qq.id,
                 questionText: qq.questionText,
                 questionTextHindi: qq.questionTextHindi,
+                questionDiagramType: qq.questionDiagramType,
+                questionDiagramLabels: qq.questionDiagramLabels,
                 options: qq.options,
                 chapter: qq.chapter || "",
                 examName: qq.examName,
@@ -1152,6 +1164,13 @@ export default function TestPage() {
                   {q.questionTextHindi}
                 </p>
               )}
+              {/* Session 22 — question-stem diagram (rare: most diagram
+                  questions put the figure in the OPTIONS instead, below). */}
+              {q.questionDiagramType && (
+                <div className="mt-3 flex justify-center rounded-xl border border-border bg-muted/30 p-3">
+                  <DiagramVenn type={q.questionDiagramType} labels={q.questionDiagramLabels} size={180} />
+                </div>
+              )}
               <div className="mt-5 space-y-2.5">
                 {q.options.map((o) => {
                   const active = answers[q.id] === o.key;
@@ -1167,11 +1186,21 @@ export default function TestPage() {
                         {o.key}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span>{o.text}</span>
-                        {o.textHi && (
-                          <span className="ml-3 border-l-2 border-border pl-3 font-hindi text-muted-foreground">
-                            {o.textHi}
+                        {/* Session 22 — diagram option (the common case:
+                            each of A/B/C/D is a different Venn diagram). */}
+                        {o.diagramType ? (
+                          <span className={`flex justify-center rounded-lg p-1 ${active ? "" : "text-foreground"}`}>
+                            <DiagramVenn type={o.diagramType} labels={o.diagramLabels} size={130} />
                           </span>
+                        ) : (
+                          <>
+                            <span>{o.text}</span>
+                            {o.textHi && (
+                              <span className="ml-3 border-l-2 border-border pl-3 font-hindi text-muted-foreground">
+                                {o.textHi}
+                              </span>
+                            )}
+                          </>
                         )}
                       </span>
                     </button>
