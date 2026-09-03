@@ -3,6 +3,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
+import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 
 export interface BulkUploadQuestion {
   examId: string;
@@ -12,7 +13,22 @@ export interface BulkUploadQuestion {
   subTopicId?: string;
   questionText: string;
   questionTextHindi?: string;
-  options: { key: string; text: string; textHi?: string }[];
+  // Session 22 — set only when the QUESTION STEM itself is a Venn/figure
+  // diagram (rare — most diagram questions put the diagram in the OPTIONS
+  // instead, see options[].diagramType below). Codes: diagram-types.ts.
+  questionDiagramType?: string;
+  questionDiagramLabels?: string[];
+  options: {
+    key: string;
+    text: string;
+    textHi?: string;
+    // Session 22 — when set, THIS OPTION is a rendered diagram (the far
+    // more common case — e.g. "select the correct Venn diagram", where
+    // each of A/B/C/D is a different circle arrangement). `text` may be
+    // empty when diagramType is set; it no longer needs to hold a caption.
+    diagramType?: string;
+    diagramLabels?: string[];
+  }[];
   correctAnswer: string;
   explanation?: string;
   explanationHindi?: string;
@@ -140,10 +156,12 @@ export class BankUploadService {
         headers: [
           'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
           'questionText*', 'questionTextHindi',
+          'questionDiagramType', 'questionDiagramLabels',
           'optionA*', 'optionA_Hindi',
           'optionB*', 'optionB_Hindi',
           'optionC*', 'optionC_Hindi',
           'optionD*', 'optionD_Hindi',
+          'optionDiagramTypes', 'optionDiagramLabels',
           'correctAnswer*', 'explanation', 'explanationHindi',
           'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
           'difficulty'
@@ -152,25 +170,46 @@ export class BankUploadService {
           JSON.stringify([
             'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
             'What is 20% of 150?', '150 का 20% क्या है?',
+            '', '',
             '30', '30',
             '25', '25',
             '35', '35',
             '40', '40',
+            '', '',
             'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
             '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
             'EASY'
+          ]),
+          // Session 22 — Venn/figure diagram question sample. Every
+          // ordinary question above leaves the 4 diagram columns blank
+          // (as shown); this row demonstrates the OPTIONS-are-diagrams
+          // case (the common one). See "Diagram question types" sheet.
+          JSON.stringify([
+            'cgl-exam-id', 'reasoning-id', 'venn-diagrams-id', '', '',
+            'उस वेन आरेख का चयन करें जो निम्नलिखित के बीच संबंध को सर्वोत्तम रूप से दर्शाता है। टिकट, हवाई जहाज, रेल', '',
+            '', '',
+            '', '',
+            '', '',
+            '', '',
+            '', '',
+            'V1|V3|V6|V2', 'टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल',
+            'A', 'टिकट, हवाई जहाज और रेल तीनों एक-दूसरे से संबंधित हैं (यात्रा से जुड़े)', '',
+            '2019', '', '', '2', '0.5',
+            'MEDIUM'
           ])
         ],
-        description: 'Excel template for bulk question upload. Required fields marked with *. Hindi fields are optional. No tags field in current schema.'
+        description: 'Excel template for bulk question upload. Required fields marked with *. Hindi fields are optional. Diagram columns are optional — see "Diagram question types" sheet for valid codes (V1-V8).'
       },
       csv: {
         headers: [
           'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
           'questionText*', 'questionTextHindi',
+          'questionDiagramType', 'questionDiagramLabels',
           'optionA*', 'optionA_Hindi',
           'optionB*', 'optionB_Hindi',
           'optionC*', 'optionC_Hindi',
           'optionD*', 'optionD_Hindi',
+          'optionDiagramTypes', 'optionDiagramLabels',
           'correctAnswer*', 'explanation', 'explanationHindi',
           'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
           'difficulty'
@@ -179,25 +218,42 @@ export class BankUploadService {
           JSON.stringify([
             'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
             'What is 20% of 150?', '150 का 20% क्या है?',
+            '', '',
             '30', '30',
             '25', '25',
             '35', '35',
             '40', '40',
+            '', '',
             'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
             '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
             'EASY'
+          ]),
+          JSON.stringify([
+            'cgl-exam-id', 'reasoning-id', 'venn-diagrams-id', '', '',
+            'उस वेन आरेख का चयन करें जो निम्नलिखित के बीच संबंध को सर्वोत्तम रूप से दर्शाता है। टिकट, हवाई जहाज, रेल', '',
+            '', '',
+            '', '',
+            '', '',
+            '', '',
+            '', '',
+            'V1|V3|V6|V2', 'टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल',
+            'A', 'टिकट, हवाई जहाज और रेल तीनों एक-दूसरे से संबंधित हैं (यात्रा से जुड़े)', '',
+            '2019', '', '', '2', '0.5',
+            'MEDIUM'
           ])
         ],
-        description: 'CSV template for bulk question upload. Use comma separation. Required fields marked with *. No tags field in current schema.'
+        description: 'CSV template for bulk question upload. Use comma separation. Required fields marked with *. Diagram columns are optional — see "Diagram question types" sheet for valid codes (V1-V8).'
       },
       text: {
         headers: [
           'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
           'questionText*', 'questionTextHindi',
+          'questionDiagramType', 'questionDiagramLabels',
           'optionA*', 'optionA_Hindi',
           'optionB*', 'optionB_Hindi',
           'optionC*', 'optionC_Hindi',
           'optionD*', 'optionD_Hindi',
+          'optionDiagramTypes', 'optionDiagramLabels',
           'correctAnswer*', 'explanation', 'explanationHindi',
           'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
           'difficulty'
@@ -206,21 +262,37 @@ export class BankUploadService {
           JSON.stringify([
             'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
             'What is 20% of 150?', '150 का 20% क्या है?',
+            '', '',
             '30', '30',
             '25', '25',
             '35', '35',
             '40', '40',
+            '', '',
             'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
             '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
             'EASY'
+          ]),
+          JSON.stringify([
+            'cgl-exam-id', 'reasoning-id', 'venn-diagrams-id', '', '',
+            'उस वेन आरेख का चयन करें जो निम्नलिखित के बीच संबंध को सर्वोत्तम रूप से दर्शाता है। टिकट, हवाई जहाज, रेल', '',
+            '', '',
+            '', '',
+            '', '',
+            '', '',
+            '', '',
+            'V1|V3|V6|V2', 'टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल',
+            'A', 'टिकट, हवाई जहाज और रेल तीनों एक-दूसरे से संबंधित हैं (यात्रा से जुड़े)', '',
+            '2019', '', '', '2', '0.5',
+            'MEDIUM'
           ])
         ],
-        description: 'Tab-separated text template for bulk question upload. Use tabs between fields. Required fields marked with *. No tags field in current schema.'
+        description: 'Tab-separated text template for bulk question upload. Use tabs between fields. Required fields marked with *. Diagram columns are optional — see "Diagram question types" sheet for valid codes (V1-V8).'
       },
       json: {
         headers: [
           'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
           'questionText*', 'questionTextHindi',
+          'questionDiagramType', 'questionDiagramLabels',
           'options*', 'correctAnswer*', 'explanation', 'explanationHindi',
           'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
           'difficulty'
@@ -249,10 +321,57 @@ export class BankUploadService {
             marks: 2,
             negativeMarks: 0.5,
             difficulty: 'EASY'
+          }),
+          // Session 22 — same Venn/figure diagram sample as the other
+          // formats, but shown in JSON's natural nested shape: each
+          // option object just carries diagramType/diagramLabels instead
+          // of a real "text" — this is actually the EASIEST format for an
+          // AI tool (e.g. Claude reading scanned exam-book photos) to
+          // emit directly, since it doesn't need the pipe/comma encoding
+          // that the flat Excel/CSV/text columns require.
+          JSON.stringify({
+            examId: 'cgl-exam-id',
+            subjectId: 'reasoning-id',
+            chapterId: 'venn-diagrams-id',
+            questionText: 'उस वेन आरेख का चयन करें जो निम्नलिखित के बीच संबंध को सर्वोत्तम रूप से दर्शाता है। टिकट, हवाई जहाज, रेल',
+            options: [
+              { key: 'A', text: '', diagramType: 'V1', diagramLabels: ['टिकट', 'हवाई जहाज', 'रेल'] },
+              { key: 'B', text: '', diagramType: 'V3', diagramLabels: ['टिकट', 'हवाई जहाज', 'रेल'] },
+              { key: 'C', text: '', diagramType: 'V6', diagramLabels: ['टिकट', 'हवाई जहाज', 'रेल'] },
+              { key: 'D', text: '', diagramType: 'V2', diagramLabels: ['टिकट', 'हवाई जहाज', 'रेल'] }
+            ],
+            correctAnswer: 'A',
+            explanation: 'टिकट, हवाई जहाज और रेल तीनों एक-दूसरे से संबंधित हैं (यात्रा से जुड़े)',
+            year: 2019,
+            marks: 2,
+            negativeMarks: 0.5,
+            difficulty: 'MEDIUM'
           })
         ],
-        description: 'JSON Lines format - one JSON object per line. Each object contains all question fields including options array. No tags field in current schema.'
+        description: 'JSON Lines format - one JSON object per line. Each object contains all question fields including options array. Diagram options carry diagramType/diagramLabels instead of text — see "Diagram question types" for valid codes (V1-V8).'
       }
+    };
+  }
+
+  /**
+   * Session 22 — the fixed Venn/figure-diagram taxonomy, exposed for the
+   * admin help endpoints (GET /admin/help/formats, /admin/help/prompts) so
+   * an admin (or an AI tool being prompted to generate questions) can see
+   * every valid diagramType code and what it looks like, without reading
+   * source code. Kept here (not duplicated) — re-exports diagram-types.ts.
+   */
+  getDiagramTypesHelp() {
+    return {
+      description:
+        'Venn/figure-diagram questions (e.g. "select the correct Venn diagram") are stored as a TYPE CODE + up to 3 labels, ' +
+        'never as an image file — the frontend renders crisp SVG from (type, labels) at zero storage cost. Use these codes in ' +
+        'the questionDiagramType / optionDiagramTypes columns (Excel/CSV/Text) or the diagramType field on an option (JSON).',
+      types: DIAGRAM_TYPES,
+      bulkUploadColumns: {
+        'questionDiagramType / questionDiagramLabels': 'Set ONLY when the question STEM itself is the diagram (rare).',
+        'optionDiagramTypes': 'Pipe-separated, one code per option in A,B,C,D order, e.g. "V1|V3|V6|V2". Leave a slot empty for a plain-text option.',
+        'optionDiagramLabels': 'Pipe-separated groups matching the same A,B,C,D order; labels within one option are comma-separated, e.g. "a,b,c|x,y,z|,|p,q,r".',
+      },
     };
   }
 
@@ -343,6 +462,29 @@ export class BankUploadService {
     ];
     const refSheet = XLSX.utils.aoa_to_sheet(refData);
     XLSX.utils.book_append_sheet(workbook, refSheet, 'Reference IDs');
+
+    // Session 22 — Diagram question types sheet: every valid diagramType
+    // code, so an admin (or an AI tool filling this template from scanned
+    // photos) knows exactly what to put in questionDiagramType /
+    // optionDiagramTypes without reading source code.
+    const diagramSheetData: (string | number)[][] = [
+      ['Diagram question types (Venn/figure-based reasoning MCQs)'],
+      [''],
+      ['These codes go in the questionDiagramType / optionDiagramTypes columns on the'],
+      ['main sheet. Diagrams render as SVG from (code + labels) — never upload an image.'],
+      [''],
+      ['code', 'description'],
+      ...DIAGRAM_TYPES.map((d) => [d.code, d.description]),
+      [''],
+      ['optionDiagramTypes example (4 options, pipe-separated, A,B,C,D order):'],
+      ['V1|V3|V6|V2'],
+      [''],
+      ['optionDiagramLabels example (matches the same order; comma-separates the'],
+      ['labels inside one diagram; leave a slot empty for a plain-text option):'],
+      ['टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल'],
+    ];
+    const diagramSheet = XLSX.utils.aoa_to_sheet(diagramSheetData);
+    XLSX.utils.book_append_sheet(workbook, diagramSheet, 'Diagram question types');
 
     return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
   }
@@ -657,12 +799,29 @@ export class BankUploadService {
       return idx !== undefined && row[idx] !== undefined ? String(row[idx]).trim() : '';
     };
 
+    // Session 22 — Venn/figure diagram OPTIONS (the common case: A/B/C/D
+    // are each a different diagram, e.g. "select the correct Venn diagram").
+    // Optional columns "optionDiagramTypes" (e.g. "V1|V3|V6|V2", one code
+    // per option in A,B,C,D order — leave a slot empty for a plain-text
+    // option) and "optionDiagramLabels" (e.g. "a,b,c|x,y|,|p,q,r", "|"
+    // separates options, "," separates the labels within one option's
+    // diagram). Both are entirely optional — absent for the ~99% of rows
+    // that are ordinary text questions, so nothing breaks for those.
+    const optionDiagramTypeParts = get('optionDiagramTypes').split('|');
+    const optionDiagramLabelParts = get('optionDiagramLabels').split('|');
+    const diagramTypeFor = (i: number) => normalizeDiagramType(optionDiagramTypeParts[i]?.trim() || undefined);
+    const diagramLabelsFor = (i: number) => parseDiagramLabels(optionDiagramLabelParts[i]);
+
     const options = [
-      { key: 'A', text: get('optionA'), textHi: get('optionA_Hindi') || undefined },
-      { key: 'B', text: get('optionB'), textHi: get('optionB_Hindi') || undefined },
-      { key: 'C', text: get('optionC'), textHi: get('optionC_Hindi') || undefined },
-      { key: 'D', text: get('optionD'), textHi: get('optionD_Hindi') || undefined },
+      { key: 'A', text: get('optionA'), textHi: get('optionA_Hindi') || undefined, diagramType: diagramTypeFor(0), diagramLabels: diagramLabelsFor(0) },
+      { key: 'B', text: get('optionB'), textHi: get('optionB_Hindi') || undefined, diagramType: diagramTypeFor(1), diagramLabels: diagramLabelsFor(1) },
+      { key: 'C', text: get('optionC'), textHi: get('optionC_Hindi') || undefined, diagramType: diagramTypeFor(2), diagramLabels: diagramLabelsFor(2) },
+      { key: 'D', text: get('optionD'), textHi: get('optionD_Hindi') || undefined, diagramType: diagramTypeFor(3), diagramLabels: diagramLabelsFor(3) },
     ];
+
+    // Session 22 — rarer case: the QUESTION STEM itself is the diagram.
+    const questionDiagramType = normalizeDiagramType(get('questionDiagramType') || undefined);
+    const questionDiagramLabels = parseDiagramLabels(get('questionDiagramLabels'));
 
     const correctAnswer = get('correctAnswer').toUpperCase();
     if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) {
@@ -685,6 +844,8 @@ export class BankUploadService {
       subTopicId: get('subTopicId') || undefined,
       questionText: get('questionText'),
       questionTextHindi: get('questionTextHindi') || undefined,
+      questionDiagramType,
+      questionDiagramLabels,
       options,
       correctAnswer,
       explanation: get('explanation') || undefined,
@@ -765,7 +926,10 @@ export class BankUploadService {
     const normalizedText = question.questionText.trim().toLowerCase();
     const optionsSignature = question.options
       .sort((a, b) => a.key.localeCompare(b.key))
-      .map(o => `${o.key}:${o.text.trim().toLowerCase()}`)
+      // Session 22: fold diagramType into the signature too, so two
+      // different diagram-only options (empty text, different diagram)
+      // don't hash-collide as "duplicates" of each other.
+      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}`)
       .join('|');
     const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
 
@@ -852,19 +1016,27 @@ export class BankUploadService {
     // duplicating the check in parseQuestionRow (Excel/CSV/Text) AND
     // processStructuredQuestions (JSON/Word), which only cover a subset.
     if (!question.questionText || !question.questionText.trim()) {
-      throw new Error('questionText is empty — question text cannot be blank.');
+      // Session 22: a diagram-stem question can still have short/empty
+      // link text ("वेन आरेख का चयन करें"), so this only blocks a TRULY
+      // blank stem with no text AND no stem diagram either.
+      if (!question.questionDiagramType) {
+        throw new Error('questionText is empty — question text cannot be blank.');
+      }
     }
+    // Session 22: an option counts as filled if it has non-empty TEXT *or*
+    // a valid diagramType (a diagram option can legitimately have empty
+    // text — the diagram itself is the answer choice).
     const missingOptions = question.options
-      .filter((o) => !o.text || !o.text.trim())
+      .filter((o) => (!o.text || !o.text.trim()) && !o.diagramType)
       .map((o) => o.key);
     if (missingOptions.length > 0) {
       throw new Error(
-        `Option${missingOptions.length > 1 ? 's' : ''} ${missingOptions.join(', ')} ${missingOptions.length > 1 ? 'are' : 'is'} empty — all four options (A–D) must have text.`,
+        `Option${missingOptions.length > 1 ? 's' : ''} ${missingOptions.join(', ')} ${missingOptions.length > 1 ? 'are' : 'is'} empty — every option (A–D) needs either text or a diagramType.`,
       );
     }
     const correctOption = question.options.find((o) => o.key === question.correctAnswer);
-    if (!correctOption || !correctOption.text.trim()) {
-      throw new Error(`correctAnswer is "${question.correctAnswer}" but option ${question.correctAnswer} has no text.`);
+    if (!correctOption || (!correctOption.text.trim() && !correctOption.diagramType)) {
+      throw new Error(`correctAnswer is "${question.correctAnswer}" but option ${question.correctAnswer} has no text and no diagramType.`);
     }
 
     // Check for duplicates first
@@ -883,13 +1055,21 @@ export class BankUploadService {
       key: o.key,
       text: o.text,
       textHi: o.textHi || '',
+      // Session 22 — omit these keys entirely for ordinary text options
+      // (rather than writing null/undefined) so optionsJson stays byte-
+      // identical to before for the ~99% of non-diagram questions.
+      ...(o.diagramType ? { diagramType: o.diagramType } : {}),
+      ...(o.diagramLabels?.length ? { diagramLabels: o.diagramLabels } : {}),
     }));
 
     // Create search hash for future duplicate detection
     const normalizedText = question.questionText.trim().toLowerCase();
     const optionsSignature = question.options
       .sort((a, b) => a.key.localeCompare(b.key))
-      .map(o => `${o.key}:${o.text.trim().toLowerCase()}`)
+      // Session 22: fold diagramType into the signature too, so two
+      // different diagram-only options (empty text, different diagram)
+      // don't hash-collide as "duplicates" of each other.
+      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}`)
       .join('|');
     const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
 
@@ -906,6 +1086,8 @@ export class BankUploadService {
         subTopicId: question.subTopicId,
         questionText: question.questionText,
         questionTextHindi: question.questionTextHindi || '',
+        questionDiagramType: question.questionDiagramType || null,
+        questionDiagramLabels: (question.questionDiagramLabels as any) || undefined,
         optionsJson: optionsJson as any,
         correctAnswer: question.correctAnswer,
         explanation: question.explanation || '',
