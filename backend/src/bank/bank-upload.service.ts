@@ -433,7 +433,7 @@ export class BankUploadService {
     // Reference data sheet — populated with REAL ids/names from the DB.
     const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
       this.prisma.exam.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
-      this.prisma.subject.findMany({ select: { id: true, name: true, examId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.subject.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
       this.prisma.chapter.findMany({ select: { id: true, name: true, subjectId: true }, orderBy: { name: 'asc' } }),
       this.prisma.topic.findMany({ select: { id: true, name: true, chapterId: true }, orderBy: { name: 'asc' } }),
       this.prisma.subTopic.findMany({ select: { id: true, name: true, topicId: true }, orderBy: { name: 'asc' } }),
@@ -445,8 +445,8 @@ export class BankUploadService {
       ...(exams.length ? exams.map(e => [e.id, e.name]) : [['(no exams yet)', '']]),
       [''],
       ['Reference: Valid Subject IDs'],
-      ['subjectId', 'name', 'examId'],
-      ...(subjects.length ? subjects.map(s => [s.id, s.name, s.examId]) : [['(no subjects yet)', '', '']]),
+      ['subjectId', 'name'],
+      ...(subjects.length ? subjects.map(s => [s.id, s.name]) : [['(no subjects yet)', '']]),
       [''],
       ['Reference: Valid Chapter IDs'],
       ['chapterId', 'name', 'subjectId'],
