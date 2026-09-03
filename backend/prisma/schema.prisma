@@ -377,7 +377,18 @@ model Question {
 
   questionText       String
   questionTextHindi  String?
-  optionsJson        Json              // Array of { key: "A", text: "...", isCorrect: boolean }
+  // Session 22 — Venn/figure-based diagram questions (e.g. reasoning
+  // "select the correct Venn diagram" MCQs). Diagrams are stored as a
+  // TYPE CODE from a fixed taxonomy (see backend/src/bank/diagram-types.ts)
+  // + plain-text labels, NOT as image files — the frontend renders the
+  // actual SVG from (type, labels) at zero storage/CDN cost and always
+  // crisp on any screen. null/undefined = ordinary text question (default,
+  // no behavior change for the other ~99% of questions).
+  questionDiagramType   String?        // e.g. "V2" — set only when the QUESTION STEM itself is a diagram
+  questionDiagramLabels Json?          // string[] — labels to place in the stem diagram's circles, in order
+  optionsJson        Json              // Array of { key, text, textHi?, diagramType?, diagramLabels? }. When
+                                        // diagramType is set on an option, that option IS the diagram (text may
+                                        // be empty) — see diagram-types.ts for valid codes.
   correctAnswer      String            // e.g. "A" / "B" / "C" / "D"
   
   explanation        String?
