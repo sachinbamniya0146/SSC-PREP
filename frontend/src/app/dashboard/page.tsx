@@ -221,6 +221,41 @@ export default function DashboardPage() {
                   Create chapters so Bulk Question Upload has a valid chapterId to target
                 </div>
               </a>
+              {/* ROOT-CAUSE FIX: there was NO way anywhere in the app —
+                  backend or frontend — to create an Exam (SSC CGL, SSC CHSL,
+                  etc.) itself. bank.service.ts's meta() (powers "Choose Your
+                  Exam" below) and tests.service.ts's sectionalExamForFamily()
+                  both depend entirely on Exam rows existing; without this
+                  page an admin had no recovery path if an exam was missing
+                  or misconfigured except direct database access. Now wired
+                  to /admin/exams (backend/src/admin/admin.controller.ts
+                  listExams()/createExam()/updateExam()). */}
+              <a
+                href="/admin/exams"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">🎓 Exam Management</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Create/activate exams (CGL, CHSL...) — required before they appear anywhere for students
+                </div>
+              </a>
+              {/* BUG FIX: backend/src/admin/admin-help.controller.ts's
+                  GET /admin/help/formats and /admin/help/prompts (upload
+                  format cheatsheet + AI-prompt templates for generating
+                  questions/explanations) were fully built but never called
+                  from anywhere in the frontend — only /admin/help/templates/*
+                  (the file downloads) was wired, inside the Bulk Upload
+                  section on /admin. There was no dedicated "Help" page or
+                  dashboard tile at all. Now wired to /admin/help. */}
+              <a
+                href="/admin/help"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">❓ Admin Help</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Upload format cheatsheet + ready-to-use AI prompts for questions/explanations
+                </div>
+              </a>
             </div>
           </div>
         )}
@@ -315,26 +350,45 @@ export default function DashboardPage() {
               Select an exam to see its PYQs, mock tests, and sectional practice
             </p>
             {/* BUG FIX: when the exams-with-questions API call fails, is
-                still loading, or every exam simply has fewer than 100
-                approved questions so far, examsWithQuestions stays an empty
-                array and this whole block used to render nothing — no
-                cards, no text, no link, nothing clickable ("kese click
-                karu, kuch available nahi hai"). Always show a fallback so
-                there's at least one way forward: a direct link into the
-                full question bank, which works with no exam filter. */}
+                still loading, or every exam simply has too few approved
+                questions so far, examsWithQuestions stays an empty array —
+                always show a fallback so there's at least one way forward:
+                a direct link into the full question bank, which works with
+                no exam filter.
+                UX FIX: each exam card used to link straight into the raw
+                question-bank browser and nowhere else. Clicking an exam
+                gave no way to reach that exam's sectional practice, mocks,
+                or year-wise PYQs from here — a student had to already know
+                those separate tiles existed further up this page.
+                /mocks and /sectional don't accept an exam-scoped URL param
+                today (mocks are listed globally by template; sectional's
+                subject picker isn't exam-filtered — see backend/src/tests/
+                tests.service.ts sectionalSubjects()), so rather than
+                silently building a link those pages would ignore, each card
+                now lists all 3 real entry points with an honest label on
+                which are exam-specific right now vs. exam-selectable once
+                you're on that page. */}
             {examsWithQuestions.length > 0 ? (
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {examsWithQuestions.map((e) => (
-                  <a
-                    key={e.id}
-                    href={`/question-bank?exam=${encodeURIComponent(e.id)}`}
-                    className="rounded-xl border border-border bg-card p-4 hover:border-primary/50 hover:shadow-md transition"
-                  >
+                  <div key={e.id} className="rounded-xl border border-border bg-card p-4">
                     <div className="font-semibold text-lg">{e.name}</div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {e.count}+ questions
+                    <div className="mt-1 text-sm text-muted-foreground">{e.count}+ questions</div>
+                    <div className="mt-3 flex flex-col gap-1.5 text-sm">
+                      <a
+                        href={`/question-bank?exam=${encodeURIComponent(e.id)}`}
+                        className="font-medium text-primary hover:underline"
+                      >
+                        📖 Browse PYQs (this exam) →
+                      </a>
+                      <a href="/year-wise" className="font-medium text-primary hover:underline">
+                        📅 Year-wise Test (pick {e.name} on that page) →
+                      </a>
+                      <a href="/sectional" className="font-medium text-primary hover:underline">
+                        📚 Sectional Practice (subject-wise, all exams) →
+                      </a>
                     </div>
-                  </a>
+                  </div>
                 ))}
               </div>
             ) : (
