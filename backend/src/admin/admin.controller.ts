@@ -665,6 +665,91 @@ export class AdminController {
       };
     }
 
+  // ---- Exams ----
+  // BUGFIX (root cause of "Choose Your Exam" showing empty AND students
+  // unable to start any sectional/mock test): the Exam model (id/name/slug/
+  // code/isActive) is the anchor every other piece of content hangs off of
+  // — bank.service.ts's meta() only shows exams that exist as rows here,
+  // tests.service.ts's sectionalExamForFamily() throws "Exam not set up
+  // for X yet" if the matching slug isn't in this table, and the bulk
+  // upload template's examId column is validated against these same rows.
+  // But there was NO endpoint anywhere — admin API or otherwise — to
+  // create, list, or edit an Exam. The ExamPattern CRUD just below this
+  // assumed exams already existed and only ever let you configure a
+  // *pattern* for one. Whoever set up cgl/chsl/mts/cpo originally must
+  // have inserted those rows by hand directly in the database; there was
+  // no in-app way to add a 5th exam, or recover if one of the 4 is
+  // missing/misconfigured on the live DB. This closes that gap.
+  @Get('exams')
+  async listExams() {
+    return this.prisma.exam.findMany({
+      orderBy: { name: 'asc' },
+      include: {
+        _count: { select: { questions: true } },
+      },
+    });
+  }
+
+  @Post('exams')
+  async createExam(
+    @Body()
+    body: {
+      name: string;
+      slug: string;
+      code: string;
+      isActive?: boolean;
+    },
+  ) {
+    if (!body?.name || !body?.slug || !body?.code) {
+      throw new BadRequestException('name, slug, and code are all required');
+    }
+    const slug = body.slug.trim().toLowerCase();
+    const code = body.code.trim().toUpperCase();
+    const existing = await this.prisma.exam.findFirst({
+      where: { OR: [{ slug }, { code }, { name: body.name.trim() }] },
+    });
+    if (existing) {
+      throw new BadRequestException(
+        `An exam already exists with this name/slug/code (id: ${existing.id}, slug: ${existing.slug}). ` +
+          `Use PATCH /admin/exams/${existing.id} to edit it instead.`,
+      );
+    }
+    return this.prisma.exam.create({
+      data: {
+        name: body.name.trim(),
+        slug,
+        code,
+        isActive: body.isActive ?? true,
+      },
+    });
+  }
+
+  @Patch('exams/:id')
+  async updateExam(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body()
+    body: Partial<{ name: string; slug: string; code: string; isActive: boolean }>,
+  ) {
+    const existing = await this.prisma.exam.findUnique({ where: { id } });
+    if (!existing) throw new BadRequestException('Exam not found');
+    return this.prisma.exam.update({
+      where: { id },
+      data: {
+        ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+        ...(body.slug !== undefined ? { slug: body.slug.trim().toLowerCase() } : {}),
+        ...(body.code !== undefined ? { code: body.code.trim().toUpperCase() } : {}),
+        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+      },
+    });
+  }
+
+  // No DELETE route on purpose: an Exam is referenced by Question, SourcePdf,
+  // StudyPlan, ExamPattern, QuestionBankSet, and UserProgress rows (see
+  // schema.prisma). Deleting one live would either cascade-orphan a large
+  // amount of student data or fail on a foreign-key constraint depending on
+  // the relation mode — neither is a safe "admin misclicked" recovery path.
+  // Use isActive: false via PATCH to hide an exam instead.
+
   // ---- Exam Patterns ----
   // BUGFIX (bonus grep — "sari exams ke test dena ka option"): ExamPattern
   // rows (durationMinutes/totalQuestions/sections JSON per exam) are read
