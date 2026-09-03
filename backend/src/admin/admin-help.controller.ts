@@ -24,6 +24,17 @@ export class AdminHelpController {
     return this.adminService.getAIPrompts();
   }
 
+  // Session 22 — Venn/figure-diagram question types (V1-V8). Kept as its
+  // own route (not folded into /formats or /prompts) so an admin — or an
+  // AI tool being pointed at this API to auto-generate/import questions —
+  // can fetch just this reference without pulling the whole formats/
+  // prompts payload.
+  @Get('diagram-types')
+  @Roles('ADMIN', 'MODERATOR')
+  async getDiagramTypes(@CurrentUser() _user: { userId: string }) {
+    return this.uploadService.getDiagramTypesHelp();
+  }
+
   // FIX (bonus grep item c — two parallel template generators, one dead
   // and divergent): these four routes used to call AdminService's own
   // generateXTemplate() methods, which were a hand-maintained SECOND copy
