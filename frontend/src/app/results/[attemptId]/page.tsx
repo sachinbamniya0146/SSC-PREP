@@ -4,12 +4,16 @@ import { fetchAuth } from "@/lib/api";
 import * as React from "react";
 import { useParams } from "next/navigation";
 import { API_BASE } from "@/lib/api";
+import DiagramVenn from "@/components/DiagramVenn";
 
 type ReviewQuestion = {
   questionId: string;
   questionText: string;
   questionTextHindi: string | null;
-  options: { key: string; text: string; textHi: string | null }[];
+  // Session 22 — Venn/figure diagram support (see DiagramVenn.tsx)
+  questionDiagramType?: string | null;
+  questionDiagramLabels?: (string | null)[] | null;
+  options: { key: string; text: string; textHi: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null }[];
   selectedOption: string | null;
   correctAnswer: string;
   isCorrect: boolean;
@@ -439,6 +443,12 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
       </div>
 
       <h3 className="mt-3 text-sm font-medium leading-relaxed">{stem}</h3>
+      {/* Session 22 — question-stem diagram (rare case) */}
+      {q.questionDiagramType && (
+        <div className="mt-2 flex justify-center rounded-xl border border-border bg-muted/30 p-3">
+          <DiagramVenn type={q.questionDiagramType} labels={q.questionDiagramLabels} size={170} />
+        </div>
+      )}
 
       <div className="mt-3 space-y-2">
         {q.options.map((o) => {
@@ -454,7 +464,12 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
               }`}>
                 {o.key}
               </span>
-              <span className="leading-relaxed">{optText(o)}</span>
+              {/* Session 22 — diagram option (common case: A/B/C/D are each a different diagram) */}
+              {o.diagramType ? (
+                <DiagramVenn type={o.diagramType} labels={o.diagramLabels} size={120} />
+              ) : (
+                <span className="leading-relaxed">{optText(o)}</span>
+              )}
               {isCorrectOpt && <span className="ml-auto text-xs font-bold text-success">✓ Answer</span>}
               {isSelected && !isCorrectOpt && <span className="ml-auto text-xs font-bold text-danger">Your choice</span>}
             </div>
