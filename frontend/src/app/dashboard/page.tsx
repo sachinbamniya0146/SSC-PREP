@@ -221,6 +221,20 @@ export default function DashboardPage() {
                   Create chapters so Bulk Question Upload has a valid chapterId to target
                 </div>
               </a>
+              {/* NEW ("chapter mein bhi topic hona tha jaise English mein
+                  Noun, Pronoun — vesa har subject mein"): Topic model
+                  already existed but had no create UI anywhere, mirroring
+                  the exact gap Chapter Management above once had. Now
+                  wired to /admin/topics. */}
+              <a
+                href="/admin/topics"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">🏷️ Topic Management</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Chapter ke andar topics banayein (Noun, Pronoun...) for topic-level analysis
+                </div>
+              </a>
               {/* ROOT-CAUSE FIX: there was NO way anywhere in the app —
                   backend or frontend — to create an Exam (SSC CGL, SSC CHSL,
                   etc.) itself. bank.service.ts's meta() (powers "Choose Your
