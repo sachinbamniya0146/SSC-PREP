@@ -530,6 +530,7 @@ async saveAnswers(
                 questionTextHindi: true,
                 questionDiagramType: true, // Session 22 — Venn/figure stem diagrams
                 questionDiagramLabels: true,
+                questionImageUrl: true, // Session 24 — non-Venn diagram stem images
                 optionsJson: true,
                 correctAnswer: true,
                 explanation: true,
@@ -591,6 +592,7 @@ async saveAnswers(
             textHi: o.textHi ?? null,
             diagramType: o.diagramType ?? null,
             diagramLabels: o.diagramLabels ?? null,
+            imageUrl: o.imageUrl ?? null,
           }))
         : [];
       return {
@@ -599,6 +601,7 @@ async saveAnswers(
         questionTextHindi: q.questionTextHindi,
         questionDiagramType: (q as any).questionDiagramType ?? null,
         questionDiagramLabels: (q as any).questionDiagramLabels ?? null,
+        questionImageUrl: (q as any).questionImageUrl ?? null,
         options: opts,
         selectedOption: a.selectedOption,
         correctAnswer: q.correctAnswer,
@@ -784,7 +787,8 @@ async saveAnswers(
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,
-          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
+          questionImageUrl: r.questionImageUrl ?? null,
+          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
           optionsHi: (r.optionsHi as any[]) || null,
           marks: r.marks ?? 2,
           negativeMarks: r.negativeMarks ?? 0.5,
@@ -949,7 +953,8 @@ async saveAnswers(
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,
-          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
+          questionImageUrl: r.questionImageUrl ?? null,
+          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
           // NOTE: correctAnswer deliberately NOT sent — answer key must never
           // reach the client before submit (server-side scoring only).
           // BUGFIX: explanation/explanationHindi used to be sent right here
@@ -1052,7 +1057,8 @@ async saveAnswers(
       questionTextHindi: r.questionTextHindi,
       questionDiagramType: r.questionDiagramType ?? null,
       questionDiagramLabels: r.questionDiagramLabels ?? null,
-      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
+      questionImageUrl: r.questionImageUrl ?? null,
+      options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
       // NOTE: correctAnswer deliberately NOT sent — answer key must never
       // reach the client before submit (server-side scoring only).
       // BUGFIX (session 18 audit — same answer-leak-gate pattern found
@@ -1192,7 +1198,8 @@ async saveAnswers(
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,
-        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
+        questionImageUrl: r.questionImageUrl ?? null,
+        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
         // NOTE: correctAnswer/explanation deliberately NOT sent — same rule
         // as every other pre-attempt paper composer in this file. Revealed
         // only after submit, via attemptDetail().
@@ -1317,7 +1324,8 @@ async saveAnswers(
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,
-          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null })),
+          questionImageUrl: r.questionImageUrl ?? null,
+          options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
           chapter: r.chapter?.name ?? '',
           examName: r.exam?.name ?? null,
           year: r.year,
