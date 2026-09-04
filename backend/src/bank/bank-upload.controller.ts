@@ -89,6 +89,20 @@ export class BankUploadController {
     return this.uploadService.uploadFromWord(file.buffer, this.adminId(req));
   }
 
+  // Session 24 — for diagram question types that AREN'T simple Venn circles
+  // (mirror image, figure series, embedded figures, paper folding, dice/
+  // clock). Upload ONE real image here, get back a URL, then paste that
+  // URL into the questionImageUrl / optionImageUrls column of a normal
+  // bulk Excel/CSV/JSON upload (same two-step pattern as diagramType
+  // codes). See BankUploadService.uploadQuestionImage() / GET
+  // /admin/help/diagram-types for the full explanation.
+  @Post('question-image')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  async uploadQuestionImage(@UploadedFile() file: any) {
+    if (!file) throw new BadRequestException('Multipart field "file" (png/jpg/webp/svg) is required');
+    return this.uploadService.uploadQuestionImage(file);
+  }
+
   // NEW (this session) — "admin ek click me poora question bank download kar
   // sake" so re-uploads only ever add genuinely new questions. Exports in
   // the exact same column shape as the upload templates (uses examId/
