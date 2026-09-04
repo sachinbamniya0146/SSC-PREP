@@ -208,6 +208,96 @@ export class BankService implements OnModuleInit {
     return { rows, totals };
   }
 
+  // ---- Content coverage drill-down (exam × subject × chapter) ----
+  // BUG FIX / NEW FEATURE ("har exam ke har subject or chapter ka status
+  // dikhna chahiye, kitna aur konsa question dala hai"): contentCoverageReport()
+  // above stops at exam × subject — it can't tell an admin WHICH chapter
+  // inside a subject is empty vs. covered. listAllChaptersForAdmin() lists
+  // every chapter but with no per-exam question counts at all. Neither
+  // answers "SSC CHSL → Quantitative Aptitude → Percentage: kitne questions
+  // hain, aur kaunsa exam". This method walks Exam → Subject → Chapter and
+  // reports a real count for every leaf, INCLUDING chapters with zero
+  // questions for that exam (deliberately not filtered out — an empty cell
+  // is exactly the information admin needs to know what to upload next).
+  async contentCoverageDrilldown() {
+    const [exams, subjects, chapters, counts] = await Promise.all([
+      this.prisma.exam.findMany({
+        select: { id: true, name: true, slug: true, code: true, isActive: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.subject.findMany({
+        select: { id: true, name: true, slug: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.chapter.findMany({
+        select: { id: true, name: true, slug: true, subjectId: true },
+        orderBy: { name: 'asc' },
+      }),
+      // Approved+live count AND total count (including pending/unapproved),
+      // grouped by exam+chapter — one raw query instead of N+1 per cell.
+      this.prisma.$queryRaw<
+        Array<{ examId: string | null; chapterId: string | null; total: number; approvedLive: number }>
+      >`
+        SELECT q."examId", q."chapterId",
+               COUNT(q.id)::int AS total,
+               COUNT(q.id) FILTER (
+                 WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+               )::int AS "approvedLive"
+        FROM questions q
+        WHERE q."examId" IS NOT NULL AND q."chapterId" IS NOT NULL
+        GROUP BY q."examId", q."chapterId";
+      `,
+    ]);
+
+    const countKey = (examId: string, chapterId: string) => `${examId}:${chapterId}`;
+    const countMap = new Map(counts.map((c) => [countKey(c.examId!, c.chapterId!), c]));
+    const chaptersBySubject = new Map<string, typeof chapters>();
+    for (const ch of chapters) {
+      const list = chaptersBySubject.get(ch.subjectId) ?? [];
+      list.push(ch);
+      chaptersBySubject.set(ch.subjectId, list);
+    }
+
+    const tree = exams.map((exam) => {
+      const subjectRows = subjects.map((subj) => {
+        const chapterRows = (chaptersBySubject.get(subj.id) ?? []).map((ch) => {
+          const c = countMap.get(countKey(exam.id, ch.id));
+          return {
+            chapterId: ch.id,
+            chapterName: ch.name,
+            chapterSlug: ch.slug,
+            total: c?.total ?? 0,
+            approvedLive: c?.approvedLive ?? 0,
+          };
+        });
+        const subjectTotal = chapterRows.reduce((s, c) => s + c.total, 0);
+        const subjectApproved = chapterRows.reduce((s, c) => s + c.approvedLive, 0);
+        return {
+          subjectId: subj.id,
+          subjectName: subj.name,
+          subjectSlug: subj.slug,
+          total: subjectTotal,
+          approvedLive: subjectApproved,
+          chapters: chapterRows,
+        };
+      });
+      const examTotal = subjectRows.reduce((s, sb) => s + sb.total, 0);
+      const examApproved = subjectRows.reduce((s, sb) => s + sb.approvedLive, 0);
+      return {
+        examId: exam.id,
+        examName: exam.name,
+        examSlug: exam.slug,
+        examCode: exam.code,
+        isActive: exam.isActive,
+        total: examTotal,
+        approvedLive: examApproved,
+        subjects: subjectRows,
+      };
+    });
+
+    return { exams: tree };
+  }
+
   async subjects(examId?: string) {
     const cacheKey = examId ? `bank:subjects:${examId}` : 'bank:subjects';
     const cached = cacheGet<any>(cacheKey);
@@ -339,6 +429,44 @@ export class BankService implements OnModuleInit {
     return this.prisma.chapter.create({ data: { subjectId, name: trimmedName, slug } });
   }
 
+  // ---- Admin topic management ----
+  // NEW ("chapter mein bhi topic hona tha jaise English mein Noun, Pronoun
+  // — vesa har subject mein"): the Topic model (Chapter → Topic →
+  // SubTopic, schema.prisma line ~274) already existed, and questions
+  // already carry an optional topicId, but there was no way anywhere in
+  // the API to CREATE a topic under a chapter — exactly the gap
+  // createChapter() above closed for chapters. Mirrors that method
+  // exactly: idempotent by (chapterId, slug), doesn't filter out
+  // zero-question topics (an admin managing content needs to see a
+  // freshly-created, still-empty topic, not have it silently hidden).
+  async listAllTopicsForAdmin(chapterId?: string) {
+    return this.prisma.topic.findMany({
+      where: chapterId ? { chapterId } : undefined,
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        chapterId: true,
+        chapter: { select: { name: true, slug: true, subject: { select: { name: true } } } },
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createTopic(chapterId: string, name: string): Promise<{ id: string; name: string; slug: string; chapterId: string }> {
+    const chapter = await this.prisma.chapter.findUnique({ where: { id: chapterId } });
+    if (!chapter) throw new BadRequestException(`Chapter not found: ${chapterId}`);
+    const trimmedName = (name ?? '').trim();
+    if (!trimmedName) throw new BadRequestException('Topic name is required');
+    const slug = trimmedName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '') || 'topic';
+    const existing = await this.prisma.topic.findUnique({ where: { chapterId_slug: { chapterId, slug } } });
+    if (existing) return existing;
+    return this.prisma.topic.create({ data: { chapterId, name: trimmedName, slug } });
+  }
+
   // Browse questions by filters (exam/subject/chapter), bilingual rows.
   async browse(f: { examId?: string; subjectId?: string; chapterId?: string; skip?: number; take?: number }, userId?: string | null) {
     const take = Math.min(f.take ?? 20, 50);
@@ -351,7 +479,12 @@ export class BankService implements OnModuleInit {
     else if (f.subjectId) where.subjectId = f.subjectId;
     const rows = await this.prisma.question.findMany({
       where,
-      include: { chapter: { select: { name: true } }, exam: { select: { name: true } }, subject: { select: { name: true } } },
+      include: {
+        chapter: { select: { name: true } },
+        exam: { select: { name: true } },
+        subject: { select: { name: true } },
+        topic: { select: { name: true } },
+      },
       orderBy: { createdAt: 'asc' },
       skip,
       take,
@@ -377,7 +510,14 @@ export class BankService implements OnModuleInit {
         exam: r.exam?.name ?? null,
         year: r.year,
         shift: r.shift,
+        paperCode: r.paperCode ?? null,
         subject: r.subject?.name ?? null,
+        // FIX ("chapter mein bhi topic hona tha jaise English mein Noun,
+        // Pronoun") — Topic model (Chapter → Topic → SubTopic) already
+        // existed in the schema and questions already carry a topicId, but
+        // this browse() response never surfaced the topic's name, and no
+        // frontend page displayed it even when present. Now included.
+        topic: r.topic?.name ?? null,
         difficulty: r.difficulty,
         marks: r.marks,
         negativeMarks: r.negativeMarks,
