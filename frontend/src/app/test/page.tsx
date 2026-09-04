@@ -19,7 +19,10 @@ type UgQ = {
   // change in that case, which is still ~99% of the bank.
   questionDiagramType?: string | null;
   questionDiagramLabels?: (string | null)[] | null;
-  options: { key: string; text: string; textHi?: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null }[];
+  // Session 24 — non-Venn diagram stem image (mirror image / figure
+  // series / embedded figure / paper folding / dice-clock etc).
+  questionImageUrl?: string | null;
+  options: { key: string; text: string; textHi?: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null; imageUrl?: string | null }[];
   chapter: string;
   examName?: string | null;
   year?: number | null;
@@ -361,6 +364,7 @@ export default function TestPage() {
                 questionTextHindi: qq.questionTextHindi,
                 questionDiagramType: qq.questionDiagramType,
                 questionDiagramLabels: qq.questionDiagramLabels,
+                questionImageUrl: qq.questionImageUrl,
                 options: qq.options,
                 chapter: qq.chapter || "",
                 examName: qq.examName,
@@ -1171,6 +1175,14 @@ export default function TestPage() {
                   <DiagramVenn type={q.questionDiagramType} labels={q.questionDiagramLabels} size={180} />
                 </div>
               )}
+              {/* Session 24 — non-Venn diagram stem (mirror image / figure
+                  series / embedded figure / paper folding / dice-clock). */}
+              {q.questionImageUrl && (
+                <div className="mt-3 flex justify-center rounded-xl border border-border bg-muted/30 p-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={q.questionImageUrl} alt="Question figure" className="max-h-64 max-w-full object-contain" />
+                </div>
+              )}
               <div className="mt-5 space-y-2.5">
                 {q.options.map((o) => {
                   const active = answers[q.id] === o.key;
@@ -1191,6 +1203,11 @@ export default function TestPage() {
                         {o.diagramType ? (
                           <span className={`flex justify-center rounded-lg p-1 ${active ? "" : "text-foreground"}`}>
                             <DiagramVenn type={o.diagramType} labels={o.diagramLabels} size={130} />
+                          </span>
+                        ) : o.imageUrl ? (
+                          <span className="flex justify-center rounded-lg p-1">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={o.imageUrl} alt={`Option ${o.key}`} className="max-h-40 max-w-full object-contain" />
                           </span>
                         ) : (
                           <>
