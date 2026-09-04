@@ -32,6 +32,16 @@ export class BankController {
     return this.bank.contentCoverageReport();
   }
 
+  // NEW ("kis exam ke kis subject key kis year ke kitne questions hey"):
+  // same shape as admin/coverage above, with year added as a third
+  // grouping level (exam × subject × year instead of just exam × subject).
+  @Get('admin/coverage/by-year')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  coverageReportByYear() {
+    return this.bank.contentCoverageReportByYear();
+  }
+
   // NEW ("har exam or har exam ke har subject or chapter ka status dikhna
   // chahiye"): drills coverage down to individual chapters, including
   // chapters with ZERO questions for a given exam — the empty cells are
