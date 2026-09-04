@@ -208,6 +208,57 @@ export class BankService implements OnModuleInit {
     return { rows, totals };
   }
 
+  // ---- Content coverage report BY YEAR (exam × subject × year) ----
+  // Sachin's request: "kis exam ke kis subject key kis year ke kitne
+  // questions hey" — contentCoverageReport() above stops at exam × subject
+  // (no year axis at all); this adds year as a third grouping level so the
+  // admin can see, e.g., "SSC CGL → Reasoning → 2023: 42 questions,
+  // 2024: 18 questions" and immediately spot which exam/subject/year
+  // combination still needs more PYQs uploaded. Questions with no year set
+  // are grouped under a NULL year row (labelled "(No Year)" by the
+  // frontend) — deliberately kept visible rather than dropped, since a
+  // missing year is itself something the admin needs to fix (see
+  // scripts/audit-questions.mjs → missingYear).
+  async contentCoverageReportByYear() {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        examName: string | null;
+        subjectName: string | null;
+        year: number | null;
+        totalQuestions: number;
+        approvedLive: number;
+        hindiTranslated: number;
+      }>
+    >`
+      SELECT
+        e.name AS "examName",
+        s.name AS "subjectName",
+        q."year" AS "year",
+        COUNT(q.id)::int AS "totalQuestions",
+        COUNT(q.id) FILTER (
+          WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+        )::int AS "approvedLive",
+        COUNT(q.id) FILTER (
+          WHERE q."questionTextHindi" IS NOT NULL AND q."questionTextHindi" <> ''
+        )::int AS "hindiTranslated"
+      FROM questions q
+      LEFT JOIN exams e ON e.id = q."examId"
+      LEFT JOIN subjects s ON s.id = q."subjectId"
+      GROUP BY e.name, s.name, q."year"
+      ORDER BY e.name NULLS LAST, s.name NULLS LAST, q."year" DESC NULLS LAST;
+    `;
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.totalQuestions += r.totalQuestions;
+        acc.approvedLive += r.approvedLive;
+        acc.hindiTranslated += r.hindiTranslated;
+        return acc;
+      },
+      { totalQuestions: 0, approvedLive: 0, hindiTranslated: 0 },
+    );
+    return { rows, totals };
+  }
+
   // ---- Content coverage drill-down (exam × subject × chapter) ----
   // BUG FIX / NEW FEATURE ("har exam ke har subject or chapter ka status
   // dikhna chahiye, kitna aur konsa question dala hai"): contentCoverageReport()
