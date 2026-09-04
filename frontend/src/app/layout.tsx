@@ -1,19 +1,6 @@
 import type { Metadata } from "next";
-import { Inter, Noto_Sans_Devanagari } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  display: "swap",
-});
-
-const notoDevanagari = Noto_Sans_Devanagari({
-  subsets: ["devanagari"],
-  variable: "--font-noto-devanagari",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "SSC Prep Hub — India's Most Advanced SSC Practice Platform",
@@ -44,10 +31,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${inter.variable} ${notoDevanagari.variable} min-h-screen bg-background font-sans text-foreground antialiased`}
-      >
+    <html
+      lang="en"
+      suppressHydrationWarning
+      style={
+        {
+          "--font-inter":
+            "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+          "--font-noto-devanagari":
+            "'Noto Sans Devanagari', 'Nirmala UI', 'Kohinoor Devanagari', Mangal, sans-serif",
+        } as React.CSSProperties
+      }
+    >
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
