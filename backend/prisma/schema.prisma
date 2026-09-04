@@ -386,9 +386,17 @@ model Question {
   // no behavior change for the other ~99% of questions).
   questionDiagramType   String?        // e.g. "V2" — set only when the QUESTION STEM itself is a diagram
   questionDiagramLabels Json?          // string[] — labels to place in the stem diagram's circles, in order
-  optionsJson        Json              // Array of { key, text, textHi?, diagramType?, diagramLabels? }. When
-                                        // diagramType is set on an option, that option IS the diagram (text may
-                                        // be empty) — see diagram-types.ts for valid codes.
+  // Session 24 — for diagram question types that AREN'T simple Venn
+  // circles (mirror image, figure series, embedded figures, paper
+  // folding, dice/clock, etc.) — genuinely arbitrary shapes that can't be
+  // reduced to a type-code taxonomy. Stores a real uploaded image URL
+  // (see S3Service.uploadQuestionImage) instead. Mutually exclusive with
+  // questionDiagramType in practice — a question uses one or the other.
+  questionImageUrl      String?
+  optionsJson        Json              // Array of { key, text, textHi?, diagramType?, diagramLabels?, imageUrl? }.
+                                        // diagramType = SVG Venn diagram (see diagram-types.ts). imageUrl = a real
+                                        // uploaded picture (mirror image / figure series / etc — see above). An
+                                        // option uses at most ONE of these three ways of being "the answer".
   correctAnswer      String            // e.g. "A" / "B" / "C" / "D"
   
   explanation        String?
