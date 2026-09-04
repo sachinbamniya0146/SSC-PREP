@@ -32,6 +32,18 @@ export class BankController {
     return this.bank.contentCoverageReport();
   }
 
+  // NEW ("har exam or har exam ke har subject or chapter ka status dikhna
+  // chahiye"): drills coverage down to individual chapters, including
+  // chapters with ZERO questions for a given exam — the empty cells are
+  // exactly what tells an admin what's still missing. contentCoverageReport()
+  // above only goes exam × subject; this goes exam × subject × chapter.
+  @Get('admin/coverage/drilldown')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  coverageDrilldown() {
+    return this.bank.contentCoverageDrilldown();
+  }
+
   // v4 §18 — SearchMiss demand log: user searched, nothing matched.
   @Post('search-miss')
   searchMiss(@Req() req: any, @Body() body: { query: string; exam?: string }) {
@@ -82,6 +94,30 @@ export class BankController {
       throw new BadRequestException('subjectId and name are required');
     }
     return this.bank.createChapter(body.subjectId, body.name);
+  }
+
+  // NEW ("chapter mein bhi topic hona tha jaise English mein Noun, Pronoun
+  // — vesa har subject mein"): the Topic model (Chapter → Topic →
+  // SubTopic) already existed in schema.prisma and GET /bank/topics
+  // (above) already listed them, but there was no admin UI or endpoint to
+  // CREATE one — the exact same gap chapters had before createChapter()
+  // was added. listAllTopicsForAdmin() deliberately shows topics with
+  // zero questions too, same reasoning as listAllChaptersForAdmin().
+  @Get('admin/topics')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  listTopicsForAdmin(@Query('chapterId') chapterId?: string) {
+    return this.bank.listAllTopicsForAdmin(chapterId);
+  }
+
+  @Post('admin/topics')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  createTopic(@Body() body: { chapterId: string; name: string }) {
+    if (!body?.chapterId || !body?.name) {
+      throw new BadRequestException('chapterId and name are required');
+    }
+    return this.bank.createTopic(body.chapterId, body.name);
   }
 
   // FIX (CRITICAL answer-key leak, see BankService.getAttemptedQuestionIds
