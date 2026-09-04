@@ -78,6 +78,12 @@ export const envValidationSchema = Joi.object({
   S3_BUCKET_NAME: Joi.string().allow('').default(''),
   S3_ACCESS_KEY_ID: Joi.string().allow('').default(''),
   S3_SECRET_ACCESS_KEY: Joi.string().allow('').default(''),
+  // Session 24 — public base URL to build permanent links for uploaded
+  // question images (e.g. a CloudFront domain, or
+  // "https://<bucket>.s3.<region>.amazonaws.com" for a public bucket).
+  // Left blank = getPublicUrl() falls back to a long-lived presigned URL
+  // instead (works, but expires — set this for production).
+  S3_PUBLIC_URL_BASE: Joi.string().allow('').default(''),
 
   // Meilisearch — Phase 2
   MEILISEARCH_HOST: Joi.string().allow('').default('http://localhost:7700'),
