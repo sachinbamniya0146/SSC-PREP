@@ -1019,7 +1019,29 @@ export class BankUploadService {
   }
 
   /**
-   * Validate all reference IDs
+   * Validate all reference IDs.
+   *
+   * BUGFIX (Sachin's audit — "kis exam ka hai ye bhi find karna hai" /
+   * galat exam-mapping wale questions): this used to push EVERY problem —
+   * including an examId/subjectId/chapterId that doesn't exist at all, or a
+   * chapter that belongs to a totally different subject — as a soft
+   * `result.warnings` entry and then let createQuestion() run anyway. A
+   * warning is easy to miss in a 500-row upload result, and unlike a bad
+   * examId (which at least trips a Postgres FK violation inside
+   * createQuestion() and gets caught as an error), a chapterId/subjectId
+   * mismatch is between two otherwise-VALID ids — no FK violation fires,
+   * so the row silently created a real, live question filed under the
+   * wrong exam/subject with zero error and zero visible warning weight.
+   * That is the exact "students dekhte hai galat exam ka question apne
+   * exam mein" bug.
+   *
+   * Fix: every one of these is now a hard validation failure (thrown
+   * Error), which the two call sites (processBulkQuestions /
+   * processStructuredQuestions) already catch and record as
+   * result.errors — so the row is REJECTED and never reaches
+   * createQuestion(), instead of being silently created with wrong
+   * mappings. Nothing here reduces validation strictness — it only
+   * upgrades existing checks from "warn and continue" to "reject the row".
    */
   private validateReferences(
     question: BulkUploadQuestion,
@@ -1034,45 +1056,40 @@ export class BankUploadService {
     result: UploadResult,
     rowNum: number
   ): void {
-    if (!examIds.has(question.examId)) {
-      result.warnings.push({ row: rowNum, message: `examId "${question.examId}" not found in database` });
+    void result; // kept in the signature to avoid touching both call sites' argument lists
+    void rowNum;
+
+    if (!question.examId || !examIds.has(question.examId)) {
+      throw new Error(`examId "${question.examId}" not found in database — is exam ka koi question is exam ke test/mock me kabhi dikhega hi nahi, isliye row reject kiya gaya`);
     }
     if (!subjectIds.has(question.subjectId)) {
-      result.warnings.push({ row: rowNum, message: `subjectId "${question.subjectId}" not found in database` });
+      throw new Error(`subjectId "${question.subjectId}" not found in database`);
     }
     if (!chapterIds.has(question.chapterId)) {
-      result.warnings.push({ row: rowNum, message: `chapterId "${question.chapterId}" not found in database` });
-    } else {
-      const chapterSubject = chapterSubjectMap.get(question.chapterId);
-      if (chapterSubject && chapterSubject !== question.subjectId) {
-        result.warnings.push({ 
-          row: rowNum, 
-          message: `chapterId "${question.chapterId}" belongs to subject "${chapterSubject}", not "${question.subjectId}"` 
-        });
-      }
+      throw new Error(`chapterId "${question.chapterId}" not found in database`);
     }
-    if (question.topicId && !topicIds.has(question.topicId)) {
-      result.warnings.push({ row: rowNum, message: `topicId "${question.topicId}" not found in database` });
+    const chapterSubject = chapterSubjectMap.get(question.chapterId);
+    if (chapterSubject && chapterSubject !== question.subjectId) {
+      throw new Error(
+        `chapterId "${question.chapterId}" belongs to a DIFFERENT subject ("${chapterSubject}") than the subjectId "${question.subjectId}" given in this row — this is exactly the "galat subject me question dikhna" bug, row rejected. Fix the subjectId or chapterId in the sheet to match.`,
+      );
     }
     if (question.topicId) {
+      if (!topicIds.has(question.topicId)) {
+        throw new Error(`topicId "${question.topicId}" not found in database`);
+      }
       const topicChapter = topicChapterMap.get(question.topicId);
       if (topicChapter && topicChapter !== question.chapterId) {
-        result.warnings.push({ 
-          row: rowNum, 
-          message: `topicId "${question.topicId}" belongs to chapter "${topicChapter}", not "${question.chapterId}"` 
-        });
+        throw new Error(`topicId "${question.topicId}" belongs to chapter "${topicChapter}", not the chapterId "${question.chapterId}" given in this row`);
       }
     }
-    if (question.subTopicId && !subTopicIds.has(question.subTopicId)) {
-      result.warnings.push({ row: rowNum, message: `subTopicId "${question.subTopicId}" not found in database` });
-    }
     if (question.subTopicId) {
+      if (!subTopicIds.has(question.subTopicId)) {
+        throw new Error(`subTopicId "${question.subTopicId}" not found in database`);
+      }
       const subTopicTopic = subTopicTopicMap.get(question.subTopicId);
       if (subTopicTopic && subTopicTopic !== question.topicId) {
-        result.warnings.push({ 
-          row: rowNum, 
-          message: `subTopicId "${question.subTopicId}" belongs to topic "${subTopicTopic}", not "${question.topicId}"` 
-        });
+        throw new Error(`subTopicId "${question.subTopicId}" belongs to topic "${subTopicTopic}", not the topicId "${question.topicId}" given in this row`);
       }
     }
   }
