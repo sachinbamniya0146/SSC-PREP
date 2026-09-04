@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { S3Service } from '../s3/s3.service';
 import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
+import { randomUUID } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 
 export interface BulkUploadQuestion {
@@ -18,6 +20,21 @@ export interface BulkUploadQuestion {
   // instead, see options[].diagramType below). Codes: diagram-types.ts.
   questionDiagramType?: string;
   questionDiagramLabels?: string[];
+  // Session 24 — for diagram types that AREN'T simple Venn circles (mirror
+  // image, figure series, embedded figures, paper folding, dice/clock) —
+  // a real uploaded image URL for the question stem. See S3Service.
+  questionImageUrl?: string;
+  // Session 25 — the SELF-CONTAINED alternative to questionImageUrl: put
+  // the raw image data directly in the JSON (base64-encoded, no data:
+  // URL prefix) instead of uploading it separately first. createQuestion()
+  // uploads it to S3 automatically and fills in questionImageUrl for you.
+  // Ideal when an AI tool (e.g. Claude reading scanned exam-book photos)
+  // is generating the whole bulk-upload JSON in one shot — no separate
+  // "upload image, get URL, paste URL back" round trip needed. Excel/CSV
+  // don't support this (impractical to paste base64 into a spreadsheet
+  // cell) — use questionImageUrl there instead.
+  questionImageBase64?: string;
+  questionImageMimeType?: string; // e.g. "image/png" — defaults to image/png if omitted
   options: {
     key: string;
     text: string;
@@ -28,6 +45,13 @@ export interface BulkUploadQuestion {
     // empty when diagramType is set; it no longer needs to hold a caption.
     diagramType?: string;
     diagramLabels?: string[];
+    // Session 24 — real uploaded image (mirror image / figure series /
+    // etc). Mutually exclusive with diagramType in practice.
+    imageUrl?: string;
+    // Session 25 — self-contained base64 alternative, see
+    // questionImageBase64 above for the full explanation.
+    imageBase64?: string;
+    imageMimeType?: string;
   }[];
   correctAnswer: string;
   explanation?: string;
@@ -57,7 +81,7 @@ export interface QuestionTemplate {
 
 @Injectable()
 export class BankUploadService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private s3: S3Service) {}
 
   /**
    * Validate and parse Excel file for bulk question upload
@@ -162,6 +186,7 @@ export class BankUploadService {
           'optionC*', 'optionC_Hindi',
           'optionD*', 'optionD_Hindi',
           'optionDiagramTypes', 'optionDiagramLabels',
+          'questionImageUrl', 'optionImageUrls',
           'correctAnswer*', 'explanation', 'explanationHindi',
           'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
           'difficulty'
@@ -175,6 +200,7 @@ export class BankUploadService {
             '25', '25',
             '35', '35',
             '40', '40',
+            '', '',
             '', '',
             'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
             '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
@@ -193,6 +219,7 @@ export class BankUploadService {
             '', '',
             '', '',
             'V1|V3|V6|V2', 'टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल',
+            '', '',
             'A', 'टिकट, हवाई जहाज और रेल तीनों एक-दूसरे से संबंधित हैं (यात्रा से जुड़े)', '',
             '2019', '', '', '2', '0.5',
             'MEDIUM'
@@ -210,6 +237,7 @@ export class BankUploadService {
           'optionC*', 'optionC_Hindi',
           'optionD*', 'optionD_Hindi',
           'optionDiagramTypes', 'optionDiagramLabels',
+          'questionImageUrl', 'optionImageUrls',
           'correctAnswer*', 'explanation', 'explanationHindi',
           'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
           'difficulty'
@@ -224,6 +252,7 @@ export class BankUploadService {
             '35', '35',
             '40', '40',
             '', '',
+            '', '',
             'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
             '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
             'EASY'
@@ -237,6 +266,7 @@ export class BankUploadService {
             '', '',
             '', '',
             'V1|V3|V6|V2', 'टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल',
+            '', '',
             'A', 'टिकट, हवाई जहाज और रेल तीनों एक-दूसरे से संबंधित हैं (यात्रा से जुड़े)', '',
             '2019', '', '', '2', '0.5',
             'MEDIUM'
@@ -254,6 +284,7 @@ export class BankUploadService {
           'optionC*', 'optionC_Hindi',
           'optionD*', 'optionD_Hindi',
           'optionDiagramTypes', 'optionDiagramLabels',
+          'questionImageUrl', 'optionImageUrls',
           'correctAnswer*', 'explanation', 'explanationHindi',
           'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
           'difficulty'
@@ -268,6 +299,7 @@ export class BankUploadService {
             '35', '35',
             '40', '40',
             '', '',
+            '', '',
             'A', 'Multiply 150 by 0.20', '150 को 0.20 से गुणा करें',
             '2023', 'Shift 1', 'PAPER-1', '2', '0.5',
             'EASY'
@@ -281,6 +313,7 @@ export class BankUploadService {
             '', '',
             '', '',
             'V1|V3|V6|V2', 'टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल|टिकट,हवाई जहाज,रेल',
+            '', '',
             'A', 'टिकट, हवाई जहाज और रेल तीनों एक-दूसरे से संबंधित हैं (यात्रा से जुड़े)', '',
             '2019', '', '', '2', '0.5',
             'MEDIUM'
@@ -293,7 +326,7 @@ export class BankUploadService {
           'examId*', 'subjectId*', 'chapterId*', 'topicId', 'subTopicId',
           'questionText*', 'questionTextHindi',
           'questionDiagramType', 'questionDiagramLabels',
-          'options*', 'correctAnswer*', 'explanation', 'explanationHindi',
+          'options*', 'questionImageUrl', 'correctAnswer*', 'explanation', 'explanationHindi',
           'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
           'difficulty'
         ],
@@ -372,7 +405,120 @@ export class BankUploadService {
         'optionDiagramTypes': 'Pipe-separated, one code per option in A,B,C,D order, e.g. "V1|V3|V6|V2". Leave a slot empty for a plain-text option.',
         'optionDiagramLabels': 'Pipe-separated groups matching the same A,B,C,D order; labels within one option are comma-separated, e.g. "a,b,c|x,y,z|,|p,q,r".',
       },
+      // Session 24 — mirror image / figure series / embedded figures /
+      // paper folding / dice-clock etc. can't be reduced to a type-code
+      // taxonomy like Venn diagrams — they need a real picture instead.
+      nonVennDiagramTypes: {
+        description:
+          'For diagram types that are NOT simple Venn circles (mirror image, figure series, embedded figures, paper ' +
+          'folding, dice/clock, counting figures, etc.), there are TWO ways to get the image in — pick whichever fits ' +
+          'your workflow:',
+        method1_uploadThenReference: {
+          description:
+            'Upload the real image first via POST /bank/admin/upload/question-image (one image per call, max 5MB, ' +
+            'png/jpg/webp/svg) — it returns a URL. Then put that URL in the questionImageUrl (stem is the image) or ' +
+            'optionImageUrls (pipe-separated per option, same A,B,C,D order as optionDiagramTypes) column of a normal ' +
+            'bulk Excel/CSV/JSON upload, exactly like the Venn diagramType codes. Best when images are already hosted ' +
+            'somewhere, or you\'re filling in the Excel/CSV template by hand.',
+          uploadEndpoint: 'POST /bank/admin/upload/question-image (multipart/form-data, field name "file")',
+        },
+        // Session 25 — the self-contained alternative: no separate upload
+        // step, no round trip. Ideal for an AI tool generating the whole
+        // bulk-upload file in one shot from scanned exam-book photos.
+        method2_base64InJson: {
+          description:
+            'JSON upload ONLY (not Excel/CSV — impractical to paste base64 into a spreadsheet cell). Put the raw image ' +
+            'bytes directly in the question JSON as base64 (no "data:image/png;base64," prefix needed, though it\'s ' +
+            'tolerated): questionImageBase64 / questionImageMimeType for a stem image, or imageBase64 / imageMimeType ' +
+            'on an individual option object. createQuestion() uploads it to S3 and fills in the URL automatically — ' +
+            'the whole question (text + images) goes up in ONE upload call, no separate "upload image, get URL, paste ' +
+            'URL back" round trip. mimeType defaults to image/png if omitted; allowed: image/png, image/jpeg, ' +
+            'image/webp, image/svg+xml; 5MB limit per image, same as method 1.',
+          example: {
+            questionText: 'नीचे दिए गए चार आकृतियों में से दर्पण-प्रतिबिंब (mirror image) चुनें।',
+            options: [
+              { key: 'A', text: '', imageBase64: '<base64 bytes of option A image>', imageMimeType: 'image/png' },
+              { key: 'B', text: '', imageBase64: '<base64 bytes of option B image>', imageMimeType: 'image/png' },
+              { key: 'C', text: '', imageBase64: '<base64 bytes of option C image>', imageMimeType: 'image/png' },
+              { key: 'D', text: '', imageBase64: '<base64 bytes of option D image>', imageMimeType: 'image/png' },
+            ],
+            correctAnswer: 'B',
+          },
+        },
+      },
     };
+  }
+
+  /**
+   * Session 25 — decodes a base64 image string and uploads it to S3,
+   * exactly like uploadQuestionImage() does for a multipart file upload.
+   * Shared by createQuestion() (self-contained JSON bulk upload) so both
+   * paths (separate upload-then-reference, and embed-directly-in-JSON)
+   * go through the same size/type validation and S3 key scheme.
+   */
+  private async uploadBase64Image(base64: string, mimeType?: string): Promise<string> {
+    const mt = mimeType || 'image/png';
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml'];
+    if (!allowedTypes.includes(mt)) {
+      throw new Error(`Unsupported image type "${mt}" in base64 image data. Allowed: ${allowedTypes.join(', ')}.`);
+    }
+    // Accept both a bare base64 string and a full "data:image/png;base64,...." URL.
+    const cleaned = base64.includes(',') && base64.trim().startsWith('data:') ? base64.split(',')[1] : base64;
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(cleaned, 'base64');
+    } catch {
+      throw new Error('Invalid base64 image data.');
+    }
+    if (!buffer.length) {
+      throw new Error('Base64 image data decoded to an empty file.');
+    }
+    const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB — same limit as the multipart upload endpoint
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      throw new Error(`Base64 image too large (${Math.round(buffer.length / 1024)} KB) — max 5 MB.`);
+    }
+    const ext = mt.split('/')[1]?.replace('svg+xml', 'svg') || 'png';
+    const key = `question-images/${randomUUID()}.${ext}`;
+    return this.s3.uploadQuestionImage(key, buffer, mt);
+  }
+
+  /**
+   * Session 24 — for diagram question types that AREN'T simple Venn
+   * circles (mirror image, figure series, embedded figures, paper
+   * folding, dice/clock — genuinely arbitrary shapes). Admin (or an AI
+   * tool acting on the admin's behalf) uploads ONE image at a time here
+   * and gets back a URL; that URL then goes straight into the
+   * questionImageUrl / optionImageUrls column of a normal bulk Excel/CSV/
+   * JSON upload (same two-step pattern as the diagram-type codes: get the
+   * reference value first, then reference it in the bulk file).
+   *
+   * Deliberately kept as a single-image endpoint rather than a bulk
+   * zip-of-images uploader — that would need a new unzip dependency this
+   * sandbox couldn't verify end-to-end (no network to npm install/test
+   * it). A script/UI can call this endpoint in a loop for hundreds of
+   * images; a true bulk zip-batch endpoint is a good next-session addition
+   * once that can be tested against a real npm install.
+   *
+   * Session 25 — this is now the SECOND way to get an image in (see
+   * questionImageBase64 / option.imageBase64 for the self-contained,
+   * single-request alternative that's ideal for AI-generated bulk JSON).
+   */
+  async uploadQuestionImage(file: { buffer: Buffer; mimetype: string; originalname: string }): Promise<{ url: string; key: string }> {
+    if (!file || !file.buffer?.length) {
+      throw new BadRequestException('No image file provided.');
+    }
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml'];
+    if (!allowedTypes.includes(file.mimetype)) {
+      throw new BadRequestException(`Unsupported image type "${file.mimetype}". Allowed: ${allowedTypes.join(', ')}.`);
+    }
+    const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB — question figures are small line-art, not photos
+    if (file.buffer.length > MAX_IMAGE_BYTES) {
+      throw new BadRequestException(`Image too large (${Math.round(file.buffer.length / 1024)} KB) — max 5 MB.`);
+    }
+    const ext = (file.originalname.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+    const key = `question-images/${randomUUID()}.${ext}`;
+    const url = await this.s3.uploadQuestionImage(key, file.buffer, file.mimetype);
+    return { url, key };
   }
 
   /**
@@ -812,16 +958,28 @@ export class BankUploadService {
     const diagramTypeFor = (i: number) => normalizeDiagramType(optionDiagramTypeParts[i]?.trim() || undefined);
     const diagramLabelsFor = (i: number) => parseDiagramLabels(optionDiagramLabelParts[i]);
 
+    // Session 24 — real-image OPTIONS (mirror image / figure series /
+    // embedded figures / paper folding / dice/clock — shapes that can't be
+    // reduced to the Venn type-code taxonomy). "optionImageUrls" is
+    // pipe-separated, one URL per option in A,B,C,D order, same shape as
+    // optionDiagramTypes above. Get URLs first via
+    // POST /bank/admin/upload/question-image (one call per image), or
+    // paste in URLs from your own image host.
+    const optionImageUrlParts = get('optionImageUrls').split('|');
+    const imageUrlFor = (i: number) => optionImageUrlParts[i]?.trim() || undefined;
+
     const options = [
-      { key: 'A', text: get('optionA'), textHi: get('optionA_Hindi') || undefined, diagramType: diagramTypeFor(0), diagramLabels: diagramLabelsFor(0) },
-      { key: 'B', text: get('optionB'), textHi: get('optionB_Hindi') || undefined, diagramType: diagramTypeFor(1), diagramLabels: diagramLabelsFor(1) },
-      { key: 'C', text: get('optionC'), textHi: get('optionC_Hindi') || undefined, diagramType: diagramTypeFor(2), diagramLabels: diagramLabelsFor(2) },
-      { key: 'D', text: get('optionD'), textHi: get('optionD_Hindi') || undefined, diagramType: diagramTypeFor(3), diagramLabels: diagramLabelsFor(3) },
+      { key: 'A', text: get('optionA'), textHi: get('optionA_Hindi') || undefined, diagramType: diagramTypeFor(0), diagramLabels: diagramLabelsFor(0), imageUrl: imageUrlFor(0) },
+      { key: 'B', text: get('optionB'), textHi: get('optionB_Hindi') || undefined, diagramType: diagramTypeFor(1), diagramLabels: diagramLabelsFor(1), imageUrl: imageUrlFor(1) },
+      { key: 'C', text: get('optionC'), textHi: get('optionC_Hindi') || undefined, diagramType: diagramTypeFor(2), diagramLabels: diagramLabelsFor(2), imageUrl: imageUrlFor(2) },
+      { key: 'D', text: get('optionD'), textHi: get('optionD_Hindi') || undefined, diagramType: diagramTypeFor(3), diagramLabels: diagramLabelsFor(3), imageUrl: imageUrlFor(3) },
     ];
 
     // Session 22 — rarer case: the QUESTION STEM itself is the diagram.
     const questionDiagramType = normalizeDiagramType(get('questionDiagramType') || undefined);
     const questionDiagramLabels = parseDiagramLabels(get('questionDiagramLabels'));
+    // Session 24 — rarer case: the QUESTION STEM itself is a real image.
+    const questionImageUrl = get('questionImageUrl') || undefined;
 
     const correctAnswer = get('correctAnswer').toUpperCase();
     if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) {
@@ -846,6 +1004,7 @@ export class BankUploadService {
       questionTextHindi: get('questionTextHindi') || undefined,
       questionDiagramType,
       questionDiagramLabels,
+      questionImageUrl,
       options,
       correctAnswer,
       explanation: get('explanation') || undefined,
@@ -929,7 +1088,7 @@ export class BankUploadService {
       // Session 22: fold diagramType into the signature too, so two
       // different diagram-only options (empty text, different diagram)
       // don't hash-collide as "duplicates" of each other.
-      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}`)
+      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}${o.imageUrl ? ':' + o.imageUrl : ''}`)
       .join('|');
     const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
 
@@ -998,6 +1157,23 @@ export class BankUploadService {
    * "is it live" fields needed to agree with each other.
    */
   private async createQuestion(question: BulkUploadQuestion, adminId: string): Promise<{ published: boolean }> {
+    // Session 25 — resolve any base64 images to real S3 URLs FIRST, before
+    // any validation runs (so the "has an image" checks below see the
+    // resolved questionImageUrl / option.imageUrl either way, regardless
+    // of whether the caller supplied a URL or raw base64 data). This is
+    // what makes a single self-contained JSON upload work end-to-end: an
+    // AI tool (or admin) can put raw image bytes straight in the bulk
+    // JSON instead of doing a separate "upload image, get URL, paste URL
+    // back" round trip first.
+    if (question.questionImageBase64 && !question.questionImageUrl) {
+      question.questionImageUrl = await this.uploadBase64Image(question.questionImageBase64, question.questionImageMimeType);
+    }
+    for (const o of question.options) {
+      if (o.imageBase64 && !o.imageUrl) {
+        o.imageUrl = await this.uploadBase64Image(o.imageBase64, o.imageMimeType);
+      }
+    }
+
     // BUGFIX (this session — "student ko question dikhta hai par answer nahi
     // de pa raha" root cause #1): NOTHING anywhere in the 5 upload paths
     // (Excel/CSV/Text/JSON-file/JSON-paste/Word — they ALL funnel through
@@ -1016,27 +1192,28 @@ export class BankUploadService {
     // duplicating the check in parseQuestionRow (Excel/CSV/Text) AND
     // processStructuredQuestions (JSON/Word), which only cover a subset.
     if (!question.questionText || !question.questionText.trim()) {
-      // Session 22: a diagram-stem question can still have short/empty
-      // link text ("वेन आरेख का चयन करें"), so this only blocks a TRULY
-      // blank stem with no text AND no stem diagram either.
-      if (!question.questionDiagramType) {
+      // Session 22/24: a diagram-stem or image-stem question can still
+      // have short/empty link text, so this only blocks a TRULY blank
+      // stem with no text AND no stem diagram AND no stem image either.
+      if (!question.questionDiagramType && !question.questionImageUrl) {
         throw new Error('questionText is empty — question text cannot be blank.');
       }
     }
-    // Session 22: an option counts as filled if it has non-empty TEXT *or*
-    // a valid diagramType (a diagram option can legitimately have empty
-    // text — the diagram itself is the answer choice).
+    // Session 22/24: an option counts as filled if it has non-empty TEXT,
+    // *or* a valid diagramType, *or* a real imageUrl (a diagram/image
+    // option can legitimately have empty text — the diagram/picture itself
+    // is the answer choice).
     const missingOptions = question.options
-      .filter((o) => (!o.text || !o.text.trim()) && !o.diagramType)
+      .filter((o) => (!o.text || !o.text.trim()) && !o.diagramType && !o.imageUrl)
       .map((o) => o.key);
     if (missingOptions.length > 0) {
       throw new Error(
-        `Option${missingOptions.length > 1 ? 's' : ''} ${missingOptions.join(', ')} ${missingOptions.length > 1 ? 'are' : 'is'} empty — every option (A–D) needs either text or a diagramType.`,
+        `Option${missingOptions.length > 1 ? 's' : ''} ${missingOptions.join(', ')} ${missingOptions.length > 1 ? 'are' : 'is'} empty — every option (A–D) needs text, a diagramType, or an imageUrl.`,
       );
     }
     const correctOption = question.options.find((o) => o.key === question.correctAnswer);
-    if (!correctOption || (!correctOption.text.trim() && !correctOption.diagramType)) {
-      throw new Error(`correctAnswer is "${question.correctAnswer}" but option ${question.correctAnswer} has no text and no diagramType.`);
+    if (!correctOption || (!correctOption.text.trim() && !correctOption.diagramType && !correctOption.imageUrl)) {
+      throw new Error(`correctAnswer is "${question.correctAnswer}" but option ${question.correctAnswer} has no text, diagramType, or imageUrl.`);
     }
 
     // Check for duplicates first
@@ -1060,6 +1237,7 @@ export class BankUploadService {
       // identical to before for the ~99% of non-diagram questions.
       ...(o.diagramType ? { diagramType: o.diagramType } : {}),
       ...(o.diagramLabels?.length ? { diagramLabels: o.diagramLabels } : {}),
+      ...(o.imageUrl ? { imageUrl: o.imageUrl } : {}),
     }));
 
     // Create search hash for future duplicate detection
@@ -1069,7 +1247,7 @@ export class BankUploadService {
       // Session 22: fold diagramType into the signature too, so two
       // different diagram-only options (empty text, different diagram)
       // don't hash-collide as "duplicates" of each other.
-      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}`)
+      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}${o.imageUrl ? ':' + o.imageUrl : ''}`)
       .join('|');
     const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
 
@@ -1088,6 +1266,7 @@ export class BankUploadService {
         questionTextHindi: question.questionTextHindi || '',
         questionDiagramType: question.questionDiagramType || null,
         questionDiagramLabels: (question.questionDiagramLabels as any) || undefined,
+        questionImageUrl: question.questionImageUrl || null,
         optionsJson: optionsJson as any,
         correctAnswer: question.correctAnswer,
         explanation: question.explanation || '',
