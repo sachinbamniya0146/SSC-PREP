@@ -219,8 +219,8 @@ export default function PdfStudioPage() {
       }
       setUploadMsg(`✅ Upload ho gaya — batch #${d?.batch?.id?.slice(0, 8) || "?"} banaya, ${d?.batch?.totalChunks ?? "?"} chunks queue mein daale gaye.`);
       setFile(null);
-      (document.getElementById("pdf-file-input") as HTMLInputElement | null)?.value &&
-        ((document.getElementById("pdf-file-input") as HTMLInputElement).value = "");
+      const pdfFileInput = document.getElementById("pdf-file-input") as HTMLInputElement | null;
+      if (pdfFileInput) pdfFileInput.value = "";
       loadBatches();
     } catch (e) {
       setUploadErr(e instanceof Error ? e.message : "Upload fail ho gaya.");
