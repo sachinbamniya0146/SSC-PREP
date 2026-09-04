@@ -13,7 +13,9 @@ type ReviewQuestion = {
   // Session 22 — Venn/figure diagram support (see DiagramVenn.tsx)
   questionDiagramType?: string | null;
   questionDiagramLabels?: (string | null)[] | null;
-  options: { key: string; text: string; textHi: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null }[];
+  // Session 24 — non-Venn diagram stem image
+  questionImageUrl?: string | null;
+  options: { key: string; text: string; textHi: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null; imageUrl?: string | null }[];
   selectedOption: string | null;
   correctAnswer: string;
   isCorrect: boolean;
@@ -449,6 +451,12 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
           <DiagramVenn type={q.questionDiagramType} labels={q.questionDiagramLabels} size={170} />
         </div>
       )}
+      {q.questionImageUrl && (
+        <div className="mt-2 flex justify-center rounded-xl border border-border bg-muted/30 p-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={q.questionImageUrl} alt="Question figure" className="max-h-64 max-w-full object-contain" />
+        </div>
+      )}
 
       <div className="mt-3 space-y-2">
         {q.options.map((o) => {
@@ -467,6 +475,9 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
               {/* Session 22 — diagram option (common case: A/B/C/D are each a different diagram) */}
               {o.diagramType ? (
                 <DiagramVenn type={o.diagramType} labels={o.diagramLabels} size={120} />
+              ) : o.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={o.imageUrl} alt={`Option ${o.key}`} className="max-h-32 max-w-full object-contain" />
               ) : (
                 <span className="leading-relaxed">{optText(o)}</span>
               )}
