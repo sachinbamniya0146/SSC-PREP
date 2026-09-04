@@ -429,6 +429,130 @@ export class BankService implements OnModuleInit {
     return this.prisma.chapter.create({ data: { subjectId, name: trimmedName, slug } });
   }
 
+  // ---- Question review queue (bulk-upload questions, not PDF-ingestion) ----
+  // BUG FIX / MISSING FEATURE ("admin pura ek ek question ko dekh paye"):
+  // approve/reject/bulk-approve endpoints already existed in
+  // pdf-ingestion.controller.ts, but EVERY ONE of them is scoped to a
+  // batchId (GET /pdf-ingestion/batches/:id/questions) — they only ever
+  // find questions that have an importBatchId set. bank-upload.service.ts's
+  // createQuestion() (the actual method every Excel/CSV/JSON/Word bulk
+  // upload funnels through) never sets importBatchId at all. The result:
+  // a question uploaded via Excel without a Hindi translation goes
+  // isApproved:false / reviewStatus:'PENDING' (see createQuestion()'s
+  // bilingual gate) and then has NO review queue anywhere that will ever
+  // find it — not the PDF-ingestion one (wrong source), not anywhere else
+  // (didn't exist). It sits PENDING forever with no way for an admin to
+  // even see it, let alone approve/edit/reject it. These three methods
+  // are a source-agnostic review queue: list/approve/reject by Question.id
+  // directly, no batch required.
+  async listPendingQuestions(filters: { examId?: string; subjectId?: string; chapterId?: string; skip?: number; take?: number }) {
+    const where: any = { isApproved: false, reviewStatus: 'PENDING' };
+    if (filters.examId) where.examId = filters.examId;
+    if (filters.subjectId) where.subjectId = filters.subjectId;
+    if (filters.chapterId) where.chapterId = filters.chapterId;
+    const take = Math.min(filters.take ?? 20, 100);
+    const skip = filters.skip ?? 0;
+    const [rows, total] = await Promise.all([
+      this.prisma.question.findMany({
+        where,
+        include: {
+          exam: { select: { name: true } },
+          subject: { select: { name: true } },
+          chapter: { select: { name: true } },
+          topic: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.question.count({ where }),
+    ]);
+    return {
+      total,
+      data: rows.map((r) => ({
+        id: r.id,
+        questionText: r.questionText,
+        questionTextHindi: r.questionTextHindi,
+        options: r.optionsJson,
+        correctAnswer: r.correctAnswer,
+        explanation: r.explanation,
+        explanationHindi: r.explanationHindi,
+        examName: r.exam?.name ?? null,
+        subjectName: r.subject?.name ?? null,
+        chapterName: r.chapter?.name ?? null,
+        topicName: r.topic?.name ?? null,
+        year: r.year,
+        shift: r.shift,
+        difficulty: r.difficulty,
+        createdAt: r.createdAt,
+      })),
+    };
+  }
+
+  /**
+   * Approve a pending question, with optional edits applied at the same
+   * time (e.g. admin fills in the missing Hindi translation right here and
+   * approves in one action, instead of needing a separate edit screen).
+   */
+  async approvePendingQuestion(
+    id: string,
+    adminId: string,
+    edits?: Partial<{
+      questionText: string;
+      questionTextHindi: string;
+      explanation: string;
+      explanationHindi: string;
+      options: Array<{ key: string; text: string; textHi?: string }>;
+      correctAnswer: string;
+    }>,
+  ) {
+    const question = await this.prisma.question.findUnique({ where: { id } });
+    if (!question) throw new BadRequestException(`Question not found: ${id}`);
+    const updated = await this.prisma.question.update({
+      where: { id },
+      data: {
+        ...(edits?.questionText !== undefined ? { questionText: edits.questionText } : {}),
+        ...(edits?.questionTextHindi !== undefined ? { questionTextHindi: edits.questionTextHindi } : {}),
+        ...(edits?.explanation !== undefined ? { explanation: edits.explanation } : {}),
+        ...(edits?.explanationHindi !== undefined ? { explanationHindi: edits.explanationHindi } : {}),
+        ...(edits?.options !== undefined ? { optionsJson: edits.options as any } : {}),
+        ...(edits?.correctAnswer !== undefined ? { correctAnswer: edits.correctAnswer } : {}),
+        isApproved: true,
+        isActive: true,
+        reviewStatus: 'APPROVED',
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'QUESTION_MANUALLY_APPROVED',
+        targetEntity: 'Question',
+        entityId: id,
+        metadataJson: { hadEdits: !!edits } as any,
+      },
+    });
+    return updated;
+  }
+
+  async rejectPendingQuestion(id: string, adminId: string, reason?: string) {
+    const question = await this.prisma.question.findUnique({ where: { id } });
+    if (!question) throw new BadRequestException(`Question not found: ${id}`);
+    const updated = await this.prisma.question.update({
+      where: { id },
+      data: { isApproved: false, isActive: false, reviewStatus: 'REJECTED' },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'QUESTION_MANUALLY_REJECTED',
+        targetEntity: 'Question',
+        entityId: id,
+        metadataJson: { reason: reason ?? null } as any,
+      },
+    });
+    return updated;
+  }
+
   // ---- Admin topic management ----
   // NEW ("chapter mein bhi topic hona tha jaise English mein Noun, Pronoun
   // — vesa har subject mein"): the Topic model (Chapter → Topic →
