@@ -235,6 +235,21 @@ export default function DashboardPage() {
                   Chapter ke andar topics banayein (Noun, Pronoun...) for topic-level analysis
                 </div>
               </a>
+              {/* NEW ("admin pura ek ek question ko dekh paye"): every
+                  Excel/CSV/JSON/Word bulk-upload question that goes
+                  PENDING (missing Hindi translation) had no review queue
+                  anywhere — the existing approve/reject endpoints are
+                  strictly PDF-ingestion-batch-scoped and never see these.
+                  Now wired to /admin/questions/review. */}
+              <a
+                href="/admin/questions/review"
+                className="rounded-lg border border-border bg-card p-4 hover:border-amber-500/50 hover:shadow-md transition"
+              >
+                <div className="font-semibold">✅ Question Review</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Pending questions (missing Hindi, etc.) ko dekh kar edit/approve/reject karein
+                </div>
+              </a>
               {/* ROOT-CAUSE FIX: there was NO way anywhere in the app —
                   backend or frontend — to create an Exam (SSC CGL, SSC CHSL,
                   etc.) itself. bank.service.ts's meta() (powers "Choose Your
