@@ -31,6 +31,16 @@ sleep 20
 echo "🗄️ Running database migrations..."
 docker exec ssc-backend npx prisma migrate deploy
 
+# BUGFIX (students unable to start any test — "Test template not found"):
+# migrate deploy only applies schema changes; it never inserts data. The
+# TestTemplate table stayed empty in production because nothing ever ran
+# scripts/seed-mocks.mjs after migrations, so every POST /tests/attempts/start
+# and every /mocks list hit an empty TestTemplate table. This step is
+# idempotent (the script does testTemplate.upsert on fixed ids), so it is
+# safe to run on every single deploy, not just the first one.
+echo "🌱 Seeding test templates (idempotent upsert)..."
+docker exec ssc-backend node scripts/seed-mocks.mjs || echo "⚠️ Seed step failed — check logs, but continuing deploy"
+
 # Restart nginx to pick up any config changes
 echo "🔄 Restarting nginx..."
 docker compose restart nginx
