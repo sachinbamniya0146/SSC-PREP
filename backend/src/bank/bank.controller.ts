@@ -120,6 +120,58 @@ export class BankController {
     return this.bank.createTopic(body.chapterId, body.name);
   }
 
+  // NEW ("admin pura ek ek question ko dekh paye"): source-agnostic
+  // review queue for PENDING questions — covers Excel/CSV/JSON/Word bulk
+  // uploads, which the existing pdf-ingestion approve/reject endpoints
+  // never reach (those are strictly scoped to a PDF-ingestion batchId; see
+  // BankService.listPendingQuestions() doc comment for the full story).
+  @Get('admin/questions/pending')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  listPending(
+    @Query('examId') examId?: string,
+    @Query('subjectId') subjectId?: string,
+    @Query('chapterId') chapterId?: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.bank.listPendingQuestions({
+      examId,
+      subjectId,
+      chapterId,
+      skip: skip ? parseInt(skip, 10) : undefined,
+      take: take ? parseInt(take, 10) : undefined,
+    });
+  }
+
+  @Post('admin/questions/:id/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  approvePending(
+    @Param('id') id: string,
+    @Req() req: any,
+    @Body()
+    body?: {
+      questionText?: string;
+      questionTextHindi?: string;
+      explanation?: string;
+      explanationHindi?: string;
+      options?: Array<{ key: string; text: string; textHi?: string }>;
+      correctAnswer?: string;
+    },
+  ) {
+    const adminId = req.user?.userId ?? req.user?.id;
+    return this.bank.approvePendingQuestion(id, adminId, body);
+  }
+
+  @Post('admin/questions/:id/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  rejectPending(@Param('id') id: string, @Req() req: any, @Body() body?: { reason?: string }) {
+    const adminId = req.user?.userId ?? req.user?.id;
+    return this.bank.rejectPendingQuestion(id, adminId, body?.reason);
+  }
+
   // FIX (CRITICAL answer-key leak, see BankService.getAttemptedQuestionIds
   // doc comment): browse/getSet/chapterPyq/getById never received the
   // caller's userId at all, so the service had no way to gate
