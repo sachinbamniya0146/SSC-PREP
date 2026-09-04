@@ -27,6 +27,17 @@ interface Q {
   questionTextHindi?: string | null;
   options: { key: string; text: string }[];
   chapter: string;
+  // FIX ("year mention hoga kya, shift bhi hona tha, kis exam mein aaya
+  // esa dikhega ya nahi"): bank.service.ts's browse() has always returned
+  // exam/year/shift/topic/subject on every row, but this Q type never
+  // declared them, so TypeScript-safe code never read them and no card
+  // ever displayed them — visible data was silently dropped on the floor.
+  exam?: string | null;
+  subject?: string | null;
+  topic?: string | null;
+  year?: number | null;
+  shift?: string | null;
+  paperCode?: string | null;
   answerVerificationStatus?: string;
   lastVerifiedAt?: string | null;
 }
@@ -399,6 +410,35 @@ export default function QuestionBankPage() {
           const showAnswer = Boolean(a);
           return (
             <div key={q.id} className="rounded-xl border border-border bg-card p-5">
+              {/* FIX ("chapter mein topic bhi hona tha, year/shift/exam
+                  dikhna chahiye"): this metadata was already coming back
+                  from the API (chapter/exam/topic/year/shift) but nothing
+                  ever rendered it — a student browsing PYQs had no way to
+                  see which exam/year/shift a question was actually from,
+                  or which topic within the chapter it belonged to. */}
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                {q.chapter && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                    📖 {q.chapter}
+                  </span>
+                )}
+                {q.topic && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                    🏷️ {q.topic}
+                  </span>
+                )}
+                {q.exam && (
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                    🎓 {q.exam}
+                  </span>
+                )}
+                {q.year && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                    📅 {q.year}
+                    {q.shift ? ` · ${q.shift}` : ""}
+                  </span>
+                )}
+              </div>
               <div className="flex items-start gap-2">
                 <span className="rounded bg-muted px-2 py-0.5 text-xs font-semibold">{i + 1}</span>
                 <span className="text-sm font-medium">{showHi && q.questionTextHindi ? q.questionTextHindi : q.questionText}</span>
