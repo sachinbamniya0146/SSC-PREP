@@ -51,6 +51,38 @@ export default function VerificationPage() {
   const [questions, setQuestions] = React.useState<QRow[]>([]);
   const [user, setUser] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(true);
+  // NEW ("admin ko vo question ki list direct mil jani chahiye jisme Hindi
+  // translation nahi hai") — real list behind GET /bank/admin/questions/missing-hindi
+  const [missingHindi, setMissingHindi] = React.useState<{
+    total: number;
+    totalPages: number;
+    page: number;
+    questions: Array<{ id: string; preview: string; examName: string | null; chapterName: string | null; year: number | null; shift: string | null }>;
+  } | null>(null);
+  const [missingHindiPage, setMissingHindiPage] = React.useState(1);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editText, setEditText] = React.useState("");
+  const [savingId, setSavingId] = React.useState<string | null>(null);
+
+  const saveHindi = async (qid: string) => {
+    if (!editText.trim()) { alert("Hindi text khali nahi ho sakta"); return; }
+    setSavingId(qid);
+    try {
+      const r = await fetchAuth(`${apiBase}/bank/admin/questions/${qid}/translation`, {
+        method: "PUT",
+        headers: { ...headers(), "Content-Type": "application/json" },
+        body: JSON.stringify({ questionTextHindi: editText.trim() }),
+      });
+      const j = await r.json();
+      if (!r.ok) { alert(j.message || "Save failed"); return; }
+      setEditingId(null);
+      setEditText("");
+      // remove the fixed row locally + refresh totals
+      setMissingHindi((prev) => prev && { ...prev, total: prev.total - 1, questions: prev.questions.filter((q) => q.id !== qid) });
+      if (j.nowPublished) alert("✅ Saved — this question is now published (live for students).");
+    } catch (e) { console.error(e); alert("Save failed"); }
+    finally { setSavingId(null); }
+  };
 
   const apiBase = API_BASE;
   const headers = () => {
@@ -63,6 +95,14 @@ export default function VerificationPage() {
     if (raw) { try { setUser(JSON.parse(raw)); } catch {} }
     loadAll();
   }, []);
+
+  React.useEffect(() => {
+    fetchAuth(`${apiBase}/bank/admin/questions/missing-hindi?page=${missingHindiPage}&limit=25`, { headers: headers() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setMissingHindi(d))
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingHindiPage]);
 
   const loadAll = async () => {
     try {
@@ -173,6 +213,93 @@ export default function VerificationPage() {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* NEW: Missing Hindi Translation list — direct actionable list, not
+            just a count, so an admin can click straight through and fix
+            each row (v3 §6.3 bilingual gate means these are all currently
+            unpublished — this is exactly the "students ko question dikhna
+            band" backlog). */}
+        {missingHindi && missingHindi.total > 0 && (
+          <div className="mt-10 rounded-xl border border-warning/30 bg-warning/5 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-bold">
+                🈳 Missing Hindi Translation <span className="text-warning">({missingHindi.total})</span>
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                These questions were created but stay UNPUBLISHED until questionTextHindi is added.
+              </p>
+            </div>
+            <div className="mt-4 divide-y divide-border">
+              {missingHindi.questions.map((q) => (
+                <div key={q.id} className="py-2.5 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate">{q.preview}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {q.examName || "—"} · {q.chapterName || "—"}
+                        {q.year ? ` · ${q.year}` : ""}{q.shift ? ` · ${q.shift}` : ""}
+                      </p>
+                    </div>
+                    {editingId !== q.id && (
+                      <button
+                        onClick={() => { setEditingId(q.id); setEditText(""); }}
+                        className="shrink-0 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20"
+                      >
+                        Add Hindi →
+                      </button>
+                    )}
+                  </div>
+                  {editingId === q.id && (
+                    <div className="mt-2 rounded-lg border border-border bg-card p-3">
+                      <textarea
+                        autoFocus
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        placeholder="प्रश्न का हिंदी अनुवाद यहाँ लिखें..."
+                        className="w-full rounded-md border border-border bg-background p-2 text-sm font-hindi"
+                        rows={3}
+                      />
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          disabled={savingId === q.id}
+                          onClick={() => saveHindi(q.id)}
+                          className="btn btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
+                        >
+                          {savingId === q.id ? "Saving…" : "Save & Publish"}
+                        </button>
+                        <button
+                          onClick={() => { setEditingId(null); setEditText(""); }}
+                          className="btn btn-outline px-3 py-1.5 text-xs"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {missingHindi.totalPages > 1 && (
+              <div className="mt-4 flex items-center justify-center gap-3 text-xs">
+                <button
+                  disabled={missingHindiPage <= 1}
+                  onClick={() => setMissingHindiPage((p) => Math.max(1, p - 1))}
+                  className="btn btn-outline px-3 py-1 disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <span className="text-muted-foreground">Page {missingHindi.page} / {missingHindi.totalPages}</span>
+                <button
+                  disabled={missingHindiPage >= missingHindi.totalPages}
+                  onClick={() => setMissingHindiPage((p) => Math.min(missingHindi.totalPages, p + 1))}
+                  className="btn btn-outline px-3 py-1 disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
           </div>
         )}
 
