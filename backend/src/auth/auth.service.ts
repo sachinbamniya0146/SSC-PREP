@@ -19,6 +19,19 @@ import { REDIS_CLIENT } from '../redis/redis.module';
 import { MailService } from './mail.service';
 import { OtpService } from './otp.service';
 import { ReferralService } from '../referral/referral.service';
+import { istDateKey } from '../gamification/gamification.service';
+
+// BUGFIX: must stay in sync with the IST-day-boundary fix in
+// quiz/quiz.service.ts getToday() — that's what actually creates/reads
+// DailyQuiz rows keyed by `date`. This lookup used to compute `date` with
+// server-local midnight (`setHours(0,0,0,0)`, i.e. UTC midnight on the
+// VPS), which would silently miss today's real DailyQuiz row (created
+// under the correct IST-midnight key) and always report "not taken".
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+function istMidnightUtc(d: Date): Date {
+  const key = istDateKey(d);
+  return new Date(new Date(`${key}T00:00:00.000Z`).getTime() - IST_OFFSET_MS);
+}
 
 export interface TokenPair {
   accessToken: string;
@@ -404,8 +417,7 @@ export class AuthService implements OnModuleInit {
       }),
       this.prisma.bookmark.count({ where: { userId } }),
       (async () => {
-        const t = new Date();
-        t.setHours(0, 0, 0, 0);
+        const t = istMidnightUtc(new Date());
         const q = await this.prisma.dailyQuiz.findUnique({ where: { date: t } });
         if (!q) return null;
         const a = await this.prisma.dailyQuizAttempt.findUnique({
