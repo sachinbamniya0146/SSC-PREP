@@ -191,6 +191,14 @@ export default function TestPage() {
   const [hintUsed, setHintUsed] = React.useState<{ [qid: string]: boolean }>({});
   const [hintQuota, setHintQuota] = React.useState(3);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
+  // FIX (exam-integrity bug): "Show Answer" / "AI Hint" were rendering on
+  // EVERY test — including server-authoritative timed exams (sectional,
+  // year-wise, full mock) — which let a student see the correct answer
+  // mid-attempt and defeats the entire point of a mock test. This flag is
+  // set to true only when a real server attempt (ssc_active_attempt) is
+  // active, and both aids are hidden in that case. Untimed question-bank /
+  // chapter practice still gets the aids as before.
+  const [isExamMode, setIsExamMode] = React.useState(false);
 
   // ---- Load real title/duration/marks for the instructions screen before
   // the user ever clicks Start (BUGFIX — see preMeta/dailyGate above) ----
@@ -303,7 +311,7 @@ export default function TestPage() {
         durationSec = dd?.durationSec || 0;
         attemptId = dd?.attemptId ?? null;
         setAttemptId(attemptId);
-        if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
+        if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
       }
       // Session 18+ — year-wise custom test: /test?yearwise=1, config stashed
       // by /year-wise page. Server composes the exam+year(+subject/chapter/
@@ -338,7 +346,7 @@ export default function TestPage() {
         durationSec = (yd?.durationMinutes || 60) * 60;
         attemptId = yd?.attemptId ?? null;
         setAttemptId(attemptId);
-        if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
+        if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
       }
       // v6 §2a — full shift paper: /test?template=<id> composes the template's paper
       // server-side (real exam blueprint, no answer key) + opens a server-authoritative
@@ -388,7 +396,7 @@ export default function TestPage() {
           const ad = await ar.json();
           attemptId = ad.id ?? null;
           setAttemptId(attemptId);
-          if (attemptId) sessionStorage.setItem("ssc_active_attempt", attemptId);
+          if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
           // v4 §31 — resumed attempt (refresh/revisit): hydrate persisted autosaves
           if (Array.isArray(ad.answers) && ad.answers.length) {
             const savedMap: { [qid: string]: string } = {};
@@ -603,32 +611,45 @@ export default function TestPage() {
     setReviewOpen(false);
     let score = 0;
     const res: { [qid: string]: Attempt } = {};
-    for (const q of qs) {
-      const ans = answers[q.id];
-      if (!ans) continue;
-      try {
-        const r = await fetchAuth(`${apiBase()}/bank/attempt`, {
-          method: "POST",
-          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({
-            questionId: q.id,
+    // FIX (slow-submit bug): this used to `await` /bank/attempt ONE
+    // QUESTION AT A TIME inside a for-loop — for a 100-question full mock
+    // that's 100 sequential network round trips before the results screen
+    // could render (5-10+ seconds of visible hang). Firing all requests
+    // together with Promise.all cuts this to the time of the single
+    // slowest request, typically <1s.
+    const answeredQs = qs.filter((q) => !!answers[q.id]);
+    await Promise.all(
+      answeredQs.map(async (q) => {
+        const ans = answers[q.id];
+        try {
+          const r = await fetchAuth(`${apiBase()}/bank/attempt`, {
+            method: "POST",
+            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify({
+              questionId: q.id,
+              selectedOption: ans,
+              templateId: "tpl-mock-live",
+            }),
+          });
+          const d = await r.json();
+          // normalize both sides before comparing/storing — some legacy
+          // rows have correctAnswer with stray whitespace/case, which used
+          // to silently fail the o.key === correctAnswer match later and
+          // show a dead "(see solution)" placeholder instead of the answer.
+          const normalizedCorrect = String(d.correctAnswer ?? "").trim().toUpperCase();
+          const a: Attempt = {
+            correct: !!d.correct,
+            correctAnswer: normalizedCorrect,
             selectedOption: ans,
-            templateId: "tpl-mock-live",
-          }),
-        });
-        const d = await r.json();
-        const a: Attempt = {
-          correct: !!d.correct,
-          correctAnswer: d.correctAnswer ?? "",
-          selectedOption: ans,
-          scoreDelta: Number(d.scoreDelta || 0),
-        };
-        res[q.id] = a;
-        score += a.scoreDelta; // server-side: correct→+marks, wrong→−negativeMarks
-      } catch {
-        // if scoring endpoint fails mid-test, keep going
-      }
-    }
+            scoreDelta: Number(d.scoreDelta || 0),
+          };
+          res[q.id] = a;
+          score += a.scoreDelta; // server-side: correct→+marks, wrong→−negativeMarks
+        } catch {
+          // if scoring endpoint fails mid-test, keep going for other Qs
+        }
+      }),
+    );
     setResult(res);
     setFinalScore(score);
     if (qs[idx]) markQuestionTime(qs[idx].id); // finalize last question time
@@ -1072,7 +1093,21 @@ export default function TestPage() {
                       <p className="mt-1 text-sm font-medium line-clamp-2">{q.questionText}</p>
                       <p className="mt-1 text-xs text-muted-foreground">
                         Your answer: <span className="font-semibold">{ansText}</span>
-                        {!a?.correct && <span> · Correct: <span className="font-semibold text-success">{q.options.find((o) => o.key === (a?.correctAnswer))?.text || "(see solution)"}</span></span>}
+                        {!a?.correct && (() => {
+                          // Match keys case/whitespace-insensitively — legacy
+                          // rows sometimes stored correctAnswer with stray
+                          // casing/spaces, which broke an exact === match.
+                          const correctKey = (a?.correctAnswer || "").trim().toUpperCase();
+                          const correctOpt = q.options.find((o) => (o.key || "").trim().toUpperCase() === correctKey);
+                          const correctLabel =
+                            correctOpt?.text ||
+                            (correctKey ? `Option ${correctKey}` : null) ||
+                            (q.explanation ? q.explanation.slice(0, 80) + "…" : null) ||
+                            "Answer not available — please report this question";
+                          return (
+                            <span> · Correct: <span className="font-semibold text-success">{correctLabel}</span></span>
+                          );
+                        })()}
                       </p>
                     </div>
                     {a?.correct ? (
@@ -1231,7 +1266,11 @@ export default function TestPage() {
                   ⚑ Mark for Review
                 </button>
                 <button onClick={clearAnswer} className="btn btn-outline">Clear Response</button>
-                {q.correctAnswer && (
+                {/* Show Answer / AI Hint are practice-only aids. Hidden in
+                    isExamMode (sectional / year-wise / full mock — any
+                    server-authoritative timed attempt) so a real exam can't
+                    be cheated mid-attempt. */}
+                {!isExamMode && q.correctAnswer && (
                   <button
                     onClick={() => setShowAns((p) => ({ ...p, [q.id]: !p[q.id] }))}
                     className={`btn ${showAns[q.id] ? "btn-success" : "btn-outline"}`}
@@ -1239,18 +1278,20 @@ export default function TestPage() {
                     {showAns[q.id] ? "✓ Answer Shown" : "Show Answer"}
                   </button>
                 )}
-                <button
-                  onClick={() => {
-                    if (hintUsed[q.id] || hintQuota <= 0) return;
-                    setHintUsed((p) => ({ ...p, [q.id]: true }));
-                    setHintQuota((n) => n - 1);
-                  }}
-                  disabled={hintUsed[q.id] || hintQuota <= 0}
-                  className="btn btn-outline disabled:opacity-40"
-                  title="Free AI Hint (3 per session)"
-                >
-                  {hintUsed[q.id] ? "Hint shown ✓" : hintQuota <= 0 ? "Hint used all (3/3)" : `💡 AI Hint (${hintQuota} left)`}
-                </button>
+                {!isExamMode && (
+                  <button
+                    onClick={() => {
+                      if (hintUsed[q.id] || hintQuota <= 0) return;
+                      setHintUsed((p) => ({ ...p, [q.id]: true }));
+                      setHintQuota((n) => n - 1);
+                    }}
+                    disabled={hintUsed[q.id] || hintQuota <= 0}
+                    className="btn btn-outline disabled:opacity-40"
+                    title="Free AI Hint (3 per session)"
+                  >
+                    {hintUsed[q.id] ? "Hint shown ✓" : hintQuota <= 0 ? "Hint used all (3/3)" : `💡 AI Hint (${hintQuota} left)`}
+                  </button>
+                )}
                 <div className="flex-1" />
                 <button onClick={saveAndNext} className="btn btn-primary">
                   Save &amp; Next →
@@ -1258,7 +1299,7 @@ export default function TestPage() {
               </div>
 
               {/* Show Answer / Hint panel — real DB data, no fabrication */}
-              {(showAns[q.id] || hintUsed[q.id]) && (
+              {!isExamMode && (showAns[q.id] || hintUsed[q.id]) && (
                 <div className="mt-4 rounded-xl border border-success/30 bg-success/5 p-4">
                   <p className="text-xs font-bold text-success">Correct Answer: {q.correctAnswer}</p>
                   {hintUsed[q.id] && (
