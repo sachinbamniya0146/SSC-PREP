@@ -1,5 +1,19 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { istDateKey } from '../gamification/gamification.service';
+
+// BUGFIX: same IST-day-boundary bug fixed in tests/daily-test.service.ts and
+// quiz/quiz.service.ts. "Today"/streak day-keys here were computed with
+// server-local midnight + `Date#toISOString()` (both UTC on the VPS, no TZ
+// set), instead of the IST calendar day every other "today" in this app
+// uses (see istDateKey() in gamification.service.ts). Left unfixed this
+// under/over-counts a student's "today" progress and daily streak for any
+// activity done between midnight and 5:30 AM IST.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+function istMidnightUtc(d: Date): Date {
+  const key = istDateKey(d); // "YYYY-MM-DD" in IST
+  return new Date(new Date(`${key}T00:00:00.000Z`).getTime() - IST_OFFSET_MS);
+}
 
 interface StudyPlanRequest {
   userId: string;
@@ -156,8 +170,7 @@ Return JSON:
     const exam = await this.prisma.exam.findUnique({ where: { id: input.examId } });
     if (!exam) throw new BadRequestException('Exam not found');
 
-    const startDate = new Date();
-    startDate.setHours(0, 0, 0, 0);
+    const startDate = istMidnightUtc(new Date());
     const targetDate = new Date(input.targetDate);
     if (Number.isNaN(targetDate.getTime()) || targetDate <= startDate) {
       throw new BadRequestException('targetDate must be a valid future date');
@@ -255,8 +268,7 @@ Return JSON:
       return { hasPlan: false, message: 'Create a study plan on the dashboard to unlock your Daily Test.' };
     }
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const todayStart = istMidnightUtc(new Date());
 
     const [todayDone, { currentStreak, longestStreak }] = await Promise.all([
       this.getQuestionsAnsweredSince(userId, todayStart),
@@ -328,7 +340,7 @@ Return JSON:
       }),
     ]);
 
-    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+    const dayKey = (d: Date) => istDateKey(d);
     const activeDays = new Set<string>();
     for (const t of testDates) if (t.submittedAt) activeDays.add(dayKey(new Date(t.submittedAt)));
     for (const s of setDates) if (s.completedAt) activeDays.add(dayKey(new Date(s.completedAt)));
@@ -350,12 +362,15 @@ Return JSON:
     // streak stays alive until a full day is missed, so "yesterday" still
     // counts if today's practice hasn't happened yet).
     let currentStreak = 0;
-    const cursor = new Date();
-    cursor.setHours(0, 0, 0, 0);
-    if (!activeDays.has(dayKey(cursor))) cursor.setDate(cursor.getDate() - 1); // allow "not done today yet"
-    while (activeDays.has(dayKey(cursor))) {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    // Walk back in fixed 24h real-time steps (not Date#setDate, which is
+    // server-local-time and would drift from IST calendar days) — IST has
+    // no DST, so each 24h step is exactly one IST calendar day back.
+    let cursor = Date.now();
+    if (!activeDays.has(dayKey(new Date(cursor)))) cursor -= DAY_MS; // allow "not done today yet"
+    while (activeDays.has(dayKey(new Date(cursor)))) {
       currentStreak++;
-      cursor.setDate(cursor.getDate() - 1);
+      cursor -= DAY_MS;
     }
 
     return { currentStreak, longestStreak };
