@@ -7,6 +7,16 @@ import * as mammoth from 'mammoth';
 import { randomUUID } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 
+// Used by resolveReferenceIds() — a v4 UUID (Prisma's `@default(uuid())`
+// format) is the one case where a topicId/subTopicId that doesn't resolve
+// via a slug map should still be treated as "the admin meant a real id,
+// just a wrong/stale one" (and therefore reported as an error rather than
+// silently dropped) instead of a free-text label to ignore.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isLikelyUuid(value: string): boolean {
+  return UUID_RE.test(value.trim());
+}
+
 export interface BulkUploadQuestion {
   examId: string;
   subjectId: string;
@@ -817,12 +827,33 @@ export class BankUploadService {
     }
 
     // Pre-fetch valid IDs
+    //
+    // BUGFIX (Sachin's "upload atak jata hai" report + SSC_CGL_MASTER_PLUS
+    // sheet analysis): every bulk-upload sheet Sachin has actually used —
+    // including this one's own "Reference IDs" sheet — writes human-
+    // readable SLUGS in the examId/subjectId/chapterId/topicId/subTopicId
+    // columns (e.g. "exam-cgl", "sub-reasoning",
+    // "chap-blood_relations-reasoning"), never the raw database UUID
+    // (nobody can type or remember a UUID while filling in 655 rows by
+    // hand or with an AI tool). This code only ever loaded `id` (the UUID)
+    // into the lookup Sets, so EVERY row in a slug-based sheet failed
+    // validateReferences with "examId not found in database" — the entire
+    // upload always ended in total failure, one error per row, no matter
+    // how correct the sheet's content otherwise was.
+    //
+    // Fix: also load `slug`, build slug->id maps, and resolve each row's
+    // exam/subject/chapter/topic/subTopic values to the real UUID (via
+    // resolveReferenceIds() below) BEFORE validateReferences/createQuestion
+    // ever see them. A sheet using real UUIDs keeps working unchanged
+    // (UUIDs simply aren't present in the slug map, so they pass through
+    // the id-set check as before); a sheet using slugs (like Sachin's) now
+    // resolves correctly instead of failing on every single row.
     const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
-      this.prisma.exam.findMany({ select: { id: true, name: true } }),
-      this.prisma.subject.findMany({ select: { id: true, name: true } }),
-      this.prisma.chapter.findMany({ select: { id: true, name: true, subjectId: true } }),
-      this.prisma.topic.findMany({ select: { id: true, name: true, chapterId: true } }),
-      this.prisma.subTopic.findMany({ select: { id: true, name: true, topicId: true } }),
+      this.prisma.exam.findMany({ select: { id: true, name: true, slug: true } }),
+      this.prisma.subject.findMany({ select: { id: true, name: true, slug: true } }),
+      this.prisma.chapter.findMany({ select: { id: true, name: true, slug: true, subjectId: true } }),
+      this.prisma.topic.findMany({ select: { id: true, name: true, slug: true, chapterId: true } }),
+      this.prisma.subTopic.findMany({ select: { id: true, name: true, slug: true, topicId: true } }),
     ]);
 
     const examIds = new Set(exams.map(e => e.id));
@@ -833,6 +864,19 @@ export class BankUploadService {
     const chapterSubjectMap = new Map(chapters.map(c => [c.id, c.subjectId]));
     const topicChapterMap = new Map(topics.map(t => [t.id, t.chapterId]));
     const subTopicTopicMap = new Map(subTopics.map(t => [t.id, t.topicId]));
+
+    // Slug -> id maps (used by resolveReferenceIds()). Chapter/Topic/
+    // SubTopic slugs are only unique WITHIN their parent (per schema.prisma
+    // @@unique([chapterId, slug]) etc.), so key those by "parentId::slug"
+    // as well as bare slug for the common case where a sheet's slugs
+    // happen to be globally unique anyway (like Sachin's "chap-xxx-subject"
+    // naming convention, which is already globally unique in practice).
+    const examSlugToId = new Map(exams.map(e => [e.slug, e.id]));
+    const subjectSlugToId = new Map(subjects.map(s => [s.slug, s.id]));
+    const chapterSlugToId = new Map(chapters.map(c => [c.slug, c.id]));
+    const chapterSlugInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${c.slug}`, c.id]));
+    const topicSlugInChapterToId = new Map(topics.map(t => [`${t.chapterId}::${t.slug}`, t.id]));
+    const subTopicSlugInTopicToId = new Map(subTopics.map(t => [`${t.topicId}::${t.slug}`, t.id]));
 
     const result: UploadResult = {
       success: false,
@@ -849,7 +893,15 @@ export class BankUploadService {
 
       try {
         const question = this.parseQuestionRow(row, headerMap, rowNum);
-        
+
+        // Resolve slugs to real UUIDs before validating/creating (see the
+        // BUGFIX comment above the Pre-fetch block for why this exists).
+        this.resolveReferenceIds(
+          question,
+          examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
+          topicSlugInChapterToId, subTopicSlugInTopicToId,
+        );
+
         // Validate references
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
@@ -881,12 +933,16 @@ export class BankUploadService {
    * Process structured questions (JSON format)
    */
   private async processStructuredQuestions(questions: BulkUploadQuestion[], adminId: string): Promise<UploadResult> {
+    // Same slug-resolution fix as processBulkQuestions() above — JSON/Word
+    // uploads go through this method, and can just as easily contain
+    // human-readable slugs (e.g. an AI-generated question set) instead of
+    // raw UUIDs.
     const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
-      this.prisma.exam.findMany({ select: { id: true } }),
-      this.prisma.subject.findMany({ select: { id: true } }),
-      this.prisma.chapter.findMany({ select: { id: true, subjectId: true } }),
-      this.prisma.topic.findMany({ select: { id: true, chapterId: true } }),
-      this.prisma.subTopic.findMany({ select: { id: true, topicId: true } }),
+      this.prisma.exam.findMany({ select: { id: true, slug: true } }),
+      this.prisma.subject.findMany({ select: { id: true, slug: true } }),
+      this.prisma.chapter.findMany({ select: { id: true, slug: true, subjectId: true } }),
+      this.prisma.topic.findMany({ select: { id: true, slug: true, chapterId: true } }),
+      this.prisma.subTopic.findMany({ select: { id: true, slug: true, topicId: true } }),
     ]);
 
     const examIds = new Set(exams.map(e => e.id));
@@ -897,6 +953,13 @@ export class BankUploadService {
     const chapterSubjectMap = new Map(chapters.map(c => [c.id, c.subjectId]));
     const topicChapterMap = new Map(topics.map(t => [t.id, t.chapterId]));
     const subTopicTopicMap = new Map(subTopics.map(t => [t.id, t.topicId]));
+
+    const examSlugToId = new Map(exams.map(e => [e.slug, e.id]));
+    const subjectSlugToId = new Map(subjects.map(s => [s.slug, s.id]));
+    const chapterSlugToId = new Map(chapters.map(c => [c.slug, c.id]));
+    const chapterSlugInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${c.slug}`, c.id]));
+    const topicSlugInChapterToId = new Map(topics.map(t => [`${t.chapterId}::${t.slug}`, t.id]));
+    const subTopicSlugInTopicToId = new Map(subTopics.map(t => [`${t.topicId}::${t.slug}`, t.id]));
 
     const result: UploadResult = {
       success: false,
@@ -912,6 +975,11 @@ export class BankUploadService {
       const rowNum = i + 1;
 
       try {
+        this.resolveReferenceIds(
+          question,
+          examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
+          topicSlugInChapterToId, subTopicSlugInTopicToId,
+        );
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
         const { published } = await this.createQuestion(question, adminId);
@@ -1016,6 +1084,78 @@ export class BankUploadService {
       negativeMarks,
       difficulty,
     };
+  }
+
+  /**
+   * Resolve a row's examId/subjectId/chapterId/topicId/subTopicId to real
+   * database UUIDs when they were given as slugs instead (see the BUGFIX
+   * comment in processBulkQuestions()'s pre-fetch block for the full
+   * background). Mutates `question` in place — after this call, every one
+   * of these fields is either a real UUID (unchanged if it already was
+   * one) or left as-is if it matched no id AND no slug, so
+   * validateReferences() below still reports it as "not found" instead of
+   * silently swallowing a genuinely wrong value.
+   *
+   * Order matters: exam and subject are resolved first (parent-independent
+   * slug maps), then chapter is resolved using the now-resolved subjectId
+   * (so "chap-x" scoped to the right subject is preferred over a same-named
+   * chapter under a different subject), then topic using the resolved
+   * chapterId, then subTopic using the resolved topicId.
+   */
+  private resolveReferenceIds(
+    question: BulkUploadQuestion,
+    examSlugToId: Map<string, string>,
+    subjectSlugToId: Map<string, string>,
+    chapterSlugToId: Map<string, string>,
+    chapterSlugInSubjectToId: Map<string, string>,
+    topicSlugInChapterToId: Map<string, string>,
+    subTopicSlugInTopicToId: Map<string, string>,
+  ): void {
+    if (question.examId && examSlugToId.has(question.examId)) {
+      question.examId = examSlugToId.get(question.examId)!;
+    }
+    if (question.subjectId && subjectSlugToId.has(question.subjectId)) {
+      question.subjectId = subjectSlugToId.get(question.subjectId)!;
+    }
+    if (question.chapterId) {
+      const scoped = chapterSlugInSubjectToId.get(`${question.subjectId}::${question.chapterId}`);
+      if (scoped) {
+        question.chapterId = scoped;
+      } else if (chapterSlugToId.has(question.chapterId)) {
+        question.chapterId = chapterSlugToId.get(question.chapterId)!;
+      }
+    }
+    if (question.topicId) {
+      const scoped = topicSlugInChapterToId.get(`${question.chapterId}::${question.topicId}`);
+      if (scoped) {
+        question.topicId = scoped;
+      } else if (!isLikelyUuid(question.topicId)) {
+        // BUGFIX (Sachin's SSC_CGL_MASTER_PLUS sheet): topicId is OPTIONAL
+        // and several real uploaded sheets put a free-text descriptive
+        // title in this column (e.g. "Blood Relations - Family Puzzle")
+        // rather than any topic slug/UUID that exists in the Topic table.
+        // Since it's optional, a value that resolves to nothing should be
+        // dropped silently and the question still created against its
+        // (required, already-validated) chapter — not hard-rejected, which
+        // would fail 100% of rows in any sheet using this common
+        // free-text-title convention purely because of an optional field.
+        // (If it WAS a real-looking UUID that just didn't match any topic
+        // under this chapter, leave it as-is so validateReferences reports
+        // a proper "not found" error instead of silently discarding what
+        // was probably a genuine mistake worth flagging.)
+        question.topicId = undefined;
+      }
+    }
+    if (question.subTopicId) {
+      const scoped = subTopicSlugInTopicToId.get(`${question.topicId}::${question.subTopicId}`);
+      if (scoped) {
+        question.subTopicId = scoped;
+      } else if (!isLikelyUuid(question.subTopicId)) {
+        // Same reasoning as topicId above — optional field, drop instead
+        // of hard-reject when it's a free-text label rather than a slug/id.
+        question.subTopicId = undefined;
+      }
+    }
   }
 
   /**
