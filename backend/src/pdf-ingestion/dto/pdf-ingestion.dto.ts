@@ -54,6 +54,25 @@ export class UploadPdfDto {
   @IsOptional()
   @IsEnum(UploadSourceType)
   sourceType?: UploadSourceType = UploadSourceType.MANUAL;
+
+  // NEW — a single PDF file (e.g. a full SSC CGL paper with English,
+  // Reasoning, Quant, GA all in one file) previously had to be uploaded
+  // whole, tagging EVERY extracted question with one subjectId — wrong for
+  // 3 of the 4 sections. Optional page-range lets an admin upload the SAME
+  // file 4 times, once per section, each with its own subjectId + the page
+  // range that section actually occupies. Omit both to process the whole
+  // PDF as before (fully backward-compatible).
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  startPage?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  endPage?: number;
 }
 
 export class AdminApproveQuestionDto {
