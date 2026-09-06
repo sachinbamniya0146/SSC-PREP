@@ -20,6 +20,7 @@
 import { PrismaClient } from '@prisma/client';
 import fs from 'fs';
 import path from 'path';
+import * as XLSX from 'xlsx';
 
 const prisma = new PrismaClient();
 const OUT_DIR = path.join(process.cwd(), 'audit-output');
@@ -33,6 +34,124 @@ function csvEscape(v) {
   return s;
 }
 
+/**
+ * Pre-upload check: does every examId/subjectId/chapterId slug used in a
+ * bulk-upload sheet already exist in this database? Read-only — never
+ * touches the DB, only reads it and reads the given Excel file.
+ */
+async function runSlugCheck(excelPath, exams, subjects, chapters) {
+  if (!fs.existsSync(excelPath)) {
+    console.error(`❌ File not found: ${excelPath}`);
+    process.exit(1);
+  }
+  console.log(`📄 Reading ${excelPath} ...`);
+  const workbook = XLSX.readFile(excelPath);
+  const sheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[sheetName];
+  const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+  if (jsonData.length < 2) {
+    console.error('❌ Sheet has no data rows.');
+    process.exit(1);
+  }
+  const headers = jsonData[0].map((h) => String(h).trim().replace(/\*\s*$/, ''));
+  const rows = jsonData.slice(1);
+  const idx = (name) => headers.indexOf(name);
+  const examIdx = idx('examId');
+  const subjectIdx = idx('subjectId');
+  const chapterIdx = idx('chapterId');
+  if (examIdx === -1 || subjectIdx === -1 || chapterIdx === -1) {
+    console.error('❌ Sheet is missing one of the required columns: examId, subjectId, chapterId');
+    process.exit(1);
+  }
+
+  const examSlugSet = new Set(exams.map((e) => e.slug));
+  const examIdSet = new Set(exams.map((e) => e.id));
+  const subjectSlugSet = new Set(subjects.map((s) => s.slug));
+  const subjectIdSet = new Set(subjects.map((s) => s.id));
+  const chapterSlugSet = new Set(chapters.map((c) => c.slug));
+  const chapterIdSet = new Set(chapters.map((c) => c.id));
+  const chapterBySlug = new Map(chapters.map((c) => [c.slug, c]));
+  const subjectById = new Map(subjects.map((s) => [s.id, s]));
+
+  const usedExams = new Set();
+  const usedSubjects = new Set();
+  const usedChapters = new Map(); // chapterSlug -> Set of subjectSlugs it was paired with in the sheet
+  let rowCount = 0;
+  for (const row of rows) {
+    if (!row || row.length === 0) continue;
+    rowCount++;
+    const e = row[examIdx] !== undefined ? String(row[examIdx]).trim() : '';
+    const s = row[subjectIdx] !== undefined ? String(row[subjectIdx]).trim() : '';
+    const c = row[chapterIdx] !== undefined ? String(row[chapterIdx]).trim() : '';
+    if (e) usedExams.add(e);
+    if (s) usedSubjects.add(s);
+    if (c) {
+      if (!usedChapters.has(c)) usedChapters.set(c, new Set());
+      usedChapters.get(c).add(s);
+    }
+  }
+
+  const missingExams = [...usedExams].filter((e) => !examSlugSet.has(e) && !examIdSet.has(e));
+  const missingSubjects = [...usedSubjects].filter((s) => !subjectSlugSet.has(s) && !subjectIdSet.has(s));
+  const missingChapters = [...usedChapters.keys()].filter((c) => !chapterSlugSet.has(c) && !chapterIdSet.has(c));
+
+  // Chapters that exist but under a DIFFERENT subject than the sheet pairs them with
+  const chapterSubjectMismatches = [];
+  for (const [chapSlug, subjSlugsUsedWith] of usedChapters.entries()) {
+    const chap = chapterBySlug.get(chapSlug);
+    if (!chap) continue; // already reported as missing above
+    const actualSubject = subjectById.get(chap.subjectId);
+    for (const subjSlugUsed of subjSlugsUsedWith) {
+      if (subjSlugUsed && actualSubject && subjSlugUsed !== actualSubject.slug) {
+        chapterSubjectMismatches.push({ chapter: chapSlug, sheetSubject: subjSlugUsed, actualSubject: actualSubject.slug });
+      }
+    }
+  }
+
+  console.log('');
+  console.log('='.repeat(70));
+  console.log(`PRE-UPLOAD SLUG CHECK — ${rowCount} data rows scanned`);
+  console.log('='.repeat(70));
+  console.log('');
+  console.log(`Distinct examId values used: ${usedExams.size}`);
+  console.log(`Distinct subjectId values used: ${usedSubjects.size}`);
+  console.log(`Distinct chapterId values used: ${usedChapters.size}`);
+  console.log('');
+
+  if (missingExams.length === 0 && missingSubjects.length === 0 && missingChapters.length === 0 && chapterSubjectMismatches.length === 0) {
+    console.log('✅ SAB EXAM / SUBJECT / CHAPTER SLUGS DATABASE ME EXIST KARTE HAIN.');
+    console.log('   Ye sheet upload karne pe examId/subjectId/chapterId ki wajah se');
+    console.log('   koi row reject nahi hogi (baaki field-level issues — jaise khaali');
+    console.log('   option ya invalid correctAnswer — alag se ho sakte hain, wo upload');
+    console.log('   result me hi dikhenge).');
+  } else {
+    if (missingExams.length) {
+      console.log(`❌ MISSING EXAMS (${missingExams.length}) — in koi bhi exam ke saath sheet ki har row reject hogi:`);
+      missingExams.forEach((e) => console.log(`     - "${e}"`));
+      console.log('');
+    }
+    if (missingSubjects.length) {
+      console.log(`❌ MISSING SUBJECTS (${missingSubjects.length}):`);
+      missingSubjects.forEach((s) => console.log(`     - "${s}"`));
+      console.log('');
+    }
+    if (missingChapters.length) {
+      console.log(`❌ MISSING CHAPTERS (${missingChapters.length}) — inhe pehle Chapter Management me banana hoga:`);
+      missingChapters.forEach((c) => console.log(`     - "${c}"`));
+      console.log('');
+    }
+    if (chapterSubjectMismatches.length) {
+      console.log(`⚠️  CHAPTER/SUBJECT MISMATCH (${chapterSubjectMismatches.length}) — chapter DB me hai, lekin ek alag subject ke andar:`);
+      chapterSubjectMismatches.forEach((m) =>
+        console.log(`     - "${m.chapter}" sheet me "${m.sheetSubject}" ke saath hai, DB me actual subject "${m.actualSubject}" hai`),
+      );
+      console.log('');
+    }
+    console.log('👉 In sab ko exam/subject/chapter management se pehle bana lo (ya sheet me slug sahi karo), phir upload karo.');
+  }
+  console.log('');
+}
+
 async function main() {
   if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -40,13 +159,31 @@ async function main() {
   const [exams, subjects, chapters, topics] = await Promise.all([
     prisma.exam.findMany({ select: { id: true, name: true, slug: true, code: true } }),
     prisma.subject.findMany({ select: { id: true, name: true, slug: true } }),
-    prisma.chapter.findMany({ select: { id: true, name: true, subjectId: true } }),
+    prisma.chapter.findMany({ select: { id: true, name: true, subjectId: true, slug: true } }),
     prisma.topic.findMany({ select: { id: true, name: true, chapterId: true } }),
   ]);
   const examById = new Map(exams.map((e) => [e.id, e]));
   const subjectById = new Map(subjects.map((s) => [s.id, s]));
   const chapterById = new Map(chapters.map((c) => [c.id, c]));
   const topicById = new Map(topics.map((t) => [t.id, t]));
+
+  // ---- Pre-upload slug check (Sachin's "kya excel upload ho jayegi"
+  // question): if a SLUG_CHECK_FILE env var (or CLI arg) points at an .xlsx
+  // sheet in the same "Questions Template" shape used for bulk upload, list
+  // every distinct examId/subjectId/chapterId slug that sheet uses and
+  // whether each one ALREADY EXISTS in this database — so you know exactly
+  // which slugs are missing BEFORE running the real upload, instead of
+  // finding out row-by-row from upload error messages afterwards.
+  //
+  // Run it like:
+  //   node scripts/audit-questions.mjs --check-slugs path/to/file.xlsx
+  const slugCheckIdx = process.argv.indexOf('--check-slugs');
+  const slugCheckPath = slugCheckIdx !== -1 ? process.argv[slugCheckIdx + 1] : null;
+  if (slugCheckPath) {
+    await runSlugCheck(slugCheckPath, exams, subjects, chapters);
+    await prisma.$disconnect();
+    return;
+  }
 
   console.log('📥 Loading all questions (this may take a bit on a large bank)...');
   const questions = await prisma.question.findMany({
