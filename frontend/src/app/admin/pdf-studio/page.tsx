@@ -77,6 +77,11 @@ export default function PdfStudioPage() {
   const [publisher, setPublisher] = React.useState("");
   const [year, setYear] = React.useState("");
   const [shift, setShift] = React.useState("");
+  // NEW — page-range for the "one full paper PDF, 4 sections, upload once
+  // per section" workflow (see UploadPdfDto comment on the backend). Both
+  // optional; leave blank to process the whole PDF as before.
+  const [startPage, setStartPage] = React.useState("");
+  const [endPage, setEndPage] = React.useState("");
   const [uploading, setUploading] = React.useState(false);
   const [uploadMsg, setUploadMsg] = React.useState("");
   const [uploadErr, setUploadErr] = React.useState("");
@@ -202,6 +207,8 @@ export default function PdfStudioPage() {
       if (publisher) form.append("publisher", publisher);
       if (year) form.append("year", year);
       if (shift) form.append("shift", shift);
+      if (startPage) form.append("startPage", startPage);
+      if (endPage) form.append("endPage", endPage);
 
       const r = await fetchAuth(`${API_BASE}/admin/pdf-ingestion/upload-file`, {
         method: "POST",
@@ -339,7 +346,24 @@ export default function PdfStudioPage() {
               <label className="text-xs font-semibold text-muted-foreground">Shift</label>
               <input value={shift} onChange={(e) => setShift(e.target.value)} placeholder="e.g. Shift 1" className="mt-1 w-full rounded-lg border border-border bg-background px-4 py-2 text-sm" />
             </div>
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground">
+                Start Page <span className="font-normal">(optional)</span>
+              </label>
+              <input type="number" min={1} value={startPage} onChange={(e) => setStartPage(e.target.value)} placeholder="e.g. 1" className="mt-1 w-full rounded-lg border border-border bg-background px-4 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground">
+                End Page <span className="font-normal">(optional)</span>
+              </label>
+              <input type="number" min={1} value={endPage} onChange={(e) => setEndPage(e.target.value)} placeholder="e.g. 25" className="mt-1 w-full rounded-lg border border-border bg-background px-4 py-2 text-sm" />
+            </div>
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            💡 Ek hi full-paper PDF (jisme English + Reasoning + Quant + GA sab ek saath hon) ko is form se
+            <b> 4 baar upload karo</b> — har baar wahi file, alag Subject aur us section ke Start/End Page daalke.
+            Page range khali chhodoge to poora PDF ek hi subject me process hoga.
+          </p>
 
           {uploadErr && <p className="mt-3 text-sm text-danger">{uploadErr}</p>}
           {uploadMsg && <p className="mt-3 text-sm text-success">{uploadMsg}</p>}
