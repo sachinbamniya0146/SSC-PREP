@@ -2,6 +2,23 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
+import { istDateKey } from '../gamification/gamification.service';
+
+// BUGFIX: "today" for the Daily Test must be an IST calendar day (this is a
+// product for Indian government-exam aspirants, and gamification streaks
+// elsewhere in this codebase already use IST — see istDateKey() in
+// gamification.service.ts). This used to be computed with
+// `new Date(); .setHours(0,0,0,0)`, which is the SERVER's local midnight —
+// on the VPS (Docker, no TZ set → UTC by default) that's 5:30 AM IST, not
+// midnight IST. Effect: a student finishing the Daily Test late at night
+// IST couldn't get a fresh one until 5:30 AM IST, and one done just after
+// midnight IST could still be blocked as "already taken today" against the
+// previous calendar day. Fixed to derive the actual IST midnight instant.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+function istMidnightUtc(d: Date): Date {
+  const key = istDateKey(d); // "YYYY-MM-DD" in IST
+  return new Date(new Date(`${key}T00:00:00.000Z`).getTime() - IST_OFFSET_MS);
+}
 
 /**
  * v3 §6.4 — Daily Test (Live mode).
@@ -44,8 +61,7 @@ export class DailyTestService {
       orderBy: { createdAt: 'desc' },
       select: { examId: true, dailyTarget: true, exam: { select: { name: true } } },
     });
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const todayStart = istMidnightUtc(new Date());
 
     const dailyTpls = await this.prisma.testTemplate.findMany({
       where: { type: 'DAILY_PRACTICE', title: { startsWith: 'Daily Test —' } },
