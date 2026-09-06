@@ -100,7 +100,21 @@ async function bootstrap() {
   );
 
   const port = Number(process.env.PORT) || 4000;
-  await app.listen(port);
+  const server = await app.listen(port);
+
+  // BUGFIX ("bulk Excel upload — bahut der tak Uploading dikhta hai, kuch
+  // nahi hota"): Node's default HTTP server request timeout is 300s (5 min)
+  // in modern Node, but on some Node/setups it can be as low as 120s — and
+  // either way it sits UNDER the 600s nginx proxy_read_timeout just raised
+  // for the /bank/admin/upload/ route (see nginx/conf.d/*.conf). A slightly
+  // slow multi-hundred-row bulk upload could still get cut off by the
+  // backend itself before nginx's longer timeout ever came into play.
+  // Raise both to comfortably exceed the nginx timeout so nginx is always
+  // the (generous) outer bound, never the backend's own default.
+  server.setTimeout(650_000); // 650s — a hair above nginx's 600s
+  server.keepAliveTimeout = 650_000;
+  server.headersTimeout = 660_000; // must be > keepAliveTimeout per Node docs
+
   logger.log(`SSC Prep Hub API running at http://localhost:${port}/api/v1`);
 }
 
