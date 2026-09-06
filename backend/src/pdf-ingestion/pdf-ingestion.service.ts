@@ -83,7 +83,13 @@ export class PdfIngestionService {
 
     // Create ImportBatch with chunks (25 pages per chunk)
     const buf = await this.readPdf(dto.s3Key);
-    const pageCount = await this.estimatePageCount(buf);
+    const totalPageCount = await this.estimatePageCount(buf);
+    // Page-range override (multi-section single-PDF workflow — see DTO
+    // comment). Clamp to the real page count either way so a typo can't
+    // create an out-of-bounds chunk.
+    const rangeStart = Math.max(1, Math.min(dto.startPage ?? 1, totalPageCount));
+    const rangeEnd = Math.max(rangeStart, Math.min(dto.endPage ?? totalPageCount, totalPageCount));
+    const pageCount = rangeEnd - rangeStart + 1;
     const chunkSize = 25;
     const totalChunks = Math.ceil(pageCount / chunkSize);
 
@@ -95,8 +101,8 @@ export class PdfIngestionService {
         chunks: {
           create: Array.from({ length: totalChunks }, (_, i) => ({
             chunkIndex: i,
-            startPage: i * chunkSize + 1,
-            endPage: Math.min((i + 1) * chunkSize, pageCount),
+            startPage: rangeStart + i * chunkSize,
+            endPage: Math.min(rangeStart + (i + 1) * chunkSize - 1, rangeEnd),
           })),
         },
       },
