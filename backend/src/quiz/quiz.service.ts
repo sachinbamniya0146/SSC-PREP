@@ -2,7 +2,19 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReviewService } from '../review/review.service';
-import { GamificationService } from '../gamification/gamification.service';
+import { GamificationService, istDateKey } from '../gamification/gamification.service';
+
+// BUGFIX: same class of bug fixed in tests/daily-test.service.ts — "today"
+// must be an IST calendar day for an India-only exam-prep app, but this was
+// server-local midnight (`new Date(); setHours(0,0,0,0)`), which is UTC
+// midnight (5:30 AM IST) on a VPS with no TZ set. That meant the "Daily
+// Quiz" record's `date` key — and therefore which quiz a student got and
+// whether they could get a fresh one — flipped over 5.5 hours late.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+function istMidnightUtc(d: Date): Date {
+  const key = istDateKey(d); // "YYYY-MM-DD" in IST
+  return new Date(new Date(`${key}T00:00:00.000Z`).getTime() - IST_OFFSET_MS);
+}
 
 @Injectable()
 export class QuizService {
@@ -16,9 +28,8 @@ export class QuizService {
 
   /** Get today's daily quiz (10 questions across subjects). Auto-creates if none. */
   async getToday() {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const dateStr = today.toISOString().split('T')[0];
+    const today = istMidnightUtc(new Date());
+    const dateStr = istDateKey(today);
 
     let quiz = await this.prisma.dailyQuiz.findUnique({ where: { date: today } });
     if (!quiz) {
