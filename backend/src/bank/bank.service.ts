@@ -286,14 +286,35 @@ export class BankService implements OnModuleInit {
       }),
       // Approved+live count AND total count (including pending/unapproved),
       // grouped by exam+chapter — one raw query instead of N+1 per cell.
+      // Extended (admin ask: "kis chapter me kitne PYQ, kitne practice,
+      // kitne solution wale, aur kitne Hindi-translation-missing hain") —
+      // added missingHindi/pyqCount/practiceCount/withSolution FILTER
+      // clauses onto the same grouped query so this stays one round trip.
       this.prisma.$queryRaw<
-        Array<{ examId: string | null; chapterId: string | null; total: number; approvedLive: number }>
+        Array<{
+          examId: string | null;
+          chapterId: string | null;
+          total: number;
+          approvedLive: number;
+          missingHindi: number;
+          pyqCount: number;
+          practiceCount: number;
+          withSolution: number;
+        }>
       >`
         SELECT q."examId", q."chapterId",
                COUNT(q.id)::int AS total,
                COUNT(q.id) FILTER (
                  WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
-               )::int AS "approvedLive"
+               )::int AS "approvedLive",
+               COUNT(q.id) FILTER (
+                 WHERE q."questionTextHindi" IS NULL OR q."questionTextHindi" = ''
+               )::int AS "missingHindi",
+               COUNT(q.id) FILTER (WHERE q."year" IS NOT NULL)::int AS "pyqCount",
+               COUNT(q.id) FILTER (WHERE q."year" IS NULL)::int AS "practiceCount",
+               COUNT(q.id) FILTER (
+                 WHERE q."explanation" IS NOT NULL AND q."explanation" != ''
+               )::int AS "withSolution"
         FROM questions q
         WHERE q."examId" IS NOT NULL AND q."chapterId" IS NOT NULL
         GROUP BY q."examId", q."chapterId";
@@ -319,6 +340,10 @@ export class BankService implements OnModuleInit {
             chapterSlug: ch.slug,
             total: c?.total ?? 0,
             approvedLive: c?.approvedLive ?? 0,
+            missingHindi: c?.missingHindi ?? 0,
+            pyqCount: c?.pyqCount ?? 0,
+            practiceCount: c?.practiceCount ?? 0,
+            withSolution: c?.withSolution ?? 0,
           };
         });
         const subjectTotal = chapterRows.reduce((s, c) => s + c.total, 0);
@@ -347,6 +372,70 @@ export class BankService implements OnModuleInit {
     });
 
     return { exams: tree };
+  }
+
+  // Admin ask ("admin ko vo question ki list direct mil jani chahiye jisme
+  // Hindi translation nahi hai"): contentCoverageDrilldown() above only
+  // gives a per-chapter COUNT of missing-Hindi rows — an admin still had no
+  // way to actually open and fix them. This returns the real question list
+  // (id + a short preview + where it lives), optionally narrowed to one
+  // exam/chapter, newest-created first, paginated (default 50/page) so a
+  // 500+ row backlog doesn't come back as one giant payload.
+  async questionsMissingHindi(opts: { examId?: string; chapterId?: string; page?: number; limit?: number }) {
+    const page = Math.max(1, opts.page ?? 1);
+    const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+    const where: any = {
+      OR: [{ questionTextHindi: null }, { questionTextHindi: '' }],
+    };
+    if (opts.examId) where.examId = opts.examId;
+    if (opts.chapterId) where.chapterId = opts.chapterId;
+
+    const [total, rows] = await Promise.all([
+      this.prisma.question.count({ where }),
+      this.prisma.question.findMany({
+        where,
+        select: {
+          id: true,
+          questionText: true,
+          isApproved: true,
+          isActive: true,
+          createdAt: true,
+          exam: { select: { id: true, name: true } },
+          subject: { select: { id: true, name: true } },
+          chapter: { select: { id: true, name: true } },
+          year: true,
+          shift: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      questions: rows.map((r) => ({
+        id: r.id,
+        preview: r.questionText.length > 140 ? r.questionText.slice(0, 140) + '…' : r.questionText,
+        examId: r.exam?.id ?? null,
+        examName: r.exam?.name ?? null,
+        subjectId: r.subject?.id ?? null,
+        subjectName: r.subject?.name ?? null,
+        chapterId: r.chapter?.id ?? null,
+        chapterName: r.chapter?.name ?? null,
+        year: r.year,
+        shift: r.shift,
+        isApproved: r.isApproved,
+        isActive: r.isActive,
+        // published = live to students right now (needs both flags + the
+        // Hindi gate this list exists to surface — so every row here is,
+        // by definition, currently unpublished).
+        createdAt: r.createdAt,
+      })),
+    };
   }
 
   async subjects(examId?: string) {
@@ -921,6 +1010,49 @@ export class BankService implements OnModuleInit {
       answerVerificationStatus: updated.answerVerificationStatus,
       lastVerifiedAt: updated.lastVerifiedAt,
     };
+  }
+
+  // NEW ("admin ko vo question ki list direct mil jani chahiye jisme Hindi
+  // translation nahi hai" — and then actually be able to fix it right
+  // there): until now there was no endpoint at all to edit an already-
+  // uploaded bank question's Hindi text — bulk re-upload via Excel was the
+  // only path. This is the minimal single-question fix path: sets
+  // questionTextHindi (required by the PUBLISHED_QUESTION_WHERE bilingual
+  // gate used everywhere tests are built — see tests.service.ts) and
+  // optionally explanationHindi, and re-checks whether the question now
+  // qualifies as published so the admin gets immediate confirmation.
+  async updateHindiTranslation(
+    questionId: string,
+    body: { questionTextHindi: string; explanationHindi?: string },
+    adminId?: string,
+  ) {
+    const text = (body.questionTextHindi ?? '').trim();
+    if (!text) throw new BadRequestException('questionTextHindi is required and cannot be empty');
+
+    const question = await this.prisma.question.findUnique({ where: { id: questionId } });
+    if (!question) throw new NotFoundException('Question not found');
+
+    const updated = await this.prisma.question.update({
+      where: { id: questionId },
+      data: {
+        questionTextHindi: text,
+        ...(body.explanationHindi !== undefined ? { explanationHindi: body.explanationHindi.trim() } : {}),
+      },
+    });
+
+    if (adminId) {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: adminId,
+          action: 'HINDI_TRANSLATION_ADDED',
+          targetEntity: 'Question',
+          entityId: questionId,
+        } as any,
+      });
+    }
+
+    const nowPublished = !!updated.questionTextHindi && updated.isApproved && updated.isActive && !updated.autoSuspended;
+    return { id: updated.id, questionTextHindi: updated.questionTextHindi, nowPublished };
   }
 
   async getVerificationStats() {
