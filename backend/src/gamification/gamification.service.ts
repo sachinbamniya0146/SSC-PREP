@@ -91,11 +91,21 @@ export class GamificationService {
 
   /** Leaderboard: top N by XP (weekly or all-time), plus the caller's row. Rows cached 30s; myRank computed fresh per user. */
   async leaderboard(userId: string, period: 'all' | 'weekly' = 'all', take = 50) {
+    // BUGFIX: this cache key has no userId in it (by design — the top-N
+    // list itself is identical for every viewer, so it's shared across
+    // users for 30s to cut DB load). The bug was baking `isMe` into the
+    // CACHED rows: whichever user's request happened to be the one that
+    // missed the cache and recomputed it had their id burned into every
+    // row's `isMe` flag for the next 30s. Every other user hitting the
+    // cache in that window would see the "You" badge on a stranger's row
+    // (or miss it entirely on their own row, even if they were top 50).
+    // Fix: cache only the anonymous ranking (no isMe), and stamp isMe
+    // fresh per-request after reading from cache.
     const cacheKey = `gamification:lb:${period}:${take}`;
-    const cachedRows = cacheGet<{ id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number; isMe: boolean }[]>(cacheKey);
-    let rows: { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number; isMe: boolean }[];
+    const cachedRows = cacheGet<{ id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number }[]>(cacheKey);
+    let baseRows: { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number }[];
     if (cachedRows) {
-      rows = cachedRows;
+      baseRows = cachedRows;
     } else {
       const since = period === 'weekly' ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) : undefined;
       const where = since ? { xp: { gt: 0 }, updatedAt: { gte: since } } : { xp: { gt: 0 } };
@@ -105,9 +115,10 @@ export class GamificationService {
         take,
         select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true },
       });
-      rows = top.map((r, i) => ({ ...r, rank: i + 1, isMe: r.id === userId }));
-      cacheSet(cacheKey, rows, 30_000);
+      baseRows = top.map((r, i) => ({ ...r, rank: i + 1 }));
+      cacheSet(cacheKey, baseRows, 30_000);
     }
+    const rows = baseRows.map((r) => ({ ...r, isMe: r.id === userId }));
     const me = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true },
