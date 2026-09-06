@@ -54,6 +54,27 @@ export class BankController {
     return this.bank.contentCoverageDrilldown();
   }
 
+  // NEW ("admin ko vo question ki list direct mil jani chahiye jisme Hindi
+  // translation nahi hai"): the actual question list behind the
+  // missingHindi count in coverageDrilldown, so an admin can click straight
+  // through and fix each one instead of just seeing a number.
+  @Get('admin/questions/missing-hindi')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  missingHindi(
+    @Query('examId') examId?: string,
+    @Query('chapterId') chapterId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.bank.questionsMissingHindi({
+      examId,
+      chapterId,
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+  }
+
   // v4 §18 — SearchMiss demand log: user searched, nothing matched.
   @Post('search-miss')
   searchMiss(@Req() req: any, @Body() body: { query: string; exam?: string }) {
@@ -313,6 +334,21 @@ export class BankController {
   ) {
     const userId = req.user?.userId ?? req.user?.id;
     return this.bank.verifyQuestion(id, body.status, userId);
+  }
+
+  // NEW ("Add Hindi →" action behind the missing-hindi list above) — the
+  // one endpoint that was missing to actually fix a row instead of just
+  // seeing it flagged.
+  @Put('admin/questions/:id/translation')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  updateHindiTranslation(
+    @Param('id') id: string,
+    @Body() body: { questionTextHindi: string; explanationHindi?: string },
+    @Req() req: any,
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.bank.updateHindiTranslation(id, body, userId);
   }
 
   @Get('verification-stats')
