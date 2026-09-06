@@ -69,6 +69,8 @@ export class PdfIngestionController {
       ...dto,
       year: dto.year ? Number(dto.year) || undefined : undefined,
       fileSize: Number(dto.fileSize) || file.size,
+      startPage: dto.startPage ? Number(dto.startPage) || undefined : undefined,
+      endPage: dto.endPage ? Number(dto.endPage) || undefined : undefined,
     };
     return this.service.createUpload(
       {
