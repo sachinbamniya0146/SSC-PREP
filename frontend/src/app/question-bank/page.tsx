@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { BackButton } from "@/components/BackButton";
 import { API_BASE, fetchAuth } from "@/lib/api";
 
 interface Subject {
@@ -312,6 +313,7 @@ export default function QuestionBankPage() {
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
+      <BackButton className="mb-3" />
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">📚 SSC Question Bank</h1>
