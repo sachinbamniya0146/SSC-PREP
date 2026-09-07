@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 type PlanData = {
   plan: {
@@ -55,18 +55,19 @@ export default function StudyPlanPage() {
   const [loading, setLoading] = React.useState(true);
 
   const apiBase = API_BASE;
-  const headers = () => {
-    const t = localStorage.getItem("ssc_access_token");
-    return { Authorization: `Bearer ${t}` };
-  };
 
+  // BUGFIX (2026-09 audit — same class of bug found across
+  // dashboard/review/quiz/weak-topics): all calls below used raw fetch()
+  // with a manually attached Authorization header instead of fetchAuth(),
+  // so an expired access token would silently break the study plan page
+  // instead of transparently refreshing.
   const loadPlan = async () => {
     try {
-      const planRes = await fetch(`${apiBase}/study-plan`, { headers: headers() });
+      const planRes = await fetchAuth(`${apiBase}/study-plan`);
       const planData = planRes.ok && planRes.status !== 204 ? await planRes.json().catch(() => null) : null;
-      const dailyRes = await fetch(`${apiBase}/study-plan/daily-target`, { headers: headers() });
+      const dailyRes = await fetchAuth(`${apiBase}/study-plan/daily-target`);
       const dailyData = dailyRes.ok && dailyRes.status !== 204 ? await dailyRes.json().catch(() => null) : null;
-      const metaRes = await fetch(`${apiBase}/bank/meta`, { headers: headers() });
+      const metaRes = await fetchAuth(`${apiBase}/bank/meta`);
       const metaData = metaRes.ok ? await metaRes.json().catch(() => null) : null;
       setPlan(planData ? { plan: planData } : null);
       setDaily(dailyData && dailyData.hasPlan ? dailyData : null);
@@ -87,8 +88,8 @@ export default function StudyPlanPage() {
     const body: any = { examId: selectedExam, type: "COMBINED", targetDate: targetDate.toISOString().split("T")[0] };
     if (selectedSubject) body.subjectId = selectedSubject;
     try {
-      const r = await fetch(`${apiBase}/study-plan/create`, {
-        method: "POST", headers: { ...headers(), "Content-Type": "application/json" },
+      const r = await fetchAuth(`${apiBase}/study-plan/create`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (r.ok) { setStep("view"); loadPlan(); }
