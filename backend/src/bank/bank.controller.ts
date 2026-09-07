@@ -203,6 +203,27 @@ export class BankController {
     return this.bank.rejectPendingQuestion(id, adminId, body?.reason);
   }
 
+  // NEW ("ek click me sabhi English-only questions ko approve karne ka
+  // option"): sweeps every PENDING question that is already complete
+  // (question text + all options + correct answer present) straight to
+  // APPROVED, without needing the admin to open each one — see
+  // BankService.bulkApprovePendingQuestions() doc comment for exactly what
+  // counts as "complete" and why Hindi translation is not required here.
+  @Post('admin/questions/bulk-approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  bulkApprovePending(
+    @Req() req: any,
+    @Body() body?: { examId?: string; subjectId?: string; chapterId?: string },
+  ) {
+    const adminId = req.user?.userId ?? req.user?.id;
+    return this.bank.bulkApprovePendingQuestions(adminId, {
+      examId: body?.examId,
+      subjectId: body?.subjectId,
+      chapterId: body?.chapterId,
+    });
+  }
+
   // FIX (CRITICAL answer-key leak, see BankService.getAttemptedQuestionIds
   // doc comment): browse/getSet/chapterPyq/getById never received the
   // caller's userId at all, so the service had no way to gate
