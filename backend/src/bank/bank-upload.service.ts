@@ -1600,7 +1600,7 @@ export class BankUploadService {
     const select = {
       id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true,
       explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true,
-      subjectId: true, chapterId: true, examId: true, createdAt: true,
+      subjectId: true, chapterId: true, examId: true, createdAt: true, searchHash: true,
     } as const;
 
     const [byHashRows, byTextRows] = hashes.length || texts.length
