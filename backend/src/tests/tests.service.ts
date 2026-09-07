@@ -5,6 +5,7 @@ import { GamificationService } from '../gamification/gamification.service';
 import { cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { TelegramService } from '../telegram/telegram.service';
+import { QuestionBankPracticeService } from '../bank/question-bank-practice.service';
 
 @Injectable()
 export class TestsService {
@@ -24,6 +25,10 @@ export class TestsService {
     // boot.
     @Inject(forwardRef(() => TelegramService))
     private telegram: TelegramService,
+    // NEW — single-chapter weak-area practice (see getWeakAreasPractice
+    // below) delegates to the same no-repeat-until-exhausted set logic
+    // used by the general question bank, instead of a second copy of it.
+    private practiceService: QuestionBankPracticeService,
   ) {}
 
   // ---- P0 — premium entitlement enforcement (server-side, never trust FE) ----
@@ -1219,9 +1224,28 @@ async saveAnswers(
   // Returns practice questions from chapters where the user got questions wrong or skipped
   async getWeakAreasPractice(
     userId: string,
-    options: { limit?: number; includeSkipped?: boolean; examId?: string }
+    options: { limit?: number; includeSkipped?: boolean; examId?: string; chapterId?: string }
   ) {
-    const limit = Math.min(Math.max(options.limit ?? 25, 5), 100);
+    // NEW ("ranking ka wrong hua toh ranking ka direct 25 pick karne ka
+    // option, minimum 15 bhi chun sake, jab tak topic ke sabhi questions
+    // saamne na aa jayen tab tak repeat na ho") — when a specific chapter
+    // is requested, skip the top-10-mixed-chapters aggregation below
+    // entirely and hand off to the practice-set engine, which already
+    // pools across ALL exams for that chapterId (chapters are exam-agnostic
+    // in the schema) and now tracks per-user "seen" questions so nothing
+    // repeats until the whole chapter has been shown at least once.
+    if (options.chapterId) {
+      const size = Math.min(50, Math.max(15, options.limit ?? 25));
+      const set = await this.practiceService.getOrCreateSet(userId, {
+        chapterId: options.chapterId,
+        examId: options.examId,
+        size,
+        mode: 'practice',
+      });
+      return { type: 'WEAK_AREAS_PRACTICE', singleChapter: true, set };
+    }
+
+    const limit = Math.min(Math.max(options.limit ?? 25, 15), 100);
     const includeSkipped = options.includeSkipped ?? true;
 
     // Get all SUBMITTED attempts for this user
