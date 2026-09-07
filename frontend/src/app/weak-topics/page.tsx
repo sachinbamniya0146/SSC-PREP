@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 type WeakTopic = {
   chapterId: string;
@@ -32,12 +32,11 @@ export default function WeakTopicsPage() {
   } | null>(null);
 
   const load = async () => {
-    const token = localStorage.getItem("ssc_access_token");
     try {
-      const res = await fetch(
-        `${API_BASE}/analytics/performance`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual
+      // token, so an expired access token auto-refreshes instead of
+      // leaving this page stuck showing nothing.
+      const res = await fetchAuth(`${API_BASE}/analytics/performance`);
       if (res.ok) {
         const d = await res.json();
         setWeak(d.weakTopics);
@@ -55,11 +54,8 @@ export default function WeakTopicsPage() {
   }, []);
 
   const startDrill = async (t: WeakTopic) => {
-    const token = localStorage.getItem("ssc_access_token");
-    const res = await fetch(
-      `${API_BASE}/analytics/chapter/${t.chapterId}/drill`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
+    // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual token.
+    const res = await fetchAuth(`${API_BASE}/analytics/chapter/${t.chapterId}/drill`);
     if (res.ok) {
       const d = await res.json();
       setDrill({ ...d, chapterName: t.chapterName });
