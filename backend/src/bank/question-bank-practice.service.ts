@@ -73,9 +73,14 @@ export class QuestionBankPracticeService {
       setNumber?: number;
       mode?: 'practice' | 'test';
       resume?: boolean; // if true, resume existing incomplete set
+      size?: number; // NEW — student-chosen set size (min 15, default 25)
     }
   ): Promise<PracticeSet> {
     const { subjectId, chapterId, examId, setNumber = 1, mode = 'practice', resume = false } = options;
+    // NEW: "students ko minimum 15 question ki practice ka bhi option
+    // milna chahiye" — clamp to [15, 50], default stays 25 for anyone who
+    // doesn't pass a size.
+    const size = Math.min(50, Math.max(15, options.size || this.QUESTIONS_PER_SET));
 
     // If resume is true, try to find existing incomplete set
     if (resume) {
@@ -141,7 +146,7 @@ export class QuestionBankPracticeService {
     }
 
     // Fetch questions for the set
-    const questions = await this.fetchQuestionsForSet(subjectId, chapterId, examId);
+    const questions = await this.fetchQuestionsForSet(userId, subjectId, chapterId, examId, size);
 
     if (questions.length === 0) {
       throw new NotFoundException('No questions available for this subject/chapter/exam combination');
@@ -178,10 +183,22 @@ export class QuestionBankPracticeService {
   }
 
   // Fetch questions for a practice set
+  //
+  // FIX ("jab tak repeat na ho jab tak us topic ke sabhi questions student
+  // ke saamne na aa gaye ho"): this used to shuffle the ENTIRE matching pool
+  // and take N every single time — with pure randomness, a student could
+  // get the same 25 questions again in set #2, or never see 40% of the
+  // chapter at all. Now: pull the IDs already SEEN by this user for this
+  // exact subject/chapter/exam combo (from every past set, completed or
+  // not) via QuestionBankSet.questions[], exclude those first, and only
+  // fall back to already-seen ones (oldest-seen first) once every question
+  // in the pool has been shown — i.e. recycle only after full exhaustion.
   private async fetchQuestionsForSet(
+    userId: string,
     subjectId?: string,
     chapterId?: string,
-    examId?: string
+    examId?: string,
+    size: number = this.QUESTIONS_PER_SET,
   ): Promise<any[]> {
     const where: any = {
       ...PUBLISHED_QUESTION_WHERE,
@@ -204,9 +221,41 @@ export class QuestionBankPracticeService {
       take: 1000,
     });
 
-    // Shuffle and take 25
-    const shuffled = rows.slice().sort(() => Math.random() - 0.5).slice(0, this.QUESTIONS_PER_SET);
-    return shuffled;
+    if (rows.length === 0) return [];
+
+    // Every past set (any status) for this same subject/chapter/exam combo,
+    // oldest first, so if we do need to recycle we bring back the
+    // longest-unseen ones first rather than a fresh random repeat.
+    const pastSets = await this.prisma.questionBankSet.findMany({
+      where: { userId, subjectId, chapterId, examId },
+      orderBy: { startedAt: 'asc' },
+      select: { questions: true },
+    });
+    const seenOrder: string[] = []; // first-seen order, de-duplicated
+    const seen = new Set<string>();
+    for (const s of pastSets) {
+      for (const qid of (s.questions as string[]) ?? []) {
+        if (!seen.has(qid)) { seen.add(qid); seenOrder.push(qid); }
+      }
+    }
+
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const unseen = rows.filter((r) => !seen.has(r.id));
+    const shuffledUnseen = unseen.slice().sort(() => Math.random() - 0.5);
+
+    if (shuffledUnseen.length >= size) {
+      return shuffledUnseen.slice(0, size);
+    }
+
+    // Not enough fresh questions left — take all remaining unseen ones,
+    // then top up with the oldest-seen ones to reach `size` (full chapter
+    // has now been exhausted at least once for this student).
+    const need = size - shuffledUnseen.length;
+    const recycled = seenOrder
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .slice(0, need);
+    return [...shuffledUnseen, ...recycled];
   }
 
   // Get a specific set by ID
