@@ -74,13 +74,31 @@ export interface BulkUploadQuestion {
   difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
 }
 
+// NEW ("admin ko upload ka result behtar dikhna chahiye — kaunsa row fail
+// hua, kyun"): errors/warnings used to carry only a row number and the raw
+// message, plus the entire raw spreadsheet row in `data` — which the
+// frontend never actually rendered. To find out WHICH question a failed
+// row #47 even was, the admin had to reopen their spreadsheet and count
+// down to row 47 by hand. Every error/warning now also carries a short,
+// human-readable `questionPreview` (first ~80 chars of that row's
+// questionText, extracted straight from the raw row using the same
+// column mapping the parser used) plus a coarse `category` — so the admin
+// can see AT A GLANCE, right in the result panel, which question broke
+// and roughly why, without cross-referencing anything.
+export type UploadErrorCategory =
+  | 'MISSING_FIELD'
+  | 'INVALID_REFERENCE'
+  | 'DUPLICATE'
+  | 'FORMAT'
+  | 'OTHER';
+
 export interface UploadResult {
   success: boolean;
   total: number;
   created: number;
   failed: number;
-  errors: { row: number; error: string; data?: any }[];
-  warnings: { row: number; message: string }[];
+  errors: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string; data?: any }[];
+  warnings: { row: number; message: string; questionPreview?: string }[];
 }
 
 export interface QuestionTemplate {
@@ -1000,9 +1018,12 @@ export class BankUploadService {
         parsedRows.push({ rowNum, row, question });
       } catch (error) {
         result.failed++;
+        const message = error instanceof Error ? error.message : String(error);
         result.errors.push({
           row: rowNum,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
+          category: this.categorizeUploadError(message),
+          questionPreview: this.extractQuestionPreview(row, headerMap),
           data: row,
         });
       }
@@ -1031,13 +1052,17 @@ export class BankUploadService {
           result.warnings.push({
             row: rowNum,
             message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
+            questionPreview: this.extractQuestionPreview(row, headerMap),
           });
         }
       } catch (error) {
         result.failed++;
+        const message = error instanceof Error ? error.message : String(error);
         result.errors.push({
           row: rowNum,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
+          category: this.categorizeUploadError(message),
+          questionPreview: this.extractQuestionPreview(row, headerMap),
           data: row,
         });
       }
@@ -1130,9 +1155,12 @@ export class BankUploadService {
         validRows.push({ rowNum, question });
       } catch (error) {
         result.failed++;
+        const message = error instanceof Error ? error.message : String(error);
         result.errors.push({
           row: rowNum,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
+          category: this.categorizeUploadError(message),
+          questionPreview: this.previewFromQuestion(question),
           data: question,
         });
       }
@@ -1148,13 +1176,17 @@ export class BankUploadService {
           result.warnings.push({
             row: rowNum,
             message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
+            questionPreview: this.previewFromQuestion(question),
           });
         }
       } catch (error) {
         result.failed++;
+        const message = error instanceof Error ? error.message : String(error);
         result.errors.push({
           row: rowNum,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
+          category: this.categorizeUploadError(message),
+          questionPreview: this.previewFromQuestion(question),
           data: question,
         });
       }
@@ -1162,6 +1194,56 @@ export class BankUploadService {
 
     result.success = result.failed === 0;
     return result;
+  }
+
+  /**
+   * NEW ("admin ko upload ka result behtar dikhna chahiye"): pull a short,
+   * readable preview straight out of a raw spreadsheet row — no dependency
+   * on the row having parsed successfully, since this is used for BOTH
+   * error rows (parsing may have failed before questionText was even
+   * extracted) and success/warning rows. Falls back gracefully at every
+   * step: missing header → missing column → empty cell → generic label.
+   */
+  private extractQuestionPreview(row: any[], headerMap: Record<string, number>): string {
+    const idx = headerMap['questionText'];
+    const raw = idx !== undefined ? row[idx] : undefined;
+    const text = raw !== undefined && raw !== null ? String(raw).trim() : '';
+    if (!text) return '(questionText column empty or unreadable on this row)';
+    return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+  }
+
+  /**
+   * Same idea as extractQuestionPreview() but for the JSON/Word upload
+   * path (processStructuredQuestions()), where rows arrive as already-
+   * parsed BulkUploadQuestion objects rather than raw spreadsheet arrays.
+   */
+  private previewFromQuestion(question: Partial<BulkUploadQuestion> | undefined | null): string {
+    const text = question?.questionText?.trim();
+    if (!text) return '(questionText missing on this entry)';
+    return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+  }
+
+  /**
+   * NEW ("kaunsa row fail hua, kyun" — group errors by root cause instead
+   * of one long undifferentiated list): classifies an error message into a
+   * coarse category so the frontend can show "38 Missing Field, 12
+   * Duplicate, 4 Invalid Reference" instead of just a flat count. Matches
+   * against the actual phrasing this file's own throw sites use (see
+   * validateReferences(), parseQuestionRow(), checkDuplicate()) — this is
+   * NOT guessing at generic error text, it's keyed to this codebase's own
+   * error strings.
+   */
+  private categorizeUploadError(message: string): UploadErrorCategory {
+    const m = message.toLowerCase();
+    if (m.includes('duplicate')) return 'DUPLICATE';
+    if (m.includes('not found in database') || m.includes('does not belong to') || m.includes('mismatch')) {
+      return 'INVALID_REFERENCE';
+    }
+    if (m.includes('missing required') || m.includes('required column') || m.includes('cannot be empty')) {
+      return 'MISSING_FIELD';
+    }
+    if (m.includes('invalid') || m.includes('must be') || m.includes('expected')) return 'FORMAT';
+    return 'OTHER';
   }
 
   /**
