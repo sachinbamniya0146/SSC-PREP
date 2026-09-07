@@ -6,6 +6,7 @@ import { DailyTestService } from './daily-test.service';
 import { DailyTestController } from './daily-test.controller';
 import { GamificationModule } from '../gamification/gamification.module';
 import { TelegramModule } from '../telegram/telegram.module';
+import { BankModule } from '../bank/bank.module';
 
 @Module({
   // Requirement 5, part (a): TestsService now injects TelegramService (to
@@ -15,7 +16,11 @@ import { TelegramModule } from '../telegram/telegram.module';
   // optional. It MUST be paired with forwardRef() on telegram.module.ts's
   // side too (see that file) — one-sided forwardRef still throws
   // "cannot resolve dependencies" at boot.
-  imports: [GamificationModule, forwardRef(() => TelegramModule)],
+  // NEW: TestsService now delegates single-chapter weak-area practice sets
+  // to QuestionBankPracticeService.getOrCreateSet() (see tests.service.ts
+  // getWeakAreasPractice) so it inherits the no-repeat-until-exhausted +
+  // configurable-size fix built there, instead of duplicating that logic.
+  imports: [GamificationModule, forwardRef(() => TelegramModule), BankModule],
   providers: [TestsService, DailyTestService, TestStatsService],
   controllers: [TestsController, DailyTestController],
   // BUGFIX (bonus grep — module-registration gap, same family as the
