@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 type Mock = {
   id: string;
@@ -23,13 +23,12 @@ export default function MocksPage() {
   const [offer, setOffer] = React.useState<{ active: boolean; priceInr: number; days: number; message: string } | null>(null);
   const [loading, setLoading] = React.useState(true);
 
+  // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual
+  // token, so an expired access token auto-refreshes instead of leaving
+  // the mocks list stuck showing nothing (or worse, all-locked).
   const load = async () => {
-    const token = localStorage.getItem("ssc_access_token");
     try {
-      const res = await fetch(
-        `${API_BASE}/mocks`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      const res = await fetchAuth(`${API_BASE}/mocks`);
       if (res.ok) {
         const d = await res.json();
         setMocks(d.mockAccess);
@@ -55,11 +54,13 @@ export default function MocksPage() {
   // PayU redirects back to /payment/success, which calls /payments/verify
   // and only then unlocks access server-side.
   const purchase = async (m: Mock) => {
-    const token = localStorage.getItem("ssc_access_token");
     try {
-      const res = await fetch(`${API_BASE}/payments/order`, {
+      // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() +
+      // manual token — a payment attempt must not silently fail to even
+      // start just because the access token expired.
+      const res = await fetchAuth(`${API_BASE}/payments/order`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mockTemplateId: m.id }),
       });
       if (!res.ok) {
