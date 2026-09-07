@@ -25,13 +25,28 @@ interface UsersResponse {
   totalPages: number;
 }
 
+// NEW ("admin ko upload ka result behtar dikhna chahiye — kaunsa row fail
+// hua, kyun"): matches BankUploadService's enriched UploadResult
+// (backend/src/bank/bank-upload.service.ts) — every error/warning now also
+// carries a question-text preview, and errors carry a coarse category so
+// they can be grouped/summarized instead of shown as one flat list.
+type UploadErrorCategory = "MISSING_FIELD" | "INVALID_REFERENCE" | "DUPLICATE" | "FORMAT" | "OTHER";
+
+const CATEGORY_LABEL: Record<UploadErrorCategory, string> = {
+  MISSING_FIELD: "❗ Missing Field",
+  INVALID_REFERENCE: "🔗 Invalid Reference",
+  DUPLICATE: "♻️ Duplicate",
+  FORMAT: "✏️ Format",
+  OTHER: "❓ Other",
+};
+
 interface UploadResult {
   success: boolean;
   total: number;
   created: number;
   failed: number;
-  errors: { row: number; error: string }[];
-  warnings: { row: number; message: string }[];
+  errors: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string }[];
+  warnings: { row: number; message: string; questionPreview?: string }[];
 }
 
 interface SubscriptionPlan {
@@ -307,6 +322,32 @@ export default function AdminPage() {
     }
   }
 
+  // NEW ("admin ko upload ka result behtar dikhna chahiye"): builds a CSV
+  // of every failed row (row number, category, question preview, exact
+  // error message) client-side from the already-fetched UploadResult —
+  // no extra backend call — and downloads it, so the admin can work
+  // through fixes in their spreadsheet app instead of scrolling this panel.
+  function downloadErrorReport(result: UploadResult) {
+    const escapeCsv = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const lines = [
+      ["Row", "Category", "Question Preview", "Error"].map(escapeCsv).join(","),
+      ...result.errors.map((e) =>
+        [String(e.row), CATEGORY_LABEL[e.category] ?? e.category, e.questionPreview ?? "", e.error]
+          .map(escapeCsv)
+          .join(","),
+      ),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `upload_errors_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
   React.useEffect(() => {
     loadUsers();
     loadPlans();
@@ -473,17 +514,59 @@ export default function AdminPage() {
 
           {uploadResult && (
             <div className="mt-4 rounded-lg border border-border bg-background p-3 text-sm">
-              <div className="flex flex-wrap gap-4">
+              <div className="flex flex-wrap items-center gap-4">
                 <span>Total: <strong>{uploadResult.total}</strong></span>
                 <span className="text-emerald-600 dark:text-emerald-400">Created: <strong>{uploadResult.created}</strong></span>
                 <span className="text-red-600 dark:text-red-400">Failed: <strong>{uploadResult.failed}</strong></span>
+                {/* NEW: one-click download of the full error report as CSV
+                    — row, category, question preview, exact error message
+                    — so the admin can open it next to their spreadsheet
+                    and fix every failed row without scrolling this panel. */}
+                {uploadResult.errors.length > 0 && (
+                  <button
+                    onClick={() => downloadErrorReport(uploadResult)}
+                    className="ml-auto rounded-md border border-border px-3 py-1 text-xs font-semibold hover:bg-muted"
+                  >
+                    📥 Download Error Report (CSV)
+                  </button>
+                )}
               </div>
+
+              {/* NEW: category breakdown — "38 Missing Field, 12 Duplicate,
+                  4 Invalid Reference" at a glance, computed from the same
+                  errors array rendered below (no separate backend call). */}
+              {uploadResult.errors.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(Object.entries(
+                    uploadResult.errors.reduce((acc: Record<string, number>, e) => {
+                      acc[e.category] = (acc[e.category] || 0) + 1;
+                      return acc;
+                    }, {}),
+                  ) as [UploadErrorCategory, number][]).map(([cat, count]) => (
+                    <span key={cat} className="rounded-full bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400">
+                      {CATEGORY_LABEL[cat] ?? cat}: {count}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {uploadResult.errors.length > 0 && (
                 <div className="mt-2">
                   <div className="mb-1 text-xs font-semibold text-red-500">Errors:</div>
-                  <ul className="max-h-40 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                  <ul className="max-h-60 space-y-1.5 overflow-y-auto text-xs text-muted-foreground">
                     {uploadResult.errors.map((e, i) => (
-                      <li key={i}>Row {e.row}: {e.error}</li>
+                      <li key={i} className="rounded border border-red-500/20 bg-red-500/5 p-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-foreground">Row {e.row}</span>
+                          <span className="rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+                            {CATEGORY_LABEL[e.category] ?? e.category}
+                          </span>
+                        </div>
+                        {e.questionPreview && (
+                          <div className="mt-0.5 italic text-foreground/80">"{e.questionPreview}"</div>
+                        )}
+                        <div className="mt-0.5">{e.error}</div>
+                      </li>
                     ))}
                   </ul>
                 </div>
@@ -491,9 +574,13 @@ export default function AdminPage() {
               {uploadResult.warnings.length > 0 && (
                 <div className="mt-2">
                   <div className="mb-1 text-xs font-semibold text-amber-500">Warnings:</div>
-                  <ul className="max-h-40 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                  <ul className="max-h-40 space-y-1.5 overflow-y-auto text-xs text-muted-foreground">
                     {uploadResult.warnings.map((w, i) => (
-                      <li key={i}>Row {w.row}: {w.message}</li>
+                      <li key={i} className="rounded border border-amber-500/20 bg-amber-500/5 p-1.5">
+                        <span className="font-semibold text-foreground">Row {w.row}</span>
+                        {w.questionPreview && <span className="italic"> — "{w.questionPreview}"</span>}
+                        <div className="mt-0.5">{w.message}</div>
+                      </li>
                     ))}
                   </ul>
                 </div>
