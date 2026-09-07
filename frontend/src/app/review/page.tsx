@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 type ReviewCardData = {
   id: string;
@@ -74,17 +74,23 @@ export default function ReviewPage() {
   const [aiError, setAiError] = React.useState<string | null>(null);
 
   const apiBase = API_BASE;
-  const headers = (): Record<string, string> => {
-    const token =
-      typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
 
+  // BUGFIX (2026-09 audit — "review page silently stops working after a
+  // while"): this page used a raw `fetch()` with a manually-attached
+  // Authorization header, instead of the shared `fetchAuth()` helper that
+  // every other authenticated page in the app uses. `fetchAuth()` auto-
+  // refreshes an expired access token on a 401 and retries once; the raw
+  // `fetch()` here did not, so once a student's access token expired mid
+  // study-session (a normal thing to happen on a page meant for repeated
+  // daily review), every call on this page would start failing with
+  // "login pehle karo" even though the student was still logged in and
+  // had a valid refresh token. Switched all three calls below to
+  // fetchAuth() so this page behaves the same as the rest of the app.
   const load = async () => {
     setLoading(true);
     setMsg(null);
     try {
-      const res = await fetch(`${apiBase}/review/due?limit=15`, { headers: headers() });
+      const res = await fetchAuth(`${apiBase}/review/due?limit=15`);
       if (res.ok) {
         const d = await res.json();
         setCards(d.due || []);
@@ -111,9 +117,9 @@ export default function ReviewPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`${apiBase}/review/grade`, {
+      const res = await fetchAuth(`${apiBase}/review/grade`, {
         method: "POST",
-        headers: { ...headers(), "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cardId, grade: g }),
       });
       if (res.ok) {
@@ -136,9 +142,7 @@ export default function ReviewPage() {
     setAiLoading(true);
     setAiError(null);
     try {
-      const res = await fetch(`${apiBase}/ai-explanation/questions/${questionId}`, {
-        headers: headers(),
-      });
+      const res = await fetchAuth(`${apiBase}/ai-explanation/questions/${questionId}`);
       const d = await res.json().catch(() => ({}));
       if (res.ok) {
         setAiExplanation(d as AIExplanation);
