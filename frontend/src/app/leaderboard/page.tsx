@@ -1,16 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 type Row = { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number; isMe?: boolean };
 type LB = { period: string; rows: Row[]; myRank: number | null; me: Row | null };
 
 const apiBase = () => API_BASE;
-const authHeaders = (): Record<string, string> => {
-  const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
 
 export default function LeaderboardPage() {
   const [data, setData] = React.useState<LB | null>(null);
@@ -22,7 +18,10 @@ export default function LeaderboardPage() {
     (async () => {
       setLoading(true);
       try {
-        const r = await fetch(`${apiBase()}/gamification/leaderboard?period=${period}`, { headers: authHeaders() });
+        // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() +
+        // manual token, so an expired access token auto-refreshes instead
+        // of showing "Login required" to an already-logged-in student.
+        const r = await fetchAuth(`${apiBase()}/gamification/leaderboard?period=${period}`);
         if (!r.ok) {
           setError(r.status === 401 ? "Login required" : `Failed to load (${r.status})`);
           return;
