@@ -97,7 +97,11 @@ export class QuestionBankPracticeService {
       });
 
       if (existingSet) {
-        return this.formatSet(existingSet);
+        // BUGFIX: was `formatSet(existingSet)` with no questions arg → an
+        // empty `questions: []` on every resume. See loadOrderedQuestions()
+        // doc comment above for the full explanation.
+        const orderedQuestions = await this.loadOrderedQuestions(existingSet.questions as string[]);
+        return this.formatSet(existingSet, orderedQuestions);
       }
     }
 
@@ -115,7 +119,9 @@ export class QuestionBankPracticeService {
     });
 
     if (existingIncompleteSet) {
-      return this.formatSet(existingIncompleteSet);
+      // BUGFIX: same empty-questions bug as the resume branch above.
+      const orderedQuestions = await this.loadOrderedQuestions(existingIncompleteSet.questions as string[]);
+      return this.formatSet(existingIncompleteSet, orderedQuestions);
     }
 
     // Check if user has completed sets for this subject/chapter
@@ -258,6 +264,33 @@ export class QuestionBankPracticeService {
     return [...shuffledUnseen, ...recycled];
   }
 
+  // BUGFIX (this session): getOrCreateSet()'s two "resume an existing
+  // incomplete set" branches used to call `this.formatSet(existingSet)`
+  // with NO `questions` argument. formatSet() only serializes questions
+  // from that second parameter — it never reads `set.questions` (the
+  // stored array of question IDs) itself. Result: resuming a set (or
+  // re-hitting getOrCreateSet for a set already in progress, which is the
+  // normal "continue where I left off" flow) silently returned
+  // `questions: []`, i.e. a practice set with zero questions to answer,
+  // even though the set had real progress (`answers`, `currentIndex`)
+  // recorded. Extracted the "fetch full question rows for a set's stored
+  // ID list, in original order" logic (previously inlined only in
+  // getSetById()) into this shared helper so both resume branches below
+  // and getSetById() build the exact same, complete PracticeSet shape.
+  private async loadOrderedQuestions(questionIds: string[]): Promise<any[]> {
+    if (questionIds.length === 0) return [];
+    const questions = await this.prisma.question.findMany({
+      where: { id: { in: questionIds } },
+      include: {
+        chapter: { select: { name: true } },
+        exam: { select: { name: true } },
+        subject: { select: { name: true } },
+      },
+    });
+    const questionMap = new Map(questions.map(q => [q.id, q]));
+    return questionIds.map(id => questionMap.get(id)).filter(Boolean);
+  }
+
   // Get a specific set by ID
   async getSetById(userId: string, setId: string, _resume = false): Promise<PracticeSet> {
     const set = await this.prisma.questionBankSet.findFirst({
@@ -268,22 +301,7 @@ export class QuestionBankPracticeService {
       throw new NotFoundException('Practice set not found');
     }
 
-    // Fetch full question details
-    const questions = await this.prisma.question.findMany({
-      where: { id: { in: set.questions as string[] } },
-      include: {
-        chapter: { select: { name: true } },
-        exam: { select: { name: true } },
-        subject: { select: { name: true } },
-      },
-    });
-
-    // Maintain order
-    const questionMap = new Map(questions.map(q => [q.id, q]));
-    const orderedQuestions = (set.questions as string[])
-      .map(id => questionMap.get(id))
-      .filter(Boolean);
-
+    const orderedQuestions = await this.loadOrderedQuestions(set.questions as string[]);
     return this.formatSet(set, orderedQuestions);
   }
 
