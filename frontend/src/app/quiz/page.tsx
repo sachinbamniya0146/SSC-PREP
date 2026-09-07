@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 type QuizQ = {
   id: string;
@@ -70,13 +70,16 @@ function ReportError({ questionId }: { questionId: string }) {
     }
     setSending(true);
     try {
-      const res = await fetch(
+      // BUGFIX (2026-09 audit — access-token expiry causes silent
+      // failures on this page, same class of bug found across
+      // dashboard/review/etc.): switched from raw fetch() to fetchAuth()
+      // so an expired token gets auto-refreshed instead of failing.
+      const res = await fetchAuth(
         `${API_BASE}/report-error`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
             questionId,
@@ -196,12 +199,11 @@ export default function DailyQuizPage() {
   >([]);
 
   const load = async () => {
-    const token = localStorage.getItem("ssc_access_token");
     try {
-      const res = await fetch(
-        `${API_BASE}/quiz/today`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() +
+      // manual token, so an expired access token auto-refreshes instead
+      // of silently leaving the daily quiz stuck on "Loading...".
+      const res = await fetchAuth(`${API_BASE}/quiz/today`);
       if (res.ok) {
         const d = await res.json();
         setQuizId(d.quizId);
@@ -226,16 +228,18 @@ export default function DailyQuizPage() {
   };
 
   const submit = async () => {
-    const token = localStorage.getItem("ssc_access_token");
     const payload = {
       quizId,
       answers: questions.map((q) => ({ questionId: q.id, selectedOption: answers[q.id] })),
     };
-    const res = await fetch(
+    // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual
+    // token — quiz submission must not silently fail just because the
+    // access token expired while the student was answering.
+    const res = await fetchAuth(
       `${API_BASE}/quiz/submit`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       },
     );
