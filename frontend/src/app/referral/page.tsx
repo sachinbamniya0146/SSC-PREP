@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 type ReferralStat = {
   totalReferrals: number;
@@ -21,12 +21,12 @@ export default function ReferralPage() {
   >([]);
   const [loading, setLoading] = React.useState(true);
 
+  // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual
+  // token, so an expired access token auto-refreshes instead of leaving
+  // the referral page stuck with no code/stats.
   const load = async () => {
-    const token = localStorage.getItem("ssc_access_token");
     try {
-      const res = await fetch(`${API_BASE}/referral/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetchAuth(`${API_BASE}/referral/me`);
       if (res.ok) {
         const d = await res.json();
         setCode(d.referralCode);
