@@ -17,22 +17,6 @@ function isLikelyUuid(value: string): boolean {
   return UUID_RE.test(value.trim());
 }
 
-// Used by resolveReferenceIds()'s new auto-create path: turns a slug like
-// "chap-dance_culture-general_awareness" or a free-text label into a clean
-// display name ("Dance Culture") and a URL-safe slug, so an auto-created
-// row looks the same as one an admin typed by hand.
-function humanizeSlug(raw: string): string {
-  return raw
-    .replace(/^chap-|^topic-|^sub-?topic-/i, '')
-    .replace(/-[a-z_]+$/i, (m) => (/^-(general_awareness|reasoning|quantitative_aptitude|english)$/i.test(m) ? '' : m)) // drop trailing "-subject_slug" suffix Sachin's sheets append
-    .replace(/[-_]+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (c) => c.toUpperCase()) || raw;
-}
-function slugify(raw: string): string {
-  return raw.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `x-${randomUUID().slice(0, 8)}`;
-}
-
 export interface BulkUploadQuestion {
   examId: string;
   subjectId: string;
@@ -105,14 +89,47 @@ export interface QuestionTemplate {
   description: string;
 }
 
+/**
+ * ENHANCEMENT (this session — batched duplicate detection): in-memory
+ * lookup structure built ONCE per upload (see buildDuplicateIndex()) and
+ * consulted per-row instead of hitting the database on every single row.
+ * See the doc-comment on buildDuplicateIndex() for the full rationale.
+ */
+interface DuplicateIndex {
+  byHash: Map<string, any>;
+  byText: Map<string, any[]>;
+}
+
 @Injectable()
 export class BankUploadService {
   constructor(private prisma: PrismaService, private s3: S3Service) {}
 
   /**
    * Validate and parse Excel file for bulk question upload
+   *
+   * BUGFIX (this session — "file sahi hai phir bhi upload nahi ho rahi"
+   * root cause): the try/catch used to wrap the ENTIRE call chain,
+   * including processBulkQuestions() — which does the DB reference-data
+   * fetch (Promise.all of exam/subject/chapter/topic/subTopic) AND all
+   * 650+ row-by-row inserts. Any error in THAT stage (most importantly a
+   * database connectivity failure — e.g. Postgres unreachable/auth
+   * failure) got caught here and rethrown as "Failed to parse Excel
+   * file: <db error>". That message tells the admin their FILE is
+   * malformed, when the real problem is the server/database — completely
+   * the wrong diagnosis, and it sent Sachin looking at the spreadsheet
+   * instead of the backend/DB when the sheet was fine all along.
+   *
+   * Fix: only the actual XLSX.read()/sheet_to_json() extraction step is
+   * wrapped here now. Parsing this workbook's structure is a genuinely
+   * different failure mode ("this isn't a valid .xlsx" / "no data rows")
+   * from "the database couldn't be reached while processing rows" —
+   * processBulkQuestions() now reports ITS OWN failures with their own
+   * accurate, distinguishing message (see the try/catch added around its
+   * reference-data fetch) instead of being silently re-labeled here.
    */
   async uploadFromExcel(fileBuffer: Buffer, adminId: string): Promise<UploadResult> {
+    let headers: string[];
+    let rows: any[][];
     try {
       const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
@@ -123,15 +140,15 @@ export class BankUploadService {
         throw new BadRequestException('Excel file must have at least a header row and one data row');
       }
 
-      const headers = jsonData[0] as string[];
-      const rows = jsonData.slice(1) as any[][];
-
-      return this.processBulkQuestions(headers, rows, adminId);
+      headers = jsonData[0] as string[];
+      rows = jsonData.slice(1) as any[][];
     } catch (error: unknown) {
       if (error instanceof BadRequestException) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      throw new BadRequestException(`Failed to parse Excel file: ${message}`);
+      throw new BadRequestException(`Failed to parse Excel file: ${message} — check the file is a real, unpasswordprotected .xlsx/.xls (an .xls saved from Google Sheets or a corrupted download are the usual causes here).`);
     }
+    // Deliberately OUTSIDE the try/catch above — see BUGFIX comment.
+    return this.processBulkQuestions(headers, rows, adminId);
   }
 
   /**
@@ -184,17 +201,21 @@ export class BankUploadService {
    * Parse Word document for bulk question upload
    */
   async uploadFromWord(fileBuffer: Buffer, adminId: string): Promise<UploadResult> {
+    // Same BUGFIX as uploadFromExcel() above — only the actual .docx text
+    // extraction/parsing is wrapped here; processStructuredQuestions()
+    // (DB reference-data fetch + row inserts) reports its own failures
+    // with its own accurate message instead of being mislabeled as a
+    // "Failed to parse Word document" error.
+    let questions: BulkUploadQuestion[];
     try {
       const result = await mammoth.extractRawText({ buffer: fileBuffer });
       const text = result.value;
-      
-      // Parse Word document - expect tables or structured format
-      const questions = this.parseWordDocument(text);
-      return this.processStructuredQuestions(questions, adminId);
+      questions = this.parseWordDocument(text);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       throw new BadRequestException(`Failed to parse Word document: ${message}`);
     }
+    return this.processStructuredQuestions(questions, adminId);
   }
 
   /**
@@ -563,6 +584,21 @@ export class BankUploadService {
    * currently in the database, so the downloaded file is a real,
    * self-contained example/guide — not just a shape with a promise to go
    * look elsewhere.
+   *
+   * BUGFIX (this session — confirmed by cross-referencing this method
+   * against resolveReferenceIds()'s own doc-comment below): that comment
+   * explicitly states "every bulk-upload sheet Sachin has actually used —
+   * INCLUDING THIS ONE'S OWN 'Reference IDs' SHEET — writes human-readable
+   * SLUGS (e.g. 'exam-cgl', 'sub-reasoning', 'chap-blood_relations-
+   * reasoning')". But this method only ever selected `id` (the raw
+   * database UUID) from Prisma, never `slug` — so a template downloaded
+   * from THIS running app showed an admin a column of raw UUIDs to copy,
+   * directly contradicting the Instructions tab, the code's own stated
+   * assumption, and every sheet Sachin has actually filled in by hand or
+   * with an AI tool (including SSC_CGL_MASTER_PLUS, which uses slugs
+   * throughout). Fix: select+write `slug` as the value to TYPE into the
+   * Questions Template sheet, with `name` for readability and the raw
+   * `id` kept as a clearly-labeled reference-only column.
    */
   async generateExcelTemplate(): Promise<Buffer> {
     const template = this.getTemplates().excel;
@@ -602,35 +638,45 @@ export class BankUploadService {
     const instrSheet = XLSX.utils.aoa_to_sheet(instructions);
     XLSX.utils.book_append_sheet(workbook, instrSheet, 'Instructions');
 
-    // Reference data sheet — populated with REAL ids/names from the DB.
+    // Reference data sheet — populated with REAL slugs/names from the DB.
+    // BUGFIX (see doc-comment above generateExcelTemplate()): now selects
+    // `slug` (the value to actually TYPE into the Questions Template
+    // sheet) in addition to `id` (kept as a reference-only column), and
+    // chapter/topic/subTopic rows show their PARENT'S SLUG too — e.g. a
+    // chapter row's "subjectId" column now shows "sub-reasoning" (what
+    // you'd type in the main sheet's subjectId column), not a raw UUID.
     const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
-      this.prisma.exam.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
-      this.prisma.subject.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
-      this.prisma.chapter.findMany({ select: { id: true, name: true, subjectId: true }, orderBy: { name: 'asc' } }),
-      this.prisma.topic.findMany({ select: { id: true, name: true, chapterId: true }, orderBy: { name: 'asc' } }),
-      this.prisma.subTopic.findMany({ select: { id: true, name: true, topicId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.exam.findMany({ select: { id: true, name: true, slug: true }, orderBy: { name: 'asc' } }),
+      this.prisma.subject.findMany({ select: { id: true, name: true, slug: true }, orderBy: { name: 'asc' } }),
+      this.prisma.chapter.findMany({ select: { id: true, name: true, slug: true, subjectId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.topic.findMany({ select: { id: true, name: true, slug: true, chapterId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.subTopic.findMany({ select: { id: true, name: true, slug: true, topicId: true }, orderBy: { name: 'asc' } }),
     ]);
 
+    const subjectSlugById = new Map(subjects.map(s => [s.id, s.slug]));
+    const chapterSlugById = new Map(chapters.map(c => [c.id, c.slug]));
+    const topicSlugById = new Map(topics.map(t => [t.id, t.slug]));
+
     const refData: (string | number)[][] = [
-      ['Reference: Valid Exam IDs'],
-      ['examId', 'name'],
-      ...(exams.length ? exams.map(e => [e.id, e.name]) : [['(no exams yet)', '']]),
+      ['Reference: Valid Exam IDs — type the value from the FIRST column below into the Questions Template sheet'],
+      ['examId (TYPE THIS)', 'name', 'id (internal UUID — reference only, do not type this)'],
+      ...(exams.length ? exams.map(e => [e.slug, e.name, e.id]) : [['(no exams yet — is the database seeded?)', '', '']]),
       [''],
-      ['Reference: Valid Subject IDs'],
-      ['subjectId', 'name'],
-      ...(subjects.length ? subjects.map(s => [s.id, s.name]) : [['(no subjects yet)', '']]),
+      ['Reference: Valid Subject IDs — type the value from the FIRST column below into the Questions Template sheet'],
+      ['subjectId (TYPE THIS)', 'name', 'id (internal UUID — reference only, do not type this)'],
+      ...(subjects.length ? subjects.map(s => [s.slug, s.name, s.id]) : [['(no subjects yet — is the database seeded?)', '', '']]),
       [''],
-      ['Reference: Valid Chapter IDs'],
-      ['chapterId', 'name', 'subjectId'],
-      ...(chapters.length ? chapters.map(c => [c.id, c.name, c.subjectId]) : [['(no chapters yet)', '', '']]),
+      ['Reference: Valid Chapter IDs — type the value from the FIRST column below into the Questions Template sheet'],
+      ['chapterId (TYPE THIS)', 'name', 'subjectId (must match the subjectId column you use for this row)', 'id (internal UUID — reference only)'],
+      ...(chapters.length ? chapters.map(c => [c.slug, c.name, subjectSlugById.get(c.subjectId) ?? c.subjectId, c.id]) : [['(no chapters yet — is the database seeded?)', '', '', '']]),
       [''],
-      ['Reference: Valid Topic IDs'],
-      ['topicId', 'name', 'chapterId'],
-      ...(topics.length ? topics.map(t => [t.id, t.name, t.chapterId]) : [['(no topics yet)', '', '']]),
+      ['Reference: Valid Topic IDs (optional column) — type the value from the FIRST column below'],
+      ['topicId (TYPE THIS)', 'name', 'chapterId (must match the chapterId column you use for this row)', 'id (internal UUID — reference only)'],
+      ...(topics.length ? topics.map(t => [t.slug, t.name, chapterSlugById.get(t.chapterId) ?? t.chapterId, t.id]) : [['(no topics yet)', '', '', '']]),
       [''],
-      ['Reference: Valid Sub-Topic IDs'],
-      ['subTopicId', 'name', 'topicId'],
-      ...(subTopics.length ? subTopics.map(t => [t.id, t.name, t.topicId]) : [['(no sub-topics yet)', '', '']]),
+      ['Reference: Valid Sub-Topic IDs (optional column) — type the value from the FIRST column below'],
+      ['subTopicId (TYPE THIS)', 'name', 'topicId (must match the topicId column you use for this row)', 'id (internal UUID — reference only)'],
+      ...(subTopics.length ? subTopics.map(t => [t.slug, t.name, topicSlugById.get(t.topicId) ?? t.topicId, t.id]) : [['(no sub-topics yet)', '', '', '']]),
     ];
     const refSheet = XLSX.utils.aoa_to_sheet(refData);
     XLSX.utils.book_append_sheet(workbook, refSheet, 'Reference IDs');
@@ -864,13 +910,46 @@ export class BankUploadService {
     // (UUIDs simply aren't present in the slug map, so they pass through
     // the id-set check as before); a sheet using slugs (like Sachin's) now
     // resolves correctly instead of failing on every single row.
-    const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
-      this.prisma.exam.findMany({ select: { id: true, name: true, slug: true } }),
-      this.prisma.subject.findMany({ select: { id: true, name: true, slug: true } }),
-      this.prisma.chapter.findMany({ select: { id: true, name: true, slug: true, subjectId: true } }),
-      this.prisma.topic.findMany({ select: { id: true, name: true, slug: true, chapterId: true } }),
-      this.prisma.subTopic.findMany({ select: { id: true, name: true, slug: true, topicId: true } }),
-    ]);
+    //
+    // BUGFIX (this session): this Promise.all is the FIRST thing that
+    // touches the database on every upload attempt. If Postgres is
+    // unreachable (wrong DATABASE_URL / auth failure / container down),
+    // it throws HERE, before a single row is processed — and previously
+    // that error bubbled straight out of processBulkQuestions(), through
+    // uploadFromExcel()'s (too-broad) try/catch, and reached the admin as
+    // "Failed to parse Excel file: <opaque Prisma error>" — actively
+    // misleading, since the file was never the problem. Now caught here
+    // with an explicit, correctly-diagnosed message, and — separately —
+    // an empty-but-reachable result (DB up, but zero exams/subjects
+    // seeded) also gets its own clear message instead of silently
+    // failing every row with "examId not found in database".
+    let exams: { id: string; name: string; slug: string }[];
+    let subjects: { id: string; name: string; slug: string }[];
+    let chapters: { id: string; name: string; slug: string; subjectId: string }[];
+    let topics: { id: string; name: string; slug: string; chapterId: string }[];
+    let subTopics: { id: string; name: string; slug: string; topicId: string }[];
+    try {
+      [exams, subjects, chapters, topics, subTopics] = await Promise.all([
+        this.prisma.exam.findMany({ select: { id: true, name: true, slug: true } }),
+        this.prisma.subject.findMany({ select: { id: true, name: true, slug: true } }),
+        this.prisma.chapter.findMany({ select: { id: true, name: true, slug: true, subjectId: true } }),
+        this.prisma.topic.findMany({ select: { id: true, name: true, slug: true, chapterId: true } }),
+        this.prisma.subTopic.findMany({ select: { id: true, name: true, slug: true, topicId: true } }),
+      ]);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(
+        `Upload could not start: the server could not reach the database to load exam/subject/chapter reference data. ` +
+        `This is NOT a problem with your file — it means the backend/Postgres connection is down. ` +
+        `Check the backend container logs and DATABASE_URL/POSTGRES_PASSWORD. Underlying error: ${message}`,
+      );
+    }
+    if (exams.length === 0 && subjects.length === 0 && chapters.length === 0) {
+      throw new BadRequestException(
+        'Upload could not start: the database connected successfully but has ZERO exams/subjects/chapters seeded. ' +
+        'Every row would fail with "not found in database" — this points to an unseeded or wrong database, not a problem with your file.',
+      );
+    }
 
     const examIds = new Set(exams.map(e => e.id));
     const subjectIds = new Set(subjects.map(s => s.id));
@@ -903,30 +982,50 @@ export class BankUploadService {
       warnings: [],
     };
 
+    // First pass: parse + resolve + validate every row WITHOUT touching the
+    // DB, so we know up front which rows are even eligible for creation.
+    const parsedRows: { rowNum: number; row: any[]; question: BulkUploadQuestion }[] = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowNum = i + 2; // 1-indexed + header
-
       try {
         const question = this.parseQuestionRow(row, headerMap, rowNum);
-
-        // Resolve slugs to real UUIDs before validating/creating (see the
-        // BUGFIX comment above the Pre-fetch block for why this exists).
-        // Now also auto-creates a missing chapter/topic/subTopic instead of
-        // rejecting the row — see resolveReferenceIds()'s own comment.
-        await this.resolveReferenceIds(
+        this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
           topicSlugInChapterToId, subTopicSlugInTopicToId,
-          { chapterIds, chapterSubjectMap, topicIds, topicChapterMap, subTopicIds, subTopicTopicMap },
         );
-
-        // Validate references
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
+        parsedRows.push({ rowNum, row, question });
+      } catch (error) {
+        result.failed++;
+        result.errors.push({
+          row: rowNum,
+          error: error instanceof Error ? error.message : String(error),
+          data: row,
+        });
+      }
+    }
 
-        // Create question
-        const { published } = await this.createQuestion(question, adminId);
+    // BUGFIX/ENHANCEMENT (this session — large-sheet performance): every
+    // row used to run its OWN 2 duplicate-check queries inside
+    // createQuestion() → checkDuplicate() — for a 655-row sheet like
+    // Sachin's SSC_CGL_MASTER_PLUS, that's up to ~1,300 sequential DB
+    // round trips just for duplicate detection, on top of ~655 inserts
+    // and ~655 audit-log writes, ALL inside one HTTP request. Even with
+    // nginx's upload-specific 600s timeout (see nginx/conf.d), that's a
+    // lot of unnecessary serialized DB latency, and it holds one Prisma
+    // connection busy the whole time. Fix: fetch every POSSIBLE duplicate
+    // match for the whole batch in ONE query up front, then do duplicate
+    // matching in-memory (see buildDuplicateIndex()/matchDuplicate()) —
+    // cuts duplicate-check DB round trips from ~2/row to a small constant
+    // number for the entire upload.
+    const duplicateIndex = await this.buildDuplicateIndex(parsedRows.map((p) => p.question));
+
+    for (const { rowNum, row, question } of parsedRows) {
+      try {
+        const { published } = await this.createQuestion(question, adminId, duplicateIndex);
         result.created++;
         if (!published) {
           result.warnings.push({
@@ -956,13 +1055,37 @@ export class BankUploadService {
     // uploads go through this method, and can just as easily contain
     // human-readable slugs (e.g. an AI-generated question set) instead of
     // raw UUIDs.
-    const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
-      this.prisma.exam.findMany({ select: { id: true, slug: true } }),
-      this.prisma.subject.findMany({ select: { id: true, slug: true } }),
-      this.prisma.chapter.findMany({ select: { id: true, slug: true, subjectId: true } }),
-      this.prisma.topic.findMany({ select: { id: true, slug: true, chapterId: true } }),
-      this.prisma.subTopic.findMany({ select: { id: true, slug: true, topicId: true } }),
-    ]);
+    //
+    // BUGFIX (this session — same reasoning as processBulkQuestions()):
+    // a DB-connectivity failure here used to bubble out as an opaque
+    // Prisma error with no indication it wasn't a file/JSON problem.
+    let exams: { id: string; slug: string }[];
+    let subjects: { id: string; slug: string }[];
+    let chapters: { id: string; slug: string; subjectId: string }[];
+    let topics: { id: string; slug: string; chapterId: string }[];
+    let subTopics: { id: string; slug: string; topicId: string }[];
+    try {
+      [exams, subjects, chapters, topics, subTopics] = await Promise.all([
+        this.prisma.exam.findMany({ select: { id: true, slug: true } }),
+        this.prisma.subject.findMany({ select: { id: true, slug: true } }),
+        this.prisma.chapter.findMany({ select: { id: true, slug: true, subjectId: true } }),
+        this.prisma.topic.findMany({ select: { id: true, slug: true, chapterId: true } }),
+        this.prisma.subTopic.findMany({ select: { id: true, slug: true, topicId: true } }),
+      ]);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(
+        `Upload could not start: the server could not reach the database to load exam/subject/chapter reference data. ` +
+        `This is NOT a problem with your file — it means the backend/Postgres connection is down. ` +
+        `Check the backend container logs and DATABASE_URL/POSTGRES_PASSWORD. Underlying error: ${message}`,
+      );
+    }
+    if (exams.length === 0 && subjects.length === 0 && chapters.length === 0) {
+      throw new BadRequestException(
+        'Upload could not start: the database connected successfully but has ZERO exams/subjects/chapters seeded. ' +
+        'Every row would fail with "not found in database" — this points to an unseeded or wrong database, not a problem with your file.',
+      );
+    }
 
     const examIds = new Set(exams.map(e => e.id));
     const subjectIds = new Set(subjects.map(s => s.id));
@@ -989,20 +1112,37 @@ export class BankUploadService {
       warnings: [],
     };
 
+    // First pass: resolve + validate every row without touching the DB
+    // (same two-pass structure as processBulkQuestions() — see the
+    // buildDuplicateIndex() doc-comment there for why).
+    const validRows: { rowNum: number; question: BulkUploadQuestion }[] = [];
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
       const rowNum = i + 1;
-
       try {
-        await this.resolveReferenceIds(
+        this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
           topicSlugInChapterToId, subTopicSlugInTopicToId,
-          { chapterIds, chapterSubjectMap, topicIds, topicChapterMap, subTopicIds, subTopicTopicMap },
         );
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
-        const { published } = await this.createQuestion(question, adminId);
+        validRows.push({ rowNum, question });
+      } catch (error) {
+        result.failed++;
+        result.errors.push({
+          row: rowNum,
+          error: error instanceof Error ? error.message : String(error),
+          data: question,
+        });
+      }
+    }
+
+    const duplicateIndex = await this.buildDuplicateIndex(validRows.map((r) => r.question));
+
+    for (const { rowNum, question } of validRows) {
+      try {
+        const { published } = await this.createQuestion(question, adminId, duplicateIndex);
         result.created++;
         if (!published) {
           result.warnings.push({
@@ -1122,24 +1262,7 @@ export class BankUploadService {
    * chapter under a different subject), then topic using the resolved
    * chapterId, then subTopic using the resolved topicId.
    */
-  /**
-   * NEW ("excel me chapterId ya kuch id upload nahi hai to system me
-   * chapter-wise/topic-wise/subtopic-wise auto daalo"): when a chapterId
-   * doesn't match any existing id/slug (and isn't a stray real UUID typo —
-   * see isLikelyUuid below), it used to hard-reject the row. Now it
-   * auto-creates a new Chapter under the row's (already-resolved)
-   * subjectId, named from the slug/text the sheet gave, and the row
-   * proceeds. topicId/subTopicId get the same treatment instead of being
-   * silently dropped. A duplicate slug within the SAME upload batch reuses
-   * the row just created (maps are mutated in place, checked first) rather
-   * than creating N copies of "Ranking" for N rows.
-   *
-   * Guardrail: only auto-creates when the value looks like a genuine
-   * label/slug — a stray real UUID that matches nothing still falls
-   * through to validateReferences()'s hard "not found" error, so a typo'd
-   * real id is still flagged instead of silently spawning a junk chapter.
-   */
-  private async resolveReferenceIds(
+  private resolveReferenceIds(
     question: BulkUploadQuestion,
     examSlugToId: Map<string, string>,
     subjectSlugToId: Map<string, string>,
@@ -1147,15 +1270,7 @@ export class BankUploadService {
     chapterSlugInSubjectToId: Map<string, string>,
     topicSlugInChapterToId: Map<string, string>,
     subTopicSlugInTopicToId: Map<string, string>,
-    liveSets?: {
-      chapterIds: Set<string>;
-      chapterSubjectMap: Map<string, string>;
-      topicIds: Set<string>;
-      topicChapterMap: Map<string, string>;
-      subTopicIds: Set<string>;
-      subTopicTopicMap: Map<string, string>;
-    },
-  ): Promise<void> {
+  ): void {
     if (question.examId && examSlugToId.has(question.examId)) {
       question.examId = examSlugToId.get(question.examId)!;
     }
@@ -1168,83 +1283,37 @@ export class BankUploadService {
         question.chapterId = scoped;
       } else if (chapterSlugToId.has(question.chapterId)) {
         question.chapterId = chapterSlugToId.get(question.chapterId)!;
-      } else if (
-        !isLikelyUuid(question.chapterId) &&
-        liveSets &&
-        subjectSlugToId.size >= 0 // subjectId must already be a resolved real id at this point
-      ) {
-        // Auto-create the chapter (only reachable when subjectId itself is
-        // valid — validateReferences() still catches a bad subjectId).
-        const rawSlugKey = `${question.subjectId}::${question.chapterId}`;
-        const alreadyCreated = chapterSlugInSubjectToId.get(rawSlugKey);
-        if (alreadyCreated) {
-          question.chapterId = alreadyCreated;
-        } else {
-          const name = humanizeSlug(question.chapterId);
-          const slug = slugify(question.chapterId);
-          const created = await this.prisma.chapter.create({
-            data: { subjectId: question.subjectId, name, slug },
-            select: { id: true, slug: true },
-          });
-          chapterSlugInSubjectToId.set(rawSlugKey, created.id);
-          chapterSlugToId.set(created.slug, created.id);
-          liveSets.chapterIds.add(created.id);
-          liveSets.chapterSubjectMap.set(created.id, question.subjectId);
-          question.chapterId = created.id;
-        }
       }
     }
     if (question.topicId) {
       const scoped = topicSlugInChapterToId.get(`${question.chapterId}::${question.topicId}`);
       if (scoped) {
         question.topicId = scoped;
-      } else if (!isLikelyUuid(question.topicId) && liveSets) {
-        // Was previously silently DROPPED here — now auto-created under
-        // the row's (already-resolved) chapterId instead, so a sheet's
-        // free-text topic titles actually populate the Topic table.
-        const rawKey = `${question.chapterId}::${question.topicId}`;
-        const alreadyCreated = topicSlugInChapterToId.get(rawKey);
-        if (alreadyCreated) {
-          question.topicId = alreadyCreated;
-        } else if (question.chapterId) {
-          const name = humanizeSlug(question.topicId);
-          const slug = slugify(question.topicId);
-          const created = await this.prisma.topic.create({
-            data: { chapterId: question.chapterId, name, slug },
-            select: { id: true },
-          });
-          topicSlugInChapterToId.set(rawKey, created.id);
-          liveSets.topicIds.add(created.id);
-          liveSets.topicChapterMap.set(created.id, question.chapterId);
-          question.topicId = created.id;
-        } else {
-          question.topicId = undefined;
-        }
+      } else if (!isLikelyUuid(question.topicId)) {
+        // BUGFIX (Sachin's SSC_CGL_MASTER_PLUS sheet): topicId is OPTIONAL
+        // and several real uploaded sheets put a free-text descriptive
+        // title in this column (e.g. "Blood Relations - Family Puzzle")
+        // rather than any topic slug/UUID that exists in the Topic table.
+        // Since it's optional, a value that resolves to nothing should be
+        // dropped silently and the question still created against its
+        // (required, already-validated) chapter — not hard-rejected, which
+        // would fail 100% of rows in any sheet using this common
+        // free-text-title convention purely because of an optional field.
+        // (If it WAS a real-looking UUID that just didn't match any topic
+        // under this chapter, leave it as-is so validateReferences reports
+        // a proper "not found" error instead of silently discarding what
+        // was probably a genuine mistake worth flagging.)
+        question.topicId = undefined;
       }
     }
     if (question.subTopicId) {
       const scoped = subTopicSlugInTopicToId.get(`${question.topicId}::${question.subTopicId}`);
       if (scoped) {
         question.subTopicId = scoped;
-      } else if (!isLikelyUuid(question.subTopicId) && liveSets) {
-        const rawKey = `${question.topicId}::${question.subTopicId}`;
-        const alreadyCreated = subTopicSlugInTopicToId.get(rawKey);
-        if (alreadyCreated) {
-          question.subTopicId = alreadyCreated;
-        } else if (question.topicId) {
-          const name = humanizeSlug(question.subTopicId);
-          const slug = slugify(question.subTopicId);
-          const created = await this.prisma.subTopic.create({
-            data: { topicId: question.topicId, name, slug },
-            select: { id: true },
-          });
-          subTopicSlugInTopicToId.set(rawKey, created.id);
-          liveSets.subTopicIds.add(created.id);
-          liveSets.subTopicTopicMap.set(created.id, question.topicId);
-          question.subTopicId = created.id;
-        } else {
-          question.subTopicId = undefined;
-        }
+      } else if (!isLikelyUuid(question.subTopicId)) {
+        // Same reasoning as topicId above — optional field, drop instead
+        // of hard-reject when it's a free-text label rather than a slug/id.
+        question.subTopicId = undefined;
       }
     }
   }
@@ -1326,49 +1395,130 @@ export class BankUploadService {
   }
 
   /**
-   * Check if a duplicate question already exists in the database
+   * Compute the same searchHash used for duplicate detection AND stored on
+   * the row at create time. Pulled out into its own method (was inlined
+   * twice, once in checkDuplicate() and once in createQuestion()) so the
+   * batched duplicate index below and createQuestion() can never drift
+   * out of sync with each other.
    */
-  private async checkDuplicate(question: BulkUploadQuestion): Promise<{ isDuplicate: boolean; existingQuestion?: any }> {
-    // Create a search hash from question text, options, and correct answer for efficient duplicate detection
+  private computeSearchHash(question: BulkUploadQuestion): string {
     const normalizedText = question.questionText.trim().toLowerCase();
     const optionsSignature = question.options
+      .slice()
       .sort((a, b) => a.key.localeCompare(b.key))
       // Session 22: fold diagramType into the signature too, so two
       // different diagram-only options (empty text, different diagram)
       // don't hash-collide as "duplicates" of each other.
       .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}${o.imageUrl ? ':' + o.imageUrl : ''}`)
       .join('|');
-    const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
+    return `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
+  }
 
-    // First check by searchHash if it exists
-    const existingByHash = await this.prisma.question.findFirst({
-      where: { searchHash, isActive: true },
-      select: { id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true, explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true, subjectId: true, chapterId: true, examId: true, createdAt: true },
-    });
+  /**
+   * ENHANCEMENT (this session — large-sheet performance, see the comment
+   * above the buildDuplicateIndex() call site in processBulkQuestions()):
+   * fetches every existing question that COULD match any row in this
+   * upload batch, in a small constant number of queries, instead of the
+   * old checkDuplicate() doing 2 DB round trips PER ROW (up to ~1,300
+   * queries for a 655-row sheet). matchDuplicate() below then does the
+   * actual comparison in memory — identical duplicate-detection logic and
+   * result to before, just batched.
+   *
+   * Also seeds the index with rows created EARLIER IN THIS SAME BATCH
+   * (via registerCreatedQuestion()) so two identical rows in the same
+   * uploaded file still correctly flag the second one as a duplicate of
+   * the first — the old sequential per-row DB check caught this "for
+   * free" since row 2's query would see row 1's just-committed insert;
+   * the batched version has to do this explicitly in memory instead.
+   */
+  private async buildDuplicateIndex(questions: BulkUploadQuestion[]): Promise<DuplicateIndex> {
+    const hashes = Array.from(new Set(questions.map((q) => this.computeSearchHash(q))));
+    const texts = Array.from(new Set(questions.map((q) => q.questionText)));
 
+    const select = {
+      id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true,
+      explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true,
+      subjectId: true, chapterId: true, examId: true, createdAt: true,
+    } as const;
+
+    const [byHashRows, byTextRows] = hashes.length || texts.length
+      ? await Promise.all([
+          hashes.length
+            ? this.prisma.question.findMany({ where: { searchHash: { in: hashes }, isActive: true }, select })
+            : Promise.resolve([]),
+          texts.length
+            ? this.prisma.question.findMany({ where: { questionText: { in: texts }, isActive: true }, select })
+            : Promise.resolve([]),
+        ])
+      : [[], []];
+
+    const byHash = new Map<string, any>();
+    for (const row of byHashRows) {
+      if (row.optionsJson != null && row.correctAnswer) {
+        // Recompute the hash the same way a fresh upload row would, so a
+        // pre-existing row whose stored searchHash is stale/absent (rows
+        // created before this feature existed) still gets indexed
+        // correctly under the hash a NEW identical row would produce.
+        byHash.set(row.searchHash ?? '', row);
+      }
+    }
+    const byText = new Map<string, any[]>();
+    for (const row of byTextRows) {
+      const arr = byText.get(row.questionText) ?? [];
+      arr.push(row);
+      byText.set(row.questionText, arr);
+    }
+    return { byHash, byText };
+  }
+
+  /** Records a just-created row into the in-memory duplicate index so later rows in the SAME batch see it — see buildDuplicateIndex() doc-comment. */
+  private registerCreatedQuestion(index: DuplicateIndex, question: BulkUploadQuestion, searchHash: string, created: { id: string; createdAt: Date }): void {
+    const record = {
+      id: created.id,
+      questionText: question.questionText,
+      questionTextHindi: question.questionTextHindi,
+      optionsJson: question.options,
+      correctAnswer: question.correctAnswer,
+      explanation: question.explanation,
+      explanationHindi: question.explanationHindi,
+      year: question.year,
+      shift: question.shift,
+      paperCode: question.paperCode,
+      subjectId: question.subjectId,
+      chapterId: question.chapterId,
+      examId: question.examId,
+      createdAt: created.createdAt,
+    };
+    index.byHash.set(searchHash, record);
+    const arr = index.byText.get(question.questionText) ?? [];
+    arr.push(record);
+    index.byText.set(question.questionText, arr);
+  }
+
+  /**
+   * Same duplicate-matching logic as the old checkDuplicate(), just reading
+   * from the pre-fetched in-memory index instead of issuing DB queries.
+   */
+  private matchDuplicate(question: BulkUploadQuestion, index: DuplicateIndex): { isDuplicate: boolean; existingQuestion?: any } {
+    const searchHash = this.computeSearchHash(question);
+
+    const existingByHash = index.byHash.get(searchHash);
     if (existingByHash) {
       return { isDuplicate: true, existingQuestion: existingByHash };
     }
 
-    // Fallback: check by exact text match + options + correct answer
-    const existingByContent = await this.prisma.question.findFirst({
-      where: {
-        questionText: question.questionText,
-        correctAnswer: question.correctAnswer,
-        isActive: true,
-      },
-      select: { id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true, explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true, subjectId: true, chapterId: true, examId: true, createdAt: true },
-    });
-
-    if (existingByContent) {
-      // Verify options match
+    const candidates = index.byText.get(question.questionText) ?? [];
+    for (const existingByContent of candidates) {
+      if (existingByContent.correctAnswer !== question.correctAnswer) continue;
       const existingOptions = existingByContent.optionsJson as any[];
       const newOptionsSorted = question.options
+        .slice()
         .sort((a, b) => a.key.localeCompare(b.key))
         .map(o => `${o.key}:${o.text.trim()}|${o.textHi?.trim() || ''}`);
       const existingOptionsSorted = existingOptions
+        .slice()
         .sort((a, b) => a.key.localeCompare(b.key))
-        .map(o => `${o.key}:${o.text.trim()}|${o.textHi?.trim() || ''}`);
+        .map(o => `${o.key}:${(o.text ?? '').trim()}|${(o.textHi ?? '').trim()}`);
 
       if (JSON.stringify(newOptionsSorted) === JSON.stringify(existingOptionsSorted)) {
         return { isDuplicate: true, existingQuestion: existingByContent };
@@ -1404,7 +1554,7 @@ export class BankUploadService {
    * source) — that label was already correct, only the two contradictory
    * "is it live" fields needed to agree with each other.
    */
-  private async createQuestion(question: BulkUploadQuestion, adminId: string): Promise<{ published: boolean }> {
+  private async createQuestion(question: BulkUploadQuestion, adminId: string, duplicateIndex?: DuplicateIndex): Promise<{ published: boolean }> {
     // Session 25 — resolve any base64 images to real S3 URLs FIRST, before
     // any validation runs (so the "has an image" checks below see the
     // resolved questionImageUrl / option.imageUrl either way, regardless
@@ -1464,8 +1614,17 @@ export class BankUploadService {
       throw new Error(`correctAnswer is "${question.correctAnswer}" but option ${question.correctAnswer} has no text, diagramType, or imageUrl.`);
     }
 
-    // Check for duplicates first
-    const duplicateCheck = await this.checkDuplicate(question);
+    // Check for duplicates first.
+    // ENHANCEMENT (this session): when a batched duplicateIndex is
+    // supplied (the Excel/CSV/Text/JSON/Word bulk paths all build one via
+    // buildDuplicateIndex() before this loop), use the fast in-memory
+    // matchDuplicate() instead of hitting the DB per row. Falls back to
+    // the direct-DB single-row check for any other/future caller of
+    // createQuestion() that doesn't pre-build an index — identical result
+    // either way, just a different number of round trips.
+    const duplicateCheck = duplicateIndex
+      ? this.matchDuplicate(question, duplicateIndex)
+      : await this.checkDuplicateDirect(question);
     if (duplicateCheck.isDuplicate) {
       const existing = duplicateCheck.existingQuestion!;
       throw new Error(
@@ -1488,22 +1647,15 @@ export class BankUploadService {
       ...(o.imageUrl ? { imageUrl: o.imageUrl } : {}),
     }));
 
-    // Create search hash for future duplicate detection
-    const normalizedText = question.questionText.trim().toLowerCase();
-    const optionsSignature = question.options
-      .sort((a, b) => a.key.localeCompare(b.key))
-      // Session 22: fold diagramType into the signature too, so two
-      // different diagram-only options (empty text, different diagram)
-      // don't hash-collide as "duplicates" of each other.
-      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}${o.imageUrl ? ':' + o.imageUrl : ''}`)
-      .join('|');
-    const searchHash = `${normalizedText}|${optionsSignature}|${question.correctAnswer}`;
+    // Create search hash for future duplicate detection (shared helper —
+    // see computeSearchHash() doc-comment for why this was pulled out).
+    const searchHash = this.computeSearchHash(question);
 
     // Bilingual gate — same condition pdf-export.service.ts and
     // question-review.worker.ts use (questionTextHindi present and non-empty).
     const hasHindiTranslation = !!(question.questionTextHindi && question.questionTextHindi.trim() !== '');
 
-    await this.prisma.question.create({
+    const createdQuestion = await this.prisma.question.create({
       data: {
         examId: question.examId,
         subjectId: question.subjectId,
@@ -1542,7 +1694,56 @@ export class BankUploadService {
       },
     });
 
+    // See buildDuplicateIndex() doc-comment: without this, two identical
+    // rows later in the SAME uploaded file wouldn't be caught as
+    // duplicates of each other (only of rows that existed before the
+    // upload started), because the index is no longer refreshed from the
+    // DB after every single row the way the old per-row DB check was.
+    if (duplicateIndex) {
+      this.registerCreatedQuestion(duplicateIndex, question, searchHash, createdQuestion);
+    }
+
     return { published: hasHindiTranslation };
+  }
+
+  /**
+   * Direct-DB single-row duplicate check — the original checkDuplicate()
+   * logic, kept as a fallback for any caller of createQuestion() that
+   * doesn't pre-build a batched DuplicateIndex (see matchDuplicate() for
+   * the batched/in-memory equivalent used by the bulk-upload paths).
+   */
+  private async checkDuplicateDirect(question: BulkUploadQuestion): Promise<{ isDuplicate: boolean; existingQuestion?: any }> {
+    const searchHash = this.computeSearchHash(question);
+    const select = {
+      id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true,
+      explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true,
+      subjectId: true, chapterId: true, examId: true, createdAt: true,
+    } as const;
+
+    const existingByHash = await this.prisma.question.findFirst({ where: { searchHash, isActive: true }, select });
+    if (existingByHash) {
+      return { isDuplicate: true, existingQuestion: existingByHash };
+    }
+
+    const existingByContent = await this.prisma.question.findFirst({
+      where: { questionText: question.questionText, correctAnswer: question.correctAnswer, isActive: true },
+      select,
+    });
+    if (existingByContent) {
+      const existingOptions = existingByContent.optionsJson as any[];
+      const newOptionsSorted = question.options
+        .slice()
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(o => `${o.key}:${o.text.trim()}|${o.textHi?.trim() || ''}`);
+      const existingOptionsSorted = existingOptions
+        .slice()
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(o => `${o.key}:${(o.text ?? '').trim()}|${(o.textHi ?? '').trim()}`);
+      if (JSON.stringify(newOptionsSorted) === JSON.stringify(existingOptionsSorted)) {
+        return { isDuplicate: true, existingQuestion: existingByContent };
+      }
+    }
+    return { isDuplicate: false };
   }
 
   /**
