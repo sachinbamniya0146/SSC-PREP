@@ -17,6 +17,22 @@ function isLikelyUuid(value: string): boolean {
   return UUID_RE.test(value.trim());
 }
 
+// Used by resolveReferenceIds()'s new auto-create path: turns a slug like
+// "chap-dance_culture-general_awareness" or a free-text label into a clean
+// display name ("Dance Culture") and a URL-safe slug, so an auto-created
+// row looks the same as one an admin typed by hand.
+function humanizeSlug(raw: string): string {
+  return raw
+    .replace(/^chap-|^topic-|^sub-?topic-/i, '')
+    .replace(/-[a-z_]+$/i, (m) => (/^-(general_awareness|reasoning|quantitative_aptitude|english)$/i.test(m) ? '' : m)) // drop trailing "-subject_slug" suffix Sachin's sheets append
+    .replace(/[-_]+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase()) || raw;
+}
+function slugify(raw: string): string {
+  return raw.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `x-${randomUUID().slice(0, 8)}`;
+}
+
 export interface BulkUploadQuestion {
   examId: string;
   subjectId: string;
@@ -896,10 +912,13 @@ export class BankUploadService {
 
         // Resolve slugs to real UUIDs before validating/creating (see the
         // BUGFIX comment above the Pre-fetch block for why this exists).
-        this.resolveReferenceIds(
+        // Now also auto-creates a missing chapter/topic/subTopic instead of
+        // rejecting the row — see resolveReferenceIds()'s own comment.
+        await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
           topicSlugInChapterToId, subTopicSlugInTopicToId,
+          { chapterIds, chapterSubjectMap, topicIds, topicChapterMap, subTopicIds, subTopicTopicMap },
         );
 
         // Validate references
@@ -975,10 +994,11 @@ export class BankUploadService {
       const rowNum = i + 1;
 
       try {
-        this.resolveReferenceIds(
+        await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
           topicSlugInChapterToId, subTopicSlugInTopicToId,
+          { chapterIds, chapterSubjectMap, topicIds, topicChapterMap, subTopicIds, subTopicTopicMap },
         );
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
@@ -1102,7 +1122,24 @@ export class BankUploadService {
    * chapter under a different subject), then topic using the resolved
    * chapterId, then subTopic using the resolved topicId.
    */
-  private resolveReferenceIds(
+  /**
+   * NEW ("excel me chapterId ya kuch id upload nahi hai to system me
+   * chapter-wise/topic-wise/subtopic-wise auto daalo"): when a chapterId
+   * doesn't match any existing id/slug (and isn't a stray real UUID typo —
+   * see isLikelyUuid below), it used to hard-reject the row. Now it
+   * auto-creates a new Chapter under the row's (already-resolved)
+   * subjectId, named from the slug/text the sheet gave, and the row
+   * proceeds. topicId/subTopicId get the same treatment instead of being
+   * silently dropped. A duplicate slug within the SAME upload batch reuses
+   * the row just created (maps are mutated in place, checked first) rather
+   * than creating N copies of "Ranking" for N rows.
+   *
+   * Guardrail: only auto-creates when the value looks like a genuine
+   * label/slug — a stray real UUID that matches nothing still falls
+   * through to validateReferences()'s hard "not found" error, so a typo'd
+   * real id is still flagged instead of silently spawning a junk chapter.
+   */
+  private async resolveReferenceIds(
     question: BulkUploadQuestion,
     examSlugToId: Map<string, string>,
     subjectSlugToId: Map<string, string>,
@@ -1110,7 +1147,15 @@ export class BankUploadService {
     chapterSlugInSubjectToId: Map<string, string>,
     topicSlugInChapterToId: Map<string, string>,
     subTopicSlugInTopicToId: Map<string, string>,
-  ): void {
+    liveSets?: {
+      chapterIds: Set<string>;
+      chapterSubjectMap: Map<string, string>;
+      topicIds: Set<string>;
+      topicChapterMap: Map<string, string>;
+      subTopicIds: Set<string>;
+      subTopicTopicMap: Map<string, string>;
+    },
+  ): Promise<void> {
     if (question.examId && examSlugToId.has(question.examId)) {
       question.examId = examSlugToId.get(question.examId)!;
     }
@@ -1123,37 +1168,83 @@ export class BankUploadService {
         question.chapterId = scoped;
       } else if (chapterSlugToId.has(question.chapterId)) {
         question.chapterId = chapterSlugToId.get(question.chapterId)!;
+      } else if (
+        !isLikelyUuid(question.chapterId) &&
+        liveSets &&
+        subjectSlugToId.size >= 0 // subjectId must already be a resolved real id at this point
+      ) {
+        // Auto-create the chapter (only reachable when subjectId itself is
+        // valid — validateReferences() still catches a bad subjectId).
+        const rawSlugKey = `${question.subjectId}::${question.chapterId}`;
+        const alreadyCreated = chapterSlugInSubjectToId.get(rawSlugKey);
+        if (alreadyCreated) {
+          question.chapterId = alreadyCreated;
+        } else {
+          const name = humanizeSlug(question.chapterId);
+          const slug = slugify(question.chapterId);
+          const created = await this.prisma.chapter.create({
+            data: { subjectId: question.subjectId, name, slug },
+            select: { id: true, slug: true },
+          });
+          chapterSlugInSubjectToId.set(rawSlugKey, created.id);
+          chapterSlugToId.set(created.slug, created.id);
+          liveSets.chapterIds.add(created.id);
+          liveSets.chapterSubjectMap.set(created.id, question.subjectId);
+          question.chapterId = created.id;
+        }
       }
     }
     if (question.topicId) {
       const scoped = topicSlugInChapterToId.get(`${question.chapterId}::${question.topicId}`);
       if (scoped) {
         question.topicId = scoped;
-      } else if (!isLikelyUuid(question.topicId)) {
-        // BUGFIX (Sachin's SSC_CGL_MASTER_PLUS sheet): topicId is OPTIONAL
-        // and several real uploaded sheets put a free-text descriptive
-        // title in this column (e.g. "Blood Relations - Family Puzzle")
-        // rather than any topic slug/UUID that exists in the Topic table.
-        // Since it's optional, a value that resolves to nothing should be
-        // dropped silently and the question still created against its
-        // (required, already-validated) chapter — not hard-rejected, which
-        // would fail 100% of rows in any sheet using this common
-        // free-text-title convention purely because of an optional field.
-        // (If it WAS a real-looking UUID that just didn't match any topic
-        // under this chapter, leave it as-is so validateReferences reports
-        // a proper "not found" error instead of silently discarding what
-        // was probably a genuine mistake worth flagging.)
-        question.topicId = undefined;
+      } else if (!isLikelyUuid(question.topicId) && liveSets) {
+        // Was previously silently DROPPED here — now auto-created under
+        // the row's (already-resolved) chapterId instead, so a sheet's
+        // free-text topic titles actually populate the Topic table.
+        const rawKey = `${question.chapterId}::${question.topicId}`;
+        const alreadyCreated = topicSlugInChapterToId.get(rawKey);
+        if (alreadyCreated) {
+          question.topicId = alreadyCreated;
+        } else if (question.chapterId) {
+          const name = humanizeSlug(question.topicId);
+          const slug = slugify(question.topicId);
+          const created = await this.prisma.topic.create({
+            data: { chapterId: question.chapterId, name, slug },
+            select: { id: true },
+          });
+          topicSlugInChapterToId.set(rawKey, created.id);
+          liveSets.topicIds.add(created.id);
+          liveSets.topicChapterMap.set(created.id, question.chapterId);
+          question.topicId = created.id;
+        } else {
+          question.topicId = undefined;
+        }
       }
     }
     if (question.subTopicId) {
       const scoped = subTopicSlugInTopicToId.get(`${question.topicId}::${question.subTopicId}`);
       if (scoped) {
         question.subTopicId = scoped;
-      } else if (!isLikelyUuid(question.subTopicId)) {
-        // Same reasoning as topicId above — optional field, drop instead
-        // of hard-reject when it's a free-text label rather than a slug/id.
-        question.subTopicId = undefined;
+      } else if (!isLikelyUuid(question.subTopicId) && liveSets) {
+        const rawKey = `${question.topicId}::${question.subTopicId}`;
+        const alreadyCreated = subTopicSlugInTopicToId.get(rawKey);
+        if (alreadyCreated) {
+          question.subTopicId = alreadyCreated;
+        } else if (question.topicId) {
+          const name = humanizeSlug(question.subTopicId);
+          const slug = slugify(question.subTopicId);
+          const created = await this.prisma.subTopic.create({
+            data: { topicId: question.topicId, name, slug },
+            select: { id: true },
+          });
+          subTopicSlugInTopicToId.set(rawKey, created.id);
+          liveSets.subTopicIds.add(created.id);
+          liveSets.subTopicTopicMap.set(created.id, question.topicId);
+          question.subTopicId = created.id;
+        } else {
+          question.subTopicId = undefined;
+        }
       }
     }
   }
