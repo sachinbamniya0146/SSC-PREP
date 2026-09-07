@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
+import { BackButton } from "@/components/BackButton";
 import { api, API_BASE, fetchAuth } from "@/lib/api";
 
 interface User {
@@ -324,9 +325,12 @@ export default function AdminPage() {
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
-          <span className="text-lg font-bold">
-            SSC<span className="text-primary">PrepHub</span> Admin
-          </span>
+          <div className="flex items-center gap-3">
+            <BackButton />
+            <span className="text-lg font-bold">
+              SSC<span className="text-primary">PrepHub</span> Admin
+            </span>
+          </div>
           <div className="flex items-center gap-3 text-sm">
             <a href="/admin/api-keys" className="rounded-lg border border-border px-3 py-2 text-sm">
               🔑 API Keys
