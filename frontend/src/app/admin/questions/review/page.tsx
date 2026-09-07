@@ -1,9 +1,10 @@
 "use client";
 
 // Question Review Queue — admin UI for GET /bank/admin/questions/pending,
-// POST /bank/admin/questions/:id/approve, POST /bank/admin/questions/:id/reject
+// POST /bank/admin/questions/:id/approve, POST /bank/admin/questions/:id/reject,
+// POST /bank/admin/questions/bulk-approve
 // (backend/src/bank/bank.service.ts listPendingQuestions()/
-// approvePendingQuestion()/rejectPendingQuestion()).
+// approvePendingQuestion()/rejectPendingQuestion()/bulkApprovePendingQuestions()).
 //
 // NEW ("admin pura ek ek question ko dekh paye"): approve/reject endpoints
 // already existed in pdf-ingestion.controller.ts, but every one of them is
@@ -17,6 +18,18 @@
 // of how it got uploaded, with inline editing so a missing Hindi
 // translation (the single most common reason a question lands here) can
 // be filled in and approved in one action.
+//
+// NEW (this update, "subject wise bhi admin dekh paye" + "ek click me
+// sabhi ko autopublish"):
+//   1. Exam + Subject filter dropdowns — admin can narrow the queue down
+//      to one subject at a time instead of scrolling through everything.
+//   2. "Bulk Approve" button — calls POST /bank/admin/questions/bulk-approve
+//      which sweeps every complete-but-Hindi-missing question (in the
+//      current exam/subject filter, or all of them if no filter is set)
+//      straight to APPROVED in one click, instead of opening each one.
+//      Anything actually incomplete (empty text/options/answer) is left
+//      behind in the queue automatically by the backend — this button
+//      never force-approves a broken question.
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -42,6 +55,9 @@ type PendingQuestion = {
   createdAt: string;
 };
 
+type ExamOption = { id: string; name: string };
+type SubjectOption = { id: string; name: string };
+
 export default function QuestionReviewPage() {
   const router = useRouter();
   const [authChecked, setAuthChecked] = React.useState(false);
@@ -54,6 +70,13 @@ export default function QuestionReviewPage() {
   const [drafts, setDrafts] = React.useState<Record<string, Partial<PendingQuestion>>>({});
   const [actioningId, setActioningId] = React.useState("");
   const [actionMsg, setActionMsg] = React.useState("");
+
+  // Filters
+  const [exams, setExams] = React.useState<ExamOption[]>([]);
+  const [subjects, setSubjects] = React.useState<SubjectOption[]>([]);
+  const [examId, setExamId] = React.useState("");
+  const [subjectId, setSubjectId] = React.useState("");
+  const [bulkBusy, setBulkBusy] = React.useState(false);
 
   React.useEffect(() => {
     try {
@@ -71,11 +94,47 @@ export default function QuestionReviewPage() {
     setAuthChecked(true);
   }, [router]);
 
+  // Load exam list once, for the filter dropdown.
+  React.useEffect(() => {
+    if (!authChecked) return;
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/admin/exams`);
+        if (!r.ok) return;
+        const d = await r.json();
+        setExams(Array.isArray(d) ? d.map((e: any) => ({ id: e.id, name: e.name })) : []);
+      } catch {
+        // Non-fatal — filters are an enhancement, queue still works without them.
+      }
+    })();
+  }, [authChecked]);
+
+  // Load subjects whenever the selected exam changes (subjects list is
+  // scoped to an exam, same as the rest of the app's Choose Exam flow).
+  React.useEffect(() => {
+    if (!authChecked) return;
+    (async () => {
+      try {
+        const qs = examId ? `?examId=${encodeURIComponent(examId)}` : "";
+        const r = await fetchAuth(`${API_BASE}/bank/subjects${qs}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        setSubjects(Array.isArray(d) ? d.map((s: any) => ({ id: s.id, name: s.name })) : []);
+      } catch {
+        // Non-fatal
+      }
+      setSubjectId("");
+    })();
+  }, [authChecked, examId]);
+
   const loadPending = React.useCallback(async () => {
     setLoading(true);
     setErr("");
     try {
-      const r = await fetchAuth(`${API_BASE}/bank/admin/questions/pending?take=50`);
+      const params = new URLSearchParams({ take: "50" });
+      if (examId) params.set("examId", examId);
+      if (subjectId) params.set("subjectId", subjectId);
+      const r = await fetchAuth(`${API_BASE}/bank/admin/questions/pending?${params.toString()}`);
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         setErr(d?.message || `HTTP ${r.status}`);
@@ -89,7 +148,7 @@ export default function QuestionReviewPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [examId, subjectId]);
 
   React.useEffect(() => {
     if (authChecked) loadPending();
@@ -166,6 +225,48 @@ export default function QuestionReviewPage() {
     }
   }
 
+  async function bulkApprove() {
+    const scopeLabel =
+      subjectId && subjects.find((s) => s.id === subjectId)
+        ? `subject "${subjects.find((s) => s.id === subjectId)?.name}"`
+        : examId && exams.find((e) => e.id === examId)
+          ? `exam "${exams.find((e) => e.id === examId)?.name}"`
+          : "SAARE (poori queue)";
+    const ok = window.confirm(
+      `${scopeLabel} ke un sabhi questions ko approve kar diya jayega jo complete hain (text + options + correct answer bhare hue) — bhale hi Hindi translation missing ho. Adhoore/broken questions queue mein hi rahenge. Continue?`,
+    );
+    if (!ok) return;
+
+    setBulkBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/questions/bulk-approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          examId: examId || undefined,
+          subjectId: subjectId || undefined,
+        }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setActionMsg(d?.message || `Bulk approve fail hua (HTTP ${r.status})`);
+        return;
+      }
+      const d = await r.json();
+      setActionMsg(
+        `✅ ${d.approvedCount} question approve ho gaye. ${
+          d.skippedCount > 0 ? `${d.skippedCount} adhoore/broken the isliye queue mein hi chhode gaye.` : ""
+        }`,
+      );
+      await loadPending();
+    } catch (e) {
+      setActionMsg(e instanceof Error ? e.message : "Bulk approve fail hua");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   if (!authChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
@@ -191,6 +292,47 @@ export default function QuestionReviewPage() {
           Ye woh questions hain jo upload to ho gaye lekin abhi tak students ko nahi dikh rahe — zyadatar
           isliye kyunki Hindi translation khaali hai. Yahan se edit karke approve karein, ya reject karein.
         </p>
+
+        <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-border bg-muted/20 p-3">
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground">Exam</label>
+            <select
+              value={examId}
+              onChange={(e) => setExamId(e.target.value)}
+              className="mt-1 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="">Sabhi Exam</option>
+              {exams.map((ex) => (
+                <option key={ex.id} value={ex.id}>
+                  {ex.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground">Subject</label>
+            <select
+              value={subjectId}
+              onChange={(e) => setSubjectId(e.target.value)}
+              className="mt-1 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="">Sabhi Subject</option>
+              {subjects.map((sb) => (
+                <option key={sb.id} value={sb.id}>
+                  {sb.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            onClick={bulkApprove}
+            disabled={bulkBusy || loading || items.length === 0}
+            className="btn bg-success ml-auto px-4 py-2 text-sm text-white disabled:opacity-50"
+          >
+            {bulkBusy ? "Approve ho raha hai..." : "⚡ Bulk Approve (complete questions)"}
+          </button>
+        </div>
 
         {err && (
           <p className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{err}</p>
@@ -227,6 +369,11 @@ export default function QuestionReviewPage() {
                           {q.examName && (
                             <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
                               🎓 {q.examName}
+                            </span>
+                          )}
+                          {q.subjectName && (
+                            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                              📚 {q.subjectName}
                             </span>
                           )}
                           {q.chapterName && (
