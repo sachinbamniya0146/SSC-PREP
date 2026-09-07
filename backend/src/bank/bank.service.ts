@@ -693,6 +693,88 @@ export class BankService implements OnModuleInit {
     return updated;
   }
 
+  /**
+   * NEW ("ek click me sabhi English-only questions ko approve karne ka
+   * option, admin ko baar baar ek ek question click nahi karna pade"):
+   *
+   * A large share of the review queue is questions that are actually
+   * complete — full English text, all options filled, a correct answer
+   * set — and only got stuck in PENDING because bank-upload.service.ts's
+   * bilingual gate requires a Hindi translation before auto-approving.
+   * The admin doesn't want to open each of those one by one; they want to
+   * sweep all the "genuinely ready, just missing Hindi" questions into
+   * APPROVED in a single action, while still leaving anything actually
+   * broken (empty question text, no options, no correct answer) sitting
+   * in the queue for manual review.
+   *
+   * This is intentionally NOT "approve everything blindly" — it re-checks
+   * completeness per row server-side (never trusts a client-supplied list
+   * of "these are all fine") so a bulk click can never publish a broken
+   * question. Filters (examId/subjectId/chapterId) are optional and match
+   * listPendingQuestions() so the admin can scope the sweep to one
+   * subject at a time if they prefer that over "approve all".
+   */
+  async bulkApprovePendingQuestions(
+    adminId: string,
+    filters: { examId?: string; subjectId?: string; chapterId?: string },
+  ) {
+    const where: any = { isApproved: false, reviewStatus: 'PENDING' };
+    if (filters.examId) where.examId = filters.examId;
+    if (filters.subjectId) where.subjectId = filters.subjectId;
+    if (filters.chapterId) where.chapterId = filters.chapterId;
+
+    const candidates = await this.prisma.question.findMany({
+      where,
+      select: {
+        id: true,
+        questionText: true,
+        optionsJson: true,
+        correctAnswer: true,
+      },
+    });
+
+    const approvedIds: string[] = [];
+    const skippedIds: string[] = [];
+
+    for (const q of candidates) {
+      const options = Array.isArray(q.optionsJson) ? (q.optionsJson as Array<{ key: string; text: string }>) : [];
+      const hasQuestionText = !!q.questionText && q.questionText.trim().length > 0;
+      const hasOptions = options.length >= 2 && options.every((o) => !!o.text && o.text.trim().length > 0);
+      const hasCorrectAnswer = !!q.correctAnswer && options.some((o) => o.key === q.correctAnswer);
+      // Deliberately NOT requiring questionTextHindi here — that's the
+      // whole point of this bulk action (sweep the "complete in English,
+      // just missing Hindi" pile). Anything missing the basics below still
+      // gets skipped and stays PENDING for manual review.
+      if (hasQuestionText && hasOptions && hasCorrectAnswer) {
+        approvedIds.push(q.id);
+      } else {
+        skippedIds.push(q.id);
+      }
+    }
+
+    if (approvedIds.length > 0) {
+      await this.prisma.question.updateMany({
+        where: { id: { in: approvedIds } },
+        data: { isApproved: true, isActive: true, reviewStatus: 'APPROVED' },
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          userId: adminId,
+          action: 'QUESTION_BULK_APPROVED',
+          targetEntity: 'Question',
+          entityId: approvedIds.join(','),
+          metadataJson: { count: approvedIds.length, filters } as any,
+        },
+      });
+    }
+
+    return {
+      approvedCount: approvedIds.length,
+      skippedCount: skippedIds.length,
+      skippedIds,
+    };
+  }
+
   // ---- Admin topic management ----
   // NEW ("chapter mein bhi topic hona tha jaise English mein Noun, Pronoun
   // — vesa har subject mein"): the Topic model (Chapter → Topic →
