@@ -30,6 +30,16 @@ import { BankModule } from '../bank/bank.module';
   // exported" at boot. TelegramModule needs it for /report and the new
   // daily weak-topic-analysis job (both call getWeakChapters() /
   // attemptDetail() on this service), so it must be exported.
-  exports: [TestsService],
+  //
+  // BUGFIX (2026-09 audit): DailyTestService and TestStatsService were
+  // providers here but NEVER listed in exports — same exact bug class as
+  // TestsService above, just not yet triggered because nothing outside
+  // this module happens to inject them yet. Left as-is, the very next
+  // feature that does (e.g. a future admin daily-test dashboard, or a
+  // Telegram /stats command reusing TestStatsService) would silently fail
+  // NestJS dependency resolution at boot with "TestStatsService is not
+  // exported" / "DailyTestService is not exported". Exporting both now
+  // closes that landmine before anything trips it.
+  exports: [TestsService, DailyTestService, TestStatsService],
 })
 export class TestsModule {}
