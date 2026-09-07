@@ -145,11 +145,13 @@ export class TestsController {
     @Query('limit') limit?: string,
     @Query('includeSkipped') includeSkipped?: string,
     @Query('examId') examId?: string,
+    @Query('chapterId') chapterId?: string,
   ) {
     return this.testsService.getWeakAreasPractice(user.userId, {
       limit: limit ? Number(limit) : 25,
       includeSkipped: includeSkipped !== 'false',
       examId,
+      chapterId,
     });
   }
 
