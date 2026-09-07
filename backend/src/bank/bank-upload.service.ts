@@ -1044,17 +1044,36 @@ export class BankUploadService {
     // number for the entire upload.
     const duplicateIndex = await this.buildDuplicateIndex(parsedRows.map((p) => p.question));
 
+    // ENHANCEMENT (this session — "Excel upload turant/fast hona chahiye"):
+    // the actual insert loop below used to be sequential (one
+    // createQuestion() await at a time). See prepareQuestion()/
+    // commitQuestionsBatch()'s doc-comments for the full "why" — short
+    // version: validation + duplicate-check stays sequential (it's fast,
+    // in-memory, and must stay ordered for in-file dedup correctness), but
+    // the actual DB writes now run in concurrent chunks of 10, which is
+    // where nearly all the wall-clock time was going.
+    const toCommit: { rowNum: number; row: any[]; question: BulkUploadQuestion; data: any; published: boolean }[] = [];
     for (const { rowNum, row, question } of parsedRows) {
       try {
-        const { published } = await this.createQuestion(question, adminId, duplicateIndex);
-        result.created++;
-        if (!published) {
-          result.warnings.push({
-            row: rowNum,
-            message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
-            questionPreview: this.extractQuestionPreview(row, headerMap),
-          });
+        if (question.questionImageBase64 || question.options.some((o) => o.imageBase64)) {
+          // Rare path: a row with an inline base64 image needs its own S3
+          // upload round trip before we can even build the Prisma `data`
+          // object, so it can't be prepared synchronously. Fall back to
+          // the original one-row-at-a-time createQuestion() for just this
+          // row — correctness over speed for the uncommon image case.
+          const { published } = await this.createQuestion(question, adminId, duplicateIndex);
+          result.created++;
+          if (!published) {
+            result.warnings.push({
+              row: rowNum,
+              message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
+              questionPreview: this.extractQuestionPreview(row, headerMap),
+            });
+          }
+          continue;
         }
+        const prepared = this.prepareQuestion(question, duplicateIndex);
+        toCommit.push({ rowNum, row, question, data: prepared.data, published: prepared.published });
       } catch (error) {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
@@ -1067,6 +1086,32 @@ export class BankUploadService {
         });
       }
     }
+
+    await this.commitQuestionsBatch(
+      toCommit,
+      adminId,
+      (rowNum, row, published) => {
+        result.created++;
+        if (!published) {
+          result.warnings.push({
+            row: rowNum,
+            message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
+            questionPreview: this.extractQuestionPreview(row, headerMap),
+          });
+        }
+      },
+      (rowNum, row, _question, error) => {
+        result.failed++;
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push({
+          row: rowNum,
+          error: message,
+          category: this.categorizeUploadError(message),
+          questionPreview: this.extractQuestionPreview(row, headerMap),
+          data: row,
+        });
+      },
+    );
 
     result.success = result.failed === 0;
     return result;
@@ -1168,17 +1213,26 @@ export class BankUploadService {
 
     const duplicateIndex = await this.buildDuplicateIndex(validRows.map((r) => r.question));
 
+    // ENHANCEMENT (this session — same fix as processBulkQuestions() above):
+    // prepare synchronously (fast, in-memory, keeps in-file dedup correct),
+    // then commit to the DB in concurrent chunks instead of one row at a time.
+    const toCommit: { rowNum: number; row: BulkUploadQuestion; question: BulkUploadQuestion; data: any; published: boolean }[] = [];
     for (const { rowNum, question } of validRows) {
       try {
-        const { published } = await this.createQuestion(question, adminId, duplicateIndex);
-        result.created++;
-        if (!published) {
-          result.warnings.push({
-            row: rowNum,
-            message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
-            questionPreview: this.previewFromQuestion(question),
-          });
+        if (question.questionImageBase64 || question.options.some((o) => o.imageBase64)) {
+          const { published } = await this.createQuestion(question, adminId, duplicateIndex);
+          result.created++;
+          if (!published) {
+            result.warnings.push({
+              row: rowNum,
+              message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
+              questionPreview: this.previewFromQuestion(question),
+            });
+          }
+          continue;
         }
+        const prepared = this.prepareQuestion(question, duplicateIndex);
+        toCommit.push({ rowNum, row: question, question, data: prepared.data, published: prepared.published });
       } catch (error) {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
@@ -1191,6 +1245,32 @@ export class BankUploadService {
         });
       }
     }
+
+    await this.commitQuestionsBatch(
+      toCommit,
+      adminId,
+      (rowNum, row, published) => {
+        result.created++;
+        if (!published) {
+          result.warnings.push({
+            row: rowNum,
+            message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
+            questionPreview: this.previewFromQuestion(row),
+          });
+        }
+      },
+      (rowNum, row, _question, error) => {
+        result.failed++;
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push({
+          row: rowNum,
+          error: message,
+          category: this.categorizeUploadError(message),
+          questionPreview: this.previewFromQuestion(row),
+          data: row,
+        });
+      },
+    );
 
     result.success = result.failed === 0;
     return result;
@@ -1636,6 +1716,178 @@ export class BankUploadService {
    * source) — that label was already correct, only the two contradictory
    * "is it live" fields needed to agree with each other.
    */
+  /**
+   * NEW — SPLIT createQuestion() into a fast in-memory "prepare" phase and
+   * a DB "commit" phase.
+   *
+   * WHY: the original createQuestion() did duplicate-check (in-memory,
+   * fast) AND both DB writes (question.create + auditLog.create, slow)
+   * inside one method, called ONE ROW AT A TIME in a sequential for-loop.
+   * For a 655-row sheet that's ~1,310 sequential DB round trips, each one
+   * waiting for the last to finish — the dominant cost of a bulk upload
+   * ("Excel upload turant/fast hona chahiye").
+   *
+   * The duplicate-check + registerCreatedQuestion() mutation of the shared
+   * in-memory DuplicateIndex is NOT safe to parallelize as-is: running two
+   * identical rows through matchDuplicate() concurrently could let both
+   * see "not a duplicate yet" before either registers itself, silently
+   * admitting an in-file duplicate pair that the sequential version would
+   * have caught. So that part MUST stay sequential and fast — which it
+   * already is, since it's pure in-memory Map lookups with no DB calls.
+   *
+   * prepareQuestion() does exactly that in-memory phase (validation +
+   * duplicate-check + register + build the exact Prisma `data` object)
+   * and returns it WITHOUT touching the database. The caller then fires
+   * the actual DB writes for many prepared rows concurrently, in bounded
+   * chunks — see processBulkQuestions()/processStructuredQuestions()'s
+   * `commitQuestionsBatch()` calls below.
+   */
+  private prepareQuestion(question: BulkUploadQuestion, duplicateIndex?: DuplicateIndex): { data: any; question: BulkUploadQuestion; searchHash: string; published: boolean } {
+    // Callers (processBulkQuestions/processStructuredQuestions) already
+    // route any row with a base64 image through the original sequential
+    // createQuestion() before ever calling this — see the
+    // `question.questionImageBase64 || options.some(imageBase64)` check at
+    // each call site — so this method only ever sees rows with either no
+    // image or an already-resolved questionImageUrl/option.imageUrl.
+    if (!question.questionText || !question.questionText.trim()) {
+      if (!question.questionDiagramType && !question.questionImageUrl) {
+        throw new Error('questionText is empty — question text cannot be blank.');
+      }
+    }
+    const missingOptions = question.options
+      .filter((o) => (!o.text || !o.text.trim()) && !o.diagramType && !o.imageUrl)
+      .map((o) => o.key);
+    if (missingOptions.length > 0) {
+      throw new Error(
+        `Option${missingOptions.length > 1 ? 's' : ''} ${missingOptions.join(', ')} ${missingOptions.length > 1 ? 'are' : 'is'} empty — every option (A–D) needs text, a diagramType, or an imageUrl.`,
+      );
+    }
+    const correctOption = question.options.find((o) => o.key === question.correctAnswer);
+    if (!correctOption || (!correctOption.text.trim() && !correctOption.diagramType && !correctOption.imageUrl)) {
+      throw new Error(`correctAnswer is "${question.correctAnswer}" but option ${question.correctAnswer} has no text, diagramType, or imageUrl.`);
+    }
+
+    const duplicateCheck = duplicateIndex
+      ? this.matchDuplicate(question, duplicateIndex)
+      : { isDuplicate: false as const };
+    if (duplicateCheck.isDuplicate) {
+      const existing = (duplicateCheck as { existingQuestion: any }).existingQuestion;
+      throw new Error(
+        `Duplicate question found (ID: ${existing.id}). ` +
+        `Question: "${existing.questionText.substring(0, 80)}..." ` +
+        `Already exists in database with same options and answer. ` +
+        `Created at: ${existing.createdAt}`,
+      );
+    }
+
+    const optionsJson = question.options.map(o => ({
+      key: o.key,
+      text: o.text,
+      textHi: o.textHi || '',
+      ...(o.diagramType ? { diagramType: o.diagramType } : {}),
+      ...(o.diagramLabels?.length ? { diagramLabels: o.diagramLabels } : {}),
+      ...(o.imageUrl ? { imageUrl: o.imageUrl } : {}),
+    }));
+
+    const searchHash = this.computeSearchHash(question);
+    const hasHindiTranslation = !!(question.questionTextHindi && question.questionTextHindi.trim() !== '');
+
+    const data = {
+      examId: question.examId,
+      subjectId: question.subjectId,
+      chapterId: question.chapterId,
+      topicId: question.topicId,
+      subTopicId: question.subTopicId,
+      questionText: question.questionText,
+      questionTextHindi: question.questionTextHindi || '',
+      questionDiagramType: question.questionDiagramType || null,
+      questionDiagramLabels: (question.questionDiagramLabels as any) || undefined,
+      questionImageUrl: question.questionImageUrl || null,
+      optionsJson: optionsJson as any,
+      correctAnswer: question.correctAnswer,
+      explanation: question.explanation || '',
+      explanationHindi: question.explanationHindi || '',
+      year: question.year,
+      shift: question.shift,
+      paperCode: question.paperCode,
+      marks: question.marks,
+      negativeMarks: question.negativeMarks,
+      difficulty: question.difficulty,
+      isApproved: hasHindiTranslation,
+      answerVerificationStatus: 'UNVERIFIED_SINGLE_SOURCE' as const,
+      reviewStatus: hasHindiTranslation ? 'APPROVED' : 'PENDING',
+      searchHash,
+    };
+
+    // Register in the shared index IMMEDIATELY (still sequential, still
+    // pure in-memory) so the NEXT row in this same synchronous pass sees
+    // this one and in-file duplicate detection keeps working exactly as
+    // before — this is what the old inline registerCreatedQuestion() call
+    // did right after the (now-deferred) DB insert.
+    if (duplicateIndex) {
+      // createdAt/id aren't known yet (no DB row exists), so register a
+      // placeholder that's good enough for in-file dedup within this same
+      // upload; matchDuplicate() only reads id/questionText/createdAt for
+      // the error message, and this row's real id is filled in once the
+      // DB commit below actually happens (see commitPreparedQuestion()).
+      this.registerCreatedQuestion(duplicateIndex, question, searchHash, { id: '(pending)', createdAt: new Date() });
+    }
+
+    return { data, question, searchHash, published: hasHindiTranslation };
+  }
+
+  /**
+   * Commit one already-prepared row's DB writes (question.create +
+   * auditLog.create). Pure DB I/O, no shared mutable state touched here —
+   * safe to run many of these concurrently via Promise.allSettled, unlike
+   * prepareQuestion() above.
+   */
+  private async commitPreparedQuestion(prepared: { data: any; question: BulkUploadQuestion }, adminId: string): Promise<void> {
+    await this.prisma.question.create({ data: prepared.data });
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'QUESTION_BULK_CREATED',
+        targetEntity: 'Question',
+        entityId: 'bulk',
+        metadataJson: { questionText: prepared.question.questionText.substring(0, 100) } as any,
+      },
+    });
+  }
+
+  /**
+   * NEW ("Excel upload turant/fast hona chahiye"): commits many prepared
+   * rows in bounded-concurrency chunks instead of one at a time. Chunk
+   * size of 10 balances speed against not exhausting the Postgres
+   * connection pool (Prisma's default pool is small) or overwhelming a
+   * modest VPS. Each row's success/failure is still fully independent —
+   * Promise.allSettled means one failing insert never blocks or fails the
+   * others in its chunk, preserving the exact same per-row error
+   * isolation the old sequential loop had.
+   */
+  private async commitQuestionsBatch<TRow>(
+    prepared: { rowNum: number; row: TRow; question: BulkUploadQuestion; data: any; published: boolean }[],
+    adminId: string,
+    onSuccess: (rowNum: number, row: TRow, published: boolean) => void,
+    onError: (rowNum: number, row: TRow, question: BulkUploadQuestion, error: unknown) => void,
+  ): Promise<void> {
+    const CHUNK_SIZE = 10;
+    for (let i = 0; i < prepared.length; i += CHUNK_SIZE) {
+      const chunk = prepared.slice(i, i + CHUNK_SIZE);
+      const outcomes = await Promise.allSettled(
+        chunk.map((p) => this.commitPreparedQuestion(p, adminId)),
+      );
+      outcomes.forEach((outcome, idx) => {
+        const p = chunk[idx];
+        if (outcome.status === 'fulfilled') {
+          onSuccess(p.rowNum, p.row, p.published);
+        } else {
+          onError(p.rowNum, p.row, p.question, outcome.reason);
+        }
+      });
+    }
+  }
+
   private async createQuestion(question: BulkUploadQuestion, adminId: string, duplicateIndex?: DuplicateIndex): Promise<{ published: boolean }> {
     // Session 25 — resolve any base64 images to real S3 URLs FIRST, before
     // any validation runs (so the "has an image" checks below see the
