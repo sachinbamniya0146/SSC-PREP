@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fetchAuth } from "@/lib/api";
 
 export default function DashboardPage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
@@ -54,11 +54,20 @@ export default function DashboardPage() {
       }
     }
     // v1 Phase 6 — live streak/XP from the gamification service
+    //
+    // BUGFIX (2026-09 audit — "dashboard stops showing streak/XP/plan after
+    // a while"): both calls below used a raw `fetch()` with a manually
+    // attached Authorization header instead of the shared `fetchAuth()`
+    // helper. fetchAuth() auto-refreshes an expired access token on a 401
+    // and retries once; raw fetch() does not. The dashboard is the page
+    // students land on most often and tend to leave open the longest, so
+    // it's exactly where an expired access token is most likely to be hit
+    // — and previously that meant XP/streak and subscription status would
+    // silently stop updating (fail closed to "—") instead of transparently
+    // refreshing like the rest of the app does.
     const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
     if (token) {
-      fetch(`${API_BASE}/gamification/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      fetchAuth(`${API_BASE}/gamification/me`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => d && setGami(d))
         .catch(() => undefined);
@@ -66,9 +75,7 @@ export default function DashboardPage() {
       // dashboard, so there was no visible "you're on the free plan" /
       // "Premium active until X" indicator anywhere the student would
       // actually see it day-to-day.
-      fetch(`${API_BASE}/payments/subscription`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      fetchAuth(`${API_BASE}/payments/subscription`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => d && setSubscription(d))
         .catch(() => undefined);
