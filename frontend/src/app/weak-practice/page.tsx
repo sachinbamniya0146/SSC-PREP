@@ -41,6 +41,11 @@ export default function WeakPracticePage() {
   const [error, setError] = React.useState("");
   const [count, setCount] = React.useState(25);
   const [includeSkipped, setIncludeSkipped] = React.useState(true);
+  // NEW — "ranking ka wrong hua toh ranking ka direct 25 pick karne ka
+  // option, minimum 15 bhi chun sake": per-chapter set size + which
+  // chapter's single-topic set is currently starting.
+  const [topicSize, setTopicSize] = React.useState(25);
+  const [startingChapterId, setStartingChapterId] = React.useState<string | null>(null);
 
   const apiBase = () => API_BASE;
 
@@ -69,6 +74,38 @@ export default function WeakPracticePage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [count, includeSkipped]);
+
+  // NEW — direct single-topic practice ("ranking ka 25/15 direct pick"):
+  // hands off to the same practice-set engine as /question-bank-practice,
+  // which pools that chapter across ALL exams and never repeats a question
+  // until the whole chapter has been shown once (see
+  // question-bank-practice.service.ts fetchQuestionsForSet fix).
+  const startTopic = async (chapterId: string) => {
+    setStartingChapterId(chapterId);
+    setError("");
+    try {
+      const r = await fetchAuth(`${apiBase()}/bank/practice/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterId, size: topicSize, mode: "practice" }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setError(d.code === "PREMIUM_REQUIRED"
+          ? "Free users can only practice 3 sets per chapter — upgrade to Premium for unlimited practice."
+          : `Failed: ${d.message || r.status}`);
+        return;
+      }
+      const d = await r.json();
+      sessionStorage.setItem("ssc_sectional_set", JSON.stringify(d));
+      sessionStorage.setItem("ssc_sectional_subject", d.chapterName || "Topic Practice");
+      window.location.href = "/test?sectional=1";
+    } catch {
+      setError("Network error while starting topic practice");
+    } finally {
+      setStartingChapterId(null);
+    }
+  };
 
   const start = async () => {
     if (!data || data.questions.length === 0) return;
@@ -114,6 +151,20 @@ export default function WeakPracticePage() {
 
         {!loading && !error && data && data.questions.length > 0 && (
           <div className="card mt-6 space-y-5 p-6">
+            {/* NEW — topic-only practice size + direct per-chapter start */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Topic practice size:</span>
+              {[15, 25, 35, 50].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setTopicSize(n)}
+                  className={`rounded-full px-3 py-1 font-semibold ${topicSize === n ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+
             {/* Weak Chapters Summary */}
             <div>
               <h2 className="font-semibold text-lg">Your Weak Chapters (from wrong/skipped answers)</h2>
@@ -143,6 +194,15 @@ export default function WeakPracticePage() {
                         style={{ width: `${Math.min(100, (c.totalErrors / 10) * 100)}%` }}
                       />
                     </div>
+                    <button
+                      disabled={startingChapterId === c.chapterId}
+                      onClick={() => startTopic(c.chapterId)}
+                      className="btn btn-outline mt-3 w-full py-1.5 text-xs disabled:opacity-50"
+                    >
+                      {startingChapterId === c.chapterId
+                        ? "Starting…"
+                        : `🎯 Practice only "${c.chapterName}" (${topicSize}Q, all exams)`}
+                    </button>
                   </div>
                 ))}
               </div>
