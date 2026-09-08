@@ -1,21 +1,45 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// P2 — monetization service: PayU orders, coupons, subscription plans, chapter purchases.
-import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+// P2 — monetization service: Cashfree orders, coupons, subscription plans, chapter purchases.
+//
+// GATEWAY MIGRATION (PayU → Cashfree): the previous PayU integration had a
+// real security weakness — it shipped hardcoded fallback merchant
+// credentials in source (`process.env.PAYU_MERCHANT_KEY || 'eUXkOt'` and a
+// literal fallback salt), meant "just for local dev" but silently active in
+// any environment where the env var was merely unset — including a
+// misconfigured production deploy. This rewrite:
+//   1. Never falls back to a baked-in secret. Missing credentials in
+//      production throw at boot instead of silently running with a fake key.
+//   2. Never sends the payment secret (or anything derived from it) to the
+//      browser. PayU's flow built an HMAC hash client-visible and POSTed it
+//      straight to PayU from the browser. Cashfree's flow keeps order
+//      creation entirely server-to-server; the browser only ever receives a
+//      short-lived, single-use `payment_session_id` opaque token.
+//   3. Never trusts the browser's word on whether a payment succeeded.
+//      verifyPayment() no longer reads a client-supplied status/hash — it
+//      asks Cashfree's server directly ("Get Order") which state the order
+//      is actually in, so a tampered redirect can't fake a success.
+//   4. Webhook signature verification uses the exact algorithm Cashfree
+//      documents (HMAC-SHA256 of `timestamp + rawBody`, base64-encoded,
+//      compared with crypto.timingSafeEqual to avoid timing side-channels)
+//      instead of the ad-hoc pipe-joined hash PayU used.
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReferralService } from '../referral/referral.service';
 import * as crypto from 'crypto';
 
-interface PayUConfig {
-  merchantId: string;
-  merchantKey: string;
-  salt: string;
+interface CashfreeConfig {
+  appId: string;
+  secretKey: string;
+  webhookSecret: string;
+  apiVersion: string;
   baseUrl: string;
-  isTest: boolean;
+  env: 'TEST' | 'PRODUCTION';
 }
 
 @Injectable()
 export class MonetizationService {
-  private payuConfig: PayUConfig;
+  private readonly logger = new Logger(MonetizationService.name);
+  private cf: CashfreeConfig;
 
   constructor(
     private prisma: PrismaService,
@@ -25,12 +49,35 @@ export class MonetizationService {
     @Inject(forwardRef(() => ReferralService))
     private referralService: ReferralService,
   ) {
-    this.payuConfig = {
-      merchantId: process.env.PAYU_MERCHANT_KEY || '',
-      merchantKey: process.env.PAYU_MERCHANT_KEY || 'eUXkOt',
-      salt: process.env.PAYU_MERCHANT_SALT || 'e0YkggUb7yKMMj39c3cxXk3VSSTnUeuc',
-      baseUrl: process.env.PAYU_BASE_URL || 'https://test.payu.in',
-      isTest: process.env.PAYU_TEST_MODE !== 'false',
+    const appId = process.env.CASHFREE_APP_ID || '';
+    const secretKey = process.env.CASHFREE_SECRET_KEY || '';
+    const env: 'TEST' | 'PRODUCTION' = process.env.CASHFREE_ENV === 'PRODUCTION' ? 'PRODUCTION' : 'TEST';
+
+    if ((!appId || !secretKey) && process.env.NODE_ENV === 'production') {
+      // Fail LOUDLY at boot rather than silently accepting payments with no
+      // (or fake) credentials — the exact failure mode the old hardcoded
+      // PayU fallback secret allowed. Better a crashed deploy than a
+      // payment gateway nobody actually configured.
+      throw new Error(
+        'CASHFREE_APP_ID and CASHFREE_SECRET_KEY must be set in production. Refusing to start with no real payment credentials.',
+      );
+    }
+    if (!appId || !secretKey) {
+      this.logger.warn(
+        'CASHFREE_APP_ID / CASHFREE_SECRET_KEY not set — payment endpoints will fail until configured (this is only tolerated outside production).',
+      );
+    }
+
+    this.cf = {
+      appId,
+      secretKey,
+      // Cashfree's webhook secret is normally the same secret key used for
+      // API calls, but they let you configure a distinct one per webhook
+      // endpoint in the dashboard — support that without requiring it.
+      webhookSecret: process.env.CASHFREE_WEBHOOK_SECRET || secretKey,
+      apiVersion: '2023-08-01',
+      baseUrl: env === 'PRODUCTION' ? 'https://api.cashfree.com' : 'https://sandbox.cashfree.com',
+      env,
     };
   }
 
@@ -71,62 +118,43 @@ export class MonetizationService {
     return { code: c.code, description: c.description, discountPct: c.discountPct, discountInr: c.discountInr, discount, finalAmountInr: final };
   }
 
-  // ---- PayU Hash Generation ----
-  private generatePayUHash(params: Record<string, string>): string {
-    // PayU hash sequence: key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5|udf6|udf7|udf8|udf9|udf10|salt
-    const hashSequence = [
-      this.payuConfig.merchantKey,
-      params.txnid || '',
-      params.amount || '',
-      params.productinfo || '',
-      params.firstname || '',
-      params.email || '',
-      params.udf1 || '',
-      params.udf2 || '',
-      params.udf3 || '',
-      params.udf4 || '',
-      params.udf5 || '',
-      params.udf6 || '',
-      params.udf7 || '',
-      params.udf8 || '',
-      params.udf9 || '',
-      params.udf10 || '',
-      this.payuConfig.salt,
-    ];
-    return crypto.createHash('sha512').update(hashSequence.join('|')).digest('hex').toLowerCase();
+  // ---- Cashfree API helper ----
+  // Every server-to-server Cashfree call goes through here so credential
+  // headers and error handling live in exactly one place.
+  private async cfFetch(path: string, init: { method: 'GET' | 'POST'; body?: any }) {
+    if (!this.cf.appId || !this.cf.secretKey) {
+      throw new BadRequestException('Payments are not configured on this server yet (missing Cashfree credentials).');
+    }
+    const res = await fetch(`${this.cf.baseUrl}${path}`, {
+      method: init.method,
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'x-api-version': this.cf.apiVersion,
+        'x-client-id': this.cf.appId,
+        'x-client-secret': this.cf.secretKey,
+      },
+      body: init.body ? JSON.stringify(init.body) : undefined,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      this.logger.error(`Cashfree ${init.method} ${path} → ${res.status}: ${JSON.stringify(json)}`);
+      throw new BadRequestException(json?.message || `Cashfree request failed (${res.status})`);
+    }
+    return json;
   }
 
-  private generateVerifyHash(params: Record<string, string>): string {
-    // Verify hash sequence: salt|status||||||udf5|udf4|udf3|udf2|udf1|email|firstname|productinfo|amount|txnid|key
-    const hashSequence = [
-      this.payuConfig.salt,
-      params.status || '',
-      '||||||',
-      params.udf5 || '',
-      params.udf4 || '',
-      params.udf3 || '',
-      params.udf2 || '',
-      params.udf1 || '',
-      params.email || '',
-      params.firstname || '',
-      params.productinfo || '',
-      params.amount || '',
-      params.txnid || '',
-      this.payuConfig.merchantKey,
-    ];
-    return crypto.createHash('sha512').update(hashSequence.join('|')).digest('hex').toLowerCase();
-  }
-
-  // ---- PayU order creation ----
+  // ---- Cashfree order creation ----
   async createOrder(userId: string, input: { planId?: string; mockTemplateId?: string; chapterId?: string; couponCode?: string }) {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, fullName: true, phone: true } });
     if (!user) throw new NotFoundException('User not found');
 
-    const txnid = `SSC_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const surl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/success`;
-    const furl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/failure`;
-    const curl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/cancel`;
+    const orderId = `SSC_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+    // Amount is ALWAYS computed here, server-side, from planId/chapterId/
+    // mockTemplateId looked up fresh from the DB — the browser never gets a
+    // chance to influence what gets charged, regardless of which gateway
+    // sits behind this.
     let amountInr = 0;
     let productInfo = '';
     let planName: string | undefined;
@@ -169,181 +197,186 @@ export class MonetizationService {
       throw new BadRequestException('Provide planId, mockTemplateId, or chapterId');
     }
 
-    // Generate hash
-    const hashParams = {
-      key: this.payuConfig.merchantKey,
-      txnid,
-      amount: amountInr.toFixed(2),
-      productinfo: productInfo,
-      firstname: user.fullName || 'User',
-      email: user.email,
-      phone: user.phone || '',
-      surl,
-      furl,
-      curl,
-      udf1: userId,
-      udf2: metadata.kind,
-      udf3: input.planId || input.chapterId || input.mockTemplateId || '',
-      udf4: input.couponCode || '',
-      udf5: '',
-    };
+    if (amountInr <= 0) {
+      throw new BadRequestException('This item is free — no payment order needed');
+    }
 
-    const hash = this.generatePayUHash(hashParams);
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    // Cashfree appends the real order_id when it substitutes {order_id} —
+    // guaranteed present on return regardless of payment outcome, so
+    // /payment/success can always look up the right Payment row.
+    const returnUrl = `${frontendUrl}/payment/success?order_id={order_id}`;
+    const notifyUrl = process.env.CASHFREE_WEBHOOK_URL || `${process.env.BACKEND_PUBLIC_URL || ''}/api/v1/payments/webhook`;
 
-    // Create payment record
+    // Cashfree requires a 10-digit customer phone. Real user phones are
+    // preferred; the sandbox test number is only used as a last resort so
+    // checkout doesn't hard-fail for a user record with no phone on file —
+    // this should be tightened to a hard requirement before go-live if
+    // phone collection at signup isn't already mandatory.
+    const customerPhone = (user.phone || '').replace(/\D/g, '').slice(-10) || '9999999999';
+
+    const order = await this.cfFetch('/pg/orders', {
+      method: 'POST',
+      body: {
+        order_id: orderId,
+        order_amount: amountInr,
+        order_currency: 'INR',
+        customer_details: {
+          customer_id: userId,
+          customer_name: user.fullName || 'User',
+          customer_email: user.email,
+          customer_phone: customerPhone,
+        },
+        order_meta: {
+          return_url: returnUrl,
+          notify_url: notifyUrl,
+        },
+        order_note: productInfo,
+      },
+    });
+
+    if (!order.payment_session_id) {
+      throw new BadRequestException('Cashfree did not return a payment session — please try again');
+    }
+
+    // Create payment record. `razorpayOrderId`/`razorpayPaymentId` are
+    // legacy column names from an earlier gateway (see the "Reusing field"
+    // note this project has carried through PayU too) — they now hold the
+    // Cashfree order_id / cf_payment_id. Renaming would need a migration;
+    // not worth the risk purely for cosmetics.
     await this.prisma.payment.create({
       data: {
         userId,
-        razorpayOrderId: txnid, // Reusing field for PayU txnid
+        razorpayOrderId: orderId,
         amountInr,
         status: 'PENDING',
         metadataJson: metadata,
       } as any,
     });
 
-    // Form data for PayU checkout
-    const formData = {
-      key: this.payuConfig.merchantKey,
-      txnid,
-      amount: amountInr.toFixed(2),
-      productinfo: productInfo,
-      firstname: user.fullName || 'User',
-      email: user.email,
-      phone: user.phone || '',
-      surl,
-      furl,
-      curl,
-      hash,
-      udf1: userId,
-      udf2: metadata.kind,
-      udf3: input.planId || input.chapterId || input.mockTemplateId || '',
-      udf4: input.couponCode || '',
-      udf5: '',
-      service_provider: 'payu_paisa',
-    };
-
-    return { 
-      orderId: txnid, 
-      amountInr, 
-      keyId: this.payuConfig.merchantKey,
-      hash, 
-      planName, 
-      chapterName, 
-      mockTitle, 
-      discount, 
-      formData,
-      payuUrl: this.payuConfig.baseUrl + '/_payment',
+    return {
+      orderId,
+      paymentSessionId: order.payment_session_id,
+      amountInr,
+      cashfreeEnv: this.cf.env, // "sandbox" vs "production" — frontend SDK needs this to know which mode to load
+      planName,
+      chapterName,
+      mockTitle,
+      discount,
     };
   }
 
-  // Verify + capture payment (called from frontend after PayU checkout; or webhook).
-  async verifyPayment(userId: string, input: { 
-    txnid: string; 
-    payuPaymentId: string; 
-    hash: string;
-    status: string;
-    amount: string;
-    productinfo: string;
-    firstname: string;
-    email: string;
-    udf1: string;
-    udf2: string;
-    udf3: string;
-    udf4: string;
-    udf5: string;
-  }) {
-    const payment = await this.prisma.payment.findUnique({ where: { razorpayOrderId: input.txnid } });
+  // Verify + capture payment. Called by the frontend right after the user
+  // lands back on /payment/success — but note it does NOT trust anything
+  // the frontend says about whether the payment succeeded. It only uses
+  // the frontend-supplied orderId to know WHICH order to check, then asks
+  // Cashfree's server directly for the authoritative status.
+  async verifyPayment(userId: string, input: { orderId: string }) {
+    const payment = await this.prisma.payment.findUnique({ where: { razorpayOrderId: input.orderId } });
     if (!payment) throw new NotFoundException('Order not found');
     if (payment.userId !== userId) throw new BadRequestException('Order belongs to another user');
 
-    // FIX Error #5 (CRITICAL): handleWebhook() already guarded against
-    // double-processing but verifyPayment() did not. Both the browser
-    // (verify) and PayU's server (webhook) can confirm the same payment,
-    // and a page refresh/retry could call verify twice — without this
-    // guard fulfill() ran unconditionally each time, granting double
-    // subscription duration, double mock-test credits, and double coupon
-    // decrements from a single real payment.
+    // FIX Error #5 (CRITICAL, carried forward from the PayU version): both
+    // the browser (verify) and Cashfree's server (webhook) can confirm the
+    // same payment, and a page refresh/retry could call verify twice —
+    // fulfill() itself is also idempotent (atomic claim below), but
+    // short-circuiting here avoids an extra round-trip to Cashfree on an
+    // already-settled order.
     if (payment.status === 'SUCCESS') return { ok: true, duplicate: true };
 
-    // Verify hash
-    const verifyParams = {
-      status: input.status,
-      udf5: input.udf5,
-      udf4: input.udf4,
-      udf3: input.udf3,
-      udf2: input.udf2,
-      udf1: input.udf1,
-      email: input.email,
-      firstname: input.firstname,
-      productinfo: input.productinfo,
-      amount: input.amount,
-      txnid: input.txnid,
-    };
-    
-    const expectedHash = this.generateVerifyHash(verifyParams);
-    if (expectedHash !== input.hash.toLowerCase()) {
-      throw new BadRequestException('Invalid payment hash');
+    const order = await this.cfFetch(`/pg/orders/${encodeURIComponent(input.orderId)}`, { method: 'GET' });
+    const orderStatus = order.order_status as string; // PAID | ACTIVE | EXPIRED | TERMINATED
+
+    if (orderStatus === 'ACTIVE') {
+      // Payment attempt still in progress (e.g. UPI collect awaiting
+      // approval) — not a failure, just not resolved yet. Frontend should
+      // poll again rather than treat this as an error.
+      return { ok: false, pending: true, message: 'Payment is still processing' };
     }
 
-    if (input.status !== 'success') {
-      await this.prisma.payment.update({
-        where: { id: payment.id },
-        data: { status: 'FAILED' },
-      });
-      throw new BadRequestException('Payment failed');
+    if (orderStatus !== 'PAID') {
+      await this.prisma.payment.update({ where: { id: payment.id }, data: { status: 'FAILED' } });
+      throw new BadRequestException(`Payment ${orderStatus?.toLowerCase() || 'failed'}`);
     }
 
-    await this.fulfill(payment, input.payuPaymentId);
+    // Order is genuinely PAID per Cashfree's own server — now fetch the
+    // actual payment transaction id for our records (best-effort; the
+    // order being PAID is already sufficient to fulfill even if this
+    // secondary call has a hiccup).
+    let cfPaymentId = input.orderId;
+    try {
+      const payments = await this.cfFetch(`/pg/orders/${encodeURIComponent(input.orderId)}/payments`, { method: 'GET' });
+      const successful = Array.isArray(payments) ? payments.find((p: any) => p.payment_status === 'SUCCESS') : null;
+      if (successful?.cf_payment_id) cfPaymentId = String(successful.cf_payment_id);
+    } catch (e) {
+      this.logger.warn(`Could not fetch payment list for order ${input.orderId}, proceeding with order-level PAID status: ${e}`);
+    }
+
+    await this.fulfill(payment, cfPaymentId);
     return { ok: true };
   }
 
-  // PayU webhook (server-confirmed payments)
-  async handleWebhook(body: Record<string, any>) {
-    const txnid = body.txnid;
-    const status = body.status;
-    const hash = body.hash;
-    const payuPaymentId = body.mihpayid;
+  // Cashfree webhook (server-confirmed payments) — the reliable path;
+  // verifyPayment() above is the fast/optimistic path for when the user is
+  // actively watching the browser. Either one alone is enough to fulfill;
+  // fulfill()'s atomic claim (see its own comment) makes it safe for both
+  // to fire for the same order.
+  //
+  // rawBody/signature/timestamp come from the controller — see
+  // MonetizationController.webhook() for how the raw bytes are captured.
+  async handleWebhook(rawBody: Buffer, signature: string | undefined, timestamp: string | undefined, parsedBody: any) {
+    if (!signature || !timestamp) {
+      return { ok: true, ignored: true, reason: 'missing_signature_headers' };
+    }
+    if (!this.cf.webhookSecret) {
+      this.logger.error('Cashfree webhook received but CASHFREE_WEBHOOK_SECRET is not configured — rejecting.');
+      return { ok: true, ignored: true, reason: 'webhook_not_configured' };
+    }
 
-    if (!txnid) return { ok: true, ignored: true, reason: 'no_txnid' };
+    // Cashfree's documented algorithm exactly: base64(HMAC-SHA256(secret,
+    // timestamp + rawBody)). MUST use the raw bytes as received, not the
+    // re-serialized parsed JSON — re-serializing can reorder keys/change
+    // whitespace and silently break the signature match.
+    const expected = crypto
+      .createHmac('sha256', this.cf.webhookSecret)
+      .update(timestamp + rawBody.toString('utf-8'))
+      .digest('base64');
 
-    const payment = await this.prisma.payment.findUnique({ where: { razorpayOrderId: txnid } });
+    const expectedBuf = Buffer.from(expected);
+    const gotBuf = Buffer.from(signature);
+    const validSignature =
+      expectedBuf.length === gotBuf.length && crypto.timingSafeEqual(expectedBuf, gotBuf);
+
+    if (!validSignature) {
+      this.logger.warn('Cashfree webhook signature mismatch — ignoring (possible spoofed request).');
+      return { ok: true, ignored: true, reason: 'invalid_signature' };
+    }
+
+    const orderId = parsedBody?.data?.order?.order_id;
+    const paymentStatus = parsedBody?.data?.payment?.payment_status; // SUCCESS | FAILED | USER_DROPPED | ...
+    const cfPaymentId = parsedBody?.data?.payment?.cf_payment_id;
+    const eventType = parsedBody?.type; // PAYMENT_SUCCESS_WEBHOOK | PAYMENT_FAILED_WEBHOOK | PAYMENT_USER_DROPPED_WEBHOOK
+
+    if (!orderId) return { ok: true, ignored: true, reason: 'no_order_id' };
+
+    const payment = await this.prisma.payment.findUnique({ where: { razorpayOrderId: orderId } });
     if (!payment) return { ok: true, ignored: true, reason: 'unknown_order' };
     if (payment.status === 'SUCCESS') return { ok: true, duplicate: true };
 
-    // Verify hash
-    const verifyParams = {
-      status,
-      udf5: body.udf5 || '',
-      udf4: body.udf4 || '',
-      udf3: body.udf3 || '',
-      udf2: body.udf2 || '',
-      udf1: body.udf1 || '',
-      email: body.email || '',
-      firstname: body.firstname || '',
-      productinfo: body.productinfo || '',
-      amount: body.amount || '',
-      txnid,
-    };
-    
-    const expectedHash = this.generateVerifyHash(verifyParams);
-    if (expectedHash !== (hash || '').toLowerCase()) {
-      return { ok: true, ignored: true, reason: 'invalid_hash' };
-    }
-
-    if (status === 'success') {
-      await this.fulfill(payment, payuPaymentId);
+    if (eventType === 'PAYMENT_SUCCESS_WEBHOOK' && paymentStatus === 'SUCCESS') {
+      await this.fulfill(payment, String(cfPaymentId || orderId));
       return { ok: true, fulfilled: true, kind: (payment.metadataJson as any)?.kind ?? null };
     }
 
-    if (status === 'failure') {
+    if (eventType === 'PAYMENT_FAILED_WEBHOOK' || eventType === 'PAYMENT_USER_DROPPED_WEBHOOK') {
       await this.prisma.payment.updateMany({
-        where: { razorpayOrderId: txnid },
+        where: { razorpayOrderId: orderId, status: { not: 'SUCCESS' } },
         data: { status: 'FAILED' },
       });
       return { ok: true, failed: true };
     }
 
-    return { ok: true, ignored: true, reason: 'unhandled_status' };
+    return { ok: true, ignored: true, reason: 'unhandled_event_type' };
   }
 
   /**
