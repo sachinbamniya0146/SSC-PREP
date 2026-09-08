@@ -936,7 +936,7 @@ export class BankService implements OnModuleInit {
   }
 
   // Instant-feedback practice attempt
-  async attempt(userId: string, dto: { questionId: string; selectedOption: string; templateId?: string }) {
+  async attempt(userId: string, dto: { questionId: string; selectedOption: string; templateId?: string; record?: boolean }) {
     if (!dto.questionId || !dto.selectedOption) {
       throw new BadRequestException('questionId and selectedOption required');
     }
@@ -946,47 +946,59 @@ export class BankService implements OnModuleInit {
     const option = dto.selectedOption.trim().toUpperCase();
     const correct = option === q.correctAnswer;
 
-    // Log attempt as a TestAttempt (single-question practice set)
-    const templateId = dto.templateId ?? 'tpl-practice';
-    // Ensure the practice template exists (FK constraint)
-    try {
-      await this.prisma.testTemplate.upsert({
-        where: { id: templateId },
-        update: {},
-        create: {
-          id: templateId,
-          title: 'Quick Practice',
-          description: 'Instant-feedback single-question practice',
-          type: 'DAILY_PRACTICE',
-          durationMinutes: 0,
-          totalQuestions: 1,
+    // BUGFIX: was unconditional — see the doc comment on attempt() above
+    // (bank.controller.ts) for the full explanation. Only record a
+    // standalone single-question TestAttempt when the caller actually wants
+    // one (question-bank/page.tsx's instant-feedback browser, where this IS
+    // the only recording mechanism). Callers that already record a proper
+    // session-level attempt themselves (test/page.tsx's sectional/
+    // chapter-wise/random-set practice path, via its own aggregate
+    // POST /tests/attempts right after) pass `record: false` to skip this
+    // and avoid creating a duplicate, analytics-polluting TestAttempt row
+    // per answered question.
+    if (dto.record !== false) {
+      // Log attempt as a TestAttempt (single-question practice set)
+      const templateId = dto.templateId ?? 'tpl-practice';
+      // Ensure the practice template exists (FK constraint)
+      try {
+        await this.prisma.testTemplate.upsert({
+          where: { id: templateId },
+          update: {},
+          create: {
+            id: templateId,
+            title: 'Quick Practice',
+            description: 'Instant-feedback single-question practice',
+            type: 'DAILY_PRACTICE',
+            durationMinutes: 0,
+            totalQuestions: 1,
+          },
+        });
+      } catch (e) {
+        // template may already exist with different required fields — ignore
+        if (!(e as any)?.code?.startsWith?.('P2002')) throw e;
+      }
+      const attempt = await this.prisma.testAttempt.create({
+        data: {
+          userId,
+          testTemplateId: templateId,
+          status: AttemptStatus.SUBMITTED,
+          score: correct ? 1 : 0,
+          totalCorrect: correct ? 1 : 0,
+          totalWrong: correct ? 0 : 1,
+          totalSkipped: 0,
+          accuracyPercent: correct ? 100 : 0,
+          submittedAt: new Date(),
         },
       });
-    } catch (e) {
-      // template may already exist with different required fields — ignore
-      if (!(e as any)?.code?.startsWith?.('P2002')) throw e;
+      await this.prisma.attemptAnswer.create({
+        data: {
+          testAttemptId: attempt.id,
+          questionId: q.id,
+          selectedOption: option,
+          isCorrect: correct,
+        },
+      });
     }
-    const attempt = await this.prisma.testAttempt.create({
-      data: {
-        userId,
-        testTemplateId: templateId,
-        status: AttemptStatus.SUBMITTED,
-        score: correct ? 1 : 0,
-        totalCorrect: correct ? 1 : 0,
-        totalWrong: correct ? 0 : 1,
-        totalSkipped: 0,
-        accuracyPercent: correct ? 100 : 0,
-        submittedAt: new Date(),
-      },
-    });
-    await this.prisma.attemptAnswer.create({
-      data: {
-        testAttemptId: attempt.id,
-        questionId: q.id,
-        selectedOption: option,
-        isCorrect: correct,
-      },
-    });
 
     return {
       correct,
