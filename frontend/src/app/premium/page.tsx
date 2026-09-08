@@ -28,6 +28,26 @@ type CouponValidation = {
   finalAmountInr: number;
 };
 
+// Cashfree JS SDK (v3) — loaded once from their CDN and cached on `window`,
+// same approach their own docs use for a plain script-tag integration (no
+// extra npm dependency to install/pin). Loading it dynamically, only when
+// the user is actually about to pay, keeps it off the initial page weight.
+let cashfreeSdkPromise: Promise<any> | null = null;
+function loadCashfreeSdk(): Promise<any> {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  if ((window as any).Cashfree) return Promise.resolve((window as any).Cashfree);
+  if (cashfreeSdkPromise) return cashfreeSdkPromise;
+  cashfreeSdkPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
+    script.async = true;
+    script.onload = () => resolve((window as any).Cashfree);
+    script.onerror = () => reject(new Error("Failed to load Cashfree SDK — check your connection and try again"));
+    document.body.appendChild(script);
+  });
+  return cashfreeSdkPromise;
+}
+
 export default function PremiumPage() {
   const router = useRouter();
   const [plans, setPlans] = React.useState<Plan[]>([]);
@@ -37,7 +57,6 @@ export default function PremiumPage() {
   const [couponCode, setCouponCode] = React.useState("");
   const [couponResult, setCouponResult] = React.useState<CouponValidation | null>(null);
   const [couponError, setCouponError] = React.useState("");
-  const [payuForm, setPayuForm] = React.useState<any>(null);
   const [processing, setProcessing] = React.useState(false);
   const [error, setError] = React.useState("");
   const [success, setSuccess] = React.useState("");
@@ -47,6 +66,7 @@ export default function PremiumPage() {
   // so any remaining paid days are silently lost. Require explicit confirmation
   // before letting an already-premium user proceed to payment.
   const [confirmReplace, setConfirmReplace] = React.useState(false);
+
 
   React.useEffect(() => {
     loadData();
@@ -78,7 +98,6 @@ export default function PremiumPage() {
     setCouponCode("");
     setCouponResult(null);
     setCouponError("");
-    setPayuForm(null);
     setConfirmReplace(false);
     setError("");
     setSuccess("");
@@ -108,10 +127,14 @@ export default function PremiumPage() {
     }
   };
 
-  const createOrder = async () => {
+  // Creates the order server-side (amount is computed there, never trusted
+  // from the browser — see monetization.service.ts createOrder()), then
+  // immediately opens Cashfree's hosted checkout with the returned
+  // payment_session_id. Unlike the old PayU flow, no payment secret or
+  // hash ever reaches the browser — the session id is a short-lived,
+  // single-use opaque token.
+  const payNow = async () => {
     if (!selectedPlan) return;
-    // BUG FIX: block accidental double-purchase — an active subscriber must
-    // explicitly acknowledge that this replaces (not extends) their current plan.
     if (subscription?.active && !confirmReplace) {
       setError("Please confirm you understand your current plan will be replaced before proceeding.");
       return;
@@ -122,42 +145,28 @@ export default function PremiumPage() {
       const res = await fetchAuth(`${API_BASE}/payments/order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          planId: selectedPlan.id, 
-          couponCode: couponResult?.code || undefined 
+        body: JSON.stringify({
+          planId: selectedPlan.id,
+          couponCode: couponResult?.code || undefined,
         }),
       });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.message || "Failed to create order");
       }
-      const data = await res.json();
-      setPayuForm(data);
+      const order = await res.json();
+
+      const Cashfree = await loadCashfreeSdk();
+      if (!Cashfree) throw new Error("Payment SDK failed to load");
+      const cashfree = Cashfree({ mode: order.cashfreeEnv === "PRODUCTION" ? "production" : "sandbox" });
+      // redirectTarget "_self" takes the whole tab to Cashfree's hosted
+      // page and back to our return_url (configured server-side) once
+      // done — simplest and most compatible option across devices/browsers.
+      await cashfree.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: "_self" });
     } catch (e: any) {
-      setError(e.message);
-    } finally {
+      setError(e.message || "Payment failed to start");
       setProcessing(false);
     }
-  };
-
-  const redirectToPayU = () => {
-    if (!payuForm) return;
-    
-    // Create a form and submit to PayU
-    const form = document.createElement("form");
-    form.method = "POST";
-    form.action = payuForm.payuUrl;
-    
-    Object.entries(payuForm.formData).forEach(([key, value]) => {
-      const input = document.createElement("input");
-      input.type = "hidden";
-      input.name = key;
-      input.value = String(value);
-      form.appendChild(input);
-    });
-    
-    document.body.appendChild(form);
-    form.submit();
   };
 
   const formatPrice = (price: number) => {
@@ -336,33 +345,16 @@ export default function PremiumPage() {
               </div>
             )}
 
-            {payuForm && (
-              <div className="space-y-4 p-4 rounded-lg border bg-muted/50">
-                <p className="text-sm text-muted-foreground">
-                  Redirecting to PayU secure payment page...
-                </p>
-                <button
-                  onClick={redirectToPayU}
-                  disabled={processing}
-                  className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 disabled:opacity-50"
-                >
-                  {processing ? "Processing..." : "Pay Securely via PayU"}
-                </button>
-                <p className="text-xs text-muted-foreground text-center">
-                  You will be redirected to PayU's secure payment page. After payment, you'll return here.
-                </p>
-              </div>
-            )}
-
-            {!payuForm && (
-              <button
-                onClick={createOrder}
-                disabled={processing || (!!subscription?.active && !confirmReplace)}
-                className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 disabled:opacity-50"
-              >
-                {processing ? "Creating Order..." : "Proceed to Payment"}
-              </button>
-            )}
+            <button
+              onClick={payNow}
+              disabled={processing || (!!subscription?.active && !confirmReplace)}
+              className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 disabled:opacity-50"
+            >
+              {processing ? "Opening secure checkout…" : "Pay Securely via Cashfree"}
+            </button>
+            <p className="mt-2 text-xs text-center text-muted-foreground">
+              🔒 You&apos;ll be taken to Cashfree&apos;s secure payment page (cards, UPI, netbanking, wallets). We never see or store your card/UPI details.
+            </p>
 
             {error && (
               <div className="mt-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
