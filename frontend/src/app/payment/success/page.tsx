@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { fetchAuth } from "@/lib/api";
+import { fetchAuth, API_BASE } from "@/lib/api";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -9,74 +9,69 @@ import { Suspense } from "react";
 function PaymentSuccessContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [status, setStatus] = React.useState<"checking" | "success" | "failed">("checking");
+  const [status, setStatus] = React.useState<"checking" | "success" | "pending" | "failed">("checking");
   const [message, setMessage] = React.useState("");
 
+  // Cashfree migration: we no longer read a payment status/hash out of the
+  // URL and trust it — the URL only tells us WHICH order_id to ask about.
+  // /payments/verify asks Cashfree's own server for the real status (see
+  // monetization.service.ts verifyPayment()), so a tampered query string
+  // can't fake a success here.
   React.useEffect(() => {
-    const verifyPayment = async () => {
-      const txnid = searchParams.get("txnid");
-      const payuPaymentId = searchParams.get("mihpayid");
-      const hash = searchParams.get("hash");
-      const paymentStatus = searchParams.get("status");
-      const amount = searchParams.get("amount");
-      const productinfo = searchParams.get("productinfo");
-      const firstname = searchParams.get("firstname");
-      const email = searchParams.get("email");
-      const udf1 = searchParams.get("udf1");
-      const udf2 = searchParams.get("udf2");
-      const udf3 = searchParams.get("udf3");
-      const udf4 = searchParams.get("udf4");
-      const udf5 = searchParams.get("udf5");
+    const orderId = searchParams.get("order_id");
 
-      if (!txnid || !payuPaymentId || !hash || !paymentStatus) {
-        setStatus("failed");
-        setMessage("Invalid payment response");
-        return;
-      }
+    if (!orderId) {
+      setStatus("failed");
+      setMessage("Invalid payment response — missing order id");
+      return;
+    }
 
+    const verifyPayment = async (attempt = 1) => {
       try {
-        const res = await fetchAuth("/payments/verify", {
+        const res = await fetchAuth(`${API_BASE}/payments/verify`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            txnid,
-            payuPaymentId,
-            hash,
-            status: paymentStatus,
-            amount,
-            productinfo,
-            firstname,
-            email,
-            udf1,
-            udf2,
-            udf3,
-            udf4,
-            udf5,
-          }),
+          body: JSON.stringify({ orderId }),
         });
+        const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.message || "Payment verification failed");
+          setStatus("failed");
+          setMessage(data.message || "Payment verification failed");
+          return;
+        }
+
+        if (data.pending) {
+          // Some payment methods (e.g. UPI collect) can take a few seconds
+          // to settle after the redirect — poll a few times before giving up.
+          if (attempt < 6) {
+            setStatus("pending");
+            setMessage("Your payment is still processing…");
+            setTimeout(() => verifyPayment(attempt + 1), 3000);
+            return;
+          }
+          setStatus("pending");
+          setMessage("Your payment is taking longer than usual. It will be confirmed automatically once done — check back in a few minutes.");
+          return;
         }
 
         setStatus("success");
-        setMessage("Payment successful! Your premium subscription is now active.");
+        setMessage(data.duplicate ? "Payment already confirmed." : "Payment successful! Your premium subscription is now active.");
       } catch (e: any) {
         setStatus("failed");
-        setMessage(e.message);
+        setMessage(e.message || "Network error while verifying payment");
       }
     };
 
     verifyPayment();
   }, [searchParams]);
 
-  if (status === "checking") {
+  if (status === "checking" || status === "pending") {
     return (
       <div className="min-h-screen bg-background text-foreground flex items-center justify-center">
-        <div className="text-center">
+        <div className="text-center px-4">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4" />
-          <p className="text-lg">Verifying payment...</p>
+          <p className="text-lg">{status === "pending" ? message : "Verifying payment..."}</p>
         </div>
       </div>
     );
