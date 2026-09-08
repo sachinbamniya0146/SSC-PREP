@@ -294,7 +294,7 @@ export class BankController {
   }
 
   @Post('attempt')
-  attempt(@Req() req: any, @Body() body: { questionId: string; selectedOption: string; templateId?: string }) {
+  attempt(@Req() req: any, @Body() body: { questionId: string; selectedOption: string; templateId?: string; record?: boolean }) {
     const userId = req.user?.userId ?? req.user?.id;
     return this.bank.attempt(userId, body);
   }
