@@ -36,24 +36,14 @@ export class MonetizationController {
     return this.service.createOrder(user.userId, body);
   }
 
+  // Cashfree migration: the frontend now only ever needs to tell us WHICH
+  // order to check — see monetization.service.ts verifyPayment() for why
+  // (we ask Cashfree's server for the real status instead of trusting
+  // anything the browser reports).
   @Post('verify')
   verifyPayment(
     @CurrentUser() user: { userId: string },
-    @Body() body: { 
-      txnid: string; 
-      payuPaymentId: string; 
-      hash: string;
-      status: string;
-      amount: string;
-      productinfo: string;
-      firstname: string;
-      email: string;
-      udf1: string;
-      udf2: string;
-      udf3: string;
-      udf4: string;
-      udf5: string;
-    },
+    @Body() body: { orderId: string },
   ) {
     return this.service.verifyPayment(user.userId, body);
   }
@@ -75,10 +65,21 @@ export class MonetizationController {
     return this.service.disableAutoPay(user.userId, body.subscriptionId);
   }
 
-  // PayU webhook (server-confirmed payments)
+  // Cashfree webhook (server-confirmed payments). Public — Cashfree calls
+  // this directly, no user session — so it's authenticated purely by the
+  // HMAC signature Cashfree signs every webhook with, verified in the
+  // service. `req.rawBody` is the exact byte buffer captured by the global
+  // body-parser `verify` hook in main.ts, which the signature MUST be
+  // computed over (re-serializing the parsed JSON can reorder keys and
+  // silently break the signature match).
   @Public()
   @Post('webhook')
-  webhook(@Req() req: Request) {
-    return this.service.handleWebhook(req.body);
+  webhook(@Req() req: Request & { rawBody?: Buffer }) {
+    return this.service.handleWebhook(
+      req.rawBody || Buffer.from(JSON.stringify(req.body || {})),
+      req.headers['x-webhook-signature'] as string | undefined,
+      req.headers['x-webhook-timestamp'] as string | undefined,
+      req.body,
+    );
   }
 }
