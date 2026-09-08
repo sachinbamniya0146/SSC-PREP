@@ -98,9 +98,18 @@ export class UserService {
     ] = await Promise.all([
       this.prisma.testAttempt.count({ where: { userId } }),
       this.prisma.attemptAnswer.count({ where: { testAttempt: { userId } } }),
+      // BUGFIX: this used to aggregate `score` (raw marks obtained, e.g.
+      // could be 45.3 out of a 200-mark paper, or negative after negative
+      // marking) while returning it under the key `avgAccuracy` — the "My
+      // Stats" dashboard was labeling a raw-marks average as an accuracy
+      // percentage, showing numbers with no relation to 0-100% accuracy.
+      // `TestAttempt.accuracyPercent` (used correctly everywhere else in
+      // tests.service.ts — accuracy-trend, weak/strong chapters, topper
+      // comparison) is the field that actually holds a 0-100 percentage.
+      // Averaging that instead gives a real, comparable accuracy number.
       this.prisma.testAttempt.aggregate({
         where: { userId, status: 'SUBMITTED' },
-        _avg: { score: true },
+        _avg: { accuracyPercent: true },
       }),
       this.prisma.user.findUnique({ where: { id: userId }, select: { currentStreak: true } }),
       this.prisma.user.findUnique({ where: { id: userId }, select: { longestStreak: true } }),
@@ -120,7 +129,7 @@ export class UserService {
     return {
       totalTests: totalTests ?? 0,
       totalQuestions: totalQuestions ?? 0,
-      avgAccuracy: Math.round((avgAccuracy._avg.score ?? 0) * 100) / 100,
+      avgAccuracy: Math.round((avgAccuracy._avg.accuracyPercent ?? 0) * 100) / 100,
       currentStreak: currentStreak?.currentStreak ?? 0,
       longestStreak: longestStreak?.longestStreak ?? 0,
       weakTopics: weakTopics.map((t: any) => topicMap.get(t.topicId) ?? 'Unknown'),
