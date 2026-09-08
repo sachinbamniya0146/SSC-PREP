@@ -1356,8 +1356,19 @@ async saveAnswers(
           shift: r.shift,
           marks: r.marks ?? 2,
           negativeMarks: r.negativeMarks ?? 0.5,
-          explanation: r.explanation,
-          explanationHindi: r.explanationHindi,
+          // BUGFIX (answer-key leak, same class as the Daily Test fix above):
+          // these are fresh questions the student has NOT yet answered
+          // (explicitly filtered via `id: { notIn: attemptedQuestionIds }`),
+          // sent straight to the client with no submit-then-reveal step in
+          // this branch. explanation/explanationHindi almost always state
+          // or heavily imply the correct answer, so including them here let
+          // a student read the answer key (Network tab, or even just the
+          // rendered page depending on the frontend) before attempting each
+          // question — while correctAnswer itself was correctly withheld.
+          // Removed to match the sibling single-chapter branch above (which
+          // delegates to practiceService.getOrCreateSet()/formatSet(),
+          // already answer-gated) and every other pre-attempt paper
+          // composer in this file (paper(), yearWiseStart(), sectional()).
           subjectId: r.subjectId,
           // metadata for UI
           _weakMeta: { chapterId: ch.chapterId, chapterName: ch.chapterName, wasWrong: true, wasSkipped: false },
@@ -1382,11 +1393,24 @@ async saveAnswers(
   }
 
   // ---- Enhanced Analytics Methods ----
+  // PERF ENHANCEMENT: these 4 methods below re-run a full scan of every one
+  // of a user's SUBMITTED attempts (with nested answers + question joins)
+  // on every single call — no caching, unlike listAvailable() a few methods
+  // up and TestStatsService, which already use this same cacheGet/cacheSet
+  // utility. For a user with a long attempt history this is real,
+  // avoidable work on every dashboard load/refresh/poll. Added a short
+  // (60s) per-user TTL cache — long enough to absorb repeat dashboard
+  // visits/polling, short enough that a just-submitted attempt shows up
+  // within a minute without needing explicit invalidation wiring.
 
   /**
    * Get detailed performance analytics for a specific test template
    */
   async getPerformanceAnalytics(userId: string, templateId: string) {
+    const cacheKey = `tests:analytics:perf:${userId}:${templateId}`;
+    const cached = cacheGet<any>(cacheKey);
+    if (cached) return cached;
+
     const attempts = await this.prisma.testAttempt.findMany({
       where: { userId, testTemplateId: templateId, status: 'SUBMITTED' },
       orderBy: { submittedAt: 'desc' },
@@ -1469,7 +1493,7 @@ async saveAnswers(
       date: a.submittedAt,
     }));
 
-    return {
+    const result = {
       templateId,
       templateTitle: template.title,
       totalAttempts: attempts.length,
@@ -1502,12 +1526,18 @@ async saveAnswers(
         .sort((a, b) => b.totalQuestions - a.totalQuestions),
       attemptProgress,
     };
+    cacheSet(cacheKey, result, 60_000);
+    return result;
   }
 
   /**
    * Get subject-wise performance across all tests
    */
   async getSubjectWiseAnalytics(userId: string) {
+    const cacheKey = `tests:analytics:subjectwise:${userId}`;
+    const cached = cacheGet<any>(cacheKey);
+    if (cached) return cached;
+
     const attempts = await this.prisma.testAttempt.findMany({
       where: { userId, status: 'SUBMITTED' },
       include: {
@@ -1541,7 +1571,7 @@ async saveAnswers(
       }
     }
 
-    return Array.from(subjectMap.entries())
+    const result = Array.from(subjectMap.entries())
       .map(([subject, stats]) => ({
         subject,
         totalAttempts: attempts.length,
@@ -1553,6 +1583,8 @@ async saveAnswers(
         avgTimePerQuestion: stats.total > 0 ? Math.round(stats.time / stats.total) : 0,
       }))
       .sort((a, b) => b.totalQuestions - a.totalQuestions);
+    cacheSet(cacheKey, result, 60_000);
+    return result;
   }
 
   /**
@@ -1637,10 +1669,19 @@ async saveAnswers(
       .sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  /**
-   * Get weak chapters (lowest accuracy)
-   */
-  async getWeakChapters(userId: string) {
+  // PERF + DRY ENHANCEMENT: getWeakChapters() and getStrengthChapters() used
+  // to independently run the exact same query (all of a user's SUBMITTED
+  // attempts, with nested answers + question/chapter/subject joins) and
+  // rebuild the exact same per-chapter aggregation map — identical work,
+  // done twice, every time a dashboard screen shows both (a very natural
+  // pairing: "your weak & strong chapters"). Extracted into one cached
+  // helper; the two public methods now just sort/slice the same shared
+  // result in opposite directions.
+  private async computeChapterStats(userId: string) {
+    const cacheKey = `tests:analytics:chapterstats:${userId}`;
+    const cached = cacheGet<any[]>(cacheKey);
+    if (cached) return cached;
+
     const attempts = await this.prisma.testAttempt.findMany({
       where: { userId, status: 'SUBMITTED' },
       include: {
@@ -1676,7 +1717,7 @@ async saveAnswers(
       }
     }
 
-    return Array.from(chapterMap.entries())
+    const result = Array.from(chapterMap.entries())
       .filter(([, stats]) => stats.total >= 5) // Minimum 5 questions
       .map(([chapterId, stats]) => ({
         chapterId,
@@ -1687,64 +1728,25 @@ async saveAnswers(
         wrong: stats.wrong,
         skipped: stats.skipped,
         accuracy: stats.total > 0 ? Math.round((stats.correct / stats.total) * 1000) / 10 : 0,
-      }))
-      .sort((a, b) => a.accuracy - b.accuracy)
-      .slice(0, 20);
+      }));
+    cacheSet(cacheKey, result, 60_000);
+    return result;
+  }
+
+  /**
+   * Get weak chapters (lowest accuracy)
+   */
+  async getWeakChapters(userId: string) {
+    const stats = await this.computeChapterStats(userId);
+    return [...stats].sort((a, b) => a.accuracy - b.accuracy).slice(0, 20);
   }
 
   /**
    * Get strength chapters (highest accuracy)
    */
   async getStrengthChapters(userId: string) {
-    const attempts = await this.prisma.testAttempt.findMany({
-      where: { userId, status: 'SUBMITTED' },
-      include: {
-        answers: {
-          include: {
-            question: {
-              select: {
-                chapterId: true,
-                chapter: { select: { name: true } },
-                subject: { select: { name: true } },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    const chapterMap = new Map<string, { name: string; subject: string; total: number; correct: number; wrong: number; skipped: number }>();
-
-    for (const attempt of attempts) {
-      for (const answer of attempt.answers) {
-        const q = answer.question;
-        if (!q?.chapterId) continue;
-        const key = q.chapterId;
-        const name = q.chapter?.name || 'Unknown';
-        const subject = q.subject?.name || 'Unknown';
-        if (!chapterMap.has(key)) chapterMap.set(key, { name, subject, total: 0, correct: 0, wrong: 0, skipped: 0 });
-        const stats = chapterMap.get(key)!;
-        stats.total++;
-        if (answer.isCorrect) stats.correct++;
-        else if (answer.selectedOption === null) stats.skipped++;
-        else stats.wrong++;
-      }
-    }
-
-    return Array.from(chapterMap.entries())
-      .filter(([, stats]) => stats.total >= 5)
-      .map(([chapterId, stats]) => ({
-        chapterId,
-        chapterName: stats.name,
-        subject: stats.subject,
-        totalQuestions: stats.total,
-        correct: stats.correct,
-        wrong: stats.wrong,
-        skipped: stats.skipped,
-        accuracy: stats.total > 0 ? Math.round((stats.correct / stats.total) * 1000) / 10 : 0,
-      }))
-      .sort((a, b) => b.accuracy - a.accuracy)
-      .slice(0, 20);
+    const stats = await this.computeChapterStats(userId);
+    return [...stats].sort((a, b) => b.accuracy - a.accuracy).slice(0, 20);
   }
 
   /**
