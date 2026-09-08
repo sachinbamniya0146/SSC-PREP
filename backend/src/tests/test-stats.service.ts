@@ -45,8 +45,17 @@ export class TestStatsService {
     if (n > 0) {
       avgScore = Math.round((done.reduce((s, a) => s + (a.score ?? 0), 0) / n) * 10) / 10;
       avgAccuracy = Math.round((done.reduce((s, a) => s + (a.accuracyPercent ?? 0), 0) / n) * 10) / 10;
-      // P90 cutoff: score at the 90th percentile (real, data-driven)
-      const idx = Math.min(done.length - 1, Math.floor(n * 0.9));
+      // BUGFIX: P90 cutoff must mark the score that only the TOP 10% of
+      // attempts reach or beat. `done` is sorted `score: 'desc'` (rank 1 =
+      // highest score first), so that boundary sits near the START of the
+      // array — roughly index floor(n * 0.10) — not near the end.
+      // The old code used `Math.floor(n * 0.9)`, which in this
+      // descending-sorted array lands near the BOTTOM 10% (the weakest
+      // scorers), not the top. That inverted "cutoff" was then shown on the
+      // results page as the qualifying score (replacing the old 40%-of-max
+      // heuristic per the comment above) — meaning it was showing students
+      // an artificially low bar, nowhere near an actual top-10% cutoff.
+      const idx = Math.max(0, Math.min(n - 1, Math.floor(n * 0.1)));
       cutoffScore = done[idx].score ?? 0;
     }
 
