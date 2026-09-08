@@ -109,13 +109,37 @@ export class AuthService implements OnModuleInit {
     const passwordsRaw = this.config.get<string>('ADMIN_PASSWORDS') || '';
     const emails = emailsRaw.split(',').map((e) => e.trim()).filter(Boolean);
     const passwords = passwordsRaw.split(',').map((p) => p.trim()).filter(Boolean);
+    // NEW ("Namaste, Platform" bug — dashboard showed the hardcoded
+    // 'Platform Admin' seed name instead of the actual admin's name):
+    // optional ADMIN_NAMES env var, comma-separated in the SAME order as
+    // ADMIN_EMAILS/ADMIN_PASSWORDS, e.g.:
+    //   ADMIN_EMAILS=sachin@example.com,other@example.com
+    //   ADMIN_NAMES=Sachin Bamniya,Other Admin
+    // If ADMIN_NAMES is missing or shorter than the email list, any
+    // uncovered admin now gets a name DERIVED from their email's local
+    // part (e.g. "sachin.bamniya" -> "Sachin Bamniya") instead of the old
+    // generic "Platform Admin" — so a brand-new admin seeded purely from
+    // ADMIN_EMAILS/ADMIN_PASSWORDS (no ADMIN_NAMES set) still gets a real-
+    // looking name on their dashboard rather than a placeholder.
+    const namesRaw = this.config.get<string>('ADMIN_NAMES') || '';
+    const names = namesRaw.split(',').map((n) => n.trim()).filter(Boolean);
+    const deriveNameFromEmail = (email: string): string => {
+      const local = email.split('@')[0] || 'Admin';
+      return local
+        .split(/[._-]+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ') || 'Admin';
+    };
 
     // Merge legacy single-admin vars in as an extra entry (back-compat).
     const legacyEmail = this.config.get<string>('ADMIN_DEFAULT_EMAIL');
     const legacyPassword = this.config.get<string>('ADMIN_DEFAULT_PASSWORD');
+    const legacyName = this.config.get<string>('ADMIN_DEFAULT_NAME');
     if (legacyEmail && legacyPassword && !emails.includes(legacyEmail)) {
       emails.push(legacyEmail);
       passwords.push(legacyPassword);
+      if (legacyName) names[emails.length - 1] = legacyName;
     }
 
     if (emails.length === 0) return;
@@ -134,6 +158,17 @@ export class AuthService implements OnModuleInit {
         } else {
           this.logger.log(`Admin account ${normalized} already active — password from env NOT reapplied.`);
         }
+        // NEW ("Namaste, Platform" bug — self-healing for accounts already
+        // seeded with the old hardcoded name): if this account still has
+        // the generic placeholder name from before this fix existed, and
+        // ADMIN_NAMES now provides a real name for this email, correct it
+        // in place — one-time, and only ever overwrites the OLD
+        // placeholder, never a name the admin (or anyone) has since set
+        // themselves via a real profile edit.
+        if (existing.fullName === 'Platform Admin' && names[i]) {
+          await this.prisma.user.update({ where: { id: existing.id }, data: { fullName: names[i] } });
+          this.logger.warn(`Corrected placeholder name for ${normalized}: 'Platform Admin' -> '${names[i]}'.`);
+        }
         this.logger.warn(
           `If login for ${normalized} still fails, the password on record does not match ADMIN_PASSWORDS ` +
             `(env only sets the password the FIRST time an account is created) — use "Forgot Password" OTP ` +
@@ -151,16 +186,17 @@ export class AuthService implements OnModuleInit {
       }
 
       const passwordHash = await bcrypt.hash(password, 12);
+      const resolvedName = names[i] || deriveNameFromEmail(normalized);
       await this.prisma.user.create({
         data: {
           email: normalized,
-          fullName: 'Platform Admin',
+          fullName: resolvedName,
           passwordHash,
           role: 'ADMIN',
           isEmailVerified: true,
         },
       });
-      this.logger.log(`Seeded new admin account: ${normalized}`);
+      this.logger.log(`Seeded new admin account: ${normalized} (name: ${resolvedName})`);
     }
   }
 
