@@ -604,11 +604,73 @@ export default function TestPage() {
     else setReviewOpen(true);
   };
 
-  // ---- Submit: score every answered question via /bank/attempt ----
+  // ---- Submit ----
   const submitTest = async () => {
     const qs = questions;
     setRunning(false);
     setReviewOpen(false);
+    if (qs[idx]) markQuestionTime(qs[idx].id); // finalize last question's time before scoring
+
+    const activeAttempt =
+      typeof window !== "undefined" ? sessionStorage.getItem("ssc_active_attempt") : null;
+
+    // ---- Server-authoritative path: mocks, Daily Test, year-wise (any flow
+    // that opened a real timed TestAttempt via /tests/attempts/start,
+    // /tests/daily-test/start, or /tests/year-wise/start). BUGFIX (see full
+    // explanation above submitTest): submit to the real attempt, then pull
+    // the server-scored per-question detail — never call /bank/attempt here.
+    if (activeAttempt) {
+      try {
+        const answersPayload = qs.map((q) => ({
+          questionId: q.id,
+          selectedOption: answers[q.id] ?? null,
+          timeSpentSeconds: timeSpent[q.id] || 0,
+        }));
+        await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
+          method: "POST",
+          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ answers: answersPayload }),
+        });
+        sessionStorage.removeItem("ssc_active_attempt");
+
+        // Single source of truth for the results screen: the same
+        // attemptDetail() data the /results/[attemptId] page already uses,
+        // with correctAnswer/isCorrect/marks/negativeMarks per question —
+        // no client-side re-derivation, no extra recording calls.
+        const dr = await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}`, {
+          headers: getAuthHeaders(),
+        });
+        const detail = await dr.json().catch(() => null);
+        const res: { [qid: string]: Attempt } = {};
+        let score = 0;
+        if (detail && Array.isArray(detail.questions)) {
+          for (const q of detail.questions) {
+            if (!q.selectedOption) continue; // unattempted — nothing to show per-question
+            const delta = q.isCorrect ? (q.marks ?? 2) : -(q.negativeMarks ?? 0.5);
+            res[q.questionId] = {
+              correct: !!q.isCorrect,
+              correctAnswer: String(q.correctAnswer ?? "").trim().toUpperCase(),
+              selectedOption: q.selectedOption,
+              scoreDelta: delta,
+            };
+            score += delta;
+          }
+        }
+        setResult(res);
+        setFinalScore(typeof detail?.score === "number" ? detail.score : score);
+      } catch {
+        // submit already happened above even if the detail re-fetch failed —
+        // student's attempt is safely recorded server-side either way.
+      } finally {
+        setPhase("results");
+      }
+      return;
+    }
+
+    // ---- Non-authoritative practice path: sectional set (stashed by
+    // /sectional), chapter-wise PYQ, or the default random /bank/set — none
+    // of these open a server TestAttempt up front, so /bank/attempt is the
+    // legitimate per-question scoring + recording mechanism here.
     let score = 0;
     const res: { [qid: string]: Attempt } = {};
     // FIX (slow-submit bug): this used to `await` /bank/attempt ONE
@@ -629,6 +691,19 @@ export default function TestPage() {
               questionId: q.id,
               selectedOption: ans,
               templateId: "tpl-mock-live",
+              // BUGFIX: the aggregate POST /tests/attempts below already
+              // records this whole practice session as one real TestAttempt
+              // once submission finishes — record: false stops this
+              // per-question call from ALSO creating its own single-question
+              // TestAttempt, which used to duplicate/pollute every
+              // un-templated analytics query (myAttempts, getWeakChapters,
+              // getStrengthChapters, getSubjectWiseAnalytics,
+              // getAccuracyTrend) for every sectional/chapter-wise/random-set
+              // practice test taken. question-bank/page.tsx's standalone
+              // instant-feedback browser is unaffected — it never sends this
+              // flag, so it keeps recording each answer as its own attempt
+              // (its intended, only recording mechanism).
+              record: false,
             }),
           });
           const d = await r.json();
@@ -652,32 +727,10 @@ export default function TestPage() {
     );
     setResult(res);
     setFinalScore(score);
-    if (qs[idx]) markQuestionTime(qs[idx].id); // finalize last question time
     setPhase("results");
 
     // P1 — best-effort save to results history (never blocks results view)
     try {
-      const activeAttempt =
-        typeof window !== "undefined" ? sessionStorage.getItem("ssc_active_attempt") : null;
-      if (activeAttempt) {
-        // P0: server-authoritative timed attempt — submit to the open attempt.
-        const answersPayload = [];
-        for (const q of qs) {
-          const a = res[q.id];
-          answersPayload.push({
-            questionId: q.id,
-            selectedOption: a ? a.selectedOption : null,
-            timeSpentSeconds: timeSpent[q.id] || 0,
-          });
-        }
-        await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
-          method: "POST",
-          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ answers: answersPayload }),
-        });
-        sessionStorage.removeItem("ssc_active_attempt");
-        return;
-      }
       let correct = 0;
       let wrong = 0;
       let skipped = 0;
