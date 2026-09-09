@@ -88,8 +88,12 @@ export class BankController {
   }
 
   @Get('chapters')
-  chapters(@Query('subjectId') subjectId?: string, @Query('examId') examId?: string) {
-    return this.bank.chapters(subjectId, examId);
+  chapters(
+    @Query('subjectId') subjectId?: string,
+    @Query('examId') examId?: string,
+    @Query('includeEmpty') includeEmpty?: string,
+  ) {
+    return this.bank.chapters(subjectId, examId, includeEmpty === 'true');
   }
 
   // Session 18+ — year-wise custom test picker: distinct years for an exam.
