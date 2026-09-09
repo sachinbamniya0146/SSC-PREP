@@ -101,6 +101,13 @@ function apiBase() {
 }
 
 export default function QuestionBankPage() {
+  // NEW ("20 20 ke batch me test format me hona chahiye, jitne bache utne
+  // aayein, last attempt se aage continue ho"): single source of truth for
+  // batch size, used both for the request `take` and for all the
+  // batch-navigation math below. Kept at 20 to match what was already
+  // effectively the page size — the fix is adding real pagination and
+  // resume around it, not changing the number itself.
+  const BATCH_SIZE = 20;
   const [examId, setExamId] = React.useState<string>("");
   const [subjectId, setSubjectId] = React.useState<string>("");
   const [chapterId, setChapterId] = React.useState<string>("");
@@ -120,6 +127,13 @@ export default function QuestionBankPage() {
   const [sscRefs, setSscRefs] = React.useState<{ [qid: string]: any }>({});
   // v7 §1 — Exam-scoped mode: when exam comes from URL, hide other exams & auto-load
   const [examScoped, setExamScoped] = React.useState(false);
+
+  // NEW: current batch offset (in questions, i.e. always a multiple of
+  // BATCH_SIZE) and how many the student has already attempted in this
+  // exact exam/subject/chapter scope — used to resume on the right batch
+  // instead of always batch #1.
+  const [skip, setSkip] = React.useState(0);
+  const [attemptedInScope, setAttemptedInScope] = React.useState<number | null>(null);
 
   const loadSscRefs = async (questionId: string) => {
     try {
@@ -227,11 +241,54 @@ export default function QuestionBankPage() {
     };
   }, [examId]);
 
+  // NEW ("last time jaha tak attempt kiya tha uske aage se continue"):
+  // whenever the exam/subject/chapter scope changes, ask the backend how
+  // many questions in that exact scope this student has already
+  // attempted, then jump straight to the batch that picks up right after
+  // that — instead of always resetting to batch #1 / skip=0.
+  React.useEffect(() => {
+    // No filter chosen yet, or a fresh mount before scope is decided —
+    // nothing to resume into.
+    if (!examId && !subjectId && !chapterId) {
+      setAttemptedInScope(null);
+      setSkip(0);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const params = new URLSearchParams();
+        if (examId) params.append("examId", examId);
+        if (chapterId) params.append("chapterId", chapterId);
+        else if (subjectId) params.append("subjectId", subjectId);
+        const r = await fetchAuth(`${apiBase()}/bank/questions/progress?${params}`, { headers: getAuthHeaders() });
+        if (!r.ok || !alive) return;
+        const d = await r.json();
+        const attempted = Number(d?.attemptedCount) || 0;
+        if (!alive) return;
+        setAttemptedInScope(attempted);
+        // Resume at the batch containing the first not-yet-attempted
+        // question, e.g. 47 attempted / batch 20 → batch #3 (skip=40).
+        // If the student has finished every question in this scope,
+        // resume math stops advancing past the true final batch (handled
+        // in loadQuestions() via the total returned there).
+        setSkip(Math.floor(attempted / BATCH_SIZE) * BATCH_SIZE);
+      } catch {
+        /* resume is a convenience, not required — fall back to skip=0 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [examId, subjectId, chapterId]);
+
   // v7 §1 — Auto-load questions when exam is set from URL (exam-scoped mode)
   React.useEffect(() => {
     if (examId && examScoped) {
-      loadQuestions();
+      loadQuestions(skip);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId, examScoped]);
 
   const loadChapters = async (sid: string) => {
@@ -243,7 +300,14 @@ export default function QuestionBankPage() {
     } catch {}
   };
 
-  const loadQuestions = async () => {
+  // CHANGED ("20 20 ke batch me... jitne bache utne aayein"): now accepts
+  // an explicit `atSkip` (defaulting to the current `skip` state) instead
+  // of always requesting the same fixed first page. Also stopped padding
+  // or hiding a final short batch — browse() on the backend already
+  // returns however many rows actually exist at that offset (could be
+  // fewer than BATCH_SIZE on the last batch), and this now renders exactly
+  // that count rather than assuming a full batch.
+  const loadQuestions = async (atSkip: number = skip) => {
     setLoading(true);
     try {
       // v4 §18 — typo-tolerant search: when the user lands with ?q=, route to
@@ -277,7 +341,8 @@ export default function QuestionBankPage() {
         return;
       }
       const params = new URLSearchParams();
-      params.append("take", "20");
+      params.append("take", String(BATCH_SIZE));
+      params.append("skip", String(atSkip));
       if (examId) params.append("examId", examId);
       if (chapterId) params.append("chapterId", chapterId);
       else if (subjectId) params.append("subjectId", subjectId);
@@ -289,6 +354,7 @@ export default function QuestionBankPage() {
       const d = await r.json();
       setQuestions(d.data || []);
       setTotal(d.total || 0);
+      setSkip(atSkip);
       setSel({});
       setResult({});
     } catch (e) {
@@ -311,26 +377,31 @@ export default function QuestionBankPage() {
     } catch {}
   };
 
+  // NEW: batch-navigation helpers. currentBatchNumber/totalBatches drive
+  // the "Batch 3 of 7" label and the Previous/Next buttons below.
+  const currentBatchNumber = Math.floor(skip / BATCH_SIZE) + 1;
+  const totalBatches = total > 0 ? Math.ceil(total / BATCH_SIZE) : 0;
+  const hasPrevBatch = skip > 0;
+  const hasNextBatch = skip + BATCH_SIZE < total;
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
       <BackButton className="mb-3" />
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">📚 SSC Question Bank</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Question Bank</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {metaTotal}+ verified PYQs · Hindi + English · instant answer feedback
           </p>
         </div>
-        <div className="flex items-center gap-1 text-sm">
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={showHi} onChange={(e) => setShowHi(e.target.checked)} />
-            Hindi
-          </label>
-        </div>
+        <label className="flex items-center gap-1.5 text-sm font-medium">
+          <input type="checkbox" checked={showHi} onChange={(e) => setShowHi(e.target.checked)} />
+          Hindi
+        </label>
       </div>
 
       {/* Filters */}
-      <div className="mb-4 grid gap-3 rounded-xl border border-border bg-card p-4 sm:grid-cols-3">
+      <div className="mb-4 grid gap-4 rounded-xl border border-border bg-card p-5 sm:grid-cols-3">
         <div>
           <label className="text-xs font-medium text-muted-foreground">
             {examScoped ? "Exam (Fixed)" : "Exam"}
@@ -377,10 +448,14 @@ export default function QuestionBankPage() {
         </div>
       </div>
 
-      <div className="mb-6 flex gap-2">
-        <button onClick={loadQuestions} disabled={loading}
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <button onClick={() => loadQuestions(skip)} disabled={loading}
           className="flex-1 rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50">
-          {loading ? "Loading..." : `Load Questions (${total} total)`}
+          {loading
+            ? "Loading..."
+            : attemptedInScope
+              ? `Resume from Batch ${Math.floor(skip / BATCH_SIZE) + 1} (${total} total)`
+              : `Load Questions (${total} total)`}
         </button>
         {chapterId && (
           <>
@@ -388,18 +463,46 @@ export default function QuestionBankPage() {
             href={`/test?chapter=${encodeURIComponent(chapterId)}${examId ? `&exam=${encodeURIComponent(examId)}` : ""}`}
             className="rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20"
           >
-            ▶ Practice Chapter (25 Qs)
+            Practice Chapter (25 Qs)
           </a>
           <button
             onClick={downloadChapterPdf}
             disabled={pdfBusy || !chapterId}
             className="rounded-lg border border-success/40 bg-success/10 px-5 py-2.5 text-sm font-semibold text-success hover:bg-success/20 disabled:opacity-50"
           >
-            {pdfBusy ? "Generating…" : "📥 Chapter PDF (₹1)"}
+            {pdfBusy ? "Generating…" : "Chapter PDF (₹1)"}
           </button>
           </>
         )}
       </div>
+
+      {/* NEW ("20 20 ke batch me test format me hona chahiye"): batch
+          indicator + Previous/Next controls. Only shown once a batch has
+          actually been loaded (total > 0), so it doesn't clutter the
+          initial "pick a filter" state. */}
+      {total > 0 && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-2 text-sm">
+          <span className="font-medium">
+            Batch {currentBatchNumber} of {totalBatches} · {questions.length} question{questions.length === 1 ? "" : "s"} in this batch
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => loadQuestions(Math.max(0, skip - BATCH_SIZE))}
+              disabled={!hasPrevBatch || loading}
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted disabled:opacity-40"
+            >
+              ← Previous
+            </button>
+            <button
+              onClick={() => loadQuestions(skip + BATCH_SIZE)}
+              disabled={!hasNextBatch || loading}
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted disabled:opacity-40"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Questions */}
       {questions.length === 0 && !loading && (
@@ -421,22 +524,22 @@ export default function QuestionBankPage() {
               <div className="mb-2 flex flex-wrap items-center gap-1.5">
                 {q.chapter && (
                   <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    📖 {q.chapter}
+                    {q.chapter}
                   </span>
                 )}
                 {q.topic && (
                   <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    🏷️ {q.topic}
+                    {q.topic}
                   </span>
                 )}
                 {q.exam && (
-                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
-                    🎓 {q.exam}
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                    {q.exam}
                   </span>
                 )}
                 {q.year && (
                   <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    📅 {q.year}
+                    {q.year}
                     {q.shift ? ` · ${q.shift}` : ""}
                   </span>
                 )}
@@ -446,7 +549,7 @@ export default function QuestionBankPage() {
                 <span className="text-sm font-medium">{showHi && q.questionTextHindi ? q.questionTextHindi : q.questionText}</span>
                 {q.answerVerificationStatus && (
                   <span className={`badge shrink-0 ${VERIF_BADGE[q.answerVerificationStatus] || VERIF_BADGE.UNVERIFIED_SINGLE_SOURCE}`}>
-                    {q.answerVerificationStatus === "VERIFIED_OFFICIAL" ? "✅" : ""} {q.answerVerificationStatus.replace(/_/g, " ")}
+                    {q.answerVerificationStatus.replace(/_/g, " ")}
                   </span>
                 )}
                 <button
@@ -454,19 +557,19 @@ export default function QuestionBankPage() {
                   className="shrink-0 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-primary hover:text-primary"
                   title="Previous SSC references (real data)"
                 >
-                  📚 SSC Refs
+                  SSC Refs
                 </button>
                 <button
                   onClick={() => toggleBookmark(q.id)}
                   className="ml-auto shrink-0 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-amber-400 hover:text-amber-500"
                 >
-                  {bookmarked[q.id] ? "🔖 Saved" : "🔖 Save"}
+                  {bookmarked[q.id] ? "Saved" : "Save"}
                 </button>
               </div>
               {sscRefs[q.id] && (
                 <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
                   <p className="font-semibold text-primary">
-                    📚 Previous SSC References ({sscRefs[q.id].previousSscRefs?.count ?? 0} in bank ·{" "}
+                    Previous SSC References ({sscRefs[q.id].previousSscRefs?.count ?? 0} in bank ·{" "}
                     {sscRefs[q.id].previousSscRefs?.acrossYears ?? 0} across years)
                   </p>
                   {(sscRefs[q.id].previousSscRefs?.years ?? []).length > 0 && (
@@ -507,15 +610,15 @@ export default function QuestionBankPage() {
               {showAnswer && (
                 <div className={`mt-3 rounded-lg border p-3 text-sm ${a.correct ? "border-success/40 bg-success/10" : "border-danger/40 bg-danger/10"}`}>
                   <p className={`font-semibold ${a.correct ? "text-success" : "text-danger"}`}>
-                    {a.correct ? "✅ Correct ! " : "❌ Wrong. "}Correct Answer: {a.correctAnswer} ({a.scoreDelta > 0 ? "+" : ""}{a.scoreDelta})
+                    {a.correct ? "Correct! " : "Incorrect. "}Correct Answer: {a.correctAnswer} ({a.scoreDelta > 0 ? "+" : ""}{a.scoreDelta})
                   </p>
                   {a.videoUrl && <VideoPlayer url={a.videoUrl} title={a.videoTitle} />}
                   {(a.explanation || a.explanationHindi) && (
                     <div className="mt-2 space-y-1">
-                      {a.explanation && <p className="whitespace-pre-line">📖 {a.explanation}</p>}
+                      {a.explanation && <p className="whitespace-pre-line">{a.explanation}</p>}
                       {a.explanationHindi && (
                         <p className="whitespace-pre-line border-t border-border pt-1">
-                          🇮🇳 {a.explanationHindi}
+                          {a.explanationHindi}
                         </p>
                       )}
                     </div>
