@@ -106,6 +106,11 @@ export default function AdminPage() {
   // admin can see what's already in the bank before adding more. Backend:
   // GET /bank/admin/upload/export (BankUploadService.exportQuestionBank()).
   const [bankExportDownloading, setBankExportDownloading] = React.useState(false);
+  // NEW — "admin ke liye alag practice question upload feature": same
+  // uploader, checked box forces every row's year/shift/paperCode blank on
+  // the backend regardless of what the sheet has, so this batch always
+  // counts as practice-only and never shows up in a Year-wise PYQ Test.
+  const [isPracticeOnly, setIsPracticeOnly] = React.useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -303,6 +308,7 @@ export default function AdminPage() {
     try {
       const formData = new FormData();
       formData.append("file", uploadFile);
+      if (isPracticeOnly) formData.append("isPracticeOnly", "true");
       const res = await fetchAuth(`${API_BASE}/bank/admin/upload/${uploadFormat}`, {
         method: "POST",
         body: formData,
@@ -511,6 +517,20 @@ export default function AdminPage() {
               {uploading ? "Uploading..." : "Upload Questions"}
             </button>
           </div>
+
+          {/* NEW — Practice-only upload toggle (separate from PYQ upload) */}
+          <label className="mt-3 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={isPracticeOnly}
+              onChange={(e) => setIsPracticeOnly(e.target.checked)}
+              className="h-4 w-4 rounded border-border"
+            />
+            <span>
+              This is <b>Practice-only</b> content, not real PYQs (year/shift/paper-code will be ignored even if the sheet has them —
+              these questions won&apos;t appear in Year-wise PYQ Tests, only in Sectional/Chapter/Weak-topic practice)
+            </span>
+          </label>
 
           {uploadResult && (
             <div className="mt-4 rounded-lg border border-border bg-background p-3 text-sm">
