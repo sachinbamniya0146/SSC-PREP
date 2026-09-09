@@ -368,15 +368,15 @@ export default function AdminPage() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-3">
             <BackButton />
-            <span className="text-lg font-bold">
-              SSC<span className="text-primary">PrepHub</span> Admin
+            <span className="text-lg font-bold tracking-tight">
+              SSC<span className="text-primary">PrepHub</span> <span className="text-muted-foreground">Admin</span>
             </span>
           </div>
           <div className="flex items-center gap-3 text-sm">
-            <a href="/admin/api-keys" className="rounded-lg border border-border px-3 py-2 text-sm">
-              🔑 API Keys
+            <a href="/admin/api-keys" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
+              API Keys
             </a>
-            <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm">
+            <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm hover:bg-muted">
               {theme === "dark" ? "☀️" : "🌙"}
             </button>
           </div>
@@ -385,10 +385,10 @@ export default function AdminPage() {
 
       <main className="mx-auto max-w-7xl px-4 py-8">
         <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-2xl font-bold">👥 User Management</h1>
+          <h1 className="text-2xl font-bold tracking-tight">User Management</h1>
           <div className="flex gap-2">
             <button onClick={() => setShowEmailModal(true)} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
-              📧 Bulk Grant Subscription
+              Bulk Grant Subscription
             </button>
           </div>
         </div>
@@ -399,9 +399,9 @@ export default function AdminPage() {
         {/* Plan / Pricing Management — previously missing entirely: the
             admin panel could only display plans to assign to a user, with
             no way to actually change a price or add a new plan. */}
-        <div className="mb-6 rounded-xl border border-border bg-card p-4">
+        <div className="mb-6 rounded-xl border border-border bg-card p-5">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">💰 Subscription Plans</h2>
+            <h2 className="font-semibold">Subscription Plans</h2>
             <button onClick={openCreatePlan} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">
               + New Plan
             </button>
@@ -427,15 +427,15 @@ export default function AdminPage() {
         {/* Bulk Question Upload — was fully built on the backend but never
             wired to a controller/module and had no UI at all. Now working:
             download a template in the format you want, fill it in, upload it. */}
-        <div className="mb-6 rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-1 font-semibold">📤 Bulk Question Upload</h2>
+        <div className="mb-6 rounded-xl border border-border bg-card p-5">
+          <h2 className="mb-1 font-semibold">Bulk Question Upload</h2>
           {/* NEW (this session) — expanded from one line into a real
               step-by-step guide, per admin request: "kis format me upload
               hoga uska guide bhi, example file bhi available ho". */}
           <div className="mb-3 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground">
             <p className="mb-1 font-semibold text-foreground">Kaise upload karein (step-by-step):</p>
             <ol className="list-decimal space-y-1 pl-4">
-              <li>Pehle "⬇️ Download Full Question Bank" se dekh lein ki kaunse questions already maujood hain — dobara wahi type karne ki zaroorat nahi (duplicate apne aap reject ho jaata hai upload ke time).</li>
+              <li>Pehle "Download Full Question Bank" se dekh lein ki kaunse questions already maujood hain — dobara wahi type karne ki zaroorat nahi (duplicate apne aap reject ho jaata hai upload ke time).</li>
               <li>Ek format select karke uska Template download karein — Excel template mein ab ek "Reference IDs" sheet bhi hai jisme har exam/subject/chapter/topic ki real ID di hui hai, seedhe copy-paste kar sakte hain.</li>
               <li>Template mein ek hi file mein sab kuch bhar sakte hain — question, options (A–D), correctAnswer, explanation, Hindi translation, year, shift, paperCode — sab columns ek saath.</li>
               <li>Hindi translation (questionTextHindi) zaroor bharein — iske bina question save to hoga lekin students ko dikhega NAHI (bilingual gate), jab tak translation add na ho.</li>
@@ -476,7 +476,7 @@ export default function AdminPage() {
               className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/10 disabled:opacity-50 dark:text-emerald-400"
               title="Poora question bank isi upload-format mein download karein — dekhein kya already maujood hai"
             >
-              {bankExportDownloading ? "Exporting..." : "⬇️ Download Full Question Bank"}
+              {bankExportDownloading ? "Exporting..." : "Download Full Question Bank"}
             </button>
           </div>
           <div className="flex flex-wrap items-end gap-3">
