@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
+import { StudyPlanType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { istDateKey } from '../gamification/gamification.service';
 
@@ -200,7 +201,7 @@ Return JSON:
           data: {
             examId: input.examId,
             subjectId: input.subjectId ?? null,
-            type: (input.type as any) ?? 'COMBINED',
+            type: input.type ?? StudyPlanType.COMBINED,
             startDate,
             targetDate,
             dailyTarget,
@@ -211,7 +212,7 @@ Return JSON:
             userId,
             examId: input.examId,
             subjectId: input.subjectId ?? null,
-            type: (input.type as any) ?? 'COMBINED',
+            type: input.type ?? StudyPlanType.COMBINED,
             startDate,
             targetDate,
             dailyTarget,
