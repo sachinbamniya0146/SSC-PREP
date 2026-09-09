@@ -209,16 +209,34 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 shadow-xl">
+    <div className="grid min-h-screen lg:grid-cols-2">
+      {/* Left: brand/value panel — same pattern as /login for consistency
+          across the two auth pages. */}
+      <div className="relative hidden overflow-hidden bg-gradient-to-br from-primary/10 via-background to-accent/10 lg:flex lg:flex-col lg:justify-between lg:p-12">
+        <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-32 -right-16 h-96 w-96 rounded-full bg-accent/20 blur-3xl" />
+        <span className="relative text-lg font-bold tracking-tight">
+          SSC<span className="text-primary">PrepHub</span>
+        </span>
+        <div className="relative max-w-md">
+          <h2 className="text-3xl font-bold leading-tight tracking-tight">
+            Join thousands preparing smarter for SSC exams.
+          </h2>
+          <p className="mt-4 text-sm text-muted-foreground">
+            Free forever plan, bilingual questions, and a daily streak that keeps you accountable.
+          </p>
+        </div>
+        <p className="relative text-xs text-muted-foreground">© {new Date().getFullYear()} SSCPrepHub</p>
+      </div>
+
+      <div className="flex items-center justify-center bg-background px-4 py-10">
+        <div className="w-full max-w-md">
         <div className="mb-8 flex items-center justify-between">
-          <h1 className="text-2xl font-bold">
-            Create <span className="text-primary">Free Account</span>
-          </h1>
+          <h1 className="text-2xl font-bold tracking-tight">Create your account</h1>
           <button
             onClick={toggleTheme}
             aria-label="Toggle theme"
-            className="rounded-lg border border-border p-2 text-sm"
+            className="rounded-lg border border-border p-2 text-sm hover:bg-muted"
           >
             {theme === "dark" ? "☀️" : "🌙"}
           </button>
@@ -227,7 +245,7 @@ export default function SignupPage() {
         {error && (
           <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400" role="alert">
             <div className="flex items-center gap-2">
-              <span>⚠️</span>
+              <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />
               <span>{error}</span>
             </div>
           </div>
@@ -359,10 +377,14 @@ export default function SignupPage() {
             </div>
             <p className="mt-1 text-xs text-muted-foreground">{confirmPassword.length}/20 characters (min 6)</p>
             {confirmPassword && password !== confirmPassword && (
-              <p className="mt-1 text-xs text-red-500">⚠️ Passwords do not match</p>
+              <p className="mt-1 flex items-center gap-1.5 text-xs text-red-500">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" /> Passwords do not match
+              </p>
             )}
             {confirmPassword && password === confirmPassword && confirmPassword.length >= 6 && (
-              <p className="mt-1 text-xs text-emerald-500">✅ Passwords match</p>
+              <p className="mt-1 flex items-center gap-1.5 text-xs text-emerald-500">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" /> Passwords match
+              </p>
             )}
           </div>
           <button
@@ -380,6 +402,7 @@ export default function SignupPage() {
             Login
           </a>
         </p>
+        </div>
       </div>
     </div>
   );
