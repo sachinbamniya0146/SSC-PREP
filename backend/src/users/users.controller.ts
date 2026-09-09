@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Delete, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserService } from './users.service';
+import { UpdatePhoneDto } from './dto/update-phone.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -37,6 +38,20 @@ export class UsersController {
     @Body() body: { darkMode?: boolean; preferredLanguage?: string },
   ) {
     return this.usersService.updatePreferences(user.userId, body);
+  }
+
+  // BUGFIX: profile/page.tsx's "Update Mobile Number" form calls
+  // `PUT /users/me/phone` — there was no such route anywhere in this
+  // controller, so every attempt to save a phone number 404'd and the
+  // feature was completely non-functional end-to-end (service-side support
+  // already existed via updatePreferences(), it just had no route pointing
+  // at it for this specific call).
+  @Put('me/phone')
+  async updatePhone(
+    @CurrentUser() user: { userId: string },
+    @Body() body: UpdatePhoneDto,
+  ) {
+    return this.usersService.updatePreferences(user.userId, { phone: body.phone });
   }
 
   /** Save/replace the user's personal OpenRouter API key (used for free-model AI explanations). */
