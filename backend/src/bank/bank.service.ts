@@ -455,9 +455,28 @@ export class BankService implements OnModuleInit {
     return out;
   }
 
-  async chapters(subjectId?: string, examId?: string) {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const where = { subjectId };
+  async chapters(subjectId?: string, examId?: string, includeEmpty = false) {
+    // NEW `includeEmpty` — admin chapter-assignment pickers (e.g. the PDF
+    // review queue's chapter dropdown/AI-suggest) need to see EVERY
+    // chapter in a subject, including ones that don't have any approved
+    // questions yet (brand-new subjects, or chapters the bank-upload
+    // auto-create feature just created). The original HAVING COUNT(q.id)
+    // > 0 filter is still the right default for student-facing pickers —
+    // this is purely additive, default behavior unchanged.
+    if (includeEmpty) {
+      return this.prisma.$queryRaw`
+        SELECT c.id, c.name, c.slug, sub.name AS subject,
+               COUNT(q.id) FILTER (
+                 WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+                 AND (${examId}::text IS NULL OR q."examId" = ${examId})
+               )::int AS count
+        FROM chapters c
+        JOIN subjects sub ON sub.id = c."subjectId"
+        LEFT JOIN questions q ON q."chapterId" = c.id
+        WHERE (${subjectId}::text IS NULL OR c."subjectId" = ${subjectId})
+        GROUP BY c.id, sub.name
+        ORDER BY c.name;`;
+    }
     return this.prisma.$queryRaw`
       SELECT c.id, c.name, c.slug, sub.name AS subject, COUNT(q.id)::int AS count
       FROM chapters c
