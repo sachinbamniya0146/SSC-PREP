@@ -40,6 +40,8 @@ type QuestionRow = {
   reviewStatus: string | null;
   answerVerificationStatus: string;
   aiConfidenceScore: number | null;
+  subjectId: string | null;
+  chapterId: string | null;
   chapter?: { name: string } | null;
   topic?: { name: string } | null;
   exam?: { name: string } | null;
@@ -67,6 +69,13 @@ export default function BatchDetailPage() {
   const [busy, setBusy] = React.useState<string>("");
   const [msg, setMsg] = React.useState("");
   const [err, setErr] = React.useState("");
+  // NEW — chapter picker + AI suggestion for each pending question (see
+  // suggestChapter() on the backend for why this exists: OCR-extracted
+  // questions came out with chapterId always null, and this page had no
+  // way to set one before Approve).
+  const [chaptersBySubject, setChaptersBySubject] = React.useState<Record<string, { id: string; name: string }[]>>({});
+  const [chapterPick, setChapterPick] = React.useState<Record<string, string>>({}); // questionId -> chosen chapterId
+  const [suggesting, setSuggesting] = React.useState<string>("");
 
   const headers = React.useCallback(() => {
     const t = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") : "";
@@ -153,10 +162,11 @@ export default function BatchDetailPage() {
     setBusy(id);
     setErr("");
     try {
+      const chapterId = chapterPick[id];
       const r = await fetchAuth(`${API_BASE}/admin/pdf-ingestion/questions/approve`, {
         method: "POST",
         headers: { ...headers(), "Content-Type": "application/json" },
-        body: JSON.stringify({ questionId: id }),
+        body: JSON.stringify({ questionId: id, ...(chapterId ? { chapterId } : {}) }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -167,12 +177,58 @@ export default function BatchDetailPage() {
         setErr(d?.message || "Approve fail ho gaya");
         return;
       }
-      setMsg("Question approve ho gaya.");
+      setMsg(chapterId ? "Question approve ho gaya (chapter set ke saath)." : "Question approve ho gaya.");
       load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Approve fail ho gaya");
     } finally {
       setBusy("");
+    }
+  };
+
+  // Lazily fetch + cache the chapter list for a question's subject the
+  // first time it's needed (dropdown opened or Suggest clicked), instead
+  // of fetching for every subject on page load.
+  const ensureChaptersLoaded = React.useCallback(
+    async (subjectId: string) => {
+      if (!subjectId || chaptersBySubject[subjectId]) return;
+      try {
+        const r = await fetchAuth(`${API_BASE}/bank/chapters?subjectId=${encodeURIComponent(subjectId)}&includeEmpty=true`, { headers: headers() });
+        if (r.ok) {
+          const list = await r.json();
+          setChaptersBySubject((prev) => ({ ...prev, [subjectId]: Array.isArray(list) ? list : list.chapters || [] }));
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [chaptersBySubject, headers],
+  );
+
+  const suggestChapterFor = async (q: QuestionRow) => {
+    if (!q.subjectId) {
+      setErr("Is question ka subject set nahi hai — chapter suggest nahi ho sakta.");
+      return;
+    }
+    setSuggesting(q.id);
+    setErr("");
+    try {
+      await ensureChaptersLoaded(q.subjectId);
+      const r = await fetchAuth(`${API_BASE}/admin/pdf-ingestion/questions/${q.id}/suggest-chapter`, {
+        method: "POST",
+        headers: headers(),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setErr(d?.message || "AI suggestion fail ho gayi — chapter manually chuno.");
+        return;
+      }
+      setChapterPick((prev) => ({ ...prev, [q.id]: d.chapterId }));
+      setMsg(`🤖 Suggested: ${d.chapterName} (confidence: ${d.confidence}) — confirm karke Approve dabao.`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "AI suggestion fail ho gayi");
+    } finally {
+      setSuggesting("");
     }
   };
 
@@ -376,6 +432,33 @@ export default function BatchDetailPage() {
                       </span>
                       {q.aiConfidenceScore != null && ` · AI confidence: ${Math.round(q.aiConfidenceScore * 100)}%`}
                     </p>
+
+                    {/* NEW — chapter picker + AI suggestion. Only shown for
+                        not-yet-approved questions; once approved the
+                        chapter is locked in and shown above via q.chapter.name. */}
+                    {!q.isApproved && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <select
+                          value={chapterPick[q.id] ?? q.chapterId ?? ""}
+                          onFocus={() => q.subjectId && ensureChaptersLoaded(q.subjectId)}
+                          onChange={(e) => setChapterPick((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                          className="rounded-lg border border-border bg-background px-2 py-1 text-xs"
+                        >
+                          <option value="">— Chapter set nahi hai —</option>
+                          {(q.subjectId ? chaptersBySubject[q.subjectId] : [])?.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => suggestChapterFor(q)}
+                          disabled={suggesting === q.id || !q.subjectId}
+                          className="rounded-lg border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
+                          title="AI se best-matching chapter suggest karwao"
+                        >
+                          {suggesting === q.id ? "Soch raha hai…" : "🤖 Suggest"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
                     <button
