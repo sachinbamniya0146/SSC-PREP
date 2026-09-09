@@ -169,6 +169,16 @@ export class PdfIngestionController {
     return { success: true, message: 'AI explanation generated and saved' };
   }
 
+  // NEW — AI chapter suggestion for the review queue (see the service
+  // method's own comment for the full rationale). Returns a suggestion
+  // only; nothing is written until the admin actually calls approveQuestion
+  // with the chosen chapterId.
+  @Post('questions/:id/suggest-chapter')
+  @ApiOperation({ summary: 'AI-suggest the most likely chapter for a pending question (does not save anything)' })
+  async suggestChapter(@Param('id') id: string) {
+    return this.service.suggestChapter(id);
+  }
+
   // v1 §7.4 — human review-gate control: move a question through
   // AI_DRAFT → APPROVED / REJECTED and optionally record extraction confidence.
   @Put('questions/:id/review-status')
