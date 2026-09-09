@@ -10,6 +10,7 @@ import { S3Service } from '../s3/s3.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { extractPdfText } from './pdf-text';
 import { SearchService } from '../search/search.service';
+import { AiProviderService } from '../ai-provider/ai-provider.service';
 
 @Injectable()
 export class PdfIngestionService {
@@ -22,6 +23,7 @@ export class PdfIngestionService {
     private audit: AuditLogService,
     private config: ConfigService,
     private searchService: SearchService,
+    private aiProvider: AiProviderService,
     @InjectQueue('pdf-extraction') private extractionQueue: Queue,
     @InjectQueue('question-review') private reviewQueue: Queue,
     @InjectQueue('explanation-generation') private explanationQueue: Queue,
@@ -241,6 +243,71 @@ export class PdfIngestionService {
     'VERIFIED_MULTI_SOURCE',
     'VERIFIED_COMPUTED',
   ]);
+
+  // NEW — "AI-assisted chapter auto-suggestion during the PDF review
+  // queue". OCR-extracted questions come out with chapterId = null (only
+  // subjectId is known — set once for the whole PDF upload), and the
+  // review UI had no way to set it at all before approving. This suggests
+  // one from the subject's real chapter list — the admin still confirms it
+  // (or picks a different one) before Approve actually writes it.
+  async suggestChapter(questionId: string): Promise<{ chapterId: string; chapterName: string; confidence: 'high' | 'medium' | 'low' }> {
+    const question = await this.prisma.question.findUnique({
+      where: { id: questionId },
+      select: { questionText: true, subjectId: true, chapterId: true },
+    });
+    if (!question) throw new NotFoundException('Question not found');
+    if (!question.subjectId) throw new BadRequestException('Question has no subject set — cannot suggest a chapter within it');
+
+    const chapters = await this.prisma.chapter.findMany({
+      where: { subjectId: question.subjectId },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    if (chapters.length === 0) {
+      throw new BadRequestException('This subject has no chapters yet — create one first');
+    }
+
+    const numbered = chapters.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+    const prompt = [
+      'You are helping tag an SSC (Staff Selection Commission, India) competitive exam question with the correct chapter/topic.',
+      'Question:',
+      question.questionText,
+      '',
+      'Pick the SINGLE best-matching chapter from this numbered list (reply with the number only, nothing else surrounding it):',
+      numbered,
+      '',
+      'Respond with strict JSON only, no markdown fences: {"chapterNumber": <int>, "confidence": "high"|"medium"|"low"}',
+    ].join('\n');
+
+    const result = await this.aiProvider.generate(prompt, { jsonResponse: true });
+
+    let parsed: { chapterNumber?: number; confidence?: string };
+    try {
+      // Models occasionally wrap JSON in ```json fences despite the
+      // instruction not to — strip those before parsing rather than
+      // failing the whole suggestion over formatting noise.
+      const cleaned = result.content.trim().replace(/^```json\s*|\s*```$/g, '');
+      parsed = JSON.parse(cleaned);
+    } catch {
+      throw new BadRequestException('AI response was not valid JSON — please pick the chapter manually');
+    }
+
+    const idx = (parsed.chapterNumber ?? 0) - 1;
+    // CRITICAL: never trust a chapter identity out of free-form model
+    // output directly — only accept it as an INDEX into the list WE built
+    // and sent, then resolve that index back to a real chapter row from
+    // our own query. This makes it impossible for the AI to invent or
+    // hallucinate a chapterId that doesn't exist.
+    const chapter = chapters[idx];
+    if (!chapter) {
+      throw new BadRequestException('AI suggestion did not match a valid chapter in the list — please pick manually');
+    }
+
+    const confidence: 'high' | 'medium' | 'low' =
+      parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low' ? parsed.confidence : 'low';
+
+    return { chapterId: chapter.id, chapterName: chapter.name, confidence };
+  }
 
   async approveQuestion(dto: any, adminId: string) {
     const question = await this.prisma.question.findUnique({ where: { id: dto.questionId } });
