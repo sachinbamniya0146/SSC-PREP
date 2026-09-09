@@ -11,6 +11,7 @@ import { MeilisearchIndexWorker } from './workers/meilisearch-index.worker';
 import { S3Module } from '../s3/s3.module';
 import { RedisModule } from '../redis/redis.module';
 import { AuditLogModule } from '../audit-log/audit-log.module';
+import { AiProviderModule } from '../ai-provider/ai-provider.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { AuditLogModule } from '../audit-log/audit-log.module';
     S3Module,
     RedisModule,
     AuditLogModule,
+    AiProviderModule,
     BullModule.registerQueue(
       { name: 'pdf-extraction' },
       { name: 'question-review' },
