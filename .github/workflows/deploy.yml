@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: '0 * * * *'
   workflow_dispatch: # Allow manual trigger — always deploys immediately, no debounce
 
 permissions:
@@ -65,14 +67,47 @@ jobs:
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"
           fi
 
+  schedule_check:
+    name: Check for new main commits (hourly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+    steps:
+      - name: Compare latest main commit vs last successful deploy
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_sha=$(gh api repos/${{ github.repository }}/commits/main --jq '.sha')
+          last_success_sha=$(gh api repos/${{ github.repository }}/actions/workflows/deploy.yml/runs -f status=success -f per_page=20 --jq '[.workflow_runs[] | select(.head_branch=="main")][0].head_sha // ""')
+
+          echo "Latest main commit:           $latest_sha"
+          echo "Last successful deploy SHA:   ${last_success_sha:-<none>}"
+
+          if [ -z "$last_success_sha" ]; then
+            echo "✅ No previous successful deploy found — deploying."
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          elif [ "$latest_sha" = "$last_success_sha" ]; then
+            echo "⏭️ No new commit since last successful deploy — skipping."
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ New commit detected since last successful deploy — deploying."
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
     name: Deploy to VPS
-    needs: debounce
+    needs: [debounce, schedule_check]
     if: |
       always() &&
-      (github.event_name == 'workflow_dispatch' || needs.debounce.outputs.should_deploy == 'true')
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && needs.debounce.outputs.should_deploy == 'true') ||
+        (github.event_name == 'schedule' && needs.schedule_check.outputs.should_deploy == 'true')
+      )
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     # Deploys themselves still run one-at-a-time and queue rather than
     # overlap (a debounced deploy and a manual workflow_dispatch could in
     # theory land close together) — but never cancel a deploy that has
@@ -133,7 +168,7 @@ jobs:
               fi
             fi
           done
-        timeout-minutes: 80
+        timeout-minutes: 170
 
       - name: Verify deployment with retry
         if: success()
