@@ -1,95 +1,190 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { cacheGet, cacheSet } from '../common/cache';
+
+// Fields safe to return to the client — never selects passwordHash or the
+// raw openrouterApiKey.
+const PUBLIC_USER_SELECT = {
+  id: true,
+  email: true,
+  phone: true,
+  fullName: true,
+  role: true,
+  isEmailVerified: true,
+  avatarUrl: true,
+  currentStreak: true,
+  longestStreak: true,
+  xp: true,
+  coins: true,
+  hintQuota: true,
+  darkMode: true,
+  preferredLanguage: true,
+  referralCode: true,
+  createdAt: true,
+} as const;
+
+const DONE_STATUSES = ['SUBMITTED', 'AUTO_SUBMITTED'] as const;
 
 /**
- * v6 §6 — per-template stats: attempts, averages, P90 cutoff + top-5 toppers.
- * Aggregated lazily (5-min TTL cache) — no scheduled job / new deps needed.
- * These numbers power the results page (real cutoff instead of the old
- * 40%-of-max heuristic) and topper-compare.
+ * User profile, preferences, and personal-OpenRouter-key management.
+ * Backs UsersController's /users/me* routes.
  */
 @Injectable()
-export class TestStatsService {
-  private readonly TTL = 5 * 60_000;
-
+export class UserService {
   constructor(private prisma: PrismaService) {}
 
-  async getStats(templateId: string): Promise<any> {
-    const cached = cacheGet<any>(`tests:stats:${templateId}`);
-    if (cached) return cached;
-
-    const template = await this.prisma.testTemplate.findUnique({
-      where: { id: templateId },
-      select: { id: true, title: true, totalQuestions: true, totalMarks: true },
+  async findById(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: PUBLIC_USER_SELECT,
     });
-    if (!template) throw new NotFoundException('Test template not found');
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
 
-    const done = await this.prisma.testAttempt.findMany({
-      where: { testTemplateId: templateId, status: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] } },
-      select: {
-        score: true,
-        accuracyPercent: true,
-        totalCorrect: true,
-        startedAt: true,
-        submittedAt: true,
-        user: { select: { id: true, fullName: true } },
-      },
-      orderBy: { score: 'desc' },
+  /** Lightweight profile-page stats: gamification counters + test performance. */
+  async getStats(userId: string): Promise<any> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { currentStreak: true, longestStreak: true, xp: true, coins: true },
     });
+    if (!user) throw new NotFoundException('User not found');
 
-    const n = done.length;
-    let avgScore = 0;
-    let avgAccuracy = 0;
-    let cutoffScore = 0;
-    if (n > 0) {
-      avgScore = Math.round((done.reduce((s, a) => s + (a.score ?? 0), 0) / n) * 10) / 10;
-      avgAccuracy = Math.round((done.reduce((s, a) => s + (a.accuracyPercent ?? 0), 0) / n) * 10) / 10;
-      // BUGFIX: P90 cutoff must mark the score that only the TOP 10% of
-      // attempts reach or beat. `done` is sorted `score: 'desc'` (rank 1 =
-      // highest score first), so that boundary sits near the START of the
-      // array — roughly index floor(n * 0.10) — not near the end.
-      // The old code used `Math.floor(n * 0.9)`, which in this
-      // descending-sorted array lands near the BOTTOM 10% (the weakest
-      // scorers), not the top. That inverted "cutoff" was then shown on the
-      // results page as the qualifying score (replacing the old 40%-of-max
-      // heuristic per the comment above) — meaning it was showing students
-      // an artificially low bar, nowhere near an actual top-10% cutoff.
-      const idx = Math.max(0, Math.min(n - 1, Math.floor(n * 0.1)));
-      cutoffScore = done[idx].score ?? 0;
-    }
+    const [attempts, quizAttempts, bookmarksCount, notesCount] = await Promise.all([
+      this.prisma.testAttempt.findMany({
+        where: { userId, status: { in: [...DONE_STATUSES] } },
+        select: { score: true, accuracyPercent: true },
+      }),
+      this.prisma.dailyQuizAttempt.count({ where: { userId, submittedAt: { not: null } } }),
+      this.prisma.bookmark.count({ where: { userId } }),
+      this.prisma.userNote.count({ where: { userId } }),
+    ]);
 
-    const toppers = done.slice(0, 5).map((a) => ({
-      userId: a.user?.id,
-      fullName: a.user?.fullName || 'Student',
-      score: a.score ?? 0,
-      accuracyPercent: a.accuracyPercent ?? 0,
-      durationSec:
-        a.startedAt && a.submittedAt ? Math.round((new Date(a.submittedAt).getTime() - new Date(a.startedAt).getTime()) / 1000) : 0,
-      submittedAt: a.submittedAt,
-    }));
+    const testsTaken = attempts.length;
+    const avgScore = testsTaken
+      ? Math.round((attempts.reduce((s, a) => s + (a.score ?? 0), 0) / testsTaken) * 10) / 10
+      : 0;
+    const avgAccuracy = testsTaken
+      ? Math.round((attempts.reduce((s, a) => s + (a.accuracyPercent ?? 0), 0) / testsTaken) * 10) / 10
+      : 0;
 
-    const stats = {
-      templateId,
-      title: template.title,
-      attempts: n,
+    return {
+      currentStreak: user.currentStreak,
+      longestStreak: user.longestStreak,
+      xp: user.xp,
+      coins: user.coins,
+      testsTaken,
       avgScore,
       avgAccuracy,
-      cutoffScore,
-      cutoffLabel: n >= 10 ? `${Math.round((cutoffScore / (template.totalMarks || 1)) * 100)}% of max` : 'not enough attempts yet',
-      hasEnoughData: n >= 10,
-      toppers,
+      dailyQuizzesTaken: quizAttempts,
+      bookmarksCount,
+      notesCount,
     };
+  }
 
-    // persist for future reads
-    const payload = { attempts: n, avgScore, avgAccuracy, cutoffScore, toppers } as any;
-    await this.prisma.testAttemptStats.upsert({
-      where: { testTemplateId: templateId },
-      create: { testTemplateId: templateId, ...payload },
-      update: payload,
+  /** Merged, most-recent-first feed of the user's mock/sectional test + daily quiz attempts. */
+  async getRecentActivity(userId: string, limit = 10): Promise<any[]> {
+    const [tests, quizzes] = await Promise.all([
+      this.prisma.testAttempt.findMany({
+        where: { userId, status: { in: [...DONE_STATUSES] }, submittedAt: { not: null } },
+        select: {
+          id: true,
+          score: true,
+          accuracyPercent: true,
+          submittedAt: true,
+          testTemplate: { select: { title: true } },
+        },
+        orderBy: { submittedAt: 'desc' },
+        take: limit,
+      }),
+      this.prisma.dailyQuizAttempt.findMany({
+        where: { userId, submittedAt: { not: null } },
+        select: { id: true, score: true, submittedAt: true },
+        orderBy: { submittedAt: 'desc' },
+        take: limit,
+      }),
+    ]);
+
+    const merged = [
+      ...tests.map((a) => ({
+        type: 'TEST' as const,
+        id: a.id,
+        title: a.testTemplate?.title ?? 'Test',
+        score: a.score,
+        accuracyPercent: a.accuracyPercent,
+        occurredAt: a.submittedAt,
+      })),
+      ...quizzes.map((a) => ({
+        type: 'DAILY_QUIZ' as const,
+        id: a.id,
+        title: 'Daily Quiz',
+        score: a.score,
+        accuracyPercent: null,
+        occurredAt: a.submittedAt,
+      })),
+    ];
+
+    merged.sort((a, b) => new Date(b.occurredAt as Date).getTime() - new Date(a.occurredAt as Date).getTime());
+    return merged.slice(0, limit);
+  }
+
+  /**
+   * Partial preference update. Also used by PUT /users/me/phone (passes only
+   * `{ phone }`), so phone uniqueness is checked here whenever it's present
+   * — mirrors the same check auth.service.ts does at signup.
+   */
+  async updatePreferences(
+    userId: string,
+    body: { darkMode?: boolean; preferredLanguage?: string; phone?: string },
+  ) {
+    const data: Record<string, unknown> = {};
+
+    if (body.darkMode !== undefined) data.darkMode = body.darkMode;
+    if (body.preferredLanguage !== undefined) data.preferredLanguage = body.preferredLanguage;
+
+    if (body.phone !== undefined) {
+      const normalizedPhone = body.phone.trim();
+      const existingPhone = await this.prisma.user.findFirst({
+        where: { phone: normalizedPhone, id: { not: userId } },
+      });
+      if (existingPhone) throw new ConflictException('This mobile number is already registered');
+      data.phone = normalizedPhone;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return this.findById(userId);
+    }
+
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data,
+      select: PUBLIC_USER_SELECT,
     });
+    return user;
+  }
 
-    cacheSet(`tests:stats:${templateId}`, stats, this.TTL);
-    return stats;
+  /** Save (or clear, when apiKey is null) the user's personal OpenRouter key. */
+  async updateOpenrouterApiKey(userId: string, apiKey: string | null) {
+    const trimmed = apiKey?.trim() || null;
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { openrouterApiKey: trimmed },
+    });
+    return this.getOpenrouterApiKeyStatus(userId);
+  }
+
+  /** Whether a personal key is saved, plus a masked preview — never the raw key. */
+  async getOpenrouterApiKeyStatus(userId: string): Promise<{ hasOpenrouterApiKey: boolean; maskedKey: string | null }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { openrouterApiKey: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    const key = user.openrouterApiKey;
+    if (!key) return { hasOpenrouterApiKey: false, maskedKey: null };
+
+    const maskedKey = key.length <= 8 ? '••••' : `${key.slice(0, 4)}${'•'.repeat(6)}${key.slice(-4)}`;
+    return { hasOpenrouterApiKey: true, maskedKey };
   }
 }
