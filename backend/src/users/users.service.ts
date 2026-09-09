@@ -3,148 +3,93 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { cacheGet, cacheSet } from '../common/cache';
 
+/**
+ * v6 §6 — per-template stats: attempts, averages, P90 cutoff + top-5 toppers.
+ * Aggregated lazily (5-min TTL cache) — no scheduled job / new deps needed.
+ * These numbers power the results page (real cutoff instead of the old
+ * 40%-of-max heuristic) and topper-compare.
+ */
 @Injectable()
-export class UserService {
-  constructor(private readonly prisma: PrismaService) {}
+export class TestStatsService {
+  private readonly TTL = 5 * 60_000;
 
-  async findById(id: string) {
-    const cached = cacheGet(`user:${id}`);
+  constructor(private prisma: PrismaService) {}
+
+  async getStats(templateId: string): Promise<any> {
+    const cached = cacheGet<any>(`tests:stats:${templateId}`);
     if (cached) return cached;
 
-    const user = await this.prisma.user.findUnique({
-      where: { id },
+    const template = await this.prisma.testTemplate.findUnique({
+      where: { id: templateId },
+      select: { id: true, title: true, totalQuestions: true, totalMarks: true },
+    });
+    if (!template) throw new NotFoundException('Test template not found');
+
+    const done = await this.prisma.testAttempt.findMany({
+      where: { testTemplateId: templateId, status: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] } },
       select: {
-        id: true,
-        email: true,
-        phone: true,
-        fullName: true,
-        role: true,
-        isEmailVerified: true,
-        avatarUrl: true,
-        currentStreak: true,
-        longestStreak: true,
-        xp: true,
-        coins: true,
-        darkMode: true,
-        preferredLanguage: true,
-        referralCode: true,
-        referredByCode: true,
-        freeSubFromReferral: true,
-        createdAt: true,
-        updatedAt: true,
-        subscriptions: {
-          where: { status: { not: 'CANCELLED' } },
-          select: { id: true, status: true, startsAt: true, endsAt: true, planId: true, plan: { select: { name: true, priceInr: true } } },
-          orderBy: { startsAt: 'desc' },
-          take: 1,
-        },
-        _count: {
-          select: {
-            testAttempts: true,
-            bookmarks: true,
-            referralsMade: true,
-            studyPlans: true,
-          },
-        },
+        score: true,
+        accuracyPercent: true,
+        totalCorrect: true,
+        startedAt: true,
+        submittedAt: true,
+        user: { select: { id: true, fullName: true } },
       },
+      orderBy: { score: 'desc' },
     });
 
-    if (!user) throw new NotFoundException('User not found');
+    const n = done.length;
+    let avgScore = 0;
+    let avgAccuracy = 0;
+    let cutoffScore = 0;
+    if (n > 0) {
+      avgScore = Math.round((done.reduce((s, a) => s + (a.score ?? 0), 0) / n) * 10) / 10;
+      avgAccuracy = Math.round((done.reduce((s, a) => s + (a.accuracyPercent ?? 0), 0) / n) * 10) / 10;
+      // BUGFIX: P90 cutoff must mark the score that only the TOP 10% of
+      // attempts reach or beat. `done` is sorted `score: 'desc'` (rank 1 =
+      // highest score first), so that boundary sits near the START of the
+      // array — roughly index floor(n * 0.10) — not near the end.
+      // The old code used `Math.floor(n * 0.9)`, which in this
+      // descending-sorted array lands near the BOTTOM 10% (the weakest
+      // scorers), not the top. That inverted "cutoff" was then shown on the
+      // results page as the qualifying score (replacing the old 40%-of-max
+      // heuristic per the comment above) — meaning it was showing students
+      // an artificially low bar, nowhere near an actual top-10% cutoff.
+      const idx = Math.max(0, Math.min(n - 1, Math.floor(n * 0.1)));
+      cutoffScore = done[idx].score ?? 0;
+    }
 
-    cacheSet(`user:${id}`, user, 300_000);
-    return user;
-  }
+    const toppers = done.slice(0, 5).map((a) => ({
+      userId: a.user?.id,
+      fullName: a.user?.fullName || 'Student',
+      score: a.score ?? 0,
+      accuracyPercent: a.accuracyPercent ?? 0,
+      durationSec:
+        a.startedAt && a.submittedAt ? Math.round((new Date(a.submittedAt).getTime() - new Date(a.startedAt).getTime()) / 1000) : 0,
+      submittedAt: a.submittedAt,
+    }));
 
-  async findByEmail(email: string) {
-    return this.prisma.user.findUnique({ where: { email } });
-  }
-
-  async updatePreferences(userId: string, data: { darkMode?: boolean; preferredLanguage?: string; phone?: string }) {
-    return this.prisma.user.update({
-      where: { id: userId },
-      data,
-      select: { id: true, darkMode: true, preferredLanguage: true, phone: true },
-    });
-  }
-
-  async updateOpenrouterApiKey(userId: string, apiKey: string | null) {
-    const trimmed = apiKey?.trim() || null;
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { openrouterApiKey: trimmed },
-    });
-
-    cacheSet(`user:${userId}`, null, 0);
-    return { hasOpenrouterApiKey: !!trimmed };
-  }
-
-  /** Masked status only — never returns the raw key to the client. */
-  async getOpenrouterApiKeyStatus(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { openrouterApiKey: true } });
-    const key = user?.openrouterApiKey;
-    if (!key) return { hasOpenrouterApiKey: false, maskedKey: null };
-    const masked = key.length <= 12 ? `${key.substring(0, 3)}...` : `${key.substring(0, 8)}...${key.substring(key.length - 4)}`;
-    return { hasOpenrouterApiKey: true, maskedKey: masked };
-  }
-
-  async getStats(userId: string) {
-    const [
-      totalTests,
-      totalQuestions,
+    const stats = {
+      templateId,
+      title: template.title,
+      attempts: n,
+      avgScore,
       avgAccuracy,
-      currentStreak,
-      longestStreak,
-      weakTopics,
-    ] = await Promise.all([
-      this.prisma.testAttempt.count({ where: { userId } }),
-      this.prisma.attemptAnswer.count({ where: { testAttempt: { userId } } }),
-      // BUGFIX: this used to aggregate `score` (raw marks obtained, e.g.
-      // could be 45.3 out of a 200-mark paper, or negative after negative
-      // marking) while returning it under the key `avgAccuracy` — the "My
-      // Stats" dashboard was labeling a raw-marks average as an accuracy
-      // percentage, showing numbers with no relation to 0-100% accuracy.
-      // `TestAttempt.accuracyPercent` (used correctly everywhere else in
-      // tests.service.ts — accuracy-trend, weak/strong chapters, topper
-      // comparison) is the field that actually holds a 0-100 percentage.
-      // Averaging that instead gives a real, comparable accuracy number.
-      this.prisma.testAttempt.aggregate({
-        where: { userId, status: 'SUBMITTED' },
-        _avg: { accuracyPercent: true },
-      }),
-      this.prisma.user.findUnique({ where: { id: userId }, select: { currentStreak: true } }),
-      this.prisma.user.findUnique({ where: { id: userId }, select: { longestStreak: true } }),
-      this.prisma.weakTopicReport.findMany({
-        where: { userId, isWeak: true },
-        select: { topicId: true },
-        take: 5,
-      }),
-    ]);
-
-    const topicNames = await this.prisma.topic.findMany({
-      where: { id: { in: weakTopics.map((t: any) => t.topicId) } },
-      select: { id: true, name: true },
-    });
-    const topicMap = new Map(topicNames.map((t: any) => [t.id, t.name]));
-
-    return {
-      totalTests: totalTests ?? 0,
-      totalQuestions: totalQuestions ?? 0,
-      avgAccuracy: Math.round((avgAccuracy._avg.accuracyPercent ?? 0) * 100) / 100,
-      currentStreak: currentStreak?.currentStreak ?? 0,
-      longestStreak: longestStreak?.longestStreak ?? 0,
-      weakTopics: weakTopics.map((t: any) => topicMap.get(t.topicId) ?? 'Unknown'),
+      cutoffScore,
+      cutoffLabel: n >= 10 ? `${Math.round((cutoffScore / (template.totalMarks || 1)) * 100)}% of max` : 'not enough attempts yet',
+      hasEnoughData: n >= 10,
+      toppers,
     };
-  }
 
-  async getRecentActivity(userId: string, limit: number = 10) {
-    return this.prisma.testAttempt.findMany({
-      where: { userId },
-      orderBy: { submittedAt: 'desc' },
-      take: limit,
-      include: {
-        testTemplate: { select: { title: true, type: true } },
-        _count: { select: { answers: true } },
-      },
+    // persist for future reads
+    const payload = { attempts: n, avgScore, avgAccuracy, cutoffScore, toppers } as any;
+    await this.prisma.testAttemptStats.upsert({
+      where: { testTemplateId: templateId },
+      create: { testTemplateId: templateId, ...payload },
+      update: payload,
     });
+
+    cacheSet(`tests:stats:${templateId}`, stats, this.TTL);
+    return stats;
   }
 }
