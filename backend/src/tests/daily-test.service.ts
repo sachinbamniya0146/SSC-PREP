@@ -234,7 +234,10 @@ export class DailyTestService {
         ...PUBLISHED_QUESTION_WHERE,
         examId,
         ...(subjectId ? { subjectId } : {}),
-        questionTextHindi: { not: '' },
+        // BUGFIX: subject "english" needs no Hindi translation — same fix
+        // as tests.service.ts/bank.service.ts (the question itself IS the
+        // English-language test).
+        OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
       },
       orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
       take: 1000,
