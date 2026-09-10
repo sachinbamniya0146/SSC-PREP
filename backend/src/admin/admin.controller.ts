@@ -7,6 +7,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { MonetizationService } from '../monetization/monetization.service';
 import { AdminService } from './admin.service';
+import { PayoutService } from '../referral/payout.service';
+import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 // v1 §10 — Admin dashboards: revenue overview + audit log viewer + user management.
 // All endpoints are ADMIN-only (global JwtAuthGuard is on the module).
@@ -19,6 +21,7 @@ export class AdminController {
     private auditLogService: AuditLogService,
     private monetization: MonetizationService,
     private adminService: AdminService,
+    private payoutService: PayoutService,
   ) {}
 
   // ---- Dashboard Overview ----
@@ -835,6 +838,292 @@ export class AdminController {
     const existing = await this.prisma.examPattern.findUnique({ where: { id } });
     if (!existing) throw new BadRequestException('Exam pattern not found');
     await this.prisma.examPattern.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  // ==================== REFER & EARN — ADMIN CONTROL ====================
+  // Full visibility + control over the referral commission program: who
+  // referred whom, who actually paid, every commission credited, every
+  // withdrawal request, and the ability to suspend a user's referral
+  // earning/withdrawal ability entirely.
+
+  @Get('referrals')
+  async listReferrals(@Query('search') search?: string) {
+    const where: Prisma.ReferralWhereInput = search
+      ? {
+          OR: [
+            { referrer: { fullName: { contains: search, mode: 'insensitive' } } },
+            { referrer: { email: { contains: search, mode: 'insensitive' } } },
+            { referee: { fullName: { contains: search, mode: 'insensitive' } } },
+            { referee: { email: { contains: search, mode: 'insensitive' } } },
+          ],
+        }
+      : {};
+
+    const referrals = await this.prisma.referral.findMany({
+      where,
+      include: {
+        referrer: { select: { id: true, fullName: true, email: true } },
+        referee: { select: { id: true, fullName: true, email: true, createdAt: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+
+    return referrals.map((r) => ({
+      id: r.id,
+      referrer: r.referrer,
+      referee: r.referee,
+      status: r.status, // PENDING = signed up, no purchase yet | PAIDED = purchased via this code | REWARDED = hit the free-sub milestone
+      purchasesCount: r.purchasesCount,
+      rewardedAt: r.rewardedAt,
+      createdAt: r.createdAt,
+    }));
+  }
+
+  // One user's complete referral picture: their wallet, every person they
+  // referred + whether each one purchased, every commission credited, and
+  // every withdrawal they've made — everything admin needs to fully audit
+  // a single referrer end-to-end.
+  @Get('referrals/user/:userId')
+  async getUserReferralDetail(@Param('userId', ParseUUIDPipe) userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, fullName: true, email: true, referralCode: true, freeSubFromReferral: true },
+    });
+    if (!user) throw new BadRequestException('User not found');
+
+    const [wallet, referrals, earnings, withdrawals, payoutMethod] = await Promise.all([
+      this.prisma.referralWallet.findUnique({ where: { userId } }),
+      this.prisma.referral.findMany({
+        where: { referrerId: userId },
+        include: { referee: { select: { id: true, fullName: true, email: true, createdAt: true } } },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.referralEarning.findMany({
+        where: { referrerId: userId },
+        include: { referee: { select: { fullName: true } }, payment: { select: { razorpayOrderId: true } } },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.withdrawalRequest.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.payoutMethod.findUnique({ where: { userId } }),
+    ]);
+
+    return {
+      user,
+      wallet: wallet || { balanceInr: 0, totalEarnedInr: 0, totalWithdrawnInr: 0, isSuspended: false },
+      payoutMethod,
+      referrals: referrals.map((r) => ({
+        id: r.id,
+        referee: r.referee,
+        status: r.status,
+        purchasesCount: r.purchasesCount,
+        rewardedAt: r.rewardedAt,
+        createdAt: r.createdAt,
+      })),
+      earnings: earnings.map((e) => ({
+        id: e.id,
+        refereeName: e.referee.fullName,
+        orderId: e.payment.razorpayOrderId,
+        purchaseAmountInr: e.purchaseAmountInr,
+        commissionPct: e.commissionPct,
+        commissionInr: e.commissionInr,
+        createdAt: e.createdAt,
+      })),
+      withdrawals,
+    };
+  }
+
+  // Suspend/unsuspend a user's entire referral earning + withdrawal ability.
+  // Suspended = no new commission is ever credited to them, and they cannot
+  // submit new withdrawal requests. Does NOT touch money already earned or
+  // already-pending withdrawal requests — admin should reject those
+  // separately if needed.
+  @Post('referrals/user/:userId/suspend')
+  async suspendReferralUser(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() body: { suspended: boolean; reason?: string },
+  ) {
+    await this.prisma.referralWallet.upsert({
+      where: { userId },
+      create: { userId, isSuspended: body.suspended, suspendedReason: body.suspended ? body.reason || 'Suspended by admin' : null },
+      update: { isSuspended: body.suspended, suspendedReason: body.suspended ? body.reason || 'Suspended by admin' : null },
+    });
+    await this.auditLogService.log({
+      userId: admin.userId,
+      action: body.suspended ? 'REFERRAL_PROGRAM_SUSPENDED' : 'REFERRAL_PROGRAM_UNSUSPENDED',
+      targetEntity: 'User',
+      entityId: userId,
+      metadataJson: { reason: body.reason },
+    });
+    return { ok: true };
+  }
+
+  // ---- Withdrawal requests ----
+  @Get('withdrawals')
+  async listWithdrawals(@Query('status') status?: string) {
+    const rows = await this.prisma.withdrawalRequest.findMany({
+      where: status ? { status: status as any } : {},
+      include: { user: { select: { id: true, fullName: true, email: true, phone: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    return rows;
+  }
+
+  // Admin APPROVES a withdrawal. If Cashfree Payouts is configured
+  // (PayoutService.isConfigured()), this immediately attempts the real
+  // bank/UPI transfer and marks the row PAID (or FAILED + auto-refund on
+  // failure). If Payouts isn't configured yet, this just flips the status
+  // to APPROVED so admin can go send the money manually and then call
+  // markManuallyPaid() below once it's actually sent — money is only ever
+  // released to the user's payout method after this explicit admin action,
+  // exactly as requested: "jab hee payment refer krne vle ko milega bs
+  // admin ne confirm kra".
+  @Post('withdrawals/:id/approve')
+  async approveWithdrawal(@CurrentUser() admin: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
+    const w = await this.prisma.withdrawalRequest.findUnique({ where: { id }, include: { user: true } });
+    if (!w) throw new BadRequestException('Withdrawal request not found');
+    if (w.status !== 'REQUESTED') throw new BadRequestException(`Cannot approve a withdrawal in status ${w.status}`);
+
+    if (!this.payoutService.isConfigured()) {
+      await this.prisma.withdrawalRequest.update({
+        where: { id },
+        data: { status: 'APPROVED', processedByAdminId: admin.userId, processedAt: new Date() },
+      });
+      await this.auditLogService.log({
+        userId: admin.userId,
+        action: 'WITHDRAWAL_APPROVED_MANUAL',
+        targetEntity: 'WithdrawalRequest',
+        entityId: id,
+        metadataJson: { amountInr: w.amountInr, note: 'Cashfree Payouts not configured — pay manually then call mark-paid' },
+      });
+      return { ok: true, autoPayout: false, message: 'Approved. Cashfree Payouts is not configured — send the money manually via UPI/bank, then mark this as Paid.' };
+    }
+
+    await this.prisma.withdrawalRequest.update({ where: { id }, data: { status: 'PROCESSING' } });
+
+    try {
+      const result = await this.payoutService.payWithdrawal({
+        withdrawalId: w.id,
+        amountInr: w.amountInr,
+        userName: w.user.fullName,
+        userEmail: w.user.email,
+        userPhone: w.user.phone || '',
+        payoutMethodType: w.payoutMethodType,
+        upiId: w.upiId,
+        bankAccountNo: w.bankAccountNo,
+        bankIfsc: w.bankIfsc,
+      });
+
+      await this.prisma.$transaction([
+        this.prisma.withdrawalRequest.update({
+          where: { id },
+          data: {
+            status: 'PAID',
+            cashfreeTransferId: result.cfTransferId,
+            processedByAdminId: admin.userId,
+            processedAt: new Date(),
+          },
+        }),
+        this.prisma.referralWallet.update({
+          where: { userId: w.userId },
+          data: { totalWithdrawnInr: { increment: w.amountInr } },
+        }),
+      ]);
+
+      await this.auditLogService.log({
+        userId: admin.userId,
+        action: 'WITHDRAWAL_PAID_AUTO',
+        targetEntity: 'WithdrawalRequest',
+        entityId: id,
+        metadataJson: { amountInr: w.amountInr, cfTransferId: result.cfTransferId },
+      });
+
+      return { ok: true, autoPayout: true, cfTransferId: result.cfTransferId };
+    } catch (e: any) {
+      // Transfer failed — refund the held amount back to the wallet so the
+      // user isn't left short, and record exactly why for admin to see.
+      await this.prisma.$transaction([
+        this.prisma.withdrawalRequest.update({
+          where: { id },
+          data: { status: 'FAILED', adminNote: String(e?.message || e), processedByAdminId: admin.userId, processedAt: new Date() },
+        }),
+        this.prisma.referralWallet.update({
+          where: { userId: w.userId },
+          data: { balanceInr: { increment: w.amountInr } },
+        }),
+      ]);
+      await this.auditLogService.log({
+        userId: admin.userId,
+        action: 'WITHDRAWAL_PAYOUT_FAILED',
+        targetEntity: 'WithdrawalRequest',
+        entityId: id,
+        metadataJson: { amountInr: w.amountInr, error: String(e?.message || e) },
+      });
+      throw new BadRequestException(`Payout failed: ${e?.message || e}. Amount has been refunded to the user's wallet.`);
+    }
+  }
+
+  // For when Cashfree Payouts isn't configured: admin sent the money by
+  // hand (UPI/bank transfer done outside the system) and now confirms it
+  // here, which is the ONLY thing that permanently finalizes the deduction.
+  @Post('withdrawals/:id/mark-paid')
+  async markWithdrawalManuallyPaid(@CurrentUser() admin: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string, @Body() body: { note?: string }) {
+    const w = await this.prisma.withdrawalRequest.findUnique({ where: { id } });
+    if (!w) throw new BadRequestException('Withdrawal request not found');
+    if (w.status !== 'APPROVED' && w.status !== 'REQUESTED') {
+      throw new BadRequestException(`Cannot mark as paid from status ${w.status}`);
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.withdrawalRequest.update({
+        where: { id },
+        data: { status: 'PAID', adminNote: body.note || 'Paid manually by admin', processedByAdminId: admin.userId, processedAt: new Date() },
+      }),
+      this.prisma.referralWallet.update({
+        where: { userId: w.userId },
+        data: { totalWithdrawnInr: { increment: w.amountInr } },
+      }),
+    ]);
+
+    await this.auditLogService.log({
+      userId: admin.userId,
+      action: 'WITHDRAWAL_PAID_MANUAL',
+      targetEntity: 'WithdrawalRequest',
+      entityId: id,
+      metadataJson: { amountInr: w.amountInr, note: body.note },
+    });
+    return { ok: true };
+  }
+
+  // Admin REJECTS a withdrawal — refunds the held amount back to the
+  // user's wallet so they can request again or fix their payout details.
+  @Post('withdrawals/:id/reject')
+  async rejectWithdrawal(@CurrentUser() admin: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string, @Body() body: { reason?: string }) {
+    const w = await this.prisma.withdrawalRequest.findUnique({ where: { id } });
+    if (!w) throw new BadRequestException('Withdrawal request not found');
+    if (w.status === 'PAID') throw new BadRequestException('Cannot reject a withdrawal that has already been paid');
+
+    await this.prisma.$transaction([
+      this.prisma.withdrawalRequest.update({
+        where: { id },
+        data: { status: 'REJECTED', adminNote: body.reason || 'Rejected by admin', processedByAdminId: admin.userId, processedAt: new Date() },
+      }),
+      this.prisma.referralWallet.update({
+        where: { userId: w.userId },
+        data: { balanceInr: { increment: w.amountInr } },
+      }),
+    ]);
+
+    await this.auditLogService.log({
+      userId: admin.userId,
+      action: 'WITHDRAWAL_REJECTED',
+      targetEntity: 'WithdrawalRequest',
+      entityId: id,
+      metadataJson: { amountInr: w.amountInr, reason: body.reason },
+    });
     return { ok: true };
   }
   }
