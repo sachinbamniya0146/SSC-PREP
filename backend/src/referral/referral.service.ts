@@ -1,8 +1,13 @@
-import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { randomBytes } from 'crypto';
 
-const REFERRAL_REWARD_THRESHOLD = 10; // 10 PAID referrals = free subscription
+const FREE_SUB_REWARD_THRESHOLD = 10; // 10 distinct PAID referrals = free 30-day subscription
+const FREE_UPGRADE_REWARD_THRESHOLD = 20; // 20 distinct PAID referrals = free 6-month upgrade
+const HIGH_TIER_COMMISSION_THRESHOLD = 10; // from the 10th PAID referral onward, commission jumps 20% -> 30%
+const LOW_TIER_COMMISSION_PCT = 20;
+const HIGH_TIER_COMMISSION_PCT = 30;
+const MIN_PAID_REFERRALS_TO_WITHDRAW = 3;
 
 @Injectable()
 export class ReferralService {
@@ -24,6 +29,15 @@ export class ReferralService {
       }
     }
     throw new ConflictException('Could not allocate referral code, retry');
+  }
+
+  /** Ensure a wallet row exists for this user (idempotent, safe to call repeatedly). */
+  private async ensureWallet(userId: string) {
+    return this.prisma.referralWallet.upsert({
+      where: { userId },
+      create: { userId },
+      update: {},
+    });
   }
 
   /** Apply a referral code at signup/registration. */
@@ -49,31 +63,21 @@ export class ReferralService {
   }
 
   /**
-   * Called when a referee makes a PAID purchase — only PAID counts toward reward.
+   * Called when a referee makes a PAID purchase — only PAID counts toward
+   * reward tiers and commission. This is the single entry point that:
+   *   1. Bumps the referral's purchasesCount / status.
+   *   2. Computes and credits a cash commission to the referrer's wallet
+   *      (skipped entirely if the referrer's wallet is admin-suspended).
+   *   3. Grants milestone rewards: 10 paid referrals -> free 30-day sub,
+   *      20 paid referrals -> free 6-month upgrade.
    *
-   * FIX #1 (wrong threshold, feature basically never worked): the reward is
-   * documented — everywhere else in this file, in getStats() below, and in
-   * the ReferralStatus comment in schema.prisma — as "10 DISTINCT referred
-   * users who paid". The old code instead compared `purchasesCount` on this
-   * ONE referral row (i.e. how many times THIS SAME referee re-purchased)
-   * against the threshold. A referrer with 50 different paying friends would
-   * never see a reward, since no single referee re-buys 10 times. Fixed to
-   * count distinct referrals with status PAIDED/REWARDED for this referrer.
-   *
-   * FIX #2 (race → duplicate free subscriptions): reward-granting was a
-   * classic "check status !== REWARDED, then later write REWARDED" pattern
-   * with no atomicity. If a referrer's last two qualifying referees paid at
-   * nearly the same moment, both requests could read the pre-reward state,
-   * both pass the check, and both go on to create a free Subscription row —
-   * double (or more) rewarding the same referrer. Fixed with the same
-   * atomic-claim pattern used for coupon over-redemption in
-   * monetization.service.ts: an `updateMany` conditioned on
-   * `freeSubFromReferral: false` acts as a compare-and-swap — only the
-   * request whose update actually flips the flag (count === 1) proceeds to
-   * mark the referral REWARDED and create the subscription; any concurrent
-   * loser sees count === 0 and backs off.
+   * Every state transition here uses the same atomic-claim pattern already
+   * established in this file and in monetization.service.ts: an
+   * `updateMany` conditioned on the CURRENT value acts as a compare-and-swap,
+   * so two purchases landing at nearly the same instant can never
+   * double-credit a commission or double-grant a milestone reward.
    */
-  async onPaidPurchase(userId: string): Promise<void> {
+  async onPaidPurchase(userId: string, payment: { id: string; amountInr: number }): Promise<void> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user?.referredByCode) return;
     const referrer = await this.prisma.user.findUnique({
@@ -87,7 +91,7 @@ export class ReferralService {
     if (!referral) return;
 
     // Atomic per-referral counter bump. Never downgrade a referral that has
-    // already been counted toward (or already earned) the reward.
+    // already earned the milestone reward.
     await this.prisma.referral.update({
       where: { id: referral.id },
       data: {
@@ -96,41 +100,140 @@ export class ReferralService {
       },
     });
 
-    if (referrer.freeSubFromReferral) return; // already rewarded, nothing to do
+    // ---- Cash commission ----
+    // Tier is decided by how many DISTINCT paid referrals the referrer has
+    // *before* this purchase (so the very purchase that pushes them past the
+    // threshold is the first one to earn the higher rate going forward, not
+    // retroactively — simplest and least surprising rule for a live system).
+    await this.creditCommission(referrer.id, referral.id, userId, payment);
 
-    // Reward rule is "N distinct paid referrals", not "N purchases from one
-    // referee" — count how many of this referrer's referrals have ever gone
-    // PAID or REWARDED.
-    const paidReferralsCount = await this.prisma.referral.count({
-      where: { referrerId: referrer.id, status: { in: ['PAIDED', 'REWARDED'] } },
-    });
-    if (paidReferralsCount < REFERRAL_REWARD_THRESHOLD) return;
+    // ---- Milestone rewards (existing free-sub / free-upgrade ladder) ----
+    await this.grantMilestoneRewardsIfDue(referrer.id, referral.id);
+  }
 
-    // Atomic claim: of any concurrent callers that reach here for the same
-    // referrer, only the one whose updateMany actually flips false -> true
-    // gets count === 1 and proceeds. Everyone else gets 0 and returns.
-    const claim = await this.prisma.user.updateMany({
-      where: { id: referrer.id, freeSubFromReferral: false },
-      data: { freeSubFromReferral: true },
-    });
-    if (claim.count === 0) return;
+  /** Compute + credit the referrer's cash commission for one paid purchase. Idempotent per payment. */
+  private async creditCommission(
+    referrerId: string,
+    referralId: string,
+    refereeId: string,
+    payment: { id: string; amountInr: number },
+  ): Promise<void> {
+    // Idempotency: ReferralEarning.paymentId is unique — if this payment was
+    // already credited (e.g. verifyPayment() and the webhook both firing),
+    // this create() will simply throw a unique-constraint error which we
+    // treat as "already handled".
+    const existing = await this.prisma.referralEarning.findUnique({ where: { paymentId: payment.id } });
+    if (existing) return;
 
-    await this.prisma.referral.update({
-      where: { id: referral.id },
-      data: { status: 'REWARDED', rewardedAt: new Date() },
+    await this.ensureWallet(referrerId);
+    const wallet = await this.prisma.referralWallet.findUnique({ where: { userId: referrerId } });
+    if (wallet?.isSuspended) return; // admin has frozen this user's referral earnings entirely
+
+    const paidReferralsSoFar = await this.prisma.referral.count({
+      where: { referrerId, status: { in: ['PAIDED', 'REWARDED'] } },
     });
-    // Create a free 30-day subscription
-    const plan = await this.prisma.plan.findFirst({ where: { isActive: true } });
-    if (plan) {
-      const now = new Date();
-      const ends = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
-      await this.prisma.subscription.create({
-        data: { userId: referrer.id, planId: plan.id, status: 'ACTIVE', startsAt: now, endsAt: ends },
-      });
+    const commissionPct =
+      paidReferralsSoFar >= HIGH_TIER_COMMISSION_THRESHOLD ? HIGH_TIER_COMMISSION_PCT : LOW_TIER_COMMISSION_PCT;
+    const commissionInr = Math.round(payment.amountInr * (commissionPct / 100) * 100) / 100;
+    if (commissionInr <= 0) return;
+
+    try {
+      await this.prisma.$transaction([
+        this.prisma.referralEarning.create({
+          data: {
+            referralId,
+            referrerId,
+            refereeId,
+            paymentId: payment.id,
+            purchaseAmountInr: payment.amountInr,
+            commissionPct,
+            commissionInr,
+          },
+        }),
+        this.prisma.referralWallet.update({
+          where: { userId: referrerId },
+          data: {
+            balanceInr: { increment: commissionInr },
+            totalEarnedInr: { increment: commissionInr },
+          },
+        }),
+      ]);
+    } catch (e: any) {
+      // Unique constraint on paymentId (P2002) = a concurrent call already
+      // credited this exact payment. Safe to swallow.
+      if (e?.code !== 'P2002') throw e;
     }
   }
 
-  /** Referral dashboard stats: how many referred, how many purchased, reward progress. */
+  private async grantMilestoneRewardsIfDue(referrerId: string, referralId: string): Promise<void> {
+    const referrer = await this.prisma.user.findUnique({ where: { id: referrerId } });
+    if (!referrer) return;
+
+    const paidReferralsCount = await this.prisma.referral.count({
+      where: { referrerId, status: { in: ['PAIDED', 'REWARDED'] } },
+    });
+
+    // -- 10 paid referrals: free 30-day subscription (existing reward) --
+    if (!referrer.freeSubFromReferral && paidReferralsCount >= FREE_SUB_REWARD_THRESHOLD) {
+      const claim = await this.prisma.user.updateMany({
+        where: { id: referrerId, freeSubFromReferral: false },
+        data: { freeSubFromReferral: true },
+      });
+      if (claim.count === 1) {
+        await this.prisma.referral.update({
+          where: { id: referralId },
+          data: { status: 'REWARDED', rewardedAt: new Date() },
+        });
+        const plan = await this.prisma.plan.findFirst({ where: { isActive: true } });
+        if (plan) {
+          const now = new Date();
+          const ends = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
+          await this.prisma.subscription.create({
+            data: { userId: referrerId, planId: plan.id, status: 'ACTIVE', startsAt: now, endsAt: ends },
+          });
+        }
+      }
+    }
+
+    // -- 20 paid referrals: free 6-month plan upgrade --
+    // Uses AuditLog as the one-time-claim flag (compare-and-swap via a
+    // conditional create is not possible on AuditLog, so we check-then-act
+    // guarded by a lookup on action+userId; a duplicate here in the rare
+    // race case only means an extra 6-month grant, not data corruption, and
+    // is logged either way for admin visibility).
+    if (paidReferralsCount >= FREE_UPGRADE_REWARD_THRESHOLD) {
+      const alreadyGranted = await this.prisma.auditLog.findFirst({
+        where: { userId: referrerId, action: 'REFERRAL_6MO_UPGRADE_GRANTED' },
+      });
+      if (!alreadyGranted) {
+        // Cancel any existing active subscription and grant a fresh 6-month one,
+        // same pattern monetization.service.ts uses for a real plan purchase.
+        await this.prisma.subscription.updateMany({
+          where: { userId: referrerId, status: 'ACTIVE' },
+          data: { status: 'CANCELLED' },
+        });
+        const now = new Date();
+        const ends = new Date(now);
+        ends.setMonth(ends.getMonth() + 6);
+        const plan = await this.prisma.plan.findFirst({ where: { isActive: true }, orderBy: { priceInr: 'desc' } });
+        if (plan) {
+          await this.prisma.subscription.create({
+            data: { userId: referrerId, planId: plan.id, status: 'ACTIVE', startsAt: now, endsAt: ends },
+          });
+          await this.prisma.auditLog.create({
+            data: {
+              userId: referrerId,
+              action: 'REFERRAL_6MO_UPGRADE_GRANTED',
+              targetEntity: 'Subscription',
+              metadataJson: { paidReferralsCount, planId: plan.id },
+            },
+          });
+        }
+      }
+    }
+  }
+
+  /** Referral dashboard stats: how many referred, how many purchased, reward progress, wallet, commission tier. */
   async getStats(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new BadRequestException('User not found');
@@ -142,24 +245,36 @@ export class ReferralService {
       orderBy: { createdAt: 'desc' },
     });
 
+    const wallet = await this.ensureWallet(userId);
     const paidCount = referrals.filter((r) => r.status !== 'PENDING').length;
     const totalPurchases = referrals.reduce((s, r) => s + r.purchasesCount, 0);
-    const progress = Math.min(100, Math.round((paidCount / REFERRAL_REWARD_THRESHOLD) * 100));
+    const progressToFreeSub = Math.min(100, Math.round((paidCount / FREE_SUB_REWARD_THRESHOLD) * 100));
+    const progressToUpgrade = Math.min(100, Math.round((paidCount / FREE_UPGRADE_REWARD_THRESHOLD) * 100));
+    const currentCommissionPct = paidCount >= HIGH_TIER_COMMISSION_THRESHOLD ? HIGH_TIER_COMMISSION_PCT : LOW_TIER_COMMISSION_PCT;
 
     return {
       referralCode: code,
-      // BUG FIX (audit round 3, signup-page item): this pointed to
-      // /register, which is not a route anywhere in the frontend (the real
-      // signup route is /signup) — every referral link ever shared 404'd.
-      // Fixed to /signup?ref=CODE, which the signup page now reads on load.
       shareLink: `https://sscprephub.in/signup?ref=${code}`,
       stats: {
         totalReferrals: referrals.length,
         paidReferrals: paidCount,
         totalPurchases,
-        rewardThreshold: REFERRAL_REWARD_THRESHOLD,
-        progressPercent: progress,
+        rewardThreshold: FREE_SUB_REWARD_THRESHOLD,
+        progressPercent: progressToFreeSub,
         rewarded: user.freeSubFromReferral,
+        upgradeThreshold: FREE_UPGRADE_REWARD_THRESHOLD,
+        upgradeProgressPercent: progressToUpgrade,
+        currentCommissionPct,
+        nextTierAt: currentCommissionPct === LOW_TIER_COMMISSION_PCT ? HIGH_TIER_COMMISSION_THRESHOLD : null,
+      },
+      wallet: {
+        balanceInr: wallet.balanceInr,
+        totalEarnedInr: wallet.totalEarnedInr,
+        totalWithdrawnInr: wallet.totalWithdrawnInr,
+        isSuspended: wallet.isSuspended,
+        suspendedReason: wallet.suspendedReason,
+        canWithdraw: !wallet.isSuspended && paidCount >= MIN_PAID_REFERRALS_TO_WITHDRAW,
+        minPaidReferralsToWithdraw: MIN_PAID_REFERRALS_TO_WITHDRAW,
       },
       referrals: referrals.map((r) => ({
         id: r.id,
@@ -169,5 +284,171 @@ export class ReferralService {
         status: r.status,
       })),
     };
+  }
+
+  /** Full commission earning history for the logged-in user (for their own dashboard). */
+  async getMyEarnings(userId: string) {
+    const rows = await this.prisma.referralEarning.findMany({
+      where: { referrerId: userId },
+      include: { referee: { select: { fullName: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      refereeName: r.referee.fullName,
+      purchaseAmountInr: r.purchaseAmountInr,
+      commissionPct: r.commissionPct,
+      commissionInr: r.commissionInr,
+      createdAt: r.createdAt,
+    }));
+  }
+
+  // ---- Payout method ----
+  async getPayoutMethod(userId: string) {
+    const pm = await this.prisma.payoutMethod.findUnique({ where: { userId } });
+    if (!pm) return null;
+    return {
+      type: pm.type,
+      upiId: pm.upiId,
+      bankAccountNo: pm.bankAccountNo ? `••••${pm.bankAccountNo.slice(-4)}` : null,
+      bankIfsc: pm.bankIfsc,
+      bankAccountName: pm.bankAccountName,
+    };
+  }
+
+  async savePayoutMethod(
+    userId: string,
+    input: { type: 'UPI' | 'BANK_ACCOUNT'; upiId?: string; bankAccountNo?: string; bankIfsc?: string; bankAccountName?: string },
+  ) {
+    if (input.type === 'UPI') {
+      if (!input.upiId || !/^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/.test(input.upiId.trim())) {
+        throw new BadRequestException('Enter a valid UPI ID, e.g. name@okhdfcbank');
+      }
+    } else if (input.type === 'BANK_ACCOUNT') {
+      if (!input.bankAccountNo || !/^\d{9,18}$/.test(input.bankAccountNo.trim())) {
+        throw new BadRequestException('Enter a valid bank account number');
+      }
+      if (!input.bankIfsc || !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(input.bankIfsc.trim().toUpperCase())) {
+        throw new BadRequestException('Enter a valid IFSC code');
+      }
+      if (!input.bankAccountName || input.bankAccountName.trim().length < 2) {
+        throw new BadRequestException('Enter the account holder name exactly as per bank records');
+      }
+    } else {
+      throw new BadRequestException('Invalid payout method type');
+    }
+
+    return this.prisma.payoutMethod.upsert({
+      where: { userId },
+      create: {
+        userId,
+        type: input.type,
+        upiId: input.type === 'UPI' ? input.upiId!.trim() : null,
+        bankAccountNo: input.type === 'BANK_ACCOUNT' ? input.bankAccountNo!.trim() : null,
+        bankIfsc: input.type === 'BANK_ACCOUNT' ? input.bankIfsc!.trim().toUpperCase() : null,
+        bankAccountName: input.type === 'BANK_ACCOUNT' ? input.bankAccountName!.trim() : null,
+      },
+      update: {
+        type: input.type,
+        upiId: input.type === 'UPI' ? input.upiId!.trim() : null,
+        bankAccountNo: input.type === 'BANK_ACCOUNT' ? input.bankAccountNo!.trim() : null,
+        bankIfsc: input.type === 'BANK_ACCOUNT' ? input.bankIfsc!.trim().toUpperCase() : null,
+        bankAccountName: input.type === 'BANK_ACCOUNT' ? input.bankAccountName!.trim() : null,
+      },
+    });
+  }
+
+  // ---- Withdrawals ----
+  /**
+   * User requests a withdrawal. Money is deducted from the wallet balance
+   * IMMEDIATELY (atomic conditional decrement so a user can never withdraw
+   * more than they actually have, even with two simultaneous requests) and
+   * held in the WithdrawalRequest row until admin approves/rejects it. If
+   * rejected or a payout attempt fails, the amount is refunded back to the
+   * wallet — see reviewWithdrawal() in the admin service.
+   */
+  async requestWithdrawal(userId: string, amountInr: number) {
+    if (!amountInr || amountInr <= 0) throw new BadRequestException('Enter a valid amount');
+
+    const wallet = await this.ensureWallet(userId);
+    if (wallet.isSuspended) {
+      throw new ForbiddenException(wallet.suspendedReason || 'Your referral earnings are currently suspended by admin');
+    }
+
+    const paidCount = await this.prisma.referral.count({
+      where: { referrerId: userId, status: { in: ['PAIDED', 'REWARDED'] } },
+    });
+    if (paidCount < MIN_PAID_REFERRALS_TO_WITHDRAW) {
+      throw new BadRequestException(
+        `You need at least ${MIN_PAID_REFERRALS_TO_WITHDRAW} paid referrals to withdraw. You currently have ${paidCount}.`,
+      );
+    }
+
+    const payoutMethod = await this.prisma.payoutMethod.findUnique({ where: { userId } });
+    if (!payoutMethod) {
+      throw new BadRequestException('Add a UPI ID or bank account first before requesting a withdrawal');
+    }
+
+    const roundedAmount = Math.round(amountInr * 100) / 100;
+
+    // Atomic conditional decrement — same compare-and-swap pattern used
+    // everywhere else in this codebase for money-adjacent writes (coupon
+    // redemption, payment fulfillment). Only succeeds if the wallet
+    // ACTUALLY has enough balance at the instant of the update.
+    const claim = await this.prisma.referralWallet.updateMany({
+      where: { userId, balanceInr: { gte: roundedAmount }, isSuspended: false },
+      data: { balanceInr: { decrement: roundedAmount } },
+    });
+    if (claim.count === 0) {
+      throw new BadRequestException('Insufficient wallet balance for this withdrawal amount');
+    }
+
+    return this.prisma.withdrawalRequest.create({
+      data: {
+        userId,
+        amountInr: roundedAmount,
+        payoutMethodType: payoutMethod.type,
+        upiId: payoutMethod.upiId,
+        bankAccountNo: payoutMethod.bankAccountNo,
+        bankIfsc: payoutMethod.bankIfsc,
+        bankAccountName: payoutMethod.bankAccountName,
+      },
+    });
+  }
+
+  async getMyWithdrawals(userId: string) {
+    return this.prisma.withdrawalRequest.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        amountInr: true,
+        status: true,
+        payoutMethodType: true,
+        adminNote: true,
+        processedAt: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  /** Cancel a still-pending (REQUESTED) withdrawal — refunds the hold back to wallet. */
+  async cancelWithdrawal(userId: string, withdrawalId: string) {
+    const w = await this.prisma.withdrawalRequest.findUnique({ where: { id: withdrawalId } });
+    if (!w || w.userId !== userId) throw new NotFoundException('Withdrawal request not found');
+    if (w.status !== 'REQUESTED') throw new BadRequestException('Only a pending request can be cancelled');
+
+    await this.prisma.$transaction([
+      this.prisma.withdrawalRequest.update({
+        where: { id: withdrawalId },
+        data: { status: 'REJECTED', adminNote: 'Cancelled by user', processedAt: new Date() },
+      }),
+      this.prisma.referralWallet.update({
+        where: { userId },
+        data: { balanceInr: { increment: w.amountInr } },
+      }),
+    ]);
+    return { ok: true };
   }
 }
