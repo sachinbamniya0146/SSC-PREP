@@ -49,8 +49,24 @@ export class MonetizationService {
     @Inject(forwardRef(() => ReferralService))
     private referralService: ReferralService,
   ) {
-    const appId = process.env.CASHFREE_APP_ID || '';
-    const secretKey = process.env.CASHFREE_SECRET_KEY || '';
+    // BUGFIX (Session — "Authentication Failed" on every purchase attempt):
+    // Cashfree's own API returns exactly {"message":"authentication Failed",
+    // "type":"authentication_error"} whenever x-client-id / x-client-secret
+    // don't match what it expects. Two real-world causes were found here:
+    //   1. process.env values copied from the dashboard/.env file can carry
+    //      a trailing newline or space (very common when pasted via some
+    //      terminals / Docker env files) — Cashfree treats the header value
+    //      byte-for-byte, so "abc123\n" !== "abc123" and auth fails even
+    //      though the key "looks" right. .trim() below removes this class
+    //      of bug entirely.
+    //   2. CASHFREE_ENV not set to PRODUCTION while PRODUCTION keys were
+    //      generated (or the reverse: TEST keys with CASHFREE_ENV=PRODUCTION)
+    //      — a TEST key sent to api.cashfree.com, or a PRODUCTION key sent
+    //      to sandbox.cashfree.com, is ALWAYS "authentication Failed". See
+    //      the explicit error in cfFetch() below which now calls this out
+    //      by name instead of surfacing Cashfree's generic message.
+    const appId = (process.env.CASHFREE_APP_ID || '').trim();
+    const secretKey = (process.env.CASHFREE_SECRET_KEY || '').trim();
     const env: 'TEST' | 'PRODUCTION' = process.env.CASHFREE_ENV === 'PRODUCTION' ? 'PRODUCTION' : 'TEST';
 
     if ((!appId || !secretKey) && process.env.NODE_ENV === 'production') {
@@ -74,7 +90,7 @@ export class MonetizationService {
       // Cashfree's webhook secret is normally the same secret key used for
       // API calls, but they let you configure a distinct one per webhook
       // endpoint in the dashboard — support that without requiring it.
-      webhookSecret: process.env.CASHFREE_WEBHOOK_SECRET || secretKey,
+      webhookSecret: (process.env.CASHFREE_WEBHOOK_SECRET || secretKey).trim(),
       apiVersion: '2023-08-01',
       baseUrl: env === 'PRODUCTION' ? 'https://api.cashfree.com' : 'https://sandbox.cashfree.com',
       env,
@@ -139,6 +155,30 @@ export class MonetizationService {
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
       this.logger.error(`Cashfree ${init.method} ${path} → ${res.status}: ${JSON.stringify(json)}`);
+      // BUGFIX: Cashfree's own "authentication Failed" (type:
+      // authentication_error) means the x-client-id/x-client-secret this
+      // server sent were rejected — it is NEVER a user-side problem, so log
+      // the real diagnosis loudly (visible in `docker compose logs backend`)
+      // instead of leaving Sachin to guess why every purchase fails. The two
+      // causes seen in practice: (a) CASHFREE_APP_ID/CASHFREE_SECRET_KEY in
+      // the server's .env don't match the CASHFREE_ENV mode (TEST keys with
+      // CASHFREE_ENV=PRODUCTION, or PRODUCTION keys with CASHFREE_ENV unset
+      // — which defaults to TEST/sandbox); (b) a stray trailing space/newline
+      // in the .env value (now defended against separately via .trim() in
+      // the constructor, but old running processes need a restart to pick
+      // up a fixed .env).
+      if (json?.type === 'authentication_error' || res.status === 401) {
+        this.logger.error(
+          `Cashfree rejected our credentials (env=${this.cf.env}, appId=${this.cf.appId ? this.cf.appId.slice(0, 6) + '…' : '(empty)'}). ` +
+            `Check on the server: (1) CASHFREE_APP_ID / CASHFREE_SECRET_KEY in .env are copied exactly from the Cashfree ` +
+            `Merchant Dashboard with no extra space/newline, and (2) CASHFREE_ENV matches the key type — ` +
+            `TEST keys need CASHFREE_ENV unset or "TEST"; LIVE/PRODUCTION keys need CASHFREE_ENV=PRODUCTION. ` +
+            `After fixing .env, restart the backend container (env vars are only read at process boot).`,
+        );
+        throw new BadRequestException(
+          'Payment gateway rejected our server credentials. Please try again in a bit — our team has been notified.',
+        );
+      }
       throw new BadRequestException(json?.message || `Cashfree request failed (${res.status})`);
     }
     return json;
