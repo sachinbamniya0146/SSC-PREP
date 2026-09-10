@@ -208,7 +208,13 @@ export class QuestionBankPracticeService {
   ): Promise<any[]> {
     const where: any = {
       ...PUBLISHED_QUESTION_WHERE,
-      questionTextHindi: { not: null },
+      // BUGFIX: was `{ not: null }`, but missing Hindi is stored as '' not
+      // NULL everywhere else in this codebase (see bank.service.ts "v7 §5"
+      // comment) — so this filter never actually excluded anything. Fixed
+      // to `{ not: '' }`, with an exemption for subject "english" (the
+      // question itself IS the English-language test, nothing to
+      // translate) matching the same fix applied in tests.service.ts.
+      OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
     };
 
     if (subjectId) where.subjectId = subjectId;
@@ -636,17 +642,21 @@ export class QuestionBankPracticeService {
   // Get available subjects for practice
   async getAvailableSubjects(userId: string, examId?: string): Promise<any[]> {
     // Get subjects with approved bilingual questions
+    // BUGFIX: subject "english" needs no Hindi translation (the question
+    // itself IS the English-language test) — without this, English never
+    // showed up as an "available subject" for practice even when it had
+    // plenty of fully-valid, approved questions.
     const subjects = await this.prisma.subject.findMany({
       where: {
         questions: {
-          some: { ...PUBLISHED_QUESTION_WHERE, questionTextHindi: { not: '' } },
+          some: { ...PUBLISHED_QUESTION_WHERE, OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }] },
         },
       },
       include: {
         chapters: {
           where: {
             questions: {
-              some: { ...PUBLISHED_QUESTION_WHERE, questionTextHindi: { not: '' } },
+              some: { ...PUBLISHED_QUESTION_WHERE, OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }] },
             },
           },
           select: { id: true, name: true },
