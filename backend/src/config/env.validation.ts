@@ -65,12 +65,25 @@ export const envValidationSchema = Joi.object({
   RAZORPAY_KEY_SECRET: Joi.string().allow('').default(''),
   RAZORPAY_WEBHOOK_SECRET: Joi.string().allow('').default(''),
 
-  // PayU — the payment gateway this deployment actually uses
-  // (monetization.service.ts calls PayU, not Razorpay).
+  // PayU — LEGACY, superseded by Cashfree below. monetization.service.ts no
+  // longer calls PayU; kept only so old .env files don't fail validation.
   PAYU_MERCHANT_KEY: Joi.string().allow('').default(''),
   PAYU_MERCHANT_SALT: Joi.string().allow('').default(''),
   PAYU_BASE_URL: Joi.string().allow('').default('https://test.payu.in'),
   PAYU_TEST_MODE: Joi.string().allow('').default('true'),
+
+  // Cashfree — the payment gateway this deployment actually uses
+  // (monetization.service.ts calls Cashfree, not PayU/Razorpay). Listed here
+  // explicitly (instead of relying on .unknown(true) below) so a missing or
+  // misspelled var is a clear boot-time validation message instead of a
+  // silent gap that only shows up as "authentication Failed" later when a
+  // student tries to buy premium. CASHFREE_ENV must match the key type —
+  // TEST keys => 'TEST' (or leave unset), PRODUCTION/LIVE keys => 'PRODUCTION'.
+  CASHFREE_APP_ID: Joi.string().allow('').default(''),
+  CASHFREE_SECRET_KEY: Joi.string().allow('').default(''),
+  CASHFREE_ENV: Joi.string().valid('TEST', 'PRODUCTION').allow('').default('TEST'),
+  CASHFREE_WEBHOOK_SECRET: Joi.string().allow('').default(''),
+  CASHFREE_WEBHOOK_URL: Joi.string().allow('').default(''),
 
   // Storage — Phase 3
   S3_ENDPOINT: Joi.string().allow('').default(''),
