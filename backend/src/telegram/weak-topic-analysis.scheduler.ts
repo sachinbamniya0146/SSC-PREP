@@ -43,12 +43,13 @@ export class WeakTopicAnalysisScheduler implements OnModuleInit {
       this.logger.log(
         `Registered daily weak-topic-analysis schedule (9:00 PM Asia/Kolkata) as "${WeakTopicAnalysisScheduler.SCHEDULER_ID}"`,
       );
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Non-fatal: if Redis is briefly unavailable at boot, log and move on
       // rather than crashing the whole app — the schedule can be
       // re-registered on the next restart, and this is a nice-to-have
       // notification feature, not core exam functionality.
-      this.logger.error(`Failed to register weak-topic-analysis schedule: ${e.message}`);
+      const message = e instanceof Error ? e.message : String(e);
+      this.logger.error(`Failed to register weak-topic-analysis schedule: ${message}`);
     }
   }
 }

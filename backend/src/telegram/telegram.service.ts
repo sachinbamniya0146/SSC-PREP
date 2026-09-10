@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import FormData from 'form-data';
 import type Redis from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import * as crypto from 'crypto';
@@ -118,8 +119,6 @@ export class TelegramService {
       return { ok: false, error: 'Bot token not configured' };
     }
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const FormData = require('form-data');
       const form = new FormData();
       form.append('chat_id', String(params.chat_id));
       if (params.caption) form.append('caption', params.caption);

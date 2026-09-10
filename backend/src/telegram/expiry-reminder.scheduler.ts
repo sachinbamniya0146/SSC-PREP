@@ -41,12 +41,13 @@ export class ExpiryReminderScheduler implements OnModuleInit {
       this.logger.log(
         `Registered daily expiry-reminder schedule (9:00 AM Asia/Kolkata) as "${ExpiryReminderScheduler.SCHEDULER_ID}"`,
       );
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Non-fatal: if Redis is briefly unavailable at boot, log and move on
       // rather than crashing the whole app — the schedule can be
       // re-registered on the next restart, and this is a nice-to-have
       // notification feature, not core exam functionality.
-      this.logger.error(`Failed to register expiry-reminder schedule: ${e.message}`);
+      const message = e instanceof Error ? e.message : String(e);
+      this.logger.error(`Failed to register expiry-reminder schedule: ${message}`);
     }
   }
 }

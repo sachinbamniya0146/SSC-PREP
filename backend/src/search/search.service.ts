@@ -215,12 +215,18 @@ export class SearchService implements OnModuleInit {
       // practice mode / bookmarks: strip answer-revealing fields here before
       // they leave the service, since no attempt record exists to justify reveal.
       const sanitizedHits = (result.hits || []).map((hit: any) => {
-        const { correctAnswer, explanation, explanationHindi, _formatted, ...safeHit } = hit;
-        if (_formatted) {
+        const safeHit = { ...hit };
+        delete safeHit.correctAnswer;
+        delete safeHit.explanation;
+        delete safeHit.explanationHindi;
+        if (safeHit._formatted && typeof safeHit._formatted === 'object') {
           // _formatted mirrors every field (highlighted where applicable) — Meilisearch
           // also highlights explanation/explanationHindi per attributesToHighlight above,
           // so this must be scrubbed too, or the leak survives inside _formatted.
-          const { correctAnswer: _ca, explanation: _exp, explanationHindi: _expHi, ...safeFormatted } = _formatted;
+          const safeFormatted = { ...safeHit._formatted };
+          delete safeFormatted.correctAnswer;
+          delete safeFormatted.explanation;
+          delete safeFormatted.explanationHindi;
           return { ...safeHit, _formatted: safeFormatted };
         }
         return safeHit;
