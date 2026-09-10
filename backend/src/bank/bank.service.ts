@@ -1213,7 +1213,10 @@ export class BankService implements OnModuleInit {
   // ungated here; do not apply the browse()/getById() attempted-gate.
   async getSet(f: { examId?: string; subjectId?: string; count?: number }) {
     const takeN = Math.min(f.count ?? 10, 25);
-    const where: any = { ...PUBLISHED_QUESTION_WHERE, questionTextHindi: { not: '' } }; // bilingual gate (v3 §3): empty/NULL dono exclude
+    // bilingual gate (v3 §3): empty/NULL dono exclude — EXCEPT subject
+    // "english", which needs no Hindi translation (the question itself IS
+    // the English-language test).
+    const where: any = { ...PUBLISHED_QUESTION_WHERE, OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }] };
     if (f.examId) where.examId = f.examId;
     else where.examId = { not: null }; // spec §3: exam badge har question par
     if (f.subjectId) where.subjectId = f.subjectId;
