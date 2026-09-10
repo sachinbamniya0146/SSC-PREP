@@ -379,6 +379,9 @@ export default function AdminPage() {
             </span>
           </div>
           <div className="flex items-center gap-3 text-sm">
+            <a href="/admin/referrals" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
+              Refer & Earn
+            </a>
             <a href="/admin/api-keys" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
               API Keys
             </a>
