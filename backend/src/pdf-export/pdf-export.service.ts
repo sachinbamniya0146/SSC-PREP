@@ -28,7 +28,9 @@ export class PdfExportService {
     const rows = await this.prisma.question.findMany({
       where: {
         ...PUBLISHED_QUESTION_WHERE,
-        questionTextHindi: { not: '' },
+        // BUGFIX: subject "english" needs no Hindi translation — same fix
+        // as tests.service.ts/bank.service.ts.
+        OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
         examId: { not: null },
       },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
@@ -302,7 +304,9 @@ export class PdfExportService {
     }
 
     const rows: any[] = await this.prisma.question.findMany({
-      where: { ...PUBLISHED_QUESTION_WHERE, chapterId, questionTextHindi: { not: '' } },
+      // BUGFIX: subject "english" needs no Hindi translation — same fix as
+      // tests.service.ts/bank.service.ts.
+      where: { ...PUBLISHED_QUESTION_WHERE, chapterId, OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }] },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
       orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
       take: 150,
