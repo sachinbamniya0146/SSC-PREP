@@ -717,7 +717,18 @@ async saveAnswers(
         // matched a question from ANY exam that happened to share this
         // subject — the actual root cause of a "CGL" paper being able to
         // contain CHSL/MTS/CPO questions.
-        where: { ...PUBLISHED_QUESTION_WHERE, subjectId, examId: famExam.id, questionTextHindi: { not: '' } },
+        // BUGFIX: English Comprehension questions ARE the English text —
+        // there's nothing to "translate", the question itself tests
+        // English. Requiring questionTextHindi for this subject just
+        // blocked perfectly valid, fully-correct English questions from
+        // ever being served ("No approved bilingual questions... English
+        // Comprehension"). Every OTHER subject still requires Hindi.
+        where: {
+          ...PUBLISHED_QUESTION_WHERE,
+          subjectId,
+          examId: famExam.id,
+          OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+        },
         include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
         orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
         take: 500,
@@ -896,7 +907,9 @@ async saveAnswers(
           ...PUBLISHED_QUESTION_WHERE,
           subjectId,
           examId: famExam.id,
-          questionTextHindi: { not: '' },
+          // BUGFIX: same English-needs-no-translation fix as paper() above —
+          // English Comprehension IS the English text, nothing to translate.
+          OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
         },
         include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
         orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
@@ -995,7 +1008,10 @@ async saveAnswers(
       LEFT JOIN questions q ON q."subjectId" = s.id AND q."isApproved" = true
         AND q."isActive" = true
         AND q."autoSuspended" = false
-        AND q."questionTextHindi" IS NOT NULL AND q."questionTextHindi" <> ''
+        -- BUGFIX: English Comprehension needs no Hindi translation (the
+        -- question itself IS the English-language test) — don't hide
+        -- valid English questions from this count just for lacking one.
+        AND ((q."questionTextHindi" IS NOT NULL AND q."questionTextHindi" <> '') OR s.slug = 'english')
       GROUP BY s.id ORDER BY s.name;`;
     return rows;
   }
@@ -1008,7 +1024,9 @@ async saveAnswers(
       where: {
         ...PUBLISHED_QUESTION_WHERE,
         subjectId,
-        questionTextHindi: { not: '' },
+        // BUGFIX: same English-needs-no-translation exemption as paper()/
+        // sectionalExamForFamily() above.
+        OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
         examId: { not: null },
       },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
@@ -1122,7 +1140,12 @@ async saveAnswers(
       ...PUBLISHED_QUESTION_WHERE,
       examId,
       year,
-      questionTextHindi: { not: '' },
+      // BUGFIX: English Comprehension questions need no Hindi translation —
+      // the question itself IS the English-language test, so requiring
+      // questionTextHindi here blocked valid English PYQs from ever
+      // appearing in a year-wise paper ("No bilingual questions available
+      // for this selection yet"). Every other subject still requires it.
+      OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
     };
     // "full" (attempt the whole year's paper) always wins over any
     // subject/chapter/topic narrowing the UI may still have selected —
@@ -1320,7 +1343,9 @@ async saveAnswers(
       const where: any = {
         ...PUBLISHED_QUESTION_WHERE,
         chapterId: ch.chapterId,
-        questionTextHindi: { not: '' },
+        // BUGFIX: same English-needs-no-translation exemption as the
+        // other paper composers in this file.
+        OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
         examId: { not: null },
         id: { notIn: [...attemptedQuestionIds] }, // don't repeat same questions
       };
