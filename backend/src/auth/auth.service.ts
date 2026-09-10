@@ -147,9 +147,7 @@ export class AuthService implements OnModuleInit {
     for (let i = 0; i < emails.length; i++) {
       const normalized = emails[i].toLowerCase().trim();
       const password = passwords[i]; // may be undefined if lists are mismatched lengths
-      const existing = await this.prisma.user.findFirst({
-        where: { email: { equals: normalized, mode: 'insensitive' } },
-      });
+      const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
 
       if (existing) {
         if (existing.role !== 'ADMIN') {
@@ -218,7 +216,7 @@ export class AuthService implements OnModuleInit {
       throw new ForbiddenException('Please use a valid email provider (Gmail, Yahoo, Outlook, etc.). Temporary/disposable emails are not allowed.');
     }
     
-    const existing = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
+    const existing = await this.prisma.user.findUnique({ where: { email: normalized } });
     if (existing) throw new ConflictException('Email already registered');
 
     // Check if phone is already registered
@@ -240,6 +238,19 @@ export class AuthService implements OnModuleInit {
 
   // ----------------------------------------------------------------- login
 
+  // BUGFIX ("login very slow" report): this and every other email lookup in
+  // this file used to run findFirst() with `email: { equals: X, mode: 'insensitive' }`.
+  // On Postgres, Prisma's `mode: 'insensitive'` compiles to a case-insensitive
+  // comparison that CANNOT use the normal unique B-tree index on `email` — so
+  // every single login/signup/forgot-password/reset-password/Google-login
+  // request forced a full sequential scan of the entire users table. This
+  // gets slower and slower as the user base grows (the exact "login is very
+  // slow" symptom). Since email is already normalized to lowercase on every
+  // write path (`signup()`, admin seeding, Google login — all store
+  // `.toLowerCase().trim()`), an insensitive comparison was never actually
+  // needed: a plain `findUnique({ email: normalized })` returns the exact
+  // same result but hits the unique index directly (O(log n) instead of a
+  // full table scan), and is now used everywhere in this file.
   async login(
     email: string,
     password: string,
@@ -248,7 +259,7 @@ export class AuthService implements OnModuleInit {
     userAgent?: string,
   ): Promise<Authenticated> {
     const normalized = email.toLowerCase().trim();
-    const user = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
     if (!user || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException('Invalid email or password');
     }
@@ -260,7 +271,7 @@ export class AuthService implements OnModuleInit {
   /** Step 1: send a reset OTP to the user's email (account must exist). */
   async forgotPassword(email: string): Promise<{ sent: boolean; devOtp?: string }> {
     const normalized = email.toLowerCase().trim();
-    const user = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
     if (!user) {
       // Do not leak which emails have accounts — same response either way.
       return { sent: true };
@@ -271,7 +282,7 @@ export class AuthService implements OnModuleInit {
   /** Step 2: verify OTP + set a new password. OTP is single-use. */
   async resetPassword(email: string, code: string, newPassword: string, confirmPassword: string): Promise<{ ok: true }> {
     const normalized = email.toLowerCase().trim();
-    const user = await this.prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } });
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
     if (!user) throw new UnauthorizedException('User not found');
 
     if (newPassword !== confirmPassword) {
@@ -352,7 +363,7 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Google token missing email');
     }
     const email = payload.email.toLowerCase().trim();
-    let user = await this.prisma.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
+    let user = await this.prisma.user.findUnique({ where: { email: email } });
     if (!user) {
       user = await this.prisma.user.create({
         data: {
