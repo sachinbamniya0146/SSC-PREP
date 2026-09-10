@@ -480,19 +480,28 @@ export class MonetizationService {
       // implemented but never called from anywhere — referrers never
       // received their promised free subscription. Trigger it here, right
       // after a successful PLAN purchase is recorded.
-      await this.referralService.onPaidPurchase(userId);
+      //
+      // REFER & EARN (Sep 2026): onPaidPurchase() now also credits a cash
+      // commission to the referrer's wallet, so every payment kind that can
+      // legitimately be a referred user's FIRST/Nth paid purchase must call
+      // it — not just PLAN. It's a no-op if the buyer wasn't referred by
+      // anyone, so calling it unconditionally for every fulfilled payment is
+      // safe (see referral.service.ts#onPaidPurchase's early-return).
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
     } else if (meta.kind === 'CHAPTER') {
       await this.prisma.chapterPurchase.upsert({
         where: { userId_chapterId: { userId, chapterId: meta.chapterId } },
         create: { userId, chapterId: meta.chapterId, amountInr: 1, status: 'SUCCESS' },
         update: { status: 'SUCCESS' },
       });
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
     } else if (meta.kind === 'MOCK') {
       await this.prisma.mockAccess.upsert({
         where: { userId_testTemplateId: { userId, testTemplateId: meta.mockTemplateId } },
         create: { userId, testTemplateId: meta.mockTemplateId, paidPacksPurchased: 1 },
         update: { paidPacksPurchased: { increment: 1 } },
       });
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
     }
 
     // consume coupon if any.
