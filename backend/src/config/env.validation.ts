@@ -59,31 +59,40 @@ export const envValidationSchema = Joi.object({
   GOOGLE_CLIENT_ID: Joi.string().allow('').default(''),
   GOOGLE_CLIENT_SECRET: Joi.string().allow('').default(''),
 
-  // Razorpay — OPTIONAL. Not required if you use PayU instead (see below);
-  // leave these blank and the Razorpay module simply won't be reachable.
+  // Razorpay — OPTIONAL, not used by this deployment. Left here only in
+  // case a future gateway swap needs it again; safe to ignore.
   RAZORPAY_KEY_ID: Joi.string().allow('').default(''),
   RAZORPAY_KEY_SECRET: Joi.string().allow('').default(''),
   RAZORPAY_WEBHOOK_SECRET: Joi.string().allow('').default(''),
 
-  // PayU — LEGACY, superseded by Cashfree below. monetization.service.ts no
-  // longer calls PayU; kept only so old .env files don't fail validation.
-  PAYU_MERCHANT_KEY: Joi.string().allow('').default(''),
-  PAYU_MERCHANT_SALT: Joi.string().allow('').default(''),
-  PAYU_BASE_URL: Joi.string().allow('').default('https://test.payu.in'),
-  PAYU_TEST_MODE: Joi.string().allow('').default('true'),
-
-  // Cashfree — the payment gateway this deployment actually uses
-  // (monetization.service.ts calls Cashfree, not PayU/Razorpay). Listed here
-  // explicitly (instead of relying on .unknown(true) below) so a missing or
-  // misspelled var is a clear boot-time validation message instead of a
-  // silent gap that only shows up as "authentication Failed" later when a
-  // student tries to buy premium. CASHFREE_ENV must match the key type —
-  // TEST keys => 'TEST' (or leave unset), PRODUCTION/LIVE keys => 'PRODUCTION'.
+  // Cashfree PAYMENT GATEWAY — how students PAY US (plans, chapter PDFs,
+  // mock tests). This is what monetization.service.ts calls. Required in
+  // production (the service itself throws at boot if missing in prod — see
+  // monetization.service.ts's constructor); optional in dev/test so the
+  // rest of the app still boots without live payment credentials.
   CASHFREE_APP_ID: Joi.string().allow('').default(''),
   CASHFREE_SECRET_KEY: Joi.string().allow('').default(''),
-  CASHFREE_ENV: Joi.string().valid('TEST', 'PRODUCTION').allow('').default('TEST'),
+  // Usually the same as CASHFREE_SECRET_KEY, but Cashfree lets you set a
+  // distinct webhook secret per endpoint in the dashboard — override only
+  // if you actually configured one separately there.
   CASHFREE_WEBHOOK_SECRET: Joi.string().allow('').default(''),
+  CASHFREE_ENV: Joi.string().valid('TEST', 'PRODUCTION').default('TEST'),
+  // Optional override for the webhook notify_url sent to Cashfree when
+  // creating an order; defaults to `${BACKEND_PUBLIC_URL}/api/v1/payments/webhook`.
   CASHFREE_WEBHOOK_URL: Joi.string().allow('').default(''),
+  BACKEND_PUBLIC_URL: Joi.string().allow('').default(''),
+
+  // Cashfree PAYOUTS — a SEPARATE Cashfree product from the Payment Gateway
+  // above, used only for the Refer & Earn withdrawal flow (how WE pay
+  // referral commission OUT to students' UPI/bank accounts). Has its own
+  // Client ID/Secret from the Cashfree dashboard's Payouts section, issued
+  // only after Payouts KYC is approved there — separate from the Payment
+  // Gateway credentials above. Leave blank and referral.controller.ts /
+  // payout.service.ts simply run in "admin approves, pays out manually"
+  // mode instead of auto-transferring — see payout.service.ts.
+  CASHFREE_PAYOUT_CLIENT_ID: Joi.string().allow('').default(''),
+  CASHFREE_PAYOUT_CLIENT_SECRET: Joi.string().allow('').default(''),
+  CASHFREE_PAYOUT_ENV: Joi.string().valid('TEST', 'PRODUCTION').default('TEST'),
 
   // Storage — Phase 3
   S3_ENDPOINT: Joi.string().allow('').default(''),
