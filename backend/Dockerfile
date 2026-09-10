@@ -1,5 +1,6 @@
 # Backend Dockerfile
 FROM node:22-alpine AS builder
+ENV NODE_OPTIONS="--max-old-space-size=2048"
 WORKDIR /app
 # Install python and build tools for native modules (better-sqlite3, bcrypt)
 RUN apk add --no-cache python3 make g++ openssl
