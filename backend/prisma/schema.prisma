@@ -247,6 +247,7 @@ model Exam {
 model Subject {
   id        String    @id @default(uuid())
   name      String    // e.g. "Reasoning", "Quantitative Aptitude"
+  nameHindi String?   // Hindi-medium toggle (Sachin, Sep 2026) — bilingual taxonomy name
   slug      String    @unique
   chapters  Chapter[]
   questions Question[]
@@ -262,6 +263,7 @@ model Chapter {
   id        String     @id @default(uuid())
   subjectId String
   name      String
+  nameHindi String?    // Hindi-medium toggle (Sachin, Sep 2026)
   slug      String
   topics    Topic[]
   questions Question[]
@@ -280,6 +282,7 @@ model Topic {
   id        String     @id @default(uuid())
   chapterId String
   name      String
+  nameHindi String?    // Hindi-medium toggle (Sachin, Sep 2026)
   slug      String
   subTopics SubTopic[]
   questions Question[]
@@ -294,11 +297,20 @@ model SubTopic {
   id        String     @id @default(uuid())
   topicId   String
   name      String
+  nameHindi String?    // Hindi-medium toggle (Sachin, Sep 2026)
   slug      String
   questions Question[]
 
   topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
 
+  // FIX (Sachin, Sep 2026 — Topic/SubTopic admin manager): SubTopic never
+  // had a uniqueness constraint, unlike Chapter (@@unique[subjectId,slug])
+  // and Topic (@@unique[chapterId,slug]) right above it — so createSubTopic()
+  // couldn't be made idempotent the same way createChapter()/createTopic()
+  // are, and the bulk taxonomy Excel importer would create duplicate rows
+  // on every re-run. If this migration fails on your live DB, you already
+  // have duplicate (topicId, slug) rows — dedupe those first, then re-run.
+  @@unique([topicId, slug])
   @@map("sub_topics")
 }
 
