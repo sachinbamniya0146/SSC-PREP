@@ -26,6 +26,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { BankUploadService } from './bank-upload.service';
+import { TaxonomyImportService } from './taxonomy-import.service';
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB — question files are text/spreadsheets, not media
 
@@ -33,7 +34,10 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB — question files are text/s
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN', 'MODERATOR')
 export class BankUploadController {
-  constructor(private readonly uploadService: BankUploadService) {}
+  constructor(
+    private readonly uploadService: BankUploadService,
+    private readonly taxonomyImportService: TaxonomyImportService,
+  ) {}
 
   private adminId(req: any): string {
     return req.user?.userId ?? req.user?.id;
@@ -44,6 +48,19 @@ export class BankUploadController {
   async uploadExcel(@UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
     return this.uploadService.uploadFromExcel(file.buffer, this.adminId(req));
+  }
+
+  // Phase 2 (Sep 2026) — bulk Subject → Chapter → Topic → SubTopic import
+  // from a syllabus-shaped Excel (one sheet per subject, bilingual cells).
+  // Run this BEFORE uploading questions via /excel above — the question
+  // uploader needs the chapterId/topicId/subTopicId to already exist (see
+  // TaxonomyImportService doc comment for the exact "Invalid Reference"
+  // error this closes).
+  @Post('taxonomy-excel')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  async uploadTaxonomyExcel(@UploadedFile() file: any, @Req() req: any) {
+    if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
+    return this.taxonomyImportService.importFromExcel(file.buffer, this.adminId(req));
   }
 
   @Post('csv')
