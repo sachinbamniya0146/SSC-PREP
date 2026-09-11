@@ -818,7 +818,7 @@ export class BankService implements OnModuleInit {
     });
   }
 
-  async createTopic(chapterId: string, name: string): Promise<{ id: string; name: string; slug: string; chapterId: string }> {
+  async createTopic(chapterId: string, name: string, nameHindi?: string): Promise<{ id: string; name: string; slug: string; chapterId: string }> {
     const chapter = await this.prisma.chapter.findUnique({ where: { id: chapterId } });
     if (!chapter) throw new BadRequestException(`Chapter not found: ${chapterId}`);
     const trimmedName = (name ?? '').trim();
@@ -828,8 +828,96 @@ export class BankService implements OnModuleInit {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '') || 'topic';
     const existing = await this.prisma.topic.findUnique({ where: { chapterId_slug: { chapterId, slug } } });
-    if (existing) return existing;
-    return this.prisma.topic.create({ data: { chapterId, name: trimmedName, slug } });
+    if (existing) {
+      // Backfill Hindi name if it was missing before (e.g. an earlier manual
+      // createTopic call didn't have it, and a later Excel import does).
+      if (nameHindi && !(existing as any).nameHindi) {
+        return this.prisma.topic.update({ where: { id: existing.id }, data: { nameHindi } });
+      }
+      return existing;
+    }
+    return this.prisma.topic.create({ data: { chapterId, name: trimmedName, nameHindi: nameHindi || null, slug } });
+  }
+
+  // ---- Admin sub-topic management ----
+  // Mirrors createTopic()/createChapter() exactly. Closes the last gap in
+  // the Subject → Chapter → Topic → SubTopic chain — SubTopic existed in
+  // the schema and questions already carry an optional subTopicId, but
+  // there was no way to CREATE one anywhere in the API (Phase 2, Sep 2026).
+  async listAllSubTopicsForAdmin(topicId?: string) {
+    return this.prisma.subTopic.findMany({
+      where: topicId ? { topicId } : undefined,
+      select: {
+        id: true,
+        name: true,
+        nameHindi: true,
+        slug: true,
+        topicId: true,
+        topic: { select: { name: true, slug: true, chapter: { select: { name: true, subject: { select: { name: true } } } } } },
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createSubTopic(topicId: string, name: string, nameHindi?: string): Promise<{ id: string; name: string; slug: string; topicId: string }> {
+    const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
+    if (!topic) throw new BadRequestException(`Topic not found: ${topicId}`);
+    const trimmedName = (name ?? '').trim();
+    if (!trimmedName) throw new BadRequestException('Sub-topic name is required');
+    const slug = trimmedName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '') || 'subtopic';
+    const existing = await this.prisma.subTopic.findUnique({ where: { topicId_slug: { topicId, slug } } });
+    if (existing) {
+      if (nameHindi && !(existing as any).nameHindi) {
+        return this.prisma.subTopic.update({ where: { id: existing.id }, data: { nameHindi } });
+      }
+      return existing;
+    }
+    return this.prisma.subTopic.create({ data: { topicId, name: trimmedName, nameHindi: nameHindi || null, slug } });
+  }
+
+  async deleteSubTopic(id: string) {
+    const existing = await this.prisma.subTopic.findUnique({ where: { id } });
+    if (!existing) throw new BadRequestException('Sub-topic not found');
+    // Questions pointing at this subTopic keep their row (subTopicId is
+    // optional on Question) — just detach, never silently delete content.
+    await this.prisma.question.updateMany({ where: { subTopicId: id }, data: { subTopicId: null } });
+    await this.prisma.subTopic.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  // Full Subject → Chapter → Topic → SubTopic tree with question counts, for
+  // the admin taxonomy page and for the "which chapter/topic ID do I put in
+  // my Excel" reference the bulk question-uploader needs (see
+  // TaxonomyImportService for how this tree gets populated in bulk).
+  async getTaxonomyTree() {
+    const subjects = await this.prisma.subject.findMany({
+      select: {
+        id: true, name: true, nameHindi: true, slug: true,
+        chapters: {
+          select: {
+            id: true, name: true, nameHindi: true, slug: true,
+            _count: { select: { questions: true } },
+            topics: {
+              select: {
+                id: true, name: true, nameHindi: true, slug: true,
+                _count: { select: { questions: true } },
+                subTopics: {
+                  select: { id: true, name: true, nameHindi: true, slug: true, _count: { select: { questions: true } } },
+                  orderBy: { name: 'asc' },
+                },
+              },
+              orderBy: { name: 'asc' },
+            },
+          },
+          orderBy: { name: 'asc' },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+    return subjects;
   }
 
   // Browse questions by filters (exam/subject/chapter), bilingual rows.
