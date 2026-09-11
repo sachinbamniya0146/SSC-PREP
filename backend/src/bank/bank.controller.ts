@@ -148,11 +148,47 @@ export class BankController {
   @Post('admin/topics')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
-  createTopic(@Body() body: { chapterId: string; name: string }) {
+  createTopic(@Body() body: { chapterId: string; name: string; nameHindi?: string }) {
     if (!body?.chapterId || !body?.name) {
       throw new BadRequestException('chapterId and name are required');
     }
-    return this.bank.createTopic(body.chapterId, body.name);
+    return this.bank.createTopic(body.chapterId, body.name, body.nameHindi);
+  }
+
+  // Phase 2 (Sep 2026) — admin sub-topic management, mirrors chapters/topics above.
+  @Get('admin/subtopics')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  listSubTopicsForAdmin(@Query('topicId') topicId?: string) {
+    return this.bank.listAllSubTopicsForAdmin(topicId);
+  }
+
+  @Post('admin/subtopics')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  createSubTopic(@Body() body: { topicId: string; name: string; nameHindi?: string }) {
+    if (!body?.topicId || !body?.name) {
+      throw new BadRequestException('topicId and name are required');
+    }
+    return this.bank.createSubTopic(body.topicId, body.name, body.nameHindi);
+  }
+
+  @Delete('admin/subtopics/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  deleteSubTopic(@Param('id') id: string) {
+    return this.bank.deleteSubTopic(id);
+  }
+
+  // Full Subject → Chapter → Topic → SubTopic tree, with question counts —
+  // powers the admin taxonomy page (/admin/taxonomy) and doubles as the
+  // reference list for "which chapterId/topicId/subTopicId do I put in my
+  // question-upload Excel" (see admin-help.controller.ts template).
+  @Get('admin/taxonomy/tree')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  taxonomyTree() {
+    return this.bank.getTaxonomyTree();
   }
 
   // NEW ("admin pura ek ek question ko dekh paye"): source-agnostic
