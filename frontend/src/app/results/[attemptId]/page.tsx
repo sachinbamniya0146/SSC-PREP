@@ -392,12 +392,64 @@ function SummaryCard({ label, value, sub, tone }: { label: string; value: string
   );
 }
 
+// Shape returned by GET /ai-explanation/questions/:id — same contract the
+// review page already uses (see frontend/src/app/review/page.tsx).
+type AIExplanation = {
+  explanation: string;
+  explanationHindi: string;
+  stepByStepSolution: string;
+  stepByStepSolutionHindi: string;
+  keyConcepts: string[];
+  keyConceptsHindi: string[];
+};
+
 function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; lang: "en" | "both" }) {
   const showHi = lang === "both";
   const optText = (o: { key: string; text: string; textHi: string | null }) =>
     showHi && o.textHi ? `${o.text} / ${o.textHi}` : o.text;
   const stem = showHi && q.questionTextHindi ? `${q.questionText} / ${q.questionTextHindi}` : q.questionText;
   const explanation = showHi && q.explanationHindi ? `${q.explanation} / ${q.explanationHindi}` : q.explanation;
+
+  // BUGFIX (Sachin report, Sep 2026): explanation used to render ONLY from
+  // q.explanation/q.explanationHindi straight off the attempt record. For
+  // any question whose explanation was never pre-generated (a large chunk
+  // of the bank imported via the old parse_*/upload_*.py scripts, which
+  // don't call the AI-explanation pipeline), that field is null in the DB
+  // — so nothing ever showed here, on ANY test type (mock/sectional/daily
+  // all render through this same component), and on practice too via the
+  // sibling pages below. The backend has always had an on-demand
+  // AI-generate-and-cache endpoint (ai-explanation/questions/:id — same one
+  // /review already uses), this page just never called it. Now it does:
+  // when explanation is missing, auto-fetch it once on mount instead of
+  // showing a permanently empty box.
+  const [aiExplanation, setAiExplanation] = React.useState<AIExplanation | null>(null);
+  const [aiLoading, setAiLoading] = React.useState(false);
+  const [aiError, setAiError] = React.useState<string | null>(null);
+  const missingExplanation = !q.explanation && !q.explanationHindi;
+
+  React.useEffect(() => {
+    if (!missingExplanation) return;
+    let cancelled = false;
+    setAiLoading(true);
+    setAiError(null);
+    (async () => {
+      try {
+        const res = await fetchAuth(`${apiBase()}/ai-explanation/questions/${q.questionId}`, { headers: authHeaders() });
+        const d = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok) setAiExplanation(d as AIExplanation);
+        else setAiError(d.message || "Explanation abhi available nahi hai is question ke liye.");
+      } catch {
+        if (!cancelled) setAiError("Network error — explanation load nahi ho payi.");
+      } finally {
+        if (!cancelled) setAiLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.questionId, missingExplanation]);
   const srcLabel =
     q.explanationSource === "AI_GENERATED"
       ? { text: "🤖 AI-generated", cls: "bg-primary/10 text-primary" }
@@ -496,7 +548,54 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
               {srcLabel.text}
             </span>
           )}
-          <span className="block pt-1">{explanation}</span>
+          <span className="block whitespace-pre-line pt-1">{explanation}</span>
+        </div>
+      )}
+
+      {/* BUGFIX: explanation missing on the question row — auto-generated
+          fallback (see effect above). Loading/error/success states mirror
+          the review page's manual "Get AI Explanation" button so the UX is
+          consistent app-wide, but here it fires automatically since the
+          person already paid the attention cost of finishing the test. */}
+      {missingExplanation && (
+        <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm leading-relaxed">
+          <span className="font-semibold text-foreground">💡 Explanation: </span>
+          <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+            🤖 AI-generated
+          </span>
+          {aiLoading && <p className="mt-2 text-muted-foreground">Explanation ban rahi hai…</p>}
+          {aiError && !aiLoading && (
+            <div className="mt-2">
+              <p className="text-xs text-muted-foreground">{aiError}</p>
+              <button
+                onClick={() => {
+                  setAiError(null);
+                  setAiExplanation(null);
+                  // re-trigger the effect
+                  setAiLoading(true);
+                  fetchAuth(`${apiBase()}/ai-explanation/questions/${q.questionId}`, { headers: authHeaders() })
+                    .then(async (res) => {
+                      const d = await res.json().catch(() => ({}));
+                      if (res.ok) setAiExplanation(d as AIExplanation);
+                      else setAiError(d.message || "Explanation abhi available nahi hai is question ke liye.");
+                    })
+                    .catch(() => setAiError("Network error — explanation load nahi ho payi."))
+                    .finally(() => setAiLoading(false));
+                }}
+                className="mt-1 rounded-md border border-primary/30 px-3 py-1 text-xs font-semibold text-primary"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {aiExplanation && !aiLoading && (
+            <div className="mt-2 whitespace-pre-line text-muted-foreground">
+              <p>{aiExplanation.stepByStepSolution}</p>
+              {showHi && aiExplanation.stepByStepSolutionHindi && (
+                <p className="mt-2">🇮🇳 {aiExplanation.stepByStepSolutionHindi}</p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
