@@ -188,6 +188,28 @@ export default function TestPage() {
 
   // practice-mode aids (v6 §5: Show Answer + AI Hint, hint capped at 3/session)
   const [showAns, setShowAns] = React.useState<{ [qid: string]: boolean }>({});
+  // BUGFIX (Sachin report, Sep 2026): "Show Answer" used to render ONLY
+  // q.explanation — for any question whose explanation was never
+  // pre-generated (a large chunk of the bank imported via old
+  // parse_*/upload_*.py scripts) that's null, so only "Correct Answer: X"
+  // showed with no explanation at all. Backend already has an on-demand
+  // AI-generate-and-cache endpoint (ai-explanation/questions/:id, same one
+  // /review already uses) — now called here too when the stored
+  // explanation is missing, keyed per question like showAns/hintUsed above.
+  const [aiExp, setAiExp] = React.useState<{
+    [qid: string]: { loading?: boolean; error?: string | null; data?: { stepByStepSolution: string; stepByStepSolutionHindi?: string } };
+  }>({});
+  const fetchAiExplanation = async (qid: string) => {
+    setAiExp((p) => ({ ...p, [qid]: { ...p[qid], loading: true, error: null } }));
+    try {
+      const res = await fetch(`${apiBase()}/ai-explanation/questions/${qid}`, { headers: getAuthHeaders() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) setAiExp((p) => ({ ...p, [qid]: { loading: false, data: d } }));
+      else setAiExp((p) => ({ ...p, [qid]: { loading: false, error: d.message || "Explanation abhi available nahi hai." } }));
+    } catch {
+      setAiExp((p) => ({ ...p, [qid]: { loading: false, error: "Network error — explanation load nahi ho payi." } }));
+    }
+  };
   const [hintUsed, setHintUsed] = React.useState<{ [qid: string]: boolean }>({});
   const [hintQuota, setHintQuota] = React.useState(3);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
@@ -1325,7 +1347,11 @@ export default function TestPage() {
                     be cheated mid-attempt. */}
                 {!isExamMode && q.correctAnswer && (
                   <button
-                    onClick={() => setShowAns((p) => ({ ...p, [q.id]: !p[q.id] }))}
+                    onClick={() => {
+                      const willShow = !showAns[q.id];
+                      setShowAns((p) => ({ ...p, [q.id]: willShow }));
+                      if (willShow && !q.explanation && !aiExp[q.id]) fetchAiExplanation(q.id);
+                    }}
                     className={`btn ${showAns[q.id] ? "btn-success" : "btn-outline"}`}
                   >
                     {showAns[q.id] ? "✓ Answer Shown" : "Show Answer"}
@@ -1362,6 +1388,21 @@ export default function TestPage() {
                   )}
                   {showAns[q.id] && q.explanation && (
                     <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{q.explanation}</p>
+                  )}
+                  {showAns[q.id] && !q.explanation && (
+                    <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                      <span className="mr-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
+                      {aiExp[q.id]?.loading && <p className="mt-1">Explanation ban rahi hai…</p>}
+                      {aiExp[q.id]?.error && (
+                        <p className="mt-1">
+                          {aiExp[q.id]?.error}{" "}
+                          <button onClick={() => fetchAiExplanation(q.id)} className="font-semibold text-primary underline">Retry</button>
+                        </p>
+                      )}
+                      {aiExp[q.id]?.data && (
+                        <p className="mt-1 whitespace-pre-line">{aiExp[q.id]!.data!.stepByStepSolution}</p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
