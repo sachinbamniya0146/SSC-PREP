@@ -15,6 +15,72 @@ type QuizQ = {
   negativeMarks: number;
 };
 
+// BUGFIX (Sachin report, Sep 2026): daily quiz result used to render
+// explanation ONLY from r.explanation/r.explanationHindi — for any question
+// whose explanation was never pre-generated (a large chunk of the bank
+// imported via old parse_*/upload_*.py scripts) that's null, so nothing
+// ever showed. The backend already has an on-demand AI-generate-and-cache
+// endpoint (ai-explanation/questions/:id, same one /review page uses) —
+// this component calls it automatically when the stored explanation is
+// missing, same pattern used on the mock/sectional/daily results page.
+function QuizExplanation({
+  questionId,
+  explanation,
+  explanationHindi,
+}: {
+  questionId: string;
+  explanation?: string | null;
+  explanationHindi?: string | null;
+}) {
+  const [ai, setAi] = React.useState<{ stepByStepSolution: string; stepByStepSolutionHindi?: string } | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+  const missing = !explanation && !explanationHindi;
+
+  React.useEffect(() => {
+    if (!missing) return;
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    fetchAuth(`${API_BASE}/ai-explanation/questions/${questionId}`)
+      .then(async (res) => {
+        const d = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok) setAi(d);
+        else setErr(d.message || "Explanation abhi available nahi hai is question ke liye.");
+      })
+      .catch(() => !cancelled && setErr("Network error — explanation load nahi ho payi."))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [questionId, missing]);
+
+  if (!missing) {
+    return (
+      <div className="mt-3 rounded-lg bg-primary/10 p-3 text-sm leading-relaxed">
+        {explanation && <p className="whitespace-pre-line">{explanation}</p>}
+        {explanationHindi && (
+          <p className="mt-2 whitespace-pre-line text-muted-foreground">🇮🇳 {explanationHindi}</p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm leading-relaxed">
+      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
+      {loading && <p className="mt-2 text-muted-foreground">Explanation ban rahi hai…</p>}
+      {err && !loading && <p className="mt-2 text-xs text-muted-foreground">{err}</p>}
+      {ai && !loading && (
+        <div className="mt-2 whitespace-pre-line text-muted-foreground">
+          <p>{ai.stepByStepSolution}</p>
+          {ai.stepByStepSolutionHindi && <p className="mt-2">🇮🇳 {ai.stepByStepSolutionHindi}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Render a YouTube/Vimeo/S3 video URL in an iframe player
 function VideoPlayer({ url, title }: { url: string; title?: string | null }) {
   let src = url;
@@ -443,18 +509,12 @@ export default function DailyQuizPage() {
                         ))}
                       </div>
 
-                      {(r.explanation || r.explanationHindi) && (
-                        <div className="mt-3 rounded-lg bg-primary/10 p-3 text-sm leading-relaxed">
-                          {r.explanation && (
-                            <p className="whitespace-pre-line">{r.explanation}</p>
-                          )}
-                          {r.explanationHindi && (
-                            <p className="mt-2 whitespace-pre-line text-muted-foreground">
-                              🇮🇳 {r.explanationHindi}
-                            </p>
-                          )}
-                        </div>
-                      )}
+                      <QuizExplanation
+                        questionId={r.questionId}
+                        explanation={r.explanation}
+                        explanationHindi={r.explanationHindi}
+                      />
+
 
                       {r.videoUrl && <VideoPlayer url={r.videoUrl} title={r.videoTitle} />}
 
