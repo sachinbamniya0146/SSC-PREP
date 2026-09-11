@@ -4,6 +4,7 @@ import { BankController } from './bank.controller';
 import { BankUploadController } from './bank-upload.controller';
 import { BankUploadService } from './bank-upload.service';
 import { QuestionBankPracticeService } from './question-bank-practice.service';
+import { TaxonomyImportService } from './taxonomy-import.service';
 
 // BUG FIX (audit round 3): BankUploadService was never listed as a provider
 // here, and BankUploadController didn't exist before — so the entire
@@ -11,7 +12,7 @@ import { QuestionBankPracticeService } from './question-bank-practice.service';
 // detection) was unreachable dead code. Both are now registered.
 @Module({
   controllers: [BankController, BankUploadController],
-  providers: [BankService, QuestionBankPracticeService, BankUploadService],
-  exports: [BankService, QuestionBankPracticeService, BankUploadService],
+  providers: [BankService, QuestionBankPracticeService, BankUploadService, TaxonomyImportService],
+  exports: [BankService, QuestionBankPracticeService, BankUploadService, TaxonomyImportService],
 })
 export class BankModule {}
