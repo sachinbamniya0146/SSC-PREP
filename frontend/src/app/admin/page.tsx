@@ -101,6 +101,21 @@ export default function AdminPage() {
   const [uploadFile, setUploadFile] = React.useState<File | null>(null);
   const [uploading, setUploading] = React.useState(false);
   const [uploadResult, setUploadResult] = React.useState<UploadResult | null>(null);
+
+  // Phase 3 (Sep 2026) — upload history (past QuestionUploadBatch rows).
+  type UploadBatchSummary = {
+    id: string; adminId: string; sourceType: string; filename: string | null;
+    totalRows: number; createdCount: number; failedCount: number; createdAt: string;
+  };
+  type UploadBatchDetail = UploadBatchSummary & {
+    errorsJson: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string }[] | null;
+    warningsJson: { row: number; message: string; questionPreview?: string }[] | null;
+  };
+  const [batches, setBatches] = React.useState<UploadBatchSummary[]>([]);
+  const [batchesLoading, setBatchesLoading] = React.useState(false);
+  const [batchesErr, setBatchesErr] = React.useState("");
+  const [expandedBatchId, setExpandedBatchId] = React.useState<string | null>(null);
+  const [expandedBatchDetail, setExpandedBatchDetail] = React.useState<UploadBatchDetail | null>(null);
   const [templateDownloading, setTemplateDownloading] = React.useState(false);
   // NEW (this session) — "poora question bank ek click me download" so the
   // admin can see what's already in the bank before adding more. Backend:
@@ -318,6 +333,7 @@ export default function AdminPage() {
         throw new Error((data as { message?: string } | null)?.message || `Upload failed (HTTP ${res.status})`);
       }
       setUploadResult(data as UploadResult);
+      loadBatches(); // Phase 3 — refresh history so this upload shows up immediately
       if ((data as UploadResult).created > 0) {
         setInfo(`${(data as UploadResult).created} question(s) upload ho gaye`);
       }
@@ -353,6 +369,102 @@ export default function AdminPage() {
     a.remove();
     window.URL.revokeObjectURL(url);
   }
+
+  // ---- Phase 3 (Sep 2026) — upload history ----
+  const loadBatches = React.useCallback(async () => {
+    setBatchesLoading(true);
+    setBatchesErr("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches`);
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setBatchesErr(d?.message || `HTTP ${r.status}`);
+        return;
+      }
+      setBatches(await r.json());
+    } catch (e) {
+      setBatchesErr(e instanceof Error ? e.message : "Upload history load nahi hui");
+    } finally {
+      setBatchesLoading(false);
+    }
+  }, []);
+
+  async function toggleBatchDetail(id: string) {
+    if (expandedBatchId === id) {
+      setExpandedBatchId(null);
+      setExpandedBatchDetail(null);
+      return;
+    }
+    setExpandedBatchId(id);
+    setExpandedBatchDetail(null);
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches/${id}`);
+      if (r.ok) setExpandedBatchDetail(await r.json());
+    } catch {
+      /* silent — the row still shows its summary counts either way */
+    }
+  }
+
+  async function deleteBatchHandler(id: string, filename: string | null) {
+    if (
+      !confirm(
+        `"${filename || "is upload"}" ke saare questions PERMANENTLY delete ho jayenge. Sirf history record rakhna hai to Cancel karke "Keep Questions" option use karein. Continue?`,
+      )
+    )
+      return;
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches/${id}`, { method: "DELETE" });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setBatchesErr(d?.message || `HTTP ${r.status}`);
+        return;
+      }
+      const d = await r.json();
+      setInfo(`${d.deletedQuestions ?? 0} question(s) delete ho gaye is upload se.`);
+      if (expandedBatchId === id) {
+        setExpandedBatchId(null);
+        setExpandedBatchDetail(null);
+      }
+      await loadBatches();
+    } catch (e) {
+      setBatchesErr(e instanceof Error ? e.message : "Delete nahi hua");
+    }
+  }
+
+  // Builds either the combined CSV (category=null) or one category's CSV,
+  // from a batch's persisted errorsJson — same shape/columns as
+  // downloadErrorReport() above so an admin's existing workflow doesn't
+  // change, just now works from HISTORY too, not only the just-finished result.
+  function downloadBatchErrorReport(
+    batch: UploadBatchDetail,
+    category: UploadErrorCategory | null,
+  ) {
+    const errors = (batch.errorsJson || []).filter((e) => !category || e.category === category);
+    if (errors.length === 0) return;
+    const escapeCsv = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const lines = [
+      ["Row", "Category", "Question Preview", "Error"].map(escapeCsv).join(","),
+      ...errors.map((e) =>
+        [String(e.row), CATEGORY_LABEL[e.category] ?? e.category, e.questionPreview ?? "", e.error]
+          .map(escapeCsv)
+          .join(","),
+      ),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const suffix = category ? `_${category.toLowerCase()}` : "_combined";
+    a.download = `upload_errors_${(batch.filename || batch.id).replace(/[^a-z0-9._-]/gi, "_")}${suffix}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  React.useEffect(() => {
+    loadBatches();
+  }, [loadBatches]);
 
   React.useEffect(() => {
     loadUsers();
@@ -608,6 +720,122 @@ export default function AdminPage() {
                   </ul>
                 </div>
               )}
+            </div>
+          )}
+        </div>
+
+        {/* Phase 3 (Sep 2026) — Upload History: persisted record of every
+            past Excel/CSV/Text/JSON/Word question upload, with per-batch
+            error report download (combined + per-category) and delete. */}
+        <div className="mb-6 rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">📜 Upload History</h2>
+            <button
+              onClick={loadBatches}
+              disabled={batchesLoading}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
+            >
+              {batchesLoading ? "Loading..." : "🔄 Refresh"}
+            </button>
+          </div>
+          {batchesErr && <p className="mt-2 text-sm text-danger">{batchesErr}</p>}
+          {!batchesErr && !batchesLoading && batches.length === 0 && (
+            <p className="mt-2 text-sm text-muted-foreground">Abhi tak koi upload record nahi hai.</p>
+          )}
+          {batches.length > 0 && (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-border text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2">Kab</th>
+                    <th className="px-3 py-2">File</th>
+                    <th className="px-3 py-2">Type</th>
+                    <th className="px-3 py-2 text-right">Total</th>
+                    <th className="px-3 py-2 text-right">Created</th>
+                    <th className="px-3 py-2 text-right">Failed</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batches.map((b) => (
+                    <React.Fragment key={b.id}>
+                      <tr className="border-b border-border last:border-0">
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          {new Date(b.createdAt).toLocaleString()}
+                        </td>
+                        <td className="px-3 py-2 font-medium">{b.filename || "—"}</td>
+                        <td className="px-3 py-2 text-xs">{b.sourceType}</td>
+                        <td className="px-3 py-2 text-right">{b.totalRows}</td>
+                        <td className="px-3 py-2 text-right text-emerald-600 dark:text-emerald-400">{b.createdCount}</td>
+                        <td className="px-3 py-2 text-right text-red-600 dark:text-red-400">{b.failedCount}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            onClick={() => toggleBatchDetail(b.id)}
+                            className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted"
+                          >
+                            {expandedBatchId === b.id ? "Hide" : "Errors ▾"}
+                          </button>
+                          <button
+                            onClick={() => deleteBatchHandler(b.id, b.filename)}
+                            className="ml-2 rounded-lg border border-danger/30 px-2 py-1 text-xs text-danger hover:bg-danger/10"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                      {expandedBatchId === b.id && (
+                        <tr className="border-b border-border last:border-0 bg-muted/20">
+                          <td colSpan={7} className="px-3 py-3">
+                            {!expandedBatchDetail ? (
+                              <p className="text-xs text-muted-foreground">Loading errors...</p>
+                            ) : (expandedBatchDetail.errorsJson?.length ?? 0) === 0 ? (
+                              <p className="text-xs text-muted-foreground">Is upload me koi error nahi tha.</p>
+                            ) : (
+                              <div>
+                                <div className="mb-2 flex flex-wrap gap-2">
+                                  <button
+                                    onClick={() => downloadBatchErrorReport(expandedBatchDetail, null)}
+                                    className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
+                                  >
+                                    📥 Combined Error Report
+                                  </button>
+                                  {(Object.keys(CATEGORY_LABEL) as UploadErrorCategory[])
+                                    .filter((cat) => expandedBatchDetail.errorsJson!.some((e) => e.category === cat))
+                                    .map((cat) => (
+                                      <button
+                                        key={cat}
+                                        onClick={() => downloadBatchErrorReport(expandedBatchDetail, cat)}
+                                        className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                                      >
+                                        📥 {CATEGORY_LABEL[cat]} only
+                                      </button>
+                                    ))}
+                                </div>
+                                <ul className="max-h-60 space-y-1.5 overflow-y-auto text-xs text-muted-foreground">
+                                  {expandedBatchDetail.errorsJson!.map((e, i) => (
+                                    <li key={i} className="rounded border border-red-500/20 bg-red-500/5 p-1.5">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="font-semibold text-foreground">Row {e.row}</span>
+                                        <span className="rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+                                          {CATEGORY_LABEL[e.category] ?? e.category}
+                                        </span>
+                                      </div>
+                                      {e.questionPreview && (
+                                        <div className="mt-0.5 italic text-foreground/80">&quot;{e.questionPreview}&quot;</div>
+                                      )}
+                                      <div className="mt-0.5">{e.error}</div>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
