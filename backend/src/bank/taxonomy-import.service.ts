@@ -1,236 +1,224 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// Phase 2 (Sachin, Sep 2026) — "admin excel se topic subtopic import kar
-// sake, chapter vagera sabh, aur usme se direct hi attach karke admin
-// upload kar dega".
+// Bulk syllabus importer — reads a bilingual syllabus workbook in the exact
+// shape of SSC_Exams_Complete_Syllabus_Hindi.xlsx and upserts it into the
+// Subject -> Chapter -> Topic -> SubTopic taxonomy tables.
 //
-// ROOT CAUSE this closes: bank-upload.service.ts's Excel/CSV/JSON/Word
-// question importer has ALWAYS required a real chapterId/topicId/
-// subTopicId to already exist in the DB — it never auto-creates taxonomy
-// rows (see bank-upload.service.ts's "Invalid Reference" checks). Sachin's
-// own upload_errors CSV (Sep 11 2026) is a direct symptom: every single row
-// failed with `chapterId "chap-..." not found in database` because the
-// chapter/topic itself was never created first. This service closes that
-// gap: point it at a syllabus-shaped Excel (one sheet per subject, columns
-// Chapter No / Chapter / Topic / Sub-Topic, exactly like
-// SSC_Exams_Complete_Syllabus_Hindi.xlsx) and it creates the whole
-// Subject → Chapter → Topic → SubTopic tree in one go, bilingually. Re-run
-// safely any time — everything is upserted by slug, never duplicated.
+// Expected sheet layout (one sheet per Subject; a sheet literally named
+// "Overview" is skipped):
+//   row 1: Subject name (English)
+//   row 2: Subject name (Hindi)
+//   row 3: blank
+//   row 4: header — S.No. | Chapter No. | Chapter | Topic | Sub-Topic
+//   row 5+: data rows. Chapter No. / Chapter are only filled in on the FIRST
+//           row of a new chapter (the rest look blank because they're
+//           visually merged in Excel); Topic and Sub-Topic are given on
+//           every row. Every Chapter/Topic/Sub-Topic cell holds both
+//           languages as "English\nHindi" (two lines in one cell).
+//   ends at the first fully-blank row, or the trailing
+//   "Total Chapters: N | Total Topics/Sub-Topics Listed: M" summary row.
+//
+// Idempotent: safe to re-run on the same file (or an edited version of it)
+// any number of times. Subject is matched on its slug, Chapter on
+// (subjectId, slug), Topic on (chapterId, slug), SubTopic on (topicId, slug)
+// — matching the unique constraints added in the
+// 20260912_add_taxonomy_hindi_and_subtopic_unique migration — so nothing is
+// duplicated; existing rows just get their name/nameHindi refreshed.
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
 import * as XLSX from 'xlsx';
-import { BankService } from './bank.service';
+import { PrismaService } from '../prisma/prisma.service';
 
-function slugify(raw: string, fallback: string): string {
-  const s = (raw ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
-  return s || fallback;
+interface ParsedSubTopic {
+  name: string;
+  nameHindi: string | null;
+}
+interface ParsedTopic {
+  name: string;
+  nameHindi: string | null;
+  subTopics: ParsedSubTopic[];
+}
+interface ParsedChapter {
+  name: string;
+  nameHindi: string | null;
+  topics: ParsedTopic[];
+}
+interface ParsedSubject {
+  name: string;
+  nameHindi: string | null;
+  chapters: ParsedChapter[];
 }
 
-// Cells in Sachin's syllabus workbook are bilingual, English and Hindi
-// joined by a literal newline inside the cell — e.g.
-// "Reading Comprehension\nगद्यांश बोधन". Split on the FIRST newline only
-// (Hindi text itself never contains one), so a Hindi phrase with internal
-// wrapping doesn't get chopped into pieces.
-function splitBilingual(raw: any): { en: string; hi: string | null } {
-  const text = raw == null ? '' : String(raw).trim();
-  if (!text) return { en: '', hi: null };
-  const nl = text.indexOf('\n');
-  if (nl === -1) return { en: text, hi: null };
-  const en = text.slice(0, nl).trim();
-  const hi = text.slice(nl + 1).trim();
-  return { en, hi: hi || null };
-}
-
-export interface TaxonomyImportResult {
-  sheet: string;
-  subjectName: string;
-  subjectCreated: boolean;
-  chaptersCreated: number;
-  topicsCreated: number;
-  subTopicsCreated: number;
-  rowsProcessed: number;
-  warnings: string[];
+export interface TaxonomyImportSummary {
+  subjects: number;
+  chapters: number;
+  topics: number;
+  subTopics: number;
+  details: { subject: string; chapters: number; topics: number; subTopics: number }[];
 }
 
 @Injectable()
 export class TaxonomyImportService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly bank: BankService,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
-  async importFromExcel(buffer: Buffer, _adminId: string): Promise<{ results: TaxonomyImportResult[]; totalRows: number }> {
-    let wb: XLSX.WorkBook;
-    try {
-      wb = XLSX.read(buffer, { type: 'buffer' });
-    } catch {
-      throw new BadRequestException('Could not read the Excel file — make sure it is a valid .xlsx/.xls');
-    }
-    if (!wb.SheetNames.length) throw new BadRequestException('Excel file has no sheets');
-
-    const results: TaxonomyImportResult[] = [];
-    for (const sheetName of wb.SheetNames) {
-      const sheet = wb.Sheets[sheetName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
-      if (!rows.length) continue;
-      results.push(await this.importSheet(sheetName, rows));
-    }
-
-    const totalRows = results.reduce((s, r) => s + r.rowsProcessed, 0);
-    if (totalRows === 0) {
-      throw new BadRequestException(
-        'No data rows found in any sheet. Expected columns: S.No / Chapter No. / Chapter / Topic / Sub-Topic (bilingual cells as "English<newline>Hindi").',
-      );
-    }
-    return { results, totalRows };
+  private splitBilingual(cell: unknown): { en: string; hi: string | null } | null {
+    if (cell == null) return null;
+    const str = String(cell).trim();
+    if (!str) return null;
+    const parts = str
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!parts.length) return null;
+    return { en: parts[0], hi: parts[1] ?? null };
   }
 
-  private async importSheet(sheetName: string, rows: any[][]): Promise<TaxonomyImportResult> {
-    const warnings: string[] = [];
+  private slugify(input: string): string {
+    const slug = input
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 100);
+    return slug || 'item';
+  }
 
-    // Row 1 = subject name (English), row 2 = subject name (Hindi) — matches
-    // SSC_Exams_Complete_Syllabus_Hindi.xlsx exactly. If row 2 doesn't look
-    // like a lone name (e.g. it's already the header row), fall back to the
-    // sheet name itself as the English subject name.
-    let subjectEn = String(rows[0]?.[0] ?? '').trim() || sheetName;
-    let subjectHi: string | null = null;
-    const row2Col0 = String(rows[1]?.[0] ?? '').trim();
-    if (row2Col0 && !/chapter|topic|s\.?no/i.test(row2Col0)) {
-      subjectHi = row2Col0;
+  /** Parses every recognizable subject sheet in the workbook. Pure function — no DB access. */
+  parseWorkbook(buffer: Buffer): ParsedSubject[] {
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(buffer, { type: 'buffer' });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw new BadRequestException(
+        `Failed to parse Excel file: ${message} — check the file is a real, unpassword-protected .xlsx/.xls.`,
+      );
     }
 
-    // Find the header row — scan the first 8 rows for one containing both
-    // "Chapter" and "Topic" (case-insensitive) in any cell.
-    let headerRowIdx = -1;
-    for (let i = 0; i < Math.min(8, rows.length); i++) {
-      const joined = rows[i].join(' ').toLowerCase();
-      if (joined.includes('chapter') && joined.includes('topic')) {
-        headerRowIdx = i;
-        break;
-      }
-    }
-    if (headerRowIdx === -1) {
-      warnings.push(`Sheet "${sheetName}": no header row found (expected a row containing "Chapter" and "Topic") — sheet skipped.`);
-      return { sheet: sheetName, subjectName: subjectEn, subjectCreated: false, chaptersCreated: 0, topicsCreated: 0, subTopicsCreated: 0, rowsProcessed: 0, warnings };
-    }
-    const header = rows[headerRowIdx].map((h) => String(h ?? '').toLowerCase());
-    const colChapter = header.findIndex((h) => h.includes('chapter') && !h.includes('no'));
-    const colTopic = header.findIndex((h) => h.includes('topic') && !h.includes('sub'));
-    const colSubTopic = header.findIndex((h) => h.includes('sub') && h.includes('topic'));
-    if (colChapter === -1 || colTopic === -1) {
-      warnings.push(`Sheet "${sheetName}": couldn't find "Chapter" / "Topic" columns in the header row — sheet skipped.`);
-      return { sheet: sheetName, subjectName: subjectEn, subjectCreated: false, chaptersCreated: 0, topicsCreated: 0, subTopicsCreated: 0, rowsProcessed: 0, warnings };
-    }
+    const subjects: ParsedSubject[] = [];
 
-    // ---- Subject: find-or-create ----
-    const subjectSlug = slugify(subjectEn, 'subject');
-    let subject = await this.prisma.subject.findUnique({ where: { slug: subjectSlug } });
-    let subjectCreated = false;
-    if (!subject) {
-      subject = await this.prisma.subject.create({ data: { name: subjectEn, nameHindi: subjectHi, slug: subjectSlug } });
-      subjectCreated = true;
-    } else if (subjectHi && !subject.nameHindi) {
-      subject = await this.prisma.subject.update({ where: { id: subject.id }, data: { nameHindi: subjectHi } });
-    }
+    for (const sheetName of workbook.SheetNames) {
+      if (sheetName.trim().toLowerCase() === 'overview') continue;
 
-    let chaptersCreated = 0;
-    let topicsCreated = 0;
-    let subTopicsCreated = 0;
-    let rowsProcessed = 0;
+      const ws = workbook.Sheets[sheetName];
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+      if (rows.length < 5) continue; // not enough rows to hold the expected layout
 
-    // Sparse-fill carry-forward: the source workbook only fills Chapter/Topic
-    // cells on the FIRST row of each group and leaves them blank on
-    // subsequent rows (no actual Excel merged cells) — same pattern used for
-    // Chapter No. too. Carry the last seen value forward across blank cells.
-    let lastChapterCell = '';
-    let lastTopicCell = '';
-    let lastChapterId: string | null = null;
-    let lastTopicId: string | null = null;
+      const subjectEn = rows[0]?.[0] != null ? String(rows[0][0]).trim() : null;
+      const subjectHi = rows[1]?.[0] != null ? String(rows[1][0]).trim() : null;
+      if (!subjectEn) continue; // doesn't match the expected layout — skip this sheet
 
-    for (let i = headerRowIdx + 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row || row.every((c) => String(c ?? '').trim() === '')) continue; // blank spacer row
+      const subject: ParsedSubject = { name: subjectEn, nameHindi: subjectHi || null, chapters: [] };
 
-      const chapterCellRaw = String(row[colChapter] ?? '').trim();
-      const topicCellRaw = String(row[colTopic] ?? '').trim();
-      const subTopicCellRaw = colSubTopic !== -1 ? String(row[colSubTopic] ?? '').trim() : '';
+      let currentChapter: ParsedChapter | null = null;
+      let currentTopic: ParsedTopic | null = null;
 
-      const chapterCell = chapterCellRaw || lastChapterCell;
-      if (!chapterCell) {
-        warnings.push(`Sheet "${sheetName}" row ${i + 1}: no chapter name (and none carried forward) — row skipped.`);
-        continue;
-      }
-      const chapterBi = splitBilingual(chapterCell);
-      if (!chapterBi.en) {
-        warnings.push(`Sheet "${sheetName}" row ${i + 1}: empty chapter name — row skipped.`);
-        continue;
-      }
+      // Data starts at row index 4 (0-based) = Excel row 5, right after the header row.
+      for (let i = 4; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row) continue;
 
-      // New chapter starts only when the cell actually had text this row.
-      if (chapterCellRaw && chapterCell !== lastChapterCell) {
-        const chSlug = slugify(chapterBi.en, `chapter-${i}`);
-        const existingChapter = await this.prisma.chapter.findUnique({ where: { subjectId_slug: { subjectId: subject.id, slug: chSlug } } });
-        if (existingChapter) {
-          lastChapterId = existingChapter.id;
-          if (chapterBi.hi && !existingChapter.nameHindi) {
-            await this.prisma.chapter.update({ where: { id: existingChapter.id }, data: { nameHindi: chapterBi.hi } });
-          }
-        } else {
-          const created = await this.prisma.chapter.create({
-            data: { subjectId: subject.id, name: chapterBi.en, nameHindi: chapterBi.hi, slug: chSlug },
-          });
-          lastChapterId = created.id;
-          chaptersCreated++;
+        const firstCell = row[0];
+        const rowIsBlank = row.every((c) => c == null || String(c).trim() === '');
+        const isSummaryRow =
+          typeof firstCell === 'string' && firstCell.trim().toLowerCase().startsWith('total chapters');
+        if (rowIsBlank || isSummaryRow) break;
+
+        const chapterCell = row[2];
+        const topicCell = row[3];
+        const subTopicCell = row[4];
+
+        const chapterParsed = this.splitBilingual(chapterCell);
+        if (chapterParsed) {
+          currentChapter = { name: chapterParsed.en, nameHindi: chapterParsed.hi, topics: [] };
+          subject.chapters.push(currentChapter);
+          currentTopic = null; // a new chapter always starts a fresh topic context
         }
-        lastChapterCell = chapterCell;
-        // a new chapter resets topic carry-forward
-        lastTopicCell = '';
-        lastTopicId = null;
-      }
-      if (!lastChapterId) continue; // defensive — should never happen
+        if (!currentChapter) continue; // malformed leading rows with no chapter yet — skip defensively
 
-      const topicCell = topicCellRaw || lastTopicCell;
-      if (!topicCell) {
-        warnings.push(`Sheet "${sheetName}" row ${i + 1}: no topic name — row skipped (chapter still created).`);
-        continue;
-      }
-      const topicBi = splitBilingual(topicCell);
-      if (topicCellRaw && topicCell !== lastTopicCell) {
-        const topicSlugCandidate = slugify(topicBi.en, `topic-${i}`);
-        const existedBefore = await this.prisma.topic.findUnique({
-          where: { chapterId_slug: { chapterId: lastChapterId, slug: topicSlugCandidate } },
-        });
-        const result = await this.bank.createTopic(lastChapterId, topicBi.en, topicBi.hi || undefined);
-        lastTopicId = result.id;
-        if (!existedBefore) topicsCreated++;
-        lastTopicCell = topicCell;
-      }
-      if (!lastTopicId) continue;
+        const topicParsed = this.splitBilingual(topicCell);
+        if (topicParsed) {
+          // Re-use the same Topic if this row repeats the immediately preceding
+          // topic name, so its sub-topics stay grouped under one Topic entry.
+          if (!currentTopic || currentTopic.name !== topicParsed.en) {
+            currentTopic = { name: topicParsed.en, nameHindi: topicParsed.hi, subTopics: [] };
+            currentChapter.topics.push(currentTopic);
+          }
+        }
+        if (!currentTopic) continue;
 
-      // Sub-topic: optional. "—", "-", "" all mean "no sub-topic for this row".
-      const subTopicBi = splitBilingual(subTopicCellRaw);
-      if (subTopicBi.en && !/^[-—]$/.test(subTopicBi.en)) {
-        const before = await this.prisma.subTopic.findUnique({
-          where: { topicId_slug: { topicId: lastTopicId, slug: slugify(subTopicBi.en, `subtopic-${i}`) } },
-        });
-        await this.bank.createSubTopic(lastTopicId, subTopicBi.en, subTopicBi.hi || undefined);
-        if (!before) subTopicsCreated++;
+        const subTopicParsed = this.splitBilingual(subTopicCell);
+        if (subTopicParsed) {
+          currentTopic.subTopics.push({ name: subTopicParsed.en, nameHindi: subTopicParsed.hi });
+        }
       }
 
-      rowsProcessed++;
+      subjects.push(subject);
     }
 
-    return {
-      sheet: sheetName,
-      subjectName: subject.name,
-      subjectCreated,
-      chaptersCreated,
-      topicsCreated,
-      subTopicsCreated,
-      rowsProcessed,
-      warnings,
-    };
+    return subjects;
+  }
+
+  /** Parses the workbook and upserts everything into Subject/Chapter/Topic/SubTopic. */
+  async importFromExcel(buffer: Buffer): Promise<TaxonomyImportSummary> {
+    const subjects = this.parseWorkbook(buffer);
+    if (!subjects.length) {
+      throw new BadRequestException(
+        'No recognizable subject sheets found. Expected sheets like "Quant Aptitude", "Reasoning", ' +
+          '"English", "General Awareness" laid out like SSC_Exams_Complete_Syllabus_Hindi.xlsx ' +
+          '(subject name in row 1, Hindi name in row 2, header in row 4, data from row 5).',
+      );
+    }
+
+    const summary: TaxonomyImportSummary = { subjects: 0, chapters: 0, topics: 0, subTopics: 0, details: [] };
+
+    for (const s of subjects) {
+      const subjectSlug = this.slugify(s.name);
+      const subjectRow = await this.prisma.subject.upsert({
+        where: { slug: subjectSlug },
+        create: { name: s.name, nameHindi: s.nameHindi, slug: subjectSlug },
+        update: { name: s.name, nameHindi: s.nameHindi },
+      });
+      summary.subjects++;
+
+      let chapterCount = 0;
+      let topicCount = 0;
+      let subTopicCount = 0;
+
+      for (const c of s.chapters) {
+        const chapterSlug = this.slugify(c.name);
+        const chapterRow = await this.prisma.chapter.upsert({
+          where: { subjectId_slug: { subjectId: subjectRow.id, slug: chapterSlug } },
+          create: { subjectId: subjectRow.id, name: c.name, nameHindi: c.nameHindi, slug: chapterSlug },
+          update: { name: c.name, nameHindi: c.nameHindi },
+        });
+        chapterCount++;
+
+        for (const t of c.topics) {
+          const topicSlug = this.slugify(t.name);
+          const topicRow = await this.prisma.topic.upsert({
+            where: { chapterId_slug: { chapterId: chapterRow.id, slug: topicSlug } },
+            create: { chapterId: chapterRow.id, name: t.name, nameHindi: t.nameHindi, slug: topicSlug },
+            update: { name: t.name, nameHindi: t.nameHindi },
+          });
+          topicCount++;
+
+          for (const st of t.subTopics) {
+            const subTopicSlug = this.slugify(st.name);
+            await this.prisma.subTopic.upsert({
+              where: { topicId_slug: { topicId: topicRow.id, slug: subTopicSlug } },
+              create: { topicId: topicRow.id, name: st.name, nameHindi: st.nameHindi, slug: subTopicSlug },
+              update: { name: st.name, nameHindi: st.nameHindi },
+            });
+            subTopicCount++;
+          }
+        }
+      }
+
+      summary.chapters += chapterCount;
+      summary.topics += topicCount;
+      summary.subTopics += subTopicCount;
+      summary.details.push({ subject: s.name, chapters: chapterCount, topics: topicCount, subTopics: subTopicCount });
+    }
+
+    return summary;
   }
 }

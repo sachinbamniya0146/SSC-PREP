@@ -11,8 +11,6 @@ import {
   Controller,
   Post,
   Get,
-  Delete,
-  Param,
   Query,
   Res,
   UseGuards,
@@ -49,27 +47,14 @@ export class BankUploadController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadExcel(@UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
-    return this.uploadService.uploadFromExcel(file.buffer, this.adminId(req), file.originalname);
-  }
-
-  // Phase 2 (Sep 2026) — bulk Subject → Chapter → Topic → SubTopic import
-  // from a syllabus-shaped Excel (one sheet per subject, bilingual cells).
-  // Run this BEFORE uploading questions via /excel above — the question
-  // uploader needs the chapterId/topicId/subTopicId to already exist (see
-  // TaxonomyImportService doc comment for the exact "Invalid Reference"
-  // error this closes).
-  @Post('taxonomy-excel')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  async uploadTaxonomyExcel(@UploadedFile() file: any, @Req() req: any) {
-    if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
-    return this.taxonomyImportService.importFromExcel(file.buffer, this.adminId(req));
+    return this.uploadService.uploadFromExcel(file.buffer, this.adminId(req));
   }
 
   @Post('csv')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadCsv(@UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.csv) is required');
-    return this.uploadService.uploadFromCSV(file.buffer, this.adminId(req), file.originalname);
+    return this.uploadService.uploadFromCSV(file.buffer, this.adminId(req));
   }
 
   // Accepts both tab-separated .txt files AND raw JSON-array .json/.txt files —
@@ -78,7 +63,7 @@ export class BankUploadController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadText(@UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.txt/.json) is required');
-    return this.uploadService.uploadFromText(file.buffer, this.adminId(req), file.originalname);
+    return this.uploadService.uploadFromText(file.buffer, this.adminId(req));
   }
 
   // Same handler as /text but named for clarity when the admin picks "JSON file" in the UI.
@@ -86,7 +71,7 @@ export class BankUploadController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadJsonFile(@UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.json) is required');
-    return this.uploadService.uploadFromText(file.buffer, this.adminId(req), file.originalname);
+    return this.uploadService.uploadFromText(file.buffer, this.adminId(req));
   }
 
   // Paste-in JSON (no file) — e.g. admin copy-pastes an array of question
@@ -98,14 +83,14 @@ export class BankUploadController {
       throw new BadRequestException('Body must be a JSON array of questions, or { "questions": [...] }');
     }
     const buffer = Buffer.from(JSON.stringify(questions), 'utf-8');
-    return this.uploadService.uploadFromText(buffer, this.adminId(req), 'pasted-json');
+    return this.uploadService.uploadFromText(buffer, this.adminId(req));
   }
 
   @Post('word')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadWord(@UploadedFile() file: any, @Req() req: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.docx) is required');
-    return this.uploadService.uploadFromWord(file.buffer, this.adminId(req), file.originalname);
+    return this.uploadService.uploadFromWord(file.buffer, this.adminId(req));
   }
 
   // Session 24 — for diagram question types that AREN'T simple Venn circles
@@ -147,24 +132,16 @@ export class BankUploadController {
     res.send(buffer);
   }
 
-  // ---- Phase 3 (Sachin, Sep 2026) — "admin ko dikhe konsi excel kab
-  // upload ki, error report dekh sake, aur uploaded question delete kar
-  // sake". Every upload above now persists a QuestionUploadBatch — these
-  // three endpoints are how the admin panel reads that history back.
-  @Get('batches')
-  listBatches(@Req() req: any, @Query('all') all?: string) {
-    // ?all=1 (ADMIN only in practice via the UI) shows every admin's
-    // uploads; default is just the logged-in admin's own history.
-    return this.uploadService.listUploadBatches(all ? undefined : this.adminId(req));
-  }
-
-  @Get('batches/:id')
-  getBatch(@Param('id') id: string) {
-    return this.uploadService.getUploadBatchDetail(id);
-  }
-
-  @Delete('batches/:id')
-  deleteBatch(@Param('id') id: string, @Query('keepQuestions') keepQuestions?: string) {
-    return this.uploadService.deleteUploadBatch(id, keepQuestions === 'true');
+  // Bulk syllabus (taxonomy) importer — upload a bilingual syllabus workbook
+  // laid out like SSC_Exams_Complete_Syllabus_Hindi.xlsx (one sheet per
+  // subject, "English\nHindi" cells for Chapter/Topic/Sub-Topic) and it gets
+  // upserted straight into Subject -> Chapter -> Topic -> SubTopic. Safe to
+  // re-run on the same or an edited file — matching rows are updated, not
+  // duplicated. See TaxonomyImportService for the exact expected layout.
+  @Post('syllabus-excel')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  async uploadSyllabusExcel(@UploadedFile() file: any) {
+    if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
+    return this.taxonomyImportService.importFromExcel(file.buffer);
   }
 }

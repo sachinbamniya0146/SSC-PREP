@@ -10,6 +10,9 @@ import { TaxonomyImportService } from './taxonomy-import.service';
 // here, and BankUploadController didn't exist before — so the entire
 // bulk-question-upload feature (Excel/CSV/JSON/Word import with duplicate
 // detection) was unreachable dead code. Both are now registered.
+//
+// TaxonomyImportService (new) — bulk syllabus/taxonomy importer used by
+// BankUploadController's POST /bank/admin/upload/syllabus-excel route.
 @Module({
   controllers: [BankController, BankUploadController],
   providers: [BankService, QuestionBankPracticeService, BankUploadService, TaxonomyImportService],
