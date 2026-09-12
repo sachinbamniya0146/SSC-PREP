@@ -165,7 +165,6 @@ async submitAttempt(
   if (attempt.status === 'SUBMITTED') {
     throw new BadRequestException('Attempt already submitted');
   }
-
   const now = new Date();
   const expired = attempt.expiresAt != null && now > attempt.expiresAt;
 
@@ -273,8 +272,28 @@ async submitAttempt(
     );
   }
 
-  const updated = await this.prisma.testAttempt.update({
-    where: { id: attempt.id },
+  // FIX (Sep 2026 audit — duplicate submit / double-XP race condition):
+  // the `if (attempt.status === 'SUBMITTED') throw ...` check above reads
+  // the row's status BEFORE scoring, but the actual write that marks it
+  // SUBMITTED happens many lines later (after scoring + upserting answers,
+  // which can take a moment for a long test). Two submit requests for the
+  // SAME attempt landing close together — a double-tap on "Submit", or the
+  // client retrying after a slow/timed-out response it thinks failed —
+  // can both pass that early check while the row is still IN_PROGRESS,
+  // both fully score independently, and both proceed to write here. The
+  // second write would silently re-score and re-finalize an
+  // already-submitted attempt, and worse, awardTestXp() (a few lines
+  // below) would fire TWICE — double XP for one test, plus two
+  // notifyTelegramAttemptPdf() sends.
+  //
+  // Fix: this UPDATE is now a conditional updateMany — it only succeeds if
+  // the row is STILL 'IN_PROGRESS' at the instant of the write (Postgres
+  // executes the WHERE-guarded UPDATE atomically). Only one of two racing
+  // requests can ever see count === 1; the other must treat it as an
+  // already-submitted attempt and return the existing scored result
+  // instead of granting XP or sending a duplicate notification.
+  const claim = await this.prisma.testAttempt.updateMany({
+    where: { id: attempt.id, status: 'IN_PROGRESS' },
     data: {
       status: 'SUBMITTED',
       score,
@@ -284,11 +303,22 @@ async submitAttempt(
       accuracyPercent,
       submittedAt: now,
     },
+  });
+
+  const updated = await this.prisma.testAttempt.findUniqueOrThrow({
+    where: { id: attempt.id },
     include: {
       testTemplate: { select: { id: true, title: true, totalQuestions: true, totalMarks: true } },
       answers: { select: { questionId: true, selectedOption: true, isCorrect: true, timeSpentSeconds: true } },
     },
   });
+
+  if (claim.count === 0) {
+    // A racing request already finalized this attempt between our read and
+    // our write — return its (already-scored) result without granting XP
+    // or sending a second Telegram notification again.
+    return { ...updated, expired };
+  }
 
   this.gamification.awardTestXp(userId, totalCorrect, 'mock').catch(() => undefined);
 
