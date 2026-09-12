@@ -2,6 +2,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
+import { BankService } from './bank.service';
 import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
 import { randomUUID } from 'crypto';
@@ -99,6 +100,11 @@ export interface UploadResult {
   failed: number;
   errors: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string; data?: any }[];
   warnings: { row: number; message: string; questionPreview?: string }[];
+  // Phase 3 (Sachin, Sep 2026) — id of the persisted QuestionUploadBatch
+  // row for this upload, so the admin panel can deep-link straight from
+  // the just-finished result into "view in upload history" / "delete this
+  // batch" without a second lookup.
+  uploadBatchId?: string;
 }
 
 export interface QuestionTemplate {
@@ -120,7 +126,7 @@ interface DuplicateIndex {
 
 @Injectable()
 export class BankUploadService {
-  constructor(private prisma: PrismaService, private s3: S3Service) {}
+  constructor(private prisma: PrismaService, private s3: S3Service, private bank: BankService) {}
 
   /**
    * Validate and parse Excel file for bulk question upload
@@ -145,7 +151,70 @@ export class BankUploadService {
    * accurate, distinguishing message (see the try/catch added around its
    * reference-data fetch) instead of being silently re-labeled here.
    */
-  async uploadFromExcel(fileBuffer: Buffer, adminId: string): Promise<UploadResult> {
+  // Phase 3 (Sachin, Sep 2026) — persists the outcome of every upload as a
+  // QuestionUploadBatch row (see schema.prisma doc-comment), so the admin
+  // panel can later show "which file added this, when, how many failed"
+  // and delete an entire bad batch in one action instead of hunting rows
+  // by hand.
+  //
+  // Two-step because the batch's own id has to exist BEFORE processing
+  // starts for Excel/CSV/Text (so every created Question can be tagged
+  // with it via uploadBatchId — see prepareQuestion()/createQuestion()),
+  // but the final counts/errors are only known AFTER processing finishes:
+  // createUploadBatchPlaceholder() first, pass its id through to
+  // processBulkQuestions/processStructuredQuestions, then
+  // finalizeUploadBatch() once the UploadResult is in hand. The Word path
+  // below can't cleanly fit that (a parse failure throws before we'd want
+  // a batch row at all), so it uses the one-shot saveUploadBatchAfterTheFact()
+  // instead — its questions just won't carry an uploadBatchId tag, which
+  // only affects the "delete this whole batch" convenience action.
+  private async createUploadBatchPlaceholder(
+    adminId: string,
+    sourceType: 'EXCEL' | 'CSV' | 'TEXT' | 'JSON' | 'WORD',
+    filename: string | undefined,
+  ): Promise<string> {
+    const batch = await this.prisma.questionUploadBatch.create({
+      data: { adminId, sourceType, filename: filename || null },
+    });
+    return batch.id;
+  }
+
+  private async finalizeUploadBatch(batchId: string, result: UploadResult): Promise<void> {
+    await this.prisma.questionUploadBatch.update({
+      where: { id: batchId },
+      data: {
+        totalRows: result.total,
+        createdCount: result.created,
+        failedCount: result.failed,
+        errorsJson: result.errors as any,
+        warningsJson: result.warnings as any,
+      },
+    });
+    result.uploadBatchId = batchId;
+  }
+
+  private async saveUploadBatchAfterTheFact(
+    adminId: string,
+    sourceType: 'EXCEL' | 'CSV' | 'TEXT' | 'JSON' | 'WORD',
+    filename: string | undefined,
+    result: UploadResult,
+  ): Promise<string> {
+    const batch = await this.prisma.questionUploadBatch.create({
+      data: {
+        adminId,
+        sourceType,
+        filename: filename || null,
+        totalRows: result.total,
+        createdCount: result.created,
+        failedCount: result.failed,
+        errorsJson: result.errors as any,
+        warningsJson: result.warnings as any,
+      },
+    });
+    return batch.id;
+  }
+
+  async uploadFromExcel(fileBuffer: Buffer, adminId: string, filename?: string): Promise<UploadResult> {
     let headers: string[];
     let rows: any[][];
     try {
@@ -166,13 +235,16 @@ export class BankUploadService {
       throw new BadRequestException(`Failed to parse Excel file: ${message} — check the file is a real, unpasswordprotected .xlsx/.xls (an .xls saved from Google Sheets or a corrupted download are the usual causes here).`);
     }
     // Deliberately OUTSIDE the try/catch above — see BUGFIX comment.
-    return this.processBulkQuestions(headers, rows, adminId);
+    const batchId = await this.createUploadBatchPlaceholder(adminId, 'EXCEL', filename);
+    const result = await this.processBulkQuestions(headers, rows, adminId, batchId);
+    await this.finalizeUploadBatch(batchId, result);
+    return result;
   }
 
   /**
    * Validate and parse CSV file for bulk question upload
    */
-  async uploadFromCSV(fileBuffer: Buffer, adminId: string): Promise<UploadResult> {
+  async uploadFromCSV(fileBuffer: Buffer, adminId: string, filename?: string): Promise<UploadResult> {
     const text = fileBuffer.toString('utf-8');
     const lines = text.split('\n').map(line => line.trim()).filter(line => line);
     
@@ -183,20 +255,26 @@ export class BankUploadService {
     const headers = this.parseCSVLine(lines[0]);
     const rows = lines.slice(1).map(line => this.parseCSVLine(line));
 
-    return this.processBulkQuestions(headers, rows, adminId);
+    const batchId = await this.createUploadBatchPlaceholder(adminId, 'CSV', filename);
+    const result = await this.processBulkQuestions(headers, rows, adminId, batchId);
+    await this.finalizeUploadBatch(batchId, result);
+    return result;
   }
 
   /**
    * Parse text file for bulk question upload (tab-separated or JSON lines)
    */
-  async uploadFromText(fileBuffer: Buffer, adminId: string): Promise<UploadResult> {
+  async uploadFromText(fileBuffer: Buffer, adminId: string, filename?: string): Promise<UploadResult> {
     const text = fileBuffer.toString('utf-8');
     
     // Try JSON lines format first
     if (text.trim().startsWith('[') || text.trim().startsWith('{')) {
       try {
         const questions = JSON.parse(text);
-        return this.processStructuredQuestions(questions, adminId);
+        const batchId = await this.createUploadBatchPlaceholder(adminId, 'JSON', filename);
+        const result = await this.processStructuredQuestions(questions, adminId, batchId);
+        await this.finalizeUploadBatch(batchId, result);
+        return result;
       } catch {
         // Fall through to tab-separated
       }
@@ -212,13 +290,16 @@ export class BankUploadService {
     const headers = lines[0].split('\t');
     const rows = lines.slice(1).map(line => line.split('\t'));
 
-    return this.processBulkQuestions(headers, rows, adminId);
+    const batchId = await this.createUploadBatchPlaceholder(adminId, 'TEXT', filename);
+    const result = await this.processBulkQuestions(headers, rows, adminId, batchId);
+    await this.finalizeUploadBatch(batchId, result);
+    return result;
   }
 
   /**
    * Parse Word document for bulk question upload
    */
-  async uploadFromWord(fileBuffer: Buffer, adminId: string): Promise<UploadResult> {
+  async uploadFromWord(fileBuffer: Buffer, adminId: string, filename?: string): Promise<UploadResult> {
     // Same BUGFIX as uploadFromExcel() above — only the actual .docx text
     // extraction/parsing is wrapped here; processStructuredQuestions()
     // (DB reference-data fetch + row inserts) reports its own failures
@@ -233,7 +314,52 @@ export class BankUploadService {
       const message = error instanceof Error ? error.message : String(error);
       throw new BadRequestException(`Failed to parse Word document: ${message}`);
     }
-    return this.processStructuredQuestions(questions, adminId);
+    return this.processStructuredQuestions(questions, adminId).then(async (result) => {
+      // Word doesn't fit the "create batch before processing" pattern
+      // cleanly (parse failures throw before we'd want a batch row at
+      // all) — persist after the fact instead; questions from this path
+      // just won't carry an uploadBatchId tag, which only matters for the
+      // "delete this whole batch" convenience action, not correctness.
+      const batchId = await this.saveUploadBatchAfterTheFact(adminId, 'WORD', filename, result);
+      result.uploadBatchId = batchId;
+      return result;
+    });
+  }
+
+  // ---- Phase 3: upload history (admin panel "past uploads" view) ----
+  async listUploadBatches(adminId?: string) {
+    return this.prisma.questionUploadBatch.findMany({
+      where: adminId ? { adminId } : undefined,
+      select: {
+        id: true, adminId: true, sourceType: true, filename: true,
+        totalRows: true, createdCount: true, failedCount: true, createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+  }
+
+  async getUploadBatchDetail(id: string) {
+    const batch = await this.prisma.questionUploadBatch.findUnique({ where: { id } });
+    if (!batch) throw new BadRequestException('Upload batch not found');
+    return batch;
+  }
+
+  // "uploaded question ko delete bhi kar sake" — removes every Question
+  // this batch created (not just the history record), for when an admin
+  // realizes an entire upload was wrong (bad chapter mapping, duplicate
+  // run, AI-generated set that needs redoing, etc). Pass keepQuestions to
+  // only clear the history entry and leave the questions live.
+  async deleteUploadBatch(id: string, keepQuestions: boolean) {
+    const batch = await this.prisma.questionUploadBatch.findUnique({ where: { id } });
+    if (!batch) throw new BadRequestException('Upload batch not found');
+    let deletedQuestions = 0;
+    if (!keepQuestions) {
+      const del = await this.prisma.question.deleteMany({ where: { uploadBatchId: id } });
+      deletedQuestions = del.count;
+    }
+    await this.prisma.questionUploadBatch.delete({ where: { id } });
+    return { deleted: true, deletedQuestions };
   }
 
   /**
@@ -875,7 +1001,7 @@ export class BankUploadService {
   /**
    * Process bulk questions from parsed headers and rows
    */
-  private async processBulkQuestions(headers: string[], rows: any[][], adminId: string): Promise<UploadResult> {
+  private async processBulkQuestions(headers: string[], rows: any[][], adminId: string, uploadBatchId?: string | null): Promise<UploadResult> {
     const requiredHeaders = ['examId', 'subjectId', 'chapterId', 'questionText', 'correctAnswer'];
     const optionHeaders = ['optionA', 'optionB', 'optionC', 'optionD'];
 
@@ -1008,10 +1134,11 @@ export class BankUploadService {
       const rowNum = i + 2; // 1-indexed + header
       try {
         const question = this.parseQuestionRow(row, headerMap, rowNum);
-        this.resolveReferenceIds(
+        await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
           topicSlugInChapterToId, subTopicSlugInTopicToId,
+          topicIds, subTopicIds, topicChapterMap, subTopicTopicMap,
         );
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
@@ -1061,7 +1188,7 @@ export class BankUploadService {
           // object, so it can't be prepared synchronously. Fall back to
           // the original one-row-at-a-time createQuestion() for just this
           // row — correctness over speed for the uncommon image case.
-          const { published } = await this.createQuestion(question, adminId, duplicateIndex);
+          const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId);
           result.created++;
           if (!published) {
             result.warnings.push({
@@ -1072,7 +1199,7 @@ export class BankUploadService {
           }
           continue;
         }
-        const prepared = this.prepareQuestion(question, duplicateIndex);
+        const prepared = this.prepareQuestion(question, duplicateIndex, uploadBatchId);
         toCommit.push({ rowNum, row, question, data: prepared.data, published: prepared.published });
       } catch (error) {
         result.failed++;
@@ -1120,7 +1247,7 @@ export class BankUploadService {
   /**
    * Process structured questions (JSON format)
    */
-  private async processStructuredQuestions(questions: BulkUploadQuestion[], adminId: string): Promise<UploadResult> {
+  private async processStructuredQuestions(questions: BulkUploadQuestion[], adminId: string, uploadBatchId?: string | null): Promise<UploadResult> {
     // Same slug-resolution fix as processBulkQuestions() above — JSON/Word
     // uploads go through this method, and can just as easily contain
     // human-readable slugs (e.g. an AI-generated question set) instead of
@@ -1190,10 +1317,11 @@ export class BankUploadService {
       const question = questions[i];
       const rowNum = i + 1;
       try {
-        this.resolveReferenceIds(
+        await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
           topicSlugInChapterToId, subTopicSlugInTopicToId,
+          topicIds, subTopicIds, topicChapterMap, subTopicTopicMap,
         );
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
@@ -1220,7 +1348,7 @@ export class BankUploadService {
     for (const { rowNum, question } of validRows) {
       try {
         if (question.questionImageBase64 || question.options.some((o) => o.imageBase64)) {
-          const { published } = await this.createQuestion(question, adminId, duplicateIndex);
+          const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId);
           result.created++;
           if (!published) {
             result.warnings.push({
@@ -1231,7 +1359,7 @@ export class BankUploadService {
           }
           continue;
         }
-        const prepared = this.prepareQuestion(question, duplicateIndex);
+        const prepared = this.prepareQuestion(question, duplicateIndex, uploadBatchId);
         toCommit.push({ rowNum, row: question, question, data: prepared.data, published: prepared.published });
       } catch (error) {
         result.failed++;
@@ -1424,7 +1552,7 @@ export class BankUploadService {
    * chapter under a different subject), then topic using the resolved
    * chapterId, then subTopic using the resolved topicId.
    */
-  private resolveReferenceIds(
+  private async resolveReferenceIds(
     question: BulkUploadQuestion,
     examSlugToId: Map<string, string>,
     subjectSlugToId: Map<string, string>,
@@ -1432,7 +1560,11 @@ export class BankUploadService {
     chapterSlugInSubjectToId: Map<string, string>,
     topicSlugInChapterToId: Map<string, string>,
     subTopicSlugInTopicToId: Map<string, string>,
-  ): void {
+    topicIds: Set<string>,
+    subTopicIds: Set<string>,
+    topicChapterMap: Map<string, string>,
+    subTopicTopicMap: Map<string, string>,
+  ): Promise<void> {
     if (question.examId && examSlugToId.has(question.examId)) {
       question.examId = examSlugToId.get(question.examId)!;
     }
@@ -1447,36 +1579,65 @@ export class BankUploadService {
         question.chapterId = chapterSlugToId.get(question.chapterId)!;
       }
     }
+    // Phase 3 (Sachin, Sep 2026 — root cause of "topic-wise analysis
+    // students ko nahi milta hai"): topicId/subTopicId used to be dropped
+    // SILENTLY here whenever the sheet's value was a free-text descriptive
+    // title rather than an existing slug/UUID — which is exactly what
+    // SSC_CGL_MASTER_PLUS_100_5PASS_CORRECTED.xlsx's 413 unique topicId
+    // values are (e.g. "Blood Relations - Family Puzzle", never a slug).
+    // Every one of those got thrown away, so 590 fully-explained questions
+    // would have landed in the DB with a chapter but NO topic at all —
+    // defeating the entire weak-topic-practice feature this session is
+    // building toward, with no error or warning to say so. Now: when the
+    // value doesn't match an existing topic, auto-create it under the
+    // resolved chapter (idempotent — see BankService.createTopic()) instead
+    // of discarding it, and register it into topicSlugInChapterToId/
+    // topicIds/topicChapterMap so (a) later rows in this same sheet that
+    // share the topic name reuse it instead of re-hitting the DB, and (b)
+    // validateReferences() (which runs right after this, against Sets
+    // snapshotted BEFORE this upload started) accepts the brand-new id.
     if (question.topicId) {
       const scoped = topicSlugInChapterToId.get(`${question.chapterId}::${question.topicId}`);
       if (scoped) {
         question.topicId = scoped;
-      } else if (!isLikelyUuid(question.topicId)) {
-        // BUGFIX (Sachin's SSC_CGL_MASTER_PLUS sheet): topicId is OPTIONAL
-        // and several real uploaded sheets put a free-text descriptive
-        // title in this column (e.g. "Blood Relations - Family Puzzle")
-        // rather than any topic slug/UUID that exists in the Topic table.
-        // Since it's optional, a value that resolves to nothing should be
-        // dropped silently and the question still created against its
-        // (required, already-validated) chapter — not hard-rejected, which
-        // would fail 100% of rows in any sheet using this common
-        // free-text-title convention purely because of an optional field.
-        // (If it WAS a real-looking UUID that just didn't match any topic
-        // under this chapter, leave it as-is so validateReferences reports
-        // a proper "not found" error instead of silently discarding what
-        // was probably a genuine mistake worth flagging.)
-        question.topicId = undefined;
+      } else if (!isLikelyUuid(question.topicId) && question.chapterId) {
+        try {
+          const created = await this.bank.createTopic(question.chapterId, question.topicId);
+          topicSlugInChapterToId.set(`${question.chapterId}::${created.slug}`, created.id);
+          topicIds.add(created.id);
+          topicChapterMap.set(created.id, question.chapterId);
+          question.topicId = created.id;
+        } catch {
+          // Chapter itself doesn't actually exist (shouldn't happen here
+          // since chapterId is validated separately) — fall back to the
+          // old safe behavior rather than blow up the whole row.
+          question.topicId = undefined;
+        }
       }
+      // else: looks like a UUID that just doesn't match — leave as-is so
+      // validateReferences() reports a proper "not found" error below,
+      // same as before.
     }
     if (question.subTopicId) {
       const scoped = subTopicSlugInTopicToId.get(`${question.topicId}::${question.subTopicId}`);
       if (scoped) {
         question.subTopicId = scoped;
-      } else if (!isLikelyUuid(question.subTopicId)) {
-        // Same reasoning as topicId above — optional field, drop instead
-        // of hard-reject when it's a free-text label rather than a slug/id.
+      } else if (!question.topicId) {
+        // no (real) topic to hang a sub-topic off of — drop it, same as before
         question.subTopicId = undefined;
+      } else if (!isLikelyUuid(question.subTopicId)) {
+        try {
+          const created = await this.bank.createSubTopic(question.topicId, question.subTopicId);
+          subTopicSlugInTopicToId.set(`${question.topicId}::${created.slug}`, created.id);
+          subTopicIds.add(created.id);
+          subTopicTopicMap.set(created.id, question.topicId);
+          question.subTopicId = created.id;
+        } catch {
+          question.subTopicId = undefined;
+        }
       }
+      // else: looks like a UUID that doesn't match — leave as-is so
+      // validateReferences() reports a proper "not found" error below.
     }
   }
 
@@ -1742,7 +1903,7 @@ export class BankUploadService {
    * chunks — see processBulkQuestions()/processStructuredQuestions()'s
    * `commitQuestionsBatch()` calls below.
    */
-  private prepareQuestion(question: BulkUploadQuestion, duplicateIndex?: DuplicateIndex): { data: any; question: BulkUploadQuestion; searchHash: string; published: boolean } {
+  private prepareQuestion(question: BulkUploadQuestion, duplicateIndex?: DuplicateIndex, uploadBatchId?: string | null): { data: any; question: BulkUploadQuestion; searchHash: string; published: boolean } {
     // Callers (processBulkQuestions/processStructuredQuestions) already
     // route any row with a base64 image through the original sequential
     // createQuestion() before ever calling this — see the
@@ -1817,6 +1978,11 @@ export class BankUploadService {
       answerVerificationStatus: 'UNVERIFIED_SINGLE_SOURCE' as const,
       reviewStatus: hasHindiTranslation ? 'APPROVED' : 'PENDING',
       searchHash,
+      // Phase 3 (Sachin, Sep 2026) — tags every question created by this
+      // upload with the batch it came from, so admin can later see "which
+      // Excel added this" and bulk-delete an entire bad upload in one click
+      // (see QuestionUploadBatch model + deleteUploadBatch()).
+      uploadBatchId: uploadBatchId || null,
     };
 
     // Register in the shared index IMMEDIATELY (still sequential, still
@@ -1888,7 +2054,7 @@ export class BankUploadService {
     }
   }
 
-  private async createQuestion(question: BulkUploadQuestion, adminId: string, duplicateIndex?: DuplicateIndex): Promise<{ published: boolean }> {
+  private async createQuestion(question: BulkUploadQuestion, adminId: string, duplicateIndex?: DuplicateIndex, uploadBatchId?: string | null): Promise<{ published: boolean }> {
     // Session 25 — resolve any base64 images to real S3 URLs FIRST, before
     // any validation runs (so the "has an image" checks below see the
     // resolved questionImageUrl / option.imageUrl either way, regardless
@@ -2015,6 +2181,7 @@ export class BankUploadService {
         answerVerificationStatus: 'UNVERIFIED_SINGLE_SOURCE',
         reviewStatus: hasHindiTranslation ? 'APPROVED' : 'PENDING',
         searchHash,
+        uploadBatchId: uploadBatchId || null,
       },
     });
 
