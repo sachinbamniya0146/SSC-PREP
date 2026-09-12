@@ -117,11 +117,57 @@ export class QuizService {
       }
     }
 
-    const result = await this.prisma.dailyQuizAttempt.upsert({
-      where: { userId_dailyQuizId: { userId, dailyQuizId: quizId } },
-      create: { userId, dailyQuizId: quizId, score, totalCorrect, totalWrong, totalSkipped, submittedAt: new Date() },
-      update: { score, totalCorrect, totalWrong, totalSkipped, submittedAt: new Date() },
-    });
+    // FIX (Sep 2026 audit — duplicate quiz submit / double-XP race
+    // condition): the `existing?.submittedAt` check above reads the row's
+    // state BEFORE scoring, but the finalizing write happens further down.
+    // Two submit requests for the same quiz landing close together
+    // (double-tap on "Submit", or a client retry after a slow response)
+    // can both pass that early check while submittedAt is still null, both
+    // score independently, and both reach the upsert below. upsert() is
+    // atomic per-call, but nothing stopped BOTH calls from succeeding —
+    // the second one just overwrites the first's score with its own, and
+    // worse, awardTestXp() a few lines below then fires TWICE, double-
+    // crediting XP for one quiz.
+    //
+    // Fix: for the UPDATE path specifically, use a conditional updateMany
+    // guarded on `submittedAt: null` so only one of two racing requests
+    // can ever flip it. The CREATE path is naturally safe already — the
+    // unique constraint on (userId, dailyQuizId) means only one row can
+    // ever be created, and a duplicate create attempt throws P2002, which
+    // we treat the same as "someone else just submitted."
+    let result;
+    let alreadyClaimed = false;
+    if (existing) {
+      const claim = await this.prisma.dailyQuizAttempt.updateMany({
+        where: { userId, dailyQuizId: quizId, submittedAt: null },
+        data: { score, totalCorrect, totalWrong, totalSkipped, submittedAt: new Date() },
+      });
+      alreadyClaimed = claim.count === 0;
+      result = await this.prisma.dailyQuizAttempt.findUniqueOrThrow({
+        where: { userId_dailyQuizId: { userId, dailyQuizId: quizId } },
+      });
+    } else {
+      try {
+        result = await this.prisma.dailyQuizAttempt.create({
+          data: { userId, dailyQuizId: quizId, score, totalCorrect, totalWrong, totalSkipped, submittedAt: new Date() },
+        });
+      } catch (e: any) {
+        if (e?.code === 'P2002') {
+          // A racing request created the row first — this is a duplicate
+          // submit, not a new one.
+          alreadyClaimed = true;
+          result = await this.prisma.dailyQuizAttempt.findUniqueOrThrow({
+            where: { userId_dailyQuizId: { userId, dailyQuizId: quizId } },
+          });
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    if (alreadyClaimed) {
+      return { alreadySubmitted: true, result };
+    }
 
     // v1 Phase 6 — daily quiz XP (8/correct) + streak check-in
     this.gamification
