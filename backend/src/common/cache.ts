@@ -27,3 +27,21 @@ export function cacheSet(key: string, value: unknown, ttlMs: number): void {
     }
   }
 }
+
+// BUGFIX (Sep 2026 — "syllabus Excel import ke baad admin panel pe purane
+// chapter/topic counts dikhte hain"): subjects()/chapters() cache their
+// results for 5 minutes for read performance, but nothing ever invalidated
+// that cache when the underlying data actually changed — a bulk syllabus
+// import (or any admin action that adds/removes subjects, chapters, or
+// questions) would silently sit behind a stale cache for up to 5 minutes
+// no matter how many times the admin reloaded the page. Call this right
+// after any such write so the very next read is fresh.
+export function cacheClearPrefix(prefix: string): void {
+  for (const k of store.keys()) {
+    if (k.startsWith(prefix)) store.delete(k);
+  }
+}
+
+export function cacheClearAll(): void {
+  store.clear();
+}

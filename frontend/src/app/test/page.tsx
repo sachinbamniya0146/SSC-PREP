@@ -1387,7 +1387,21 @@ export default function TestPage() {
                     </p>
                   )}
                   {showAns[q.id] && q.explanation && (
-                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{q.explanation}</p>
+                    <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                      <p>{q.explanation}</p>
+                      {/* BUGFIX (Sachin report, Sep 2026 — "solution poora nahi
+                          dikhta"): explanationHindi was fetched and passed into
+                          this component's data shape (see line ~406 above) but
+                          NEVER rendered anywhere on this page — only the
+                          English q.explanation showed here, no matter how
+                          complete the Hindi explanation was in the database.
+                          Bilingual solution display (English + Hindi) is now
+                          shown together whenever both exist, matching what
+                          results/[attemptId]/page.tsx already does correctly. */}
+                      {q.explanationHindi && (
+                        <p className="mt-2 border-t border-success/20 pt-2">🇮🇳 {q.explanationHindi}</p>
+                      )}
+                    </div>
                   )}
                   {showAns[q.id] && !q.explanation && (
                     <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
@@ -1400,7 +1414,14 @@ export default function TestPage() {
                         </p>
                       )}
                       {aiExp[q.id]?.data && (
-                        <p className="mt-1 whitespace-pre-line">{aiExp[q.id]!.data!.stepByStepSolution}</p>
+                        <div className="mt-1">
+                          <p className="whitespace-pre-line">{aiExp[q.id]!.data!.stepByStepSolution}</p>
+                          {aiExp[q.id]!.data!.stepByStepSolutionHindi && (
+                            <p className="mt-2 whitespace-pre-line border-t border-primary/20 pt-2">
+                              🇮🇳 {aiExp[q.id]!.data!.stepByStepSolutionHindi}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}

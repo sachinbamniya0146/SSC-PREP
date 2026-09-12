@@ -62,6 +62,18 @@ const ACCESS_TTL_SECONDS_DEFAULT = 15 * 60;
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
+  // PERF FIX (Sep 2026 — "Google login thoda slow work karta hai, atak
+  // jata hai"): googleLogin() used to do `new OAuth2Client(...)` on EVERY
+  // single call. google-auth-library's verifyIdToken() fetches and caches
+  // Google's public signing certificates internally on the client
+  // instance — a fresh instance every request means that certificate
+  // cache can never be reused across logins, so every Google login paid
+  // for an extra network round-trip to Google's cert endpoint that a
+  // long-lived client would have skipped after the first request. Created
+  // lazily (first Google login) rather than in the constructor, since
+  // GOOGLE_CLIENT_ID/SECRET might not be configured on every deployment
+  // and we don't want to throw at app boot for that.
+  private googleClient: OAuth2Client | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -348,10 +360,14 @@ export class AuthService implements OnModuleInit {
     if (!clientId || !clientSecret) {
       throw new ForbiddenException('Google login not configured on the server');
     }
-    const client = new OAuth2Client(clientId, clientSecret);
+    // Reuse one OAuth2Client for the process lifetime (see the field's
+    // doc comment above) instead of constructing a new one per request.
+    if (!this.googleClient) {
+      this.googleClient = new OAuth2Client(clientId, clientSecret);
+    }
     let ticket;
     try {
-      ticket = await client.verifyIdToken({
+      ticket = await this.googleClient.verifyIdToken({
         idToken,
         audience: clientId,
       });
@@ -498,6 +514,28 @@ export class AuthService implements OnModuleInit {
     };
   }
 
+  // PERF FIX (Sep 2026 — login/logout latency on a busy Redis instance):
+  // ioredis's `KEYS pattern` blocks the ENTIRE Redis server while it walks
+  // every key in the keyspace to find matches — it does NOT skip past
+  // non-matching keys cheaply, so as the app's total key count grows
+  // (sessions, refresh tokens, caches, rate-limit counters, all sharing one
+  // Redis instance), a `KEYS` call anywhere gets slower for EVERY client
+  // connected to that Redis, not just the caller — including concurrent
+  // Google/email logins waiting on their own unrelated Redis calls. `SCAN`
+  // does the identical pattern match but incrementally, in small batches,
+  // without blocking other clients — the standard fix recommended by
+  // Redis's own docs for exactly this "KEYS in production" anti-pattern.
+  private async scanKeys(pattern: string): Promise<string[]> {
+    const found: string[] = [];
+    let cursor = '0';
+    do {
+      const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      found.push(...keys);
+      cursor = nextCursor;
+    } while (cursor !== '0');
+    return found;
+  }
+
   async logout(refreshToken: string, sessionId?: string): Promise<void> {
     const hash = createHash('sha256').update(refreshToken).digest('hex');
     await this.prisma.refreshToken.updateMany({
@@ -509,7 +547,7 @@ export class AuthService implements OnModuleInit {
         where: { id: sessionId, isActive: true },
         data: { isActive: false },
       });
-      const keys = await this.redis.keys(`session:*:${sessionId}`);
+      const keys = await this.scanKeys(`session:*:${sessionId}`);
       if (keys.length) await this.redis.del(...keys);
     }
   }
@@ -550,7 +588,7 @@ export class AuthService implements OnModuleInit {
           data: { revokedAt: new Date() },
         }),
       ]);
-      const oldKeys = await this.redis.keys(`user:${user.id}:*:${old.id}`);
+      const oldKeys = await this.scanKeys(`user:${user.id}:*:${old.id}`);
       if (oldKeys.length) await this.redis.del(...oldKeys);
     }
 

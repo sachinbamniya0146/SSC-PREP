@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
 import { randomUUID } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
+import { cacheClearPrefix } from '../common/cache';
 
 // Used by resolveReferenceIds() — a v4 UUID (Prisma's `@default(uuid())`
 // format) is the one case where a topicId/subTopicId that doesn't resolve
@@ -191,6 +192,14 @@ export class BankUploadService {
       },
     });
     result.uploadBatchId = batchId;
+    // BUGFIX (Sep 2026 — stale chapter/question counts after bulk upload):
+    // bank.service.ts's subjects()/chapters() cache results for 5 minutes.
+    // A bulk question upload changes both question counts per chapter and
+    // (via auto-create) possibly the chapter list itself, so without this
+    // the admin panel showed pre-upload numbers for up to 5 minutes.
+    cacheClearPrefix('bank:subjects');
+    cacheClearPrefix('bank:chapters');
+    cacheClearPrefix('bank:meta');
   }
 
   private async saveUploadBatchAfterTheFact(
@@ -211,6 +220,11 @@ export class BankUploadService {
         warningsJson: result.warnings as any,
       },
     });
+    // Same cache-staleness fix as finalizeUploadBatch() above — this is the
+    // Word-upload path's equivalent finalize step.
+    cacheClearPrefix('bank:subjects');
+    cacheClearPrefix('bank:chapters');
+    cacheClearPrefix('bank:meta');
     return batch.id;
   }
 

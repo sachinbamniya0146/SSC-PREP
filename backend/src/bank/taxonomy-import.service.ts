@@ -26,6 +26,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
+import { cacheClearPrefix } from '../common/cache';
 
 interface ParsedSubTopic {
   name: string;
@@ -218,6 +219,18 @@ export class TaxonomyImportService {
       summary.subTopics += subTopicCount;
       summary.details.push({ subject: s.name, chapters: chapterCount, topics: topicCount, subTopics: subTopicCount });
     }
+
+    // BUGFIX (Sep 2026 — "syllabus Excel import ke baad admin panel pe
+    // purane counts dikhte hain"): bank.service.ts's subjects()/chapters()
+    // cache their results for 5 minutes. Without this, a fresh import sat
+    // invisible behind that stale cache for up to 5 minutes regardless of
+    // how many times the admin reloaded /admin/topics — the upload itself
+    // always worked, only the READ was stale. Clearing both prefixes here
+    // means the very next GET /bank/subjects or /bank/chapters right after
+    // this import returns fresh counts immediately.
+    cacheClearPrefix('bank:subjects');
+    cacheClearPrefix('bank:chapters');
+    cacheClearPrefix('bank:meta');
 
     return summary;
   }
