@@ -398,7 +398,7 @@ export class BankUploadService {
         ],
         sampleRows: [
           JSON.stringify([
-            'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
+            'ssc-cgl' /* apna real examId 'Reference IDs' sheet se lein */, 'quantitative_aptitude', 'percentage', 'basic-percentage-concepts', 'percentage-change',
             'What is 20% of 150?', '150 का 20% क्या है?',
             '', '',
             '30', '30',
@@ -416,7 +416,7 @@ export class BankUploadService {
           // (as shown); this row demonstrates the OPTIONS-are-diagrams
           // case (the common one). See "Diagram question types" sheet.
           JSON.stringify([
-            'cgl-exam-id', 'reasoning-id', 'venn-diagrams-id', '', '',
+            'ssc-cgl' /* apna real examId 'Reference IDs' sheet se lein */, 'reasoning', 'venn-diagram', 'diagram-based-logic-problems', 'relationship-between-given-classes',
             'उस वेन आरेख का चयन करें जो निम्नलिखित के बीच संबंध को सर्वोत्तम रूप से दर्शाता है। टिकट, हवाई जहाज, रेल', '',
             '', '',
             '', '',
@@ -449,7 +449,7 @@ export class BankUploadService {
         ],
         sampleRows: [
           JSON.stringify([
-            'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
+            'ssc-cgl' /* apna real examId 'Reference IDs' sheet se lein */, 'quantitative_aptitude', 'percentage', 'basic-percentage-concepts', 'percentage-change',
             'What is 20% of 150?', '150 का 20% क्या है?',
             '', '',
             '30', '30',
@@ -463,7 +463,7 @@ export class BankUploadService {
             'EASY'
           ]),
           JSON.stringify([
-            'cgl-exam-id', 'reasoning-id', 'venn-diagrams-id', '', '',
+            'ssc-cgl' /* apna real examId 'Reference IDs' sheet se lein */, 'reasoning', 'venn-diagram', 'diagram-based-logic-problems', 'relationship-between-given-classes',
             'उस वेन आरेख का चयन करें जो निम्नलिखित के बीच संबंध को सर्वोत्तम रूप से दर्शाता है। टिकट, हवाई जहाज, रेल', '',
             '', '',
             '', '',
@@ -496,7 +496,7 @@ export class BankUploadService {
         ],
         sampleRows: [
           JSON.stringify([
-            'cgl-exam-id', 'quantitative-aptitude-id', 'arithmetic-id', 'percentage', 'percentage-basics',
+            'ssc-cgl' /* apna real examId 'Reference IDs' sheet se lein */, 'quantitative_aptitude', 'percentage', 'basic-percentage-concepts', 'percentage-change',
             'What is 20% of 150?', '150 का 20% क्या है?',
             '', '',
             '30', '30',
@@ -510,7 +510,7 @@ export class BankUploadService {
             'EASY'
           ]),
           JSON.stringify([
-            'cgl-exam-id', 'reasoning-id', 'venn-diagrams-id', '', '',
+            'ssc-cgl' /* apna real examId 'Reference IDs' sheet se lein */, 'reasoning', 'venn-diagram', 'diagram-based-logic-problems', 'relationship-between-given-classes',
             'उस वेन आरेख का चयन करें जो निम्नलिखित के बीच संबंध को सर्वोत्तम रूप से दर्शाता है। टिकट, हवाई जहाज, रेल', '',
             '', '',
             '', '',
@@ -537,11 +537,11 @@ export class BankUploadService {
         ],
         sampleRows: [
           JSON.stringify({
-            examId: 'cgl-exam-id',
-            subjectId: 'quantitative-aptitude-id',
-            chapterId: 'arithmetic-id',
-            topicId: 'percentage',
-            subTopicId: 'percentage-basics',
+            examId: 'ssc-cgl', // apna real examId "Reference IDs" sheet se lein
+            subjectId: 'quantitative_aptitude',
+            chapterId: 'percentage',
+            topicId: 'basic-percentage-concepts',
+            subTopicId: 'percentage-change',
             questionText: 'What is 20% of 150?',
             questionTextHindi: '150 का 20% क्या है?',
             options: [
@@ -568,9 +568,11 @@ export class BankUploadService {
           // emit directly, since it doesn't need the pipe/comma encoding
           // that the flat Excel/CSV/text columns require.
           JSON.stringify({
-            examId: 'cgl-exam-id',
-            subjectId: 'reasoning-id',
-            chapterId: 'venn-diagrams-id',
+            examId: 'ssc-cgl', // apna real examId "Reference IDs" sheet se lein
+            subjectId: 'reasoning',
+            chapterId: 'venn-diagram',
+            topicId: 'diagram-based-logic-problems',
+            subTopicId: 'relationship-between-given-classes',
             questionText: 'उस वेन आरेख का चयन करें जो निम्नलिखित के बीच संबंध को सर्वोत्तम रूप से दर्शाता है। टिकट, हवाई जहाज, रेल',
             options: [
               { key: 'A', text: '', diagramType: 'V1', diagramLabels: ['टिकट', 'हवाई जहाज', 'रेल'] },

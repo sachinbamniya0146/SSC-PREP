@@ -45,8 +45,52 @@ interface ParsedChapter {
 interface ParsedSubject {
   name: string;
   nameHindi: string | null;
+  sheetName: string;
   chapters: ParsedChapter[];
 }
+
+// BUGFIX (Sep 2026 — "syllabus Excel import karne ke baad Topic Management
+// mein purane Reasoning/Quant/English/General Awareness ke bajaye alag hi
+// subject dikhta hai / topics purane chapters ke andar nahi aate"):
+//
+// bank.service.ts seeds (and the whole rest of the app — tests.service.ts,
+// question-bank-practice.service.ts, pdf-export.service.ts, etc.) all key
+// off FOUR fixed subject slugs, using an UNDERSCORE convention:
+//   reasoning | quantitative_aptitude | english | general_awareness
+//
+// But SSC_Exams_Complete_Syllabus_Hindi.xlsx's row-1 cell in each sheet is
+// the full official exam-syllabus title, not that short name — e.g. the
+// "Reasoning" sheet's row 1 says "General Intelligence & Reasoning". This
+// importer used to slugify() that full title directly (hyphen-based), so
+// every single one of the four sheets produced a slug that could NEVER
+// match the app's real subjects:
+//   "General Intelligence & Reasoning"        -> general-intelligence-reasoning   (real: reasoning)
+//   "Quantitative Aptitude (Maths)"           -> quantitative-aptitude-maths      (real: quantitative_aptitude)
+//   "English Language & Comprehension"        -> english-language-comprehension  (real: english)
+//   "General Awareness / General Knowledge"   -> general-awareness-general-knowledge (real: general_awareness)
+//
+// Net effect: importing the syllabus created FOUR brand-new, empty-of-
+// questions duplicate subjects sitting next to the real ones instead of
+// adding chapters/topics/sub-topics onto the real Reasoning/Quantitative
+// Aptitude/English/General Awareness that already have thousands of
+// questions and non-zero chapter counts in the admin panel — exactly the
+// "topic manage mein chapter ke naam ke hisaab se nahi dikhta" symptom.
+//
+// Fix: match on the WORKBOOK SHEET NAME (not the row-1 title) against a
+// small alias table of the app's real subject slugs. Sheet names in
+// SSC_Exams_Complete_Syllabus_Hindi.xlsx are the short, stable ones
+// ("Quant Aptitude", "Reasoning", "English", "General Awareness") and
+// match this table directly. Any OTHER sheet name (a future subject like
+// "Computer Knowledge" or "Hindi" that isn't one of the four core ones)
+// falls back to the old slugify(row-1-title) behavior exactly as before —
+// nothing changes for those.
+const CORE_SUBJECT_SLUG_BY_SHEET_NAME: Record<string, string> = {
+  'quant aptitude': 'quantitative_aptitude',
+  'quantitative aptitude': 'quantitative_aptitude',
+  reasoning: 'reasoning',
+  english: 'english',
+  'general awareness': 'general_awareness',
+};
 
 export interface TaxonomyImportSummary {
   subjects: number;
@@ -107,7 +151,12 @@ export class TaxonomyImportService {
       const subjectHi = rows[1]?.[0] != null ? String(rows[1][0]).trim() : null;
       if (!subjectEn) continue; // doesn't match the expected layout — skip this sheet
 
-      const subject: ParsedSubject = { name: subjectEn, nameHindi: subjectHi || null, chapters: [] };
+      const subject: ParsedSubject = {
+        name: subjectEn,
+        nameHindi: subjectHi || null,
+        sheetName: sheetName.trim(),
+        chapters: [],
+      };
 
       let currentChapter: ParsedChapter | null = null;
       let currentTopic: ParsedTopic | null = null;
@@ -172,11 +221,24 @@ export class TaxonomyImportService {
     const summary: TaxonomyImportSummary = { subjects: 0, chapters: 0, topics: 0, subTopics: 0, details: [] };
 
     for (const s of subjects) {
-      const subjectSlug = this.slugify(s.name);
+      // See CORE_SUBJECT_SLUG_BY_SHEET_NAME doc-comment above: for the four
+      // core subjects, match by sheet name onto the app's REAL existing
+      // slug instead of slugifying the syllabus's full official title —
+      // that's what stops this import from spawning duplicate subjects.
+      const coreSlug = CORE_SUBJECT_SLUG_BY_SHEET_NAME[s.sheetName.toLowerCase()];
+      const subjectSlug = coreSlug ?? this.slugify(s.name);
       const subjectRow = await this.prisma.subject.upsert({
         where: { slug: subjectSlug },
         create: { name: s.name, nameHindi: s.nameHindi, slug: subjectSlug },
-        update: { name: s.name, nameHindi: s.nameHindi },
+        // For a core subject that already exists (the normal case on a
+        // real deployment), deliberately DON'T overwrite its existing
+        // `name` (e.g. keep "Reasoning", don't rename it to the syllabus's
+        // "General Intelligence & Reasoning") — only add/refresh the Hindi
+        // name. Every other part of the app displays/matches on that
+        // existing English name, so it must stay exactly as it was.
+        // Non-core subjects (no alias match) keep the old behavior of
+        // updating both name and nameHindi from the sheet.
+        update: coreSlug ? { nameHindi: s.nameHindi } : { name: s.name, nameHindi: s.nameHindi },
       });
       summary.subjects++;
 
