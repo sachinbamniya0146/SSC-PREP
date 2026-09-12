@@ -145,6 +145,12 @@ model User {
   chapterPurchases  ChapterPurchase[]
   referralsMade     Referral[]      @relation("Referrer")
   referralsReceived Referral[]      @relation("Referee")
+  referralWallet     ReferralWallet?
+  earningsAsReferrer ReferralEarning[] @relation("EarningsAsReferrer")
+  earningsAsReferee  ReferralEarning[] @relation("EarningsAsReferee")
+  payoutMethod       PayoutMethod?
+  withdrawalRequests WithdrawalRequest[]
+  uploadBatches      QuestionUploadBatch[]
   studyPlans        StudyPlan[]
   telegram          TelegramUser?
   reviewCards       ReviewCard[]
@@ -368,10 +374,43 @@ model ImportChunk {
   @@map("import_chunks")
 }
 
+// Bulk Upload History (admin panel "past uploads" view) — one row per
+// Excel/CSV/Text/JSON/Word bulk-upload run, so admin can see what was
+// uploaded, when, by whom, how many rows succeeded/failed, and undo an
+// entire bad run (delete the batch + optionally the questions it created).
+// This is a DIFFERENT, newer feature from the older ImportBatch/ImportChunk
+// pair above (which is PDF-extraction-pipeline specific) — kept as its own
+// model rather than overloading ImportBatch, since their lifecycles and
+// admin-facing purposes don't overlap.
+model QuestionUploadBatch {
+  id           String   @id @default(uuid())
+  adminId      String
+  sourceType   String   // EXCEL | CSV | TEXT | JSON | WORD
+  filename     String?
+  totalRows    Int      @default(0)
+  createdCount Int      @default(0)
+  failedCount  Int      @default(0)
+  errorsJson   Json?
+  warningsJson Json?
+  createdAt    DateTime @default(now())
+
+  admin     User       @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  questions Question[]
+
+  @@index([adminId])
+  @@map("question_upload_batches")
+}
+
 model Question {
   id                 String            @id @default(uuid())
   sourcePdfId        String?
   importBatchId      String?
+  // Bulk Upload History feature — tags a question with the upload run that
+  // created it (Excel/CSV/Text/JSON path; the Word path leaves this null,
+  // see bank-upload.service.ts's saveUploadBatchAfterTheFact() comment).
+  // Distinct from importBatchId (an older/different import pipeline) —
+  // kept separate rather than reusing it to avoid conflating two systems.
+  uploadBatchId      String?
   
   subjectId          String
   chapterId          String?
@@ -447,6 +486,7 @@ model Question {
 
   sourcePdf          SourcePdf?        @relation(fields: [sourcePdfId], references: [id])
   importBatch        ImportBatch?      @relation(fields: [importBatchId], references: [id])
+  uploadBatch        QuestionUploadBatch? @relation(fields: [uploadBatchId], references: [id])
   subject            Subject           @relation(fields: [subjectId], references: [id])
   chapter            Chapter?          @relation(fields: [chapterId], references: [id])
   topic              Topic?            @relation(fields: [topicId], references: [id])
@@ -660,6 +700,7 @@ model Payment {
 
   user         User          @relation(fields: [userId], references: [id])
   subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  referralEarning ReferralEarning?
 
   @@map("payments")
 }
@@ -735,6 +776,7 @@ model Referral {
 
   referrer User @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
   referee  User @relation("Referee", fields: [refereeId], references: [id], onDelete: Cascade)
+  earnings ReferralEarning[]
 
   @@unique([referrerId, refereeId])
   @@index([referrerId])
@@ -746,6 +788,113 @@ enum ReferralStatus {
   PENDING
   PAIDED
   REWARDED
+}
+
+// ================= REFERRAL EARNINGS / WALLET / WITHDRAWALS =================
+// Cash commission system: a referrer earns a % commission every time a
+// referee they brought in makes a successful paid purchase. Commission tier
+// (20% vs 30%) is decided by how many DISTINCT paid referrals the referrer
+// already has at the moment of that purchase (see referral.service.ts).
+// This is entirely separate from the older "10 paid referrals = free
+// 30-day sub" reward and the newer "20 paid referrals = free 6-month
+// upgrade" reward — a user can earn cash commission AND those milestone
+// rewards at the same time.
+
+// One row per user holding their referral-earnings balance. Kept separate
+// from any other "coins"/XP wallet in the app — this wallet holds real INR.
+model ReferralWallet {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  balanceInr        Float    @default(0) // withdrawable balance right now
+  totalEarnedInr    Float    @default(0) // lifetime commission earned
+  totalWithdrawnInr Float    @default(0) // lifetime amount paid out
+  isSuspended       Boolean  @default(false) // admin can freeze a user's referral earning/withdrawal ability
+  suspendedReason   String?
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("referral_wallets")
+}
+
+// One row per commission credit event — always tied to the exact Payment
+// that triggered it, so admin can trace "this ₹X credit came from this
+// referee's this purchase" with zero ambiguity.
+model ReferralEarning {
+  id             String   @id @default(uuid())
+  referralId     String
+  referrerId     String
+  refereeId      String
+  paymentId      String   @unique // the SUCCESSFUL Payment row that earned this commission
+  purchaseAmountInr Float
+  commissionPct  Float    // the % actually applied (20 or 30) at the time of this purchase
+  commissionInr  Float    // the actual ₹ credited to the referrer's wallet
+  createdAt      DateTime @default(now())
+
+  referral Referral @relation(fields: [referralId], references: [id], onDelete: Cascade)
+  referrer User     @relation("EarningsAsReferrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referee  User     @relation("EarningsAsReferee", fields: [refereeId], references: [id], onDelete: Cascade)
+  payment  Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId])
+  @@map("referral_earnings")
+}
+
+// The bank/UPI destination a user wants their withdrawals sent to. Only one
+// active payout method per user at a time (keep it simple — re-saving
+// overwrites, never leaves an ambiguous "which one gets paid" situation).
+enum PayoutMethodType {
+  UPI
+  BANK_ACCOUNT
+}
+
+model PayoutMethod {
+  id            String           @id @default(uuid())
+  userId        String           @unique
+  type          PayoutMethodType
+  upiId         String? // e.g. name@okhdfcbank
+  bankAccountNo String?
+  bankIfsc      String?
+  bankAccountName String?
+  updatedAt     DateTime         @updatedAt
+  createdAt     DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("payout_methods")
+}
+
+enum WithdrawalStatus {
+  REQUESTED   // user asked to withdraw; money is on hold (deducted from balance) but not yet sent
+  APPROVED    // admin confirmed the payout should go out (about to call Cashfree Payouts, or was sent manually)
+  PROCESSING  // Cashfree Payouts transfer API call is in-flight
+  PAID        // money confirmed sent — the ONLY state that keeps the deduction permanent
+  REJECTED    // admin rejected — balance is refunded back to wallet
+  FAILED      // Cashfree Payouts transfer failed — balance is refunded back to wallet
+}
+
+model WithdrawalRequest {
+  id               String           @id @default(uuid())
+  userId           String
+  amountInr        Float
+  status           WithdrawalStatus @default(REQUESTED)
+  payoutMethodType PayoutMethodType
+  upiId            String?
+  bankAccountNo    String?
+  bankIfsc         String?
+  bankAccountName  String?
+  cashfreeTransferId String?        // Cashfree Payouts transfer_id, once initiated
+  adminNote        String?
+  processedByAdminId String?
+  processedAt      DateTime?
+  createdAt        DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("withdrawal_requests")
 }
 
 // ================= DAILY QUIZ =================
