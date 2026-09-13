@@ -20,6 +20,35 @@ function isLikelyUuid(value: string): boolean {
   return UUID_RE.test(value.trim());
 }
 
+// BUGFIX (Sep 2026 — "syllabus ke topic/subtopic naam jaise old excel me
+// hain, vaise hi format mein daalna hai" / messy auto-created topic names):
+// the official syllabus workbook format (same one TaxonomyImportService's
+// syllabus-excel importer expects — see its own splitBilingual()) writes a
+// chapter/topic/sub-topic cell as TWO LINES in one cell: English name on
+// line 1, Hindi name on line 2 (e.g. "Basic Family Tree Problems\nआधारभूत
+// वंशावली समस्याएँ"). Sachin's corrected question workbook puts topicId/
+// subTopicId in exactly this same bilingual format (matching the syllabus
+// he's mapping against) rather than a plain slug — which is the CORRECT,
+// expected way to fill those columns when you don't already know the
+// slug. But resolveReferenceIds() below used to pass that whole raw
+// two-line string straight into createTopic()/createSubTopic() as the
+// English `name` with no Hindi name at all — so every auto-created topic
+// ended up with the Hindi text baked into the "English" name field, a
+// slug that silently dropped the Hindi half entirely (slugify() strips
+// all non a-z0-9 characters, i.e. all Devanagari), and no nameHindi saved
+// even though it was right there in the cell. Same bilingual split used
+// by TaxonomyImportService now runs here too, so a topic/sub-topic typed
+// in the official "English\nHindi" syllabus format creates a clean,
+// correctly-named record — English name, Hindi name, and a sane
+// English-only slug — instead of a mangled one.
+function splitBilingualCell(raw: string): { en: string; hi: string | null } {
+  const parts = raw
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return { en: parts[0] ?? raw.trim(), hi: parts[1] ?? null };
+}
+
 export interface BulkUploadQuestion {
   examId: string;
   subjectId: string;
@@ -398,15 +427,43 @@ export class BankUploadService {
     const text = fileBuffer.toString('utf-8');
     
     // Try JSON lines format first
-    if (text.trim().startsWith('[') || text.trim().startsWith('{')) {
+    //
+    // BUGFIX (Sep 2026 — "internal server error aata hai, uska asli reason
+    // kabhi nahi pata chalta" root cause): this try/catch used to wrap
+    // JSON.parse(text) AND processStructuredQuestions() (the whole DB
+    // reference-fetch + 500-600-row image-upload pipeline) together. ANY
+    // failure inside processStructuredQuestions — a bad chapter/topic
+    // reference, an S3 upload error on one of the base64 images, a DB
+    // hiccup, even a genuine BadRequestException with a clear message —
+    // got silently swallowed by this bare `catch {}` and treated as "this
+    // wasn't valid JSON after all", falling through to parse the SAME
+    // JSON text as tab-separated lines instead. A JSON array obviously has
+    // no tabs, so that fallback produced a near-meaningless second error
+    // (or, worse, an empty/garbage single "row") that had nothing to do
+    // with the REAL problem — exactly why the admin panel showed a
+    // generic, undiagnosable "Internal Server Error" instead of the
+    // specific reason the upload actually failed.
+    //
+    // Fix: only JSON.parse() itself is inside the try/catch now (a genuine
+    // "this text isn't valid JSON" case, where falling through to
+    // tab-separated parsing is the correct behavior). Once parsing
+    // succeeds, processStructuredQuestions() runs OUTSIDE this catch, so
+    // any error it throws propagates to the controller with its real,
+    // specific message intact.
+    const trimmed = text.trim();
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      let questions: any;
+      let isJson = true;
       try {
-        const questions = JSON.parse(text);
+        questions = JSON.parse(text);
+      } catch {
+        isJson = false; // genuinely not valid JSON — fall through to tab-separated below
+      }
+      if (isJson) {
         const batchId = await this.createUploadBatchPlaceholder(adminId, 'JSON', filename);
         const result = await this.processStructuredQuestions(questions, adminId, batchId, isPracticeOnly);
         await this.finalizeUploadBatch(batchId, result);
         return result;
-      } catch {
-        // Fall through to tab-separated
       }
     }
 
@@ -1911,7 +1968,11 @@ export class BankUploadService {
         question.topicId = scoped;
       } else if (!isLikelyUuid(question.topicId) && question.chapterId) {
         try {
-          const created = await this.bank.createTopic(question.chapterId, question.topicId);
+          // BUGFIX (see splitBilingualCell() doc-comment above) — split
+          // "English\nHindi" cells before creating, instead of passing the
+          // raw combined string as the English name.
+          const { en, hi } = splitBilingualCell(question.topicId);
+          const created = await this.bank.createTopic(question.chapterId, en, hi || undefined);
           topicSlugInChapterToId.set(`${question.chapterId}::${created.slug}`, created.id);
           topicIds.add(created.id);
           topicChapterMap.set(created.id, question.chapterId);
@@ -1936,7 +1997,9 @@ export class BankUploadService {
         question.subTopicId = undefined;
       } else if (!isLikelyUuid(question.subTopicId)) {
         try {
-          const created = await this.bank.createSubTopic(question.topicId, question.subTopicId);
+          // Same bilingual-split fix as topicId above.
+          const { en, hi } = splitBilingualCell(question.subTopicId);
+          const created = await this.bank.createSubTopic(question.topicId, en, hi || undefined);
           subTopicSlugInTopicToId.set(`${question.topicId}::${created.slug}`, created.id);
           subTopicIds.add(created.id);
           subTopicTopicMap.set(created.id, question.topicId);
