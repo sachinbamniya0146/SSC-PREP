@@ -27,6 +27,7 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 type Subject = {
   id: string;
   name: string;
+  nameHindi?: string | null;
   slug: string;
   questionCount: number;
   chapterCount: number;
@@ -35,9 +36,10 @@ type Subject = {
 type AdminChapter = {
   id: string;
   name: string;
+  nameHindi?: string | null;
   slug: string;
   subjectId: string;
-  subject: { name: string; slug: string };
+  subject: { name: string; nameHindi?: string | null; slug: string };
 };
 
 export default function ChapterManagementPage() {
@@ -54,6 +56,7 @@ export default function ChapterManagementPage() {
   const [chaptersErr, setChaptersErr] = React.useState("");
 
   const [newName, setNewName] = React.useState("");
+  const [newNameHindi, setNewNameHindi] = React.useState("");
   const [creating, setCreating] = React.useState(false);
   const [createMsg, setCreateMsg] = React.useState("");
   const [createErr, setCreateErr] = React.useState("");
@@ -157,7 +160,7 @@ export default function ChapterManagementPage() {
       const r = await fetchAuth(`${API_BASE}/bank/admin/chapters`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subjectId: selectedSubjectId, name: trimmed }),
+        body: JSON.stringify({ subjectId: selectedSubjectId, name: trimmed, nameHindi: newNameHindi.trim() || undefined }),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
@@ -166,6 +169,7 @@ export default function ChapterManagementPage() {
       }
       const created: AdminChapter = await r.json();
       setNewName("");
+      setNewNameHindi("");
       const refreshed = await loadChapters(selectedSubjectId);
       // createChapter() on the backend is idempotent by (subjectId, slug) —
       // if the list didn't grow, this name already existed and the
@@ -236,7 +240,7 @@ export default function ChapterManagementPage() {
                       : "border-border text-muted-foreground"
                   }`}
                 >
-                  {s.name} <span className="opacity-70">({s.chapterCount} ch)</span>
+                  {s.name}{s.nameHindi ? ` / ${s.nameHindi}` : ""} <span className="opacity-70">({s.chapterCount} ch)</span>
                 </button>
               ))}
             </div>
@@ -251,7 +255,15 @@ export default function ChapterManagementPage() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && createChapter()}
-                  placeholder="Chapter ka naam, jaise 'Percentage' ya 'Modern History'"
+                  placeholder="Chapter ka naam (English), jaise 'Percentage' ya 'Modern History'"
+                  className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                  disabled={!selectedSubjectId || creating}
+                />
+                <input
+                  value={newNameHindi}
+                  onChange={(e) => setNewNameHindi(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && createChapter()}
+                  placeholder="Hindi naam (optional), jaise 'प्रतिशत'"
                   className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
                   disabled={!selectedSubjectId || creating}
                 />
@@ -273,6 +285,7 @@ export default function ChapterManagementPage() {
                 <thead className="border-b border-border text-xs text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3">Chapter</th>
+                    <th className="px-4 py-3">हिंदी नाम</th>
                     <th className="px-4 py-3">Slug</th>
                     <th className="px-4 py-3">Chapter ID</th>
                     <th className="px-4 py-3"></th>
@@ -281,17 +294,17 @@ export default function ChapterManagementPage() {
                 <tbody>
                   {chaptersErr && (
                     <tr>
-                      <td colSpan={4} className="px-4 py-6 text-center text-sm text-danger">{chaptersErr}</td>
+                      <td colSpan={5} className="px-4 py-6 text-center text-sm text-danger">{chaptersErr}</td>
                     </tr>
                   )}
                   {!chaptersErr && chaptersLoading && (
                     <tr>
-                      <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">Loading chapters...</td>
+                      <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted-foreground">Loading chapters...</td>
                     </tr>
                   )}
                   {!chaptersErr && !chaptersLoading && chapters.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                      <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted-foreground">
                         Is subject mein abhi koi chapter nahi hai — upar se pehla chapter banayein.
                       </td>
                     </tr>
@@ -299,6 +312,7 @@ export default function ChapterManagementPage() {
                   {!chaptersErr && !chaptersLoading && chapters.map((c) => (
                     <tr key={c.id} className="border-b border-border last:border-0">
                       <td className="px-4 py-3 font-medium">{c.name}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{c.nameHindi || "—"}</td>
                       <td className="px-4 py-3 text-muted-foreground">{c.slug}</td>
                       <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{c.id}</td>
                       <td className="px-4 py-3 text-right">

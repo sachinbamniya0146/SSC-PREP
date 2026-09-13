@@ -271,17 +271,25 @@ export class BankService implements OnModuleInit {
   // questions for that exam (deliberately not filtered out — an empty cell
   // is exactly the information admin needs to know what to upload next).
   async contentCoverageDrilldown() {
-    const [exams, subjects, chapters, counts] = await Promise.all([
+    const [exams, subjects, chapters, topics, subTopics, counts, topicCounts, subTopicCounts] = await Promise.all([
       this.prisma.exam.findMany({
         select: { id: true, name: true, slug: true, code: true, isActive: true },
         orderBy: { name: 'asc' },
       }),
       this.prisma.subject.findMany({
-        select: { id: true, name: true, slug: true },
+        select: { id: true, name: true, nameHindi: true, slug: true },
         orderBy: { name: 'asc' },
       }),
       this.prisma.chapter.findMany({
-        select: { id: true, name: true, slug: true, subjectId: true },
+        select: { id: true, name: true, nameHindi: true, slug: true, subjectId: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.topic.findMany({
+        select: { id: true, name: true, nameHindi: true, slug: true, chapterId: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.subTopic.findMany({
+        select: { id: true, name: true, nameHindi: true, slug: true, topicId: true },
         orderBy: { name: 'asc' },
       }),
       // Approved+live count AND total count (including pending/unapproved),
@@ -319,24 +327,87 @@ export class BankService implements OnModuleInit {
         WHERE q."examId" IS NOT NULL AND q."chapterId" IS NOT NULL
         GROUP BY q."examId", q."chapterId";
       `,
+      // NEW — same idea, one level deeper: per exam+topic totals, so the
+      // "kaunse topic/sub-topic mein abhi tak koi question nahi hai" gap
+      // list (below) can tell a chapter with SOME questions apart from a
+      // chapter whose questions all sit outside any specific topic.
+      this.prisma.$queryRaw<Array<{ examId: string | null; topicId: string | null; total: number; approvedLive: number }>>`
+        SELECT q."examId", q."topicId",
+               COUNT(q.id)::int AS total,
+               COUNT(q.id) FILTER (
+                 WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+               )::int AS "approvedLive"
+        FROM questions q
+        WHERE q."examId" IS NOT NULL AND q."topicId" IS NOT NULL
+        GROUP BY q."examId", q."topicId";
+      `,
+      this.prisma.$queryRaw<Array<{ examId: string | null; subTopicId: string | null; total: number; approvedLive: number }>>`
+        SELECT q."examId", q."subTopicId",
+               COUNT(q.id)::int AS total,
+               COUNT(q.id) FILTER (
+                 WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+               )::int AS "approvedLive"
+        FROM questions q
+        WHERE q."examId" IS NOT NULL AND q."subTopicId" IS NOT NULL
+        GROUP BY q."examId", q."subTopicId";
+      `,
     ]);
 
-    const countKey = (examId: string, chapterId: string) => `${examId}:${chapterId}`;
+    const countKey = (examId: string, id: string) => `${examId}:${id}`;
     const countMap = new Map(counts.map((c) => [countKey(c.examId!, c.chapterId!), c]));
+    const topicCountMap = new Map(topicCounts.map((c) => [countKey(c.examId!, c.topicId!), c]));
+    const subTopicCountMap = new Map(subTopicCounts.map((c) => [countKey(c.examId!, c.subTopicId!), c]));
+
     const chaptersBySubject = new Map<string, typeof chapters>();
     for (const ch of chapters) {
       const list = chaptersBySubject.get(ch.subjectId) ?? [];
       list.push(ch);
       chaptersBySubject.set(ch.subjectId, list);
     }
+    const topicsByChapter = new Map<string, typeof topics>();
+    for (const t of topics) {
+      const list = topicsByChapter.get(t.chapterId) ?? [];
+      list.push(t);
+      topicsByChapter.set(t.chapterId, list);
+    }
+    const subTopicsByTopic = new Map<string, typeof subTopics>();
+    for (const st of subTopics) {
+      const list = subTopicsByTopic.get(st.topicId) ?? [];
+      list.push(st);
+      subTopicsByTopic.set(st.topicId, list);
+    }
 
     const tree = exams.map((exam) => {
       const subjectRows = subjects.map((subj) => {
         const chapterRows = (chaptersBySubject.get(subj.id) ?? []).map((ch) => {
           const c = countMap.get(countKey(exam.id, ch.id));
+          const topicRows = (topicsByChapter.get(ch.id) ?? []).map((t) => {
+            const tc = topicCountMap.get(countKey(exam.id, t.id));
+            const subTopicRows = (subTopicsByTopic.get(t.id) ?? []).map((st) => {
+              const stc = subTopicCountMap.get(countKey(exam.id, st.id));
+              return {
+                subTopicId: st.id,
+                subTopicName: st.name,
+                subTopicNameHindi: st.nameHindi ?? null,
+                subTopicSlug: st.slug,
+                total: stc?.total ?? 0,
+                approvedLive: stc?.approvedLive ?? 0,
+              };
+            });
+            return {
+              topicId: t.id,
+              topicName: t.name,
+              topicNameHindi: t.nameHindi ?? null,
+              topicSlug: t.slug,
+              total: tc?.total ?? 0,
+              approvedLive: tc?.approvedLive ?? 0,
+              subTopics: subTopicRows,
+            };
+          });
           return {
             chapterId: ch.id,
             chapterName: ch.name,
+            chapterNameHindi: ch.nameHindi ?? null,
             chapterSlug: ch.slug,
             total: c?.total ?? 0,
             approvedLive: c?.approvedLive ?? 0,
@@ -344,6 +415,7 @@ export class BankService implements OnModuleInit {
             pyqCount: c?.pyqCount ?? 0,
             practiceCount: c?.practiceCount ?? 0,
             withSolution: c?.withSolution ?? 0,
+            topics: topicRows,
           };
         });
         const subjectTotal = chapterRows.reduce((s, c) => s + c.total, 0);
@@ -351,6 +423,7 @@ export class BankService implements OnModuleInit {
         return {
           subjectId: subj.id,
           subjectName: subj.name,
+          subjectNameHindi: subj.nameHindi ?? null,
           subjectSlug: subj.slug,
           total: subjectTotal,
           approvedLive: subjectApproved,
@@ -443,7 +516,7 @@ export class BankService implements OnModuleInit {
     const cached = cacheGet<any>(cacheKey);
     if (cached) return cached;
     const out = await this.prisma.$queryRaw`
-      SELECT s.id, s.name, s.slug,
+      SELECT s.id, s.name, s."nameHindi", s.slug,
              COUNT(q.id)::int AS "questionCount",
              COUNT(DISTINCT q."chapterId")::int AS "chapterCount"
       FROM subjects s
@@ -465,7 +538,7 @@ export class BankService implements OnModuleInit {
     // this is purely additive, default behavior unchanged.
     if (includeEmpty) {
       return this.prisma.$queryRaw`
-        SELECT c.id, c.name, c.slug, sub.name AS subject,
+        SELECT c.id, c.name, c."nameHindi", c.slug, sub.name AS subject,
                COUNT(q.id) FILTER (
                  WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
                  AND (${examId}::text IS NULL OR q."examId" = ${examId})
@@ -478,7 +551,7 @@ export class BankService implements OnModuleInit {
         ORDER BY c.name;`;
     }
     return this.prisma.$queryRaw`
-      SELECT c.id, c.name, c.slug, sub.name AS subject, COUNT(q.id)::int AS count
+      SELECT c.id, c.name, c."nameHindi", c.slug, sub.name AS subject, COUNT(q.id)::int AS count
       FROM chapters c
       JOIN subjects sub ON sub.id = c."subjectId"
       LEFT JOIN questions q ON q."chapterId" = c.id
@@ -534,7 +607,7 @@ export class BankService implements OnModuleInit {
   // exam they actually picked.
   async topics(chapterId?: string, examId?: string) {
     return this.prisma.$queryRaw`
-      SELECT t.id, t.name, t.slug, COUNT(q.id)::int AS count
+      SELECT t.id, t.name, t."nameHindi", t.slug, COUNT(q.id)::int AS count
       FROM topics t
       LEFT JOIN questions q ON q."topicId" = t.id
            AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
@@ -568,13 +641,22 @@ export class BankService implements OnModuleInit {
   async listAllChaptersForAdmin(subjectId?: string) {
     return this.prisma.chapter.findMany({
       where: subjectId ? { subjectId } : undefined,
-      select: { id: true, name: true, slug: true, subjectId: true, subject: { select: { name: true, slug: true } } },
+      select: {
+        id: true, name: true, nameHindi: true, slug: true, subjectId: true,
+        subject: { select: { name: true, nameHindi: true, slug: true } },
+      },
       orderBy: { name: 'asc' },
     });
   }
 
-  /** Idempotent by (subjectId, slug): re-creating with the same name is a no-op, returns the existing row. */
-  async createChapter(subjectId: string, name: string): Promise<{ id: string; name: string; slug: string; subjectId: string }> {
+  /**
+   * Idempotent by (subjectId, slug): re-creating with the same name is a
+   * no-op, returns the existing row. `nameHindi` mirrors createTopic()/
+   * createSubTopic() below — lets an admin manually adding a chapter (or
+   * the taxonomy syllabus-Excel importer backfilling one created earlier
+   * without a Hindi name) set/refresh it the same way.
+   */
+  async createChapter(subjectId: string, name: string, nameHindi?: string): Promise<{ id: string; name: string; slug: string; subjectId: string }> {
     const subject = await this.prisma.subject.findUnique({ where: { id: subjectId } });
     if (!subject) throw new BadRequestException(`Subject not found: ${subjectId}`);
     const trimmedName = (name ?? '').trim();
@@ -584,8 +666,13 @@ export class BankService implements OnModuleInit {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '') || 'chapter';
     const existing = await this.prisma.chapter.findUnique({ where: { subjectId_slug: { subjectId, slug } } });
-    if (existing) return existing;
-    return this.prisma.chapter.create({ data: { subjectId, name: trimmedName, slug } });
+    if (existing) {
+      if (nameHindi && !(existing as any).nameHindi) {
+        return this.prisma.chapter.update({ where: { id: existing.id }, data: { nameHindi } });
+      }
+      return existing;
+    }
+    return this.prisma.chapter.create({ data: { subjectId, name: trimmedName, nameHindi: nameHindi || null, slug } });
   }
 
   // ---- Question review queue (bulk-upload questions, not PDF-ingestion) ----
@@ -810,9 +897,10 @@ export class BankService implements OnModuleInit {
       select: {
         id: true,
         name: true,
+        nameHindi: true,
         slug: true,
         chapterId: true,
-        chapter: { select: { name: true, slug: true, subject: { select: { name: true } } } },
+        chapter: { select: { name: true, nameHindi: true, slug: true, subject: { select: { name: true, nameHindi: true } } } },
       },
       orderBy: { name: 'asc' },
     });

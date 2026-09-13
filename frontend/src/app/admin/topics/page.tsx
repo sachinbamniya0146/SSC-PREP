@@ -18,6 +18,7 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 type Subject = {
   id: string;
   name: string;
+  nameHindi?: string | null;
   slug: string;
   questionCount: number;
   chapterCount: number;
@@ -26,17 +27,19 @@ type Subject = {
 type AdminChapter = {
   id: string;
   name: string;
+  nameHindi?: string | null;
   slug: string;
   subjectId: string;
-  subject: { name: string; slug: string };
+  subject: { name: string; nameHindi?: string | null; slug: string };
 };
 
 type AdminTopic = {
   id: string;
   name: string;
+  nameHindi?: string | null;
   slug: string;
   chapterId: string;
-  chapter: { name: string; slug: string; subject: { name: string } };
+  chapter: { name: string; nameHindi?: string | null; slug: string; subject: { name: string; nameHindi?: string | null } };
 };
 
 type TaxonomyImportSummary = {
@@ -66,6 +69,7 @@ export default function TopicManagementPage() {
   const [topicsErr, setTopicsErr] = React.useState("");
 
   const [newName, setNewName] = React.useState("");
+  const [newNameHindi, setNewNameHindi] = React.useState("");
   const [creating, setCreating] = React.useState(false);
   const [createMsg, setCreateMsg] = React.useState("");
   const [createErr, setCreateErr] = React.useState("");
@@ -212,7 +216,7 @@ export default function TopicManagementPage() {
       const r = await fetchAuth(`${API_BASE}/bank/admin/topics`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chapterId: selectedChapterId, name: trimmed }),
+        body: JSON.stringify({ chapterId: selectedChapterId, name: trimmed, nameHindi: newNameHindi.trim() || undefined }),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
@@ -221,6 +225,7 @@ export default function TopicManagementPage() {
       }
       const created: AdminTopic = await r.json();
       setNewName("");
+      setNewNameHindi("");
       const refreshed = await loadTopics(selectedChapterId);
       setCreateMsg(
         refreshed.length === countBefore
@@ -379,7 +384,7 @@ export default function TopicManagementPage() {
                         : "border-border text-muted-foreground"
                     }`}
                   >
-                    {s.name} <span className="opacity-70">({s.chapterCount} ch)</span>
+                    {s.name}{s.nameHindi ? ` / ${s.nameHindi}` : ""} <span className="opacity-70">({s.chapterCount} ch)</span>
                   </button>
                 ))}
               </div>
@@ -389,7 +394,7 @@ export default function TopicManagementPage() {
             {selectedSubjectId && (
               <div className="mt-4">
                 <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                  2. Chapter चुनें {selectedSubject ? `(${selectedSubject.name})` : ""}
+                  2. Chapter चुनें {selectedSubject ? `(${selectedSubject.name}${selectedSubject.nameHindi ? ` / ${selectedSubject.nameHindi}` : ""})` : ""}
                 </p>
                 {chaptersErr && <p className="text-sm text-danger">{chaptersErr}</p>}
                 {chaptersLoading ? (
@@ -413,7 +418,7 @@ export default function TopicManagementPage() {
                             : "border-border text-muted-foreground"
                         }`}
                       >
-                        {c.name}
+                        {c.name}{c.nameHindi ? ` / ${c.nameHindi}` : ""}
                       </button>
                     ))}
                   </div>
@@ -426,14 +431,22 @@ export default function TopicManagementPage() {
               <>
                 <div className="card mt-6 p-4">
                   <h2 className="font-semibold">
-                    ➕ New Topic{selectedChapter ? ` — ${selectedChapter.name}` : ""}
+                    ➕ New Topic{selectedChapter ? ` — ${selectedChapter.name}${selectedChapter.nameHindi ? ` / ${selectedChapter.nameHindi}` : ""}` : ""}
                   </h2>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                     <input
                       value={newName}
                       onChange={(e) => setNewName(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && createTopic()}
-                      placeholder="Topic ka naam, jaise 'Noun' ya 'Percentage Basics'"
+                      placeholder="Topic ka naam (English), jaise 'Noun' ya 'Percentage Basics'"
+                      className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                      disabled={creating}
+                    />
+                    <input
+                      value={newNameHindi}
+                      onChange={(e) => setNewNameHindi(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && createTopic()}
+                      placeholder="Hindi naam (optional), jaise 'संज्ञा'"
                       className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
                       disabled={creating}
                     />
@@ -454,6 +467,7 @@ export default function TopicManagementPage() {
                     <thead className="border-b border-border text-xs text-muted-foreground">
                       <tr>
                         <th className="px-4 py-3">Topic</th>
+                        <th className="px-4 py-3">हिंदी नाम</th>
                         <th className="px-4 py-3">Slug</th>
                         <th className="px-4 py-3">Topic ID</th>
                         <th className="px-4 py-3"></th>
@@ -462,19 +476,19 @@ export default function TopicManagementPage() {
                     <tbody>
                       {topicsErr && (
                         <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-sm text-danger">{topicsErr}</td>
+                          <td colSpan={5} className="px-4 py-6 text-center text-sm text-danger">{topicsErr}</td>
                         </tr>
                       )}
                       {!topicsErr && topicsLoading && (
                         <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                          <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted-foreground">
                             Loading topics...
                           </td>
                         </tr>
                       )}
                       {!topicsErr && !topicsLoading && topics.length === 0 && (
                         <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                          <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted-foreground">
                             Is chapter mein abhi koi topic nahi hai — upar se pehla topic banayein.
                           </td>
                         </tr>
@@ -484,6 +498,7 @@ export default function TopicManagementPage() {
                         topics.map((t) => (
                           <tr key={t.id} className="border-b border-border last:border-0">
                             <td className="px-4 py-3 font-medium">{t.name}</td>
+                            <td className="px-4 py-3 text-muted-foreground">{t.nameHindi || "—"}</td>
                             <td className="px-4 py-3 text-muted-foreground">{t.slug}</td>
                             <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{t.id}</td>
                             <td className="px-4 py-3 text-right">

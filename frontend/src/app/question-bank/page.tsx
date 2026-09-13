@@ -7,6 +7,7 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 interface Subject {
   id: string;
   name: string;
+  nameHindi?: string | null;
   slug: string;
   questionCount: number;
   chapterCount: number;
@@ -19,6 +20,7 @@ interface Exam {
 interface Chapter {
   id: string;
   name: string;
+  nameHindi?: string | null;
   subject: string;
   count: number;
 }
@@ -432,7 +434,9 @@ export default function QuestionBankPage() {
           >
             <option value="">All Subjects</option>
             {subjects.filter((s) => s.questionCount > 0).map((s) => (
-              <option key={s.id} value={s.id}>{s.name} ({s.questionCount})</option>
+              <option key={s.id} value={s.id}>
+                {s.name}{s.nameHindi ? ` / ${s.nameHindi}` : ""} ({s.questionCount})
+              </option>
             ))}
           </select>
         </div>
@@ -442,7 +446,9 @@ export default function QuestionBankPage() {
             className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" disabled={!subjectId}>
             <option value="">All Chapters</option>
             {chapters.map((c) => (
-              <option key={c.id} value={c.id}>{c.name} ({c.count})</option>
+              <option key={c.id} value={c.id}>
+                {c.name}{c.nameHindi ? ` / ${c.nameHindi}` : ""} ({c.count})
+              </option>
             ))}
           </select>
         </div>

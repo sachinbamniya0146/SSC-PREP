@@ -785,6 +785,10 @@ export class BankUploadService {
       ['7. marks default to 1, negativeMarks default to 0.25'],
       ['8. examId, subjectId, chapterId MUST exactly match an existing ID — see the'],
       ['   "Reference IDs" sheet (next tab) for every real ID currently in the database.'],
+      ['8b. Chapter/Topic/Sub-Topic names must follow the official syllabus — see the'],
+      ['    "Syllabus (Hindi+English)" sheet (next tab after Reference IDs) for the full'],
+      ['    Subject → Chapter → Topic → Sub-Topic tree with both English and Hindi names.'],
+      ['    Pick the matching slug from "Reference IDs" for whichever row you need.'],
       ['9. topicId and subTopicId are optional but recommended — Year-wise custom tests let'],
       ['   students filter down to a specific topic, which only works if this is set.'],
       ['10. Duplicate questions (same text + same options + same answer) are auto-detected'],
@@ -807,10 +811,10 @@ export class BankUploadService {
     // you'd type in the main sheet's subjectId column), not a raw UUID.
     const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
       this.prisma.exam.findMany({ select: { id: true, name: true, slug: true }, orderBy: { name: 'asc' } }),
-      this.prisma.subject.findMany({ select: { id: true, name: true, slug: true }, orderBy: { name: 'asc' } }),
-      this.prisma.chapter.findMany({ select: { id: true, name: true, slug: true, subjectId: true }, orderBy: { name: 'asc' } }),
-      this.prisma.topic.findMany({ select: { id: true, name: true, slug: true, chapterId: true }, orderBy: { name: 'asc' } }),
-      this.prisma.subTopic.findMany({ select: { id: true, name: true, slug: true, topicId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.subject.findMany({ select: { id: true, name: true, nameHindi: true, slug: true }, orderBy: { name: 'asc' } }),
+      this.prisma.chapter.findMany({ select: { id: true, name: true, nameHindi: true, slug: true, subjectId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.topic.findMany({ select: { id: true, name: true, nameHindi: true, slug: true, chapterId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.subTopic.findMany({ select: { id: true, name: true, nameHindi: true, slug: true, topicId: true }, orderBy: { name: 'asc' } }),
     ]);
 
     const subjectSlugById = new Map(subjects.map(s => [s.id, s.slug]));
@@ -823,23 +827,85 @@ export class BankUploadService {
       ...(exams.length ? exams.map(e => [e.slug, e.name, e.id]) : [['(no exams yet — is the database seeded?)', '', '']]),
       [''],
       ['Reference: Valid Subject IDs — type the value from the FIRST column below into the Questions Template sheet'],
-      ['subjectId (TYPE THIS)', 'name', 'id (internal UUID — reference only, do not type this)'],
-      ...(subjects.length ? subjects.map(s => [s.slug, s.name, s.id]) : [['(no subjects yet — is the database seeded?)', '', '']]),
+      ['subjectId (TYPE THIS)', 'name (English)', 'nameHindi (हिंदी)', 'id (internal UUID — reference only, do not type this)'],
+      ...(subjects.length ? subjects.map(s => [s.slug, s.name, s.nameHindi || '', s.id]) : [['(no subjects yet — is the database seeded?)', '', '', '']]),
       [''],
       ['Reference: Valid Chapter IDs — type the value from the FIRST column below into the Questions Template sheet'],
-      ['chapterId (TYPE THIS)', 'name', 'subjectId (must match the subjectId column you use for this row)', 'id (internal UUID — reference only)'],
-      ...(chapters.length ? chapters.map(c => [c.slug, c.name, subjectSlugById.get(c.subjectId) ?? c.subjectId, c.id]) : [['(no chapters yet — is the database seeded?)', '', '', '']]),
+      ['chapterId (TYPE THIS)', 'name (English)', 'nameHindi (हिंदी)', 'subjectId (must match the subjectId column you use for this row)', 'id (internal UUID — reference only)'],
+      ...(chapters.length ? chapters.map(c => [c.slug, c.name, c.nameHindi || '', subjectSlugById.get(c.subjectId) ?? c.subjectId, c.id]) : [['(no chapters yet — is the database seeded?)', '', '', '', '']]),
       [''],
       ['Reference: Valid Topic IDs (optional column) — type the value from the FIRST column below'],
-      ['topicId (TYPE THIS)', 'name', 'chapterId (must match the chapterId column you use for this row)', 'id (internal UUID — reference only)'],
-      ...(topics.length ? topics.map(t => [t.slug, t.name, chapterSlugById.get(t.chapterId) ?? t.chapterId, t.id]) : [['(no topics yet)', '', '', '']]),
+      ['topicId (TYPE THIS)', 'name (English)', 'nameHindi (हिंदी)', 'chapterId (must match the chapterId column you use for this row)', 'id (internal UUID — reference only)'],
+      ...(topics.length ? topics.map(t => [t.slug, t.name, t.nameHindi || '', chapterSlugById.get(t.chapterId) ?? t.chapterId, t.id]) : [['(no topics yet)', '', '', '', '']]),
       [''],
       ['Reference: Valid Sub-Topic IDs (optional column) — type the value from the FIRST column below'],
-      ['subTopicId (TYPE THIS)', 'name', 'topicId (must match the topicId column you use for this row)', 'id (internal UUID — reference only)'],
-      ...(subTopics.length ? subTopics.map(t => [t.slug, t.name, topicSlugById.get(t.topicId) ?? t.topicId, t.id]) : [['(no sub-topics yet)', '', '', '']]),
+      ['subTopicId (TYPE THIS)', 'name (English)', 'nameHindi (हिंदी)', 'topicId (must match the topicId column you use for this row)', 'id (internal UUID — reference only)'],
+      ...(subTopics.length ? subTopics.map(t => [t.slug, t.name, t.nameHindi || '', topicSlugById.get(t.topicId) ?? t.topicId, t.id]) : [['(no sub-topics yet)', '', '', '', '']]),
     ];
     const refSheet = XLSX.utils.aoa_to_sheet(refData);
     XLSX.utils.book_append_sheet(workbook, refSheet, 'Reference IDs');
+
+    // "Syllabus (Hindi + English)" sheet — Session (Sep 2026, syllabus-Excel
+    // import): a full Subject -> Chapter -> Topic -> Sub-Topic TREE, indented
+    // and bilingual, built fresh from the DB every time this template is
+    // downloaded. The "Reference IDs" sheet above is deliberately flat
+    // (good for copy-pasting a slug) but bad for seeing the big picture —
+    // this sheet exists purely so a human OR an AI tool filling the
+    // Questions Template sheet can see, at a glance, "which chapters exist
+    // under Quant Aptitude and what are they called in Hindi", matching
+    // exactly what was imported from SSC_Exams_Complete_Syllabus_Hindi.xlsx
+    // via POST /bank/admin/upload/syllabus-excel (TaxonomyImportService).
+    // Nothing here is typed into the upload sheet directly — for that, use
+    // the slug columns in "Reference IDs" — this sheet is the map, that
+    // sheet is the code you type in.
+    const chaptersBySubject = new Map<string, typeof chapters>();
+    for (const c of chapters) {
+      if (!chaptersBySubject.has(c.subjectId)) chaptersBySubject.set(c.subjectId, []);
+      chaptersBySubject.get(c.subjectId)!.push(c);
+    }
+    const topicsByChapter = new Map<string, typeof topics>();
+    for (const t of topics) {
+      if (!topicsByChapter.has(t.chapterId)) topicsByChapter.set(t.chapterId, []);
+      topicsByChapter.get(t.chapterId)!.push(t);
+    }
+    const subTopicsByTopic = new Map<string, typeof subTopics>();
+    for (const st of subTopics) {
+      if (!subTopicsByTopic.has(st.topicId)) subTopicsByTopic.set(st.topicId, []);
+      subTopicsByTopic.get(st.topicId)!.push(st);
+    }
+
+    const syllabusData: (string | number)[][] = [
+      ['SSC Syllabus — Subject → Chapter → Topic → Sub-Topic (English / हिंदी)'],
+      [''],
+      ['This is the FULL syllabus tree currently loaded in the database (imported from the'],
+      ['syllabus Excel via Topic Management → "Import Syllabus"). Any question you add in the'],
+      ['"Questions Template" sheet MUST use a chapter/topic/sub-topic name that appears'],
+      ['somewhere in this tree — pick the matching slug for it from the "Reference IDs" sheet.'],
+      ['If a chapter/topic you need is missing here, add it via Topic Management first, or'],
+      ['re-run the syllabus Excel import with the missing row added.'],
+      [''],
+      ['Level', 'English Name', 'हिंदी नाम (Hindi Name)', 'Slug to type in Questions Template'],
+    ];
+    if (!subjects.length) {
+      syllabusData.push(['(no syllabus imported yet — use Topic Management → "Import Syllabus" first)', '', '', '']);
+    }
+    for (const s of subjects) {
+      syllabusData.push([`Subject`, s.name, s.nameHindi || '', s.slug]);
+      const subjChapters = chaptersBySubject.get(s.id) || [];
+      for (const c of subjChapters) {
+        syllabusData.push([`  Chapter`, c.name, c.nameHindi || '', c.slug]);
+        const chapTopics = topicsByChapter.get(c.id) || [];
+        for (const t of chapTopics) {
+          syllabusData.push([`    Topic`, t.name, t.nameHindi || '', t.slug]);
+          const topicSubTopics = subTopicsByTopic.get(t.id) || [];
+          for (const st of topicSubTopics) {
+            syllabusData.push([`      Sub-Topic`, st.name, st.nameHindi || '', st.slug]);
+          }
+        }
+      }
+    }
+    const syllabusSheet = XLSX.utils.aoa_to_sheet(syllabusData);
+    XLSX.utils.book_append_sheet(workbook, syllabusSheet, 'Syllabus (Hindi+English)');
 
     // Session 22 — Diagram question types sheet: every valid diagramType
     // code, so an admin (or an AI tool filling this template from scanned

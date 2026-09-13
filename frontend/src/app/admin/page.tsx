@@ -580,6 +580,12 @@ export default function AdminPage() {
           >
             🧩 Chapter IDs chahiye upload se pehle? Manage Chapters →
           </a>
+          <a
+            href="/admin/coverage"
+            className="mb-3 ml-2 inline-block rounded-lg border border-danger/40 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10"
+          >
+            🕳️ Kaunse Topic/Sub-Topic mein question missing hai? Coverage / Gap Finder →
+          </a>
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
               <button

@@ -124,11 +124,11 @@ export class BankController {
   @Post('admin/chapters')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
-  createChapter(@Body() body: { subjectId: string; name: string }) {
+  createChapter(@Body() body: { subjectId: string; name: string; nameHindi?: string }) {
     if (!body?.subjectId || !body?.name) {
       throw new BadRequestException('subjectId and name are required');
     }
-    return this.bank.createChapter(body.subjectId, body.name);
+    return this.bank.createChapter(body.subjectId, body.name, body.nameHindi);
   }
 
   // NEW ("chapter mein bhi topic hona tha jaise English mein Noun, Pronoun

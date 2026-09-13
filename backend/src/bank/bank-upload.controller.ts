@@ -11,6 +11,8 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
+  Param,
   Query,
   Res,
   UseGuards,
@@ -130,6 +132,31 @@ export class BankUploadController {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
+  }
+
+  // BUGFIX (this session — "last upload se aaye questions delete karne ka
+  // option": frontend/src/app/admin/page.tsx's loadBatches()/
+  // toggleBatchDetail()/deleteBatchHandler() were ALREADY calling
+  // GET /bank/admin/upload/batches, GET .../batches/:id, and
+  // DELETE .../batches/:id — but no route for any of them existed on this
+  // controller, so every one of those calls 404'd. BankUploadService's
+  // listUploadBatches()/getUploadBatchDetail()/deleteUploadBatch() were
+  // fully implemented and completely unreachable. Wires them up for real.
+  @Get('batches')
+  async listBatches(@Req() req: any, @Query('mine') mine: string | undefined) {
+    // `?mine=1` scopes to the calling admin's own uploads; omit it to see
+    // every admin's upload history (both are ADMIN/MODERATOR-only anyway).
+    return this.uploadService.listUploadBatches(mine === '1' || mine === 'true' ? this.adminId(req) : undefined);
+  }
+
+  @Get('batches/:id')
+  async getBatch(@Param('id') id: string) {
+    return this.uploadService.getUploadBatchDetail(id);
+  }
+
+  @Delete('batches/:id')
+  async deleteBatch(@Param('id') id: string, @Query('keepQuestions') keepQuestions: string | undefined) {
+    return this.uploadService.deleteUploadBatch(id, keepQuestions === '1' || keepQuestions === 'true');
   }
 
   // Bulk syllabus (taxonomy) importer — upload a bilingual syllabus workbook
