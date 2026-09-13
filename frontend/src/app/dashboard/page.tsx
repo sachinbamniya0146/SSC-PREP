@@ -402,6 +402,31 @@ export default function DashboardPage() {
           </a>
         </div>
 
+        {/* NEW ("Practice for SSC Exams" ka ek direct, prominent option
+            chahiye jaha admin ke daale practice questions milein — sabhi
+            chapter/topic/subtopic ke saath): /question-bank-practice
+            (backend/src/bank/question-bank-practice.service.ts) already
+            existed fully built — subject → chapter practice sets, resume,
+            per-chapter progress tracking, bilingual questions — but had NO
+            link anywhere in the app, same orphan-page pattern as
+            /sectional once had. This is the single most prominent tile on
+            the dashboard (own row, above the other test formats) since
+            it's the primary "practice" entry point the user asked for. */}
+        <a
+          href="/question-bank-practice"
+          className="mt-6 flex flex-col justify-between rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/[0.06] to-transparent p-6 transition hover:border-emerald-500/50 hover:shadow-md"
+        >
+          <div>
+            <h2 className="text-lg font-semibold">Practice for SSC Exams</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Subject → chapter practice sets covering the full syllabus, with your progress and accuracy tracked per chapter.
+            </p>
+          </div>
+          <span className="mt-4 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+            Start practicing →
+          </span>
+        </a>
+
         {/* Test formats — a quiet, equal-weight row since these are peers
             of each other, not competing for hierarchy the way the exam
             picker above does. */}
