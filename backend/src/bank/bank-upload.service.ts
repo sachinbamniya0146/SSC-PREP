@@ -228,7 +228,7 @@ export class BankUploadService {
     return batch.id;
   }
 
-  async uploadFromExcel(fileBuffer: Buffer, adminId: string, filename?: string): Promise<UploadResult> {
+  async uploadFromExcel(fileBuffer: Buffer, adminId: string, filename?: string, isPracticeOnly?: boolean): Promise<UploadResult> {
     let headers: string[];
     let rows: any[][];
     try {
@@ -250,7 +250,7 @@ export class BankUploadService {
     }
     // Deliberately OUTSIDE the try/catch above — see BUGFIX comment.
     const batchId = await this.createUploadBatchPlaceholder(adminId, 'EXCEL', filename);
-    const result = await this.processBulkQuestions(headers, rows, adminId, batchId);
+    const result = await this.processBulkQuestions(headers, rows, adminId, batchId, isPracticeOnly);
     await this.finalizeUploadBatch(batchId, result);
     return result;
   }
@@ -258,7 +258,7 @@ export class BankUploadService {
   /**
    * Validate and parse CSV file for bulk question upload
    */
-  async uploadFromCSV(fileBuffer: Buffer, adminId: string, filename?: string): Promise<UploadResult> {
+  async uploadFromCSV(fileBuffer: Buffer, adminId: string, filename?: string, isPracticeOnly?: boolean): Promise<UploadResult> {
     const text = fileBuffer.toString('utf-8');
     const lines = text.split('\n').map(line => line.trim()).filter(line => line);
     
@@ -270,7 +270,7 @@ export class BankUploadService {
     const rows = lines.slice(1).map(line => this.parseCSVLine(line));
 
     const batchId = await this.createUploadBatchPlaceholder(adminId, 'CSV', filename);
-    const result = await this.processBulkQuestions(headers, rows, adminId, batchId);
+    const result = await this.processBulkQuestions(headers, rows, adminId, batchId, isPracticeOnly);
     await this.finalizeUploadBatch(batchId, result);
     return result;
   }
@@ -278,7 +278,7 @@ export class BankUploadService {
   /**
    * Parse text file for bulk question upload (tab-separated or JSON lines)
    */
-  async uploadFromText(fileBuffer: Buffer, adminId: string, filename?: string): Promise<UploadResult> {
+  async uploadFromText(fileBuffer: Buffer, adminId: string, filename?: string, isPracticeOnly?: boolean): Promise<UploadResult> {
     const text = fileBuffer.toString('utf-8');
     
     // Try JSON lines format first
@@ -286,7 +286,7 @@ export class BankUploadService {
       try {
         const questions = JSON.parse(text);
         const batchId = await this.createUploadBatchPlaceholder(adminId, 'JSON', filename);
-        const result = await this.processStructuredQuestions(questions, adminId, batchId);
+        const result = await this.processStructuredQuestions(questions, adminId, batchId, isPracticeOnly);
         await this.finalizeUploadBatch(batchId, result);
         return result;
       } catch {
@@ -305,7 +305,7 @@ export class BankUploadService {
     const rows = lines.slice(1).map(line => line.split('\t'));
 
     const batchId = await this.createUploadBatchPlaceholder(adminId, 'TEXT', filename);
-    const result = await this.processBulkQuestions(headers, rows, adminId, batchId);
+    const result = await this.processBulkQuestions(headers, rows, adminId, batchId, isPracticeOnly);
     await this.finalizeUploadBatch(batchId, result);
     return result;
   }
@@ -313,7 +313,7 @@ export class BankUploadService {
   /**
    * Parse Word document for bulk question upload
    */
-  async uploadFromWord(fileBuffer: Buffer, adminId: string, filename?: string): Promise<UploadResult> {
+  async uploadFromWord(fileBuffer: Buffer, adminId: string, filename?: string, isPracticeOnly?: boolean): Promise<UploadResult> {
     // Same BUGFIX as uploadFromExcel() above — only the actual .docx text
     // extraction/parsing is wrapped here; processStructuredQuestions()
     // (DB reference-data fetch + row inserts) reports its own failures
@@ -328,7 +328,7 @@ export class BankUploadService {
       const message = error instanceof Error ? error.message : String(error);
       throw new BadRequestException(`Failed to parse Word document: ${message}`);
     }
-    return this.processStructuredQuestions(questions, adminId).then(async (result) => {
+    return this.processStructuredQuestions(questions, adminId, undefined, isPracticeOnly).then(async (result) => {
       // Word doesn't fit the "create batch before processing" pattern
       // cleanly (parse failures throw before we'd want a batch row at
       // all) — persist after the fact instead; questions from this path
@@ -1052,6 +1052,93 @@ export class BankUploadService {
   }
 
   /**
+   * NEW ("chuninda questions ka Excel export jinme Hindi translation ya
+   * solution ya answer key missing hai — dono PYQ aur Practice questions ke
+   * liye"): exportQuestionBank() above dumps the WHOLE bank; this dumps
+   * only rows with a genuine gap (delegates the actual gap detection to
+   * BankService.questionsWithGaps() so there's one definition of "missing"
+   * shared with the admin-facing coverage screens). Same column shape as
+   * the upload templates PLUS a `gapType` column at the end telling the
+   * admin exactly what's missing on each row (e.g. "Hindi translation" or
+   * "Solution/explanation + Answer key"), and an `isPyq` column (Yes = tied
+   * to a specific year, i.e. a PYQ; No = a year-less practice question) so
+   * the two categories Sachin asked to distinguish are visible in the same
+   * file without needing two separate exports.
+   */
+  async exportQuestionGaps(
+    filters: { type?: 'hindi' | 'solution' | 'answer' | 'all'; examId?: string; chapterId?: string; isPyq?: boolean },
+    format: 'json' | 'excel' | 'csv',
+  ): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
+    const questions = await this.bank.questionsWithGaps(filters);
+
+    const rowsAsObjects = questions.map((q: any) => {
+      const opts = (q.optionsJson as any[]) ?? [];
+      const byKey = (k: string) => opts.find((o) => o.key === k) ?? { text: '', textHi: '' };
+      return {
+        id: q.id,
+        examId: q.examId,
+        examName: q.exam?.name ?? '',
+        subjectId: q.subjectId,
+        subjectName: q.subject?.name ?? '',
+        chapterId: q.chapterId,
+        chapterName: q.chapter?.name ?? '',
+        topicId: q.topicId ?? '',
+        subTopicId: q.subTopicId ?? '',
+        questionText: q.questionText,
+        questionTextHindi: q.questionTextHindi ?? '',
+        optionA: byKey('A').text ?? '', optionA_Hindi: byKey('A').textHi ?? '',
+        optionB: byKey('B').text ?? '', optionB_Hindi: byKey('B').textHi ?? '',
+        optionC: byKey('C').text ?? '', optionC_Hindi: byKey('C').textHi ?? '',
+        optionD: byKey('D').text ?? '', optionD_Hindi: byKey('D').textHi ?? '',
+        correctAnswer: q.correctAnswer ?? '',
+        explanation: q.explanation ?? '',
+        explanationHindi: q.explanationHindi ?? '',
+        year: q.year ?? '',
+        shift: q.shift ?? '',
+        paperCode: q.paperCode ?? '',
+        marks: q.marks,
+        negativeMarks: q.negativeMarks,
+        difficulty: q.difficulty,
+        isPublishedToStudents: q.isApproved,
+        isPyq: q.isPyq ? 'Yes' : 'No',
+        gapType: q.gapType,
+      };
+    });
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const typeLabel = filters.type && filters.type !== 'all' ? `_${filters.type}` : '';
+
+    if (format === 'json') {
+      const buffer = Buffer.from(JSON.stringify(rowsAsObjects, null, 2), 'utf-8');
+      return { buffer, contentType: 'application/json', filename: `question_gaps${typeLabel}_${stamp}.json` };
+    }
+
+    if (format === 'csv') {
+      const headers = rowsAsObjects.length ? Object.keys(rowsAsObjects[0]) : [];
+      const lines = [headers.join(',')];
+      for (const row of rowsAsObjects) {
+        lines.push(this.escapeCSVRow(headers.map((h) => String((row as any)[h] ?? ''))));
+      }
+      const buffer = Buffer.from(lines.join('\n'), 'utf-8');
+      return { buffer, contentType: 'text/csv', filename: `question_gaps${typeLabel}_${stamp}.csv` };
+    }
+
+    // excel
+    const workbook = XLSX.utils.book_new();
+    const headers = rowsAsObjects.length
+      ? Object.keys(rowsAsObjects[0])
+      : ['id', 'examId', 'examName', 'subjectId', 'subjectName', 'chapterId', 'chapterName', 'topicId', 'subTopicId',
+         'questionText', 'questionTextHindi', 'optionA', 'optionA_Hindi', 'optionB', 'optionB_Hindi', 'optionC',
+         'optionC_Hindi', 'optionD', 'optionD_Hindi', 'correctAnswer', 'explanation', 'explanationHindi', 'year',
+         'shift', 'paperCode', 'marks', 'negativeMarks', 'difficulty', 'isPublishedToStudents', 'isPyq', 'gapType'];
+    const sheetData = [headers, ...rowsAsObjects.map((row) => headers.map((h) => (row as any)[h]))];
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Missing Hindi-Solution-Answer');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    return { buffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename: `question_gaps${typeLabel}_${stamp}.xlsx` };
+  }
+
+  /**
    * Generate CSV template file for download
    */
   generateCSVTemplate(): Buffer {
@@ -1083,7 +1170,7 @@ export class BankUploadService {
   /**
    * Process bulk questions from parsed headers and rows
    */
-  private async processBulkQuestions(headers: string[], rows: any[][], adminId: string, uploadBatchId?: string | null): Promise<UploadResult> {
+  private async processBulkQuestions(headers: string[], rows: any[][], adminId: string, uploadBatchId?: string | null, isPracticeOnly?: boolean): Promise<UploadResult> {
     const requiredHeaders = ['examId', 'subjectId', 'chapterId', 'questionText', 'correctAnswer'];
     const optionHeaders = ['optionA', 'optionB', 'optionC', 'optionD'];
 
@@ -1216,6 +1303,22 @@ export class BankUploadService {
       const rowNum = i + 2; // 1-indexed + header
       try {
         const question = this.parseQuestionRow(row, headerMap, rowNum);
+        // NEW ("admin ke liye alag practice question upload feature" —
+        // isPracticeOnly checkbox on /admin): the frontend was already
+        // sending this flag in the upload FormData, but no backend code
+        // anywhere read it — the checkbox silently did nothing, so a sheet
+        // with year/shift/paperCode filled in still got saved as a PYQ and
+        // could show up in Year-wise PYQ Test even when the admin explicitly
+        // marked the batch as practice-only. Blank those three fields here,
+        // before validation/insert, whenever the admin checked the box —
+        // this is also exactly what questionsWithGaps()'s `isPyq` filter
+        // (year == null) keys off, so practice-only uploads are correctly
+        // excluded from PYQ-only gap exports.
+        if (isPracticeOnly) {
+          question.year = undefined;
+          question.shift = undefined;
+          question.paperCode = undefined;
+        }
         await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
@@ -1329,7 +1432,7 @@ export class BankUploadService {
   /**
    * Process structured questions (JSON format)
    */
-  private async processStructuredQuestions(questions: BulkUploadQuestion[], adminId: string, uploadBatchId?: string | null): Promise<UploadResult> {
+  private async processStructuredQuestions(questions: BulkUploadQuestion[], adminId: string, uploadBatchId?: string | null, isPracticeOnly?: boolean): Promise<UploadResult> {
     // Same slug-resolution fix as processBulkQuestions() above — JSON/Word
     // uploads go through this method, and can just as easily contain
     // human-readable slugs (e.g. an AI-generated question set) instead of
@@ -1399,6 +1502,14 @@ export class BankUploadService {
       const question = questions[i];
       const rowNum = i + 1;
       try {
+        // Same isPracticeOnly fix as processBulkQuestions() above — this is
+        // the JSON/Word upload path, which was equally unaffected by the
+        // admin's checkbox before this fix.
+        if (isPracticeOnly) {
+          question.year = undefined;
+          question.shift = undefined;
+          question.paperCode = undefined;
+        }
         await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
