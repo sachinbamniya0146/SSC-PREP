@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank, PYQ_MOCK_PRICE_INR } from '../common/pyq-mock-pricing';
 
 const FREE_MOCKS_PER_EXAM = 2;
 const OFFER_DAYS = 15;
@@ -41,7 +42,32 @@ export class MocksService {
       user?.role === 'ADMIN' ||
       !!(user?.subscriptions?.[0] && new Date(user.subscriptions[0].endsAt) > new Date());
 
+    // NEW ("free honge bus top 10 rhenge bs baki paid") — rank every
+    // auto-created PYQ mock (id starting `pyq-`) newest-paper-first using
+    // the SAME shared helper tests.service.ts#assertMockEntitled() uses to
+    // gate startAttempt, so the list and the enforcement can never
+    // disagree about which 10 are free. See common/pyq-mock-pricing.ts.
+    const pyqRank = rankPyqTemplatesNewestFirst(tests.filter((t) => isPyqAutoMockId(t.id)));
+
     const mocks = tests.map((t) => {
+      if (isPyqAutoMockId(t.id)) {
+        const isFreeTop10 = isPyqMockFreeByRank(pyqRank.get(t.id));
+        if (isFreeTop10 || hasActiveSubscription) {
+          return {
+            id: t.id, title: t.title, description: t.description, type: t.type,
+            durationMinutes: t.durationMinutes, totalQuestions: t.totalQuestions, totalMarks: t.totalMarks,
+            free: true, locked: false,
+            reason: isFreeTop10 ? 'FREE_TOP_10_PYQ' : 'PREMIUM_SUBSCRIPTION',
+          };
+        }
+        return {
+          id: t.id, title: t.title, description: t.description, type: t.type,
+          durationMinutes: t.durationMinutes, totalQuestions: t.totalQuestions, totalMarks: t.totalMarks,
+          free: false, locked: true, reason: 'PAID',
+          offerPriceInr: PYQ_MOCK_PRICE_INR, offerDays: OFFER_DAYS,
+        };
+      }
+
       const isFreeByType = t.type === 'PREVIOUS_YEAR' || t.type === 'YEAR_WISE';
       if (isFreeByType || !t.isPremium) {
         return { id: t.id, title: t.title, description: t.description, type: t.type, durationMinutes: t.durationMinutes, totalQuestions: t.totalQuestions, totalMarks: t.totalMarks, free: true, locked: false, reason: 'FREE' };
