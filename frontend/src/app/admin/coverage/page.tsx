@@ -132,6 +132,36 @@ export default function CoveragePage() {
   // above; fetched lazily only when the admin actually opens this tab, so
   // the default page load stays exactly as fast as before).
   const [activeTab, setActiveTab] = React.useState<"subject" | "year" | "drilldown">("subject");
+  // NEW ("chuninda questions ka Excel export jinme Hindi translation ya
+  // solution ya answer key missing hai") — GET /bank/admin/upload/export-gaps
+  // (BankUploadService.exportQuestionGaps()); same auth-header-needed blob
+  // download pattern as admin/page.tsx's downloadBankExport().
+  const [gapsDownloading, setGapsDownloading] = React.useState(false);
+  async function downloadGaps() {
+    setGapsDownloading(true);
+    try {
+      const res = await fetchAuth(`${API_BASE}/bank/admin/upload/export-gaps?format=excel`);
+      if (!res.ok) throw new Error(`Failed to export gaps (HTTP ${res.status})`);
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="(.+)"/);
+      const filename = match ? match[1] : "question_gaps.xlsx";
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      // Coverage page has no shared error banner outside per-tab state;
+      // a failed export here is rare (auth already verified to reach this
+      // page) and the admin can just retry the click.
+    } finally {
+      setGapsDownloading(false);
+    }
+  }
   const [yearReport, setYearReport] = React.useState<CoverageByYearReport | null>(null);
   const [yearLoading, setYearLoading] = React.useState(false);
   const [yearErr, setYearErr] = React.useState("");
@@ -335,6 +365,22 @@ export default function CoveragePage() {
         <p className="mt-1 text-sm text-muted-foreground">
           Kis exam ke kis subject mein kitne questions hain, aur unme se kitne Hindi mein translate ho chuke hain.
         </p>
+
+        {/* NEW ("chuninda questions ka Excel export jinme Hindi translation
+            ya solution ya answer key missing hai"): this page already shows
+            the missingHindi COUNT per chapter (see ch.missingHindi below) —
+            this button gets the admin the actual downloadable rows behind
+            those counts, in the same upload-template shape, ready to fill
+            in and re-upload. Visible on every tab since the gap isn't
+            specific to one report view. */}
+        <button
+          onClick={downloadGaps}
+          disabled={gapsDownloading}
+          className="mt-4 rounded-lg border border-danger/40 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+          title="Sirf vo questions jisme Hindi translation, solution, ya answer key missing hai — PYQ aur Practice dono"
+        >
+          {gapsDownloading ? "Exporting..." : "⬇️ Download Gaps Excel (Missing Hindi/Solution/Answer)"}
+        </button>
 
         {/* NEW — tab switcher: exam×subject (existing) vs exam×subject×year (new) */}
         <div className="mt-6 flex gap-2 border-b border-border">
