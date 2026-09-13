@@ -45,6 +45,16 @@ type QuestionRow = {
   chapter?: { name: string } | null;
   topic?: { name: string } | null;
   exam?: { name: string } | null;
+  // BUGFIX (Sep 2026 — "explanation jo he vo show nahi hota"): the backend
+  // (pdf-ingestion.service.ts getBatchQuestions()) already returns
+  // `explanation`/`explanationHindi` on every question — it uses a plain
+  // Prisma `include` (no `select`), which returns every scalar column by
+  // default. This page's QuestionRow type just never declared the two
+  // fields, so even though the data was sitting right there in the API
+  // response, nothing in the review card ever read or rendered it. Adding
+  // them here is what makes the display fix below possible.
+  explanation: string | null;
+  explanationHindi: string | null;
 };
 
 const CHUNK_BADGE: Record<string, string> = {
@@ -76,6 +86,13 @@ export default function BatchDetailPage() {
   const [chaptersBySubject, setChaptersBySubject] = React.useState<Record<string, { id: string; name: string }[]>>({});
   const [chapterPick, setChapterPick] = React.useState<Record<string, string>>({}); // questionId -> chosen chapterId
   const [suggesting, setSuggesting] = React.useState<string>("");
+  // NEW (explanation display/edit/generate — see QuestionRow doc-comment
+  // above for why this was missing entirely before). explanationDraft
+  // holds in-progress edits keyed by questionId (same pattern as
+  // chapterPick above); explaining tracks which question's "Generate AI
+  // Explanation" button is currently in flight.
+  const [explanationDraft, setExplanationDraft] = React.useState<Record<string, { explanation?: string; explanationHindi?: string }>>({});
+  const [explaining, setExplaining] = React.useState<string>("");
 
   const headers = React.useCallback(() => {
     const t = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") : "";
@@ -163,10 +180,20 @@ export default function BatchDetailPage() {
     setErr("");
     try {
       const chapterId = chapterPick[id];
+      // NEW — include any edited explanation/explanationHindi (from the
+      // textareas added below) in the same approve call. AdminApproveQuestionDto
+      // already accepts both fields and writes them (pdf-ingestion.service.ts
+      // approveQuestion()) — this page just never sent them before.
+      const draft = explanationDraft[id];
       const r = await fetchAuth(`${API_BASE}/admin/pdf-ingestion/questions/approve`, {
         method: "POST",
         headers: { ...headers(), "Content-Type": "application/json" },
-        body: JSON.stringify({ questionId: id, ...(chapterId ? { chapterId } : {}) }),
+        body: JSON.stringify({
+          questionId: id,
+          ...(chapterId ? { chapterId } : {}),
+          ...(draft?.explanation !== undefined ? { explanation: draft.explanation } : {}),
+          ...(draft?.explanationHindi !== undefined ? { explanationHindi: draft.explanationHindi } : {}),
+        }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -229,6 +256,30 @@ export default function BatchDetailPage() {
       setErr(e instanceof Error ? e.message : "AI suggestion fail ho gayi");
     } finally {
       setSuggesting("");
+    }
+  };
+
+  const generateExplanationFor = async (q: QuestionRow) => {
+    setExplaining(q.id);
+    setErr("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/admin/pdf-ingestion/questions/${q.id}/explain`, {
+        method: "POST",
+        headers: headers(),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setErr(d?.message || "AI explanation generate karne mein fail ho gaya — OPENAI_API_KEY set hai ya nahi check karo.");
+        return;
+      }
+      setMsg("🤖 AI explanation generate ho gayi.");
+      // Backend already saved it to the question row — reload so the
+      // freshly-generated explanation/explanationHindi shows up below.
+      load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "AI explanation generate karne mein fail ho gaya");
+    } finally {
+      setExplaining("");
     }
   };
 
@@ -457,6 +508,45 @@ export default function BatchDetailPage() {
                         >
                           {suggesting === q.id ? "Soch raha hai…" : "🤖 Suggest"}
                         </button>
+                      </div>
+                    )}
+
+                    {/* NEW — explanation display/edit/generate (see
+                        QuestionRow doc-comment above: this field existed in
+                        the API response all along but this page never read
+                        or rendered it, which is exactly the "explanation
+                        jo he vo show nahi hota" bug). Shown for
+                        not-yet-approved questions so the admin can review/
+                        fix it before Approve publishes the question. */}
+                    {!q.isApproved && (
+                      <div className="mt-3 space-y-2 rounded-lg border border-border bg-muted/10 p-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold text-muted-foreground">Explanation (English)</label>
+                          <button
+                            onClick={() => generateExplanationFor(q)}
+                            disabled={explaining === q.id}
+                            className="rounded-lg border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
+                            title="AI se explanation generate karwao (OPENAI_API_KEY zaroori hai)"
+                          >
+                            {explaining === q.id ? "Generate ho raha hai…" : "🤖 Generate AI Explanation"}
+                          </button>
+                        </div>
+                        <textarea
+                          value={explanationDraft[q.id]?.explanation ?? q.explanation ?? ""}
+                          onChange={(e) => setExplanationDraft((prev) => ({ ...prev, [q.id]: { ...prev[q.id], explanation: e.target.value } }))}
+                          placeholder="Explanation yahaan khaali hai — 'Generate AI Explanation' dabao ya khud type karo"
+                          className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
+                          rows={2}
+                        />
+                        <label className="text-xs font-semibold text-muted-foreground">Explanation (Hindi)</label>
+                        <textarea
+                          value={explanationDraft[q.id]?.explanationHindi ?? q.explanationHindi ?? ""}
+                          onChange={(e) => setExplanationDraft((prev) => ({ ...prev, [q.id]: { ...prev[q.id], explanationHindi: e.target.value } }))}
+                          placeholder="यहाँ हिंदी व्याख्या खाली है"
+                          className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
+                          rows={2}
+                        />
+                        <p className="text-[10px] text-muted-foreground">Edits yahaan Approve dabane par hi save hongi (saath mein publish bhi ho jaayega).</p>
                       </div>
                     )}
                   </div>
