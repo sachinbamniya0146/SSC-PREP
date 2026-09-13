@@ -8,6 +8,7 @@ import * as mammoth from 'mammoth';
 import { randomUUID } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 import { cacheClearPrefix } from '../common/cache';
+import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 
 // Used by resolveReferenceIds() — a v4 UUID (Prisma's `@default(uuid())`
 // format) is the one case where a topicId/subTopicId that doesn't resolve
@@ -200,6 +201,114 @@ export class BankUploadService {
     cacheClearPrefix('bank:subjects');
     cacheClearPrefix('bank:chapters');
     cacheClearPrefix('bank:meta');
+    // NEW ("ek hee shift ke jo questions hote he ... to vo mock test me ho
+    // pyq based mock test esa hona chaiye"): after every upload, check
+    // whether this batch's questions form one or more complete real papers
+    // (same examId+year+shift+paperCode on every row — exactly what a
+    // genuine PYQ paper upload looks like, as opposed to a mixed
+    // question-bank/practice upload where those fields vary row to row or
+    // are blank). Any such group gets a PYQ Mock Test auto-created (or
+    // refreshed, if re-uploading corrections to an existing paper) so it
+    // appears on /mocks immediately — no separate admin action needed.
+    try {
+      await this.autoCreatePyqMocksForBatch(batchId);
+    } catch (e) {
+      // Never let mock auto-creation fail the upload itself — the
+      // questions are already safely saved at this point; worst case the
+      // admin creates/fixes the mock manually via the coverage tools.
+    }
+  }
+
+  // NEW — groups this batch's questions by (examId, year, shift, paperCode)
+  // and auto-creates/refreshes a SHIFT_WISE TestTemplate for every group
+  // that (a) has all four fields present on every row [a genuine single
+  // paper, not a mixed bag] and (b) has at least MIN_PAPER_QUESTIONS
+  // questions [enough to be worth a dedicated mock — avoids e.g. a
+  // 2-question test-upload accidentally spawning a "mock"].
+  //
+  // Deterministic template id (`pyq-<slug of paperCode>`) means re-uploading
+  // corrections/additions to the same paper (same paperCode) UPDATES the
+  // existing mock's question count/title instead of creating a duplicate —
+  // same idea as this file's other upsert-by-natural-key patterns
+  // (createUploadBatchPlaceholder, etc.) rather than ever risking two mocks
+  // for one real paper.
+  private static readonly MIN_PAPER_QUESTIONS = 20;
+  private async autoCreatePyqMocksForBatch(batchId: string): Promise<void> {
+    const rows = await this.prisma.question.findMany({
+      where: { uploadBatchId: batchId },
+      select: { examId: true, year: true, shift: true, paperCode: true },
+    });
+    if (rows.length === 0) return;
+
+    const groups = new Map<string, { examId: string; year: number; shift: string; paperCode: string; count: number }>();
+    for (const r of rows) {
+      // Every one of the four must be present — a row missing any of them
+      // isn't part of a "complete real paper" group (e.g. a practice
+      // question with no year/shift, or a PYQ row someone forgot to tag
+      // with a paperCode). Such rows simply aren't counted toward any
+      // group, so a mixed batch (some real-paper rows + some loose
+      // practice rows) still correctly detects the paper rows alone.
+      if (!r.examId || !r.year || !r.shift || !r.paperCode) continue;
+      const key = `${r.examId}|${r.year}|${r.shift}|${r.paperCode}`;
+      const existing = groups.get(key);
+      if (existing) existing.count++;
+      else groups.set(key, { examId: r.examId, year: r.year, shift: r.shift, paperCode: r.paperCode, count: 1 });
+    }
+
+    for (const g of groups.values()) {
+      if (g.count < BankUploadService.MIN_PAPER_QUESTIONS) continue;
+      await this.upsertPyqMockForPaper(g.examId, g.year, g.shift, g.paperCode);
+    }
+  }
+
+  // Slugifies a paperCode (e.g. "SSC-CGL-T-I-12-Sep-2025-S1") into a safe
+  // TestTemplate id fragment. paperCode is admin-authored free text in the
+  // upload sheet, so this strips anything that isn't alphanumeric/hyphen
+  // rather than trusting it's already ID-safe.
+  private slugifyPaperCode(paperCode: string): string {
+    return paperCode.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  }
+
+  private async upsertPyqMockForPaper(examId: string, year: number, shift: string, paperCode: string): Promise<void> {
+    const [exam, actualCount] = await Promise.all([
+      this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } }),
+      // Count against PUBLISHED_QUESTION_WHERE (not the raw upload count) —
+      // if some rows are still pending Hindi translation and therefore not
+      // isApproved yet, the mock should reflect what's ACTUALLY servable
+      // today, not the on-paper total. It'll self-correct to the full count
+      // the next time this paperCode's batch is touched (e.g. after the
+      // gaps-Excel fills in the missing Hindi and gets re-uploaded).
+      this.prisma.question.count({ where: { ...PUBLISHED_QUESTION_WHERE, examId, year, shift, paperCode } }),
+    ]);
+    if (actualCount < BankUploadService.MIN_PAPER_QUESTIONS) return; // not enough APPROVED rows yet to bother creating/keeping this live
+
+    const templateId = `pyq-${this.slugifyPaperCode(paperCode)}`;
+    const examName = exam?.name ?? 'SSC';
+    const title = `${examName} — ${paperCode}`;
+    const totalMarks = await this.prisma.question
+      .aggregate({ where: { ...PUBLISHED_QUESTION_WHERE, examId, year, shift, paperCode }, _sum: { marks: true } })
+      .then((r) => r._sum.marks ?? actualCount * 2);
+    const durationMinutes = Math.max(10, Math.round(actualCount * 0.6)); // same 0.6 min/Q pacing as paper()/yearWiseStart()
+
+    await this.prisma.testTemplate.upsert({
+      where: { id: templateId },
+      create: {
+        id: templateId,
+        title,
+        description: `Real ${examName} paper, ${shift} — ${year}. Composed exactly as it appeared on the day, question-for-question.`,
+        type: 'SHIFT_WISE',
+        durationMinutes,
+        totalQuestions: actualCount,
+        totalMarks,
+        isPremium: false, // pricing (top-10-free / rest-paid) is applied at LIST time by MocksService, not baked into the row here
+      },
+      update: {
+        title,
+        totalQuestions: actualCount,
+        totalMarks,
+        durationMinutes,
+      },
+    });
   }
 
   private async saveUploadBatchAfterTheFact(
@@ -225,6 +334,13 @@ export class BankUploadService {
     cacheClearPrefix('bank:subjects');
     cacheClearPrefix('bank:chapters');
     cacheClearPrefix('bank:meta');
+    // Same PYQ-mock auto-detection as finalizeUploadBatch() above — the
+    // Word-upload path is a separate finalize step so it needs its own call.
+    try {
+      await this.autoCreatePyqMocksForBatch(batch.id);
+    } catch (e) {
+      // Never let mock auto-creation fail the upload itself.
+    }
     return batch.id;
   }
 
