@@ -511,6 +511,90 @@ export class BankService implements OnModuleInit {
     };
   }
 
+  // NEW ("chuninda questions ka Excel export jinme Hindi translation ya
+  // solution ya answer key missing hai"): questionsMissingHindi() above
+  // only returns a short preview + metadata for on-screen viewing, and only
+  // ever checked the Hindi question text — never the Hindi explanation, a
+  // missing explanation altogether, or a missing correctAnswer. Used by
+  // BankUploadService.exportQuestionGaps() to build the actual downloadable
+  // Excel — this returns FULL question rows (every field a re-upload would
+  // need) rather than a preview, and one `gapType` per question so the
+  // admin's export sheet says exactly what's missing on each row.
+  // `type` narrows which gap(s) to include:
+  //  - 'hindi'     → questionTextHindi missing (English question, no Hindi
+  //                  translation yet — matches questionsMissingHindi()'s
+  //                  definition, kept identical for consistency)
+  //  - 'solution'  → explanation (solution) missing, in EITHER language
+  //  - 'answer'    → correctAnswer missing/blank (shouldn't normally
+  //                  happen since it's a required upload column, but old
+  //                  rows or manual edits can leave it empty)
+  //  - 'all' (default) → any of the above
+  async questionsWithGaps(opts: {
+    type?: 'hindi' | 'solution' | 'answer' | 'all';
+    examId?: string;
+    chapterId?: string;
+    isPyq?: boolean; // true = only questions tied to a specific year (PYQ); false = only year-less (practice); omit = both
+  }) {
+    const type = opts.type ?? 'all';
+    const gapConditions: any[] = [];
+    if (type === 'hindi' || type === 'all') {
+      gapConditions.push({ OR: [{ questionTextHindi: null }, { questionTextHindi: '' }] });
+    }
+    if (type === 'solution' || type === 'all') {
+      gapConditions.push({ OR: [{ explanation: null }, { explanation: '' }] });
+    }
+    if (type === 'answer' || type === 'all') {
+      gapConditions.push({ OR: [{ correctAnswer: null }, { correctAnswer: '' }] });
+    }
+
+    const where: any = { OR: gapConditions };
+    if (opts.examId) where.examId = opts.examId;
+    if (opts.chapterId) where.chapterId = opts.chapterId;
+    if (opts.isPyq === true) where.year = { not: null };
+    if (opts.isPyq === false) where.year = null;
+
+    const questions = await this.prisma.question.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }],
+      take: 20000, // same safety cap as exportQuestionBank
+      select: {
+        id: true,
+        examId: true,
+        subjectId: true,
+        chapterId: true,
+        topicId: true,
+        subTopicId: true,
+        questionText: true,
+        questionTextHindi: true,
+        optionsJson: true,
+        correctAnswer: true,
+        explanation: true,
+        explanationHindi: true,
+        year: true,
+        shift: true,
+        paperCode: true,
+        marks: true,
+        negativeMarks: true,
+        difficulty: true,
+        isApproved: true,
+        exam: { select: { name: true } },
+        subject: { select: { name: true } },
+        chapter: { select: { name: true } },
+      },
+    });
+
+    return questions.map((q) => {
+      const missingHindi = !q.questionTextHindi;
+      const missingSolution = !q.explanation;
+      const missingAnswer = !q.correctAnswer;
+      const gaps: string[] = [];
+      if (missingHindi) gaps.push('Hindi translation');
+      if (missingSolution) gaps.push('Solution/explanation');
+      if (missingAnswer) gaps.push('Answer key');
+      return { ...q, gapType: gaps.join(' + '), isPyq: q.year != null };
+    });
+  }
+
   async subjects(examId?: string) {
     const cacheKey = examId ? `bank:subjects:${examId}` : 'bank:subjects';
     const cached = cacheGet<any>(cacheKey);
