@@ -45,35 +45,49 @@ export class BankUploadController {
     return req.user?.userId ?? req.user?.id;
   }
 
+  // BUGFIX ("admin ke liye alag practice question upload feature" —
+  // isPracticeOnly checkbox on /admin): the frontend's submitUpload()
+  // already appended `formData.append("isPracticeOnly", "true")` when the
+  // admin checked the box, but every handler below ignored it completely —
+  // no @Body() param existed to read it, so the flag went nowhere and the
+  // checkbox was a no-op. Multer (FileInterceptor) parses other multipart
+  // text fields into req.body same as it always has; @Body('isPracticeOnly')
+  // reads it as the string "true" (multipart fields are always strings) —
+  // compared explicitly below rather than truthy-checked, since the
+  // string "false" would otherwise also count as checked.
+  private isPracticeOnlyFlag(body: any): boolean {
+    return body?.isPracticeOnly === 'true' || body?.isPracticeOnly === true;
+  }
+
   @Post('excel')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  async uploadExcel(@UploadedFile() file: any, @Req() req: any) {
+  async uploadExcel(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
-    return this.uploadService.uploadFromExcel(file.buffer, this.adminId(req));
+    return this.uploadService.uploadFromExcel(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
   }
 
   @Post('csv')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  async uploadCsv(@UploadedFile() file: any, @Req() req: any) {
+  async uploadCsv(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.csv) is required');
-    return this.uploadService.uploadFromCSV(file.buffer, this.adminId(req));
+    return this.uploadService.uploadFromCSV(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
   }
 
   // Accepts both tab-separated .txt files AND raw JSON-array .json/.txt files —
   // BankUploadService.uploadFromText() already auto-detects JSON vs tab-separated.
   @Post('text')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  async uploadText(@UploadedFile() file: any, @Req() req: any) {
+  async uploadText(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.txt/.json) is required');
-    return this.uploadService.uploadFromText(file.buffer, this.adminId(req));
+    return this.uploadService.uploadFromText(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
   }
 
   // Same handler as /text but named for clarity when the admin picks "JSON file" in the UI.
   @Post('json')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  async uploadJsonFile(@UploadedFile() file: any, @Req() req: any) {
+  async uploadJsonFile(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.json) is required');
-    return this.uploadService.uploadFromText(file.buffer, this.adminId(req));
+    return this.uploadService.uploadFromText(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
   }
 
   // Paste-in JSON (no file) — e.g. admin copy-pastes an array of question
@@ -84,15 +98,19 @@ export class BankUploadController {
     if (!Array.isArray(questions) || questions.length === 0) {
       throw new BadRequestException('Body must be a JSON array of questions, or { "questions": [...] }');
     }
+    // isPracticeOnly only applies when body is the { questions, isPracticeOnly }
+    // shape — a bare array has nowhere to carry it, which is fine (that path
+    // isn't used by the /admin checkbox flow today).
+    const isPracticeOnly = !Array.isArray(body) && this.isPracticeOnlyFlag(body);
     const buffer = Buffer.from(JSON.stringify(questions), 'utf-8');
-    return this.uploadService.uploadFromText(buffer, this.adminId(req));
+    return this.uploadService.uploadFromText(buffer, this.adminId(req), undefined, isPracticeOnly);
   }
 
   @Post('word')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  async uploadWord(@UploadedFile() file: any, @Req() req: any) {
+  async uploadWord(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.docx) is required');
-    return this.uploadService.uploadFromWord(file.buffer, this.adminId(req));
+    return this.uploadService.uploadFromWord(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
   }
 
   // Session 24 — for diagram question types that AREN'T simple Venn circles
@@ -127,6 +145,40 @@ export class BankUploadController {
     const fmt = (format === 'json' || format === 'csv' || format === 'excel') ? format : 'excel';
     const { buffer, contentType, filename } = await this.uploadService.exportQuestionBank(
       { examId, subjectId, chapterId, year: year ? parseInt(year, 10) : undefined },
+      fmt,
+    );
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
+
+  // NEW ("chuninda questions ka Excel export jinme Hindi translation ya
+  // solution ya answer key missing hai — dono PYQ aur Practice questions ke
+  // liye"): same auth/roles as the export above, one level down — narrows
+  // to only the questions with a genuine gap instead of the whole bank.
+  // ?type=hindi|solution|answer|all (default all) picks which gap(s) to
+  // include; ?isPyq=true only exports year-tagged (PYQ) questions,
+  // ?isPyq=false only exports year-less (practice) questions, omit for
+  // both in one file (see BankService.questionsWithGaps() for exact
+  // definitions).
+  @Get('export-gaps')
+  async exportGaps(
+    @Query('format') format: string | undefined,
+    @Query('type') type: string | undefined,
+    @Query('examId') examId: string | undefined,
+    @Query('chapterId') chapterId: string | undefined,
+    @Query('isPyq') isPyq: string | undefined,
+    @Res() res: Response,
+  ) {
+    const fmt = (format === 'json' || format === 'csv' || format === 'excel') ? format : 'excel';
+    const gapType = (type === 'hindi' || type === 'solution' || type === 'answer') ? type : 'all';
+    const { buffer, contentType, filename } = await this.uploadService.exportQuestionGaps(
+      {
+        type: gapType,
+        examId,
+        chapterId,
+        isPyq: isPyq === 'true' ? true : isPyq === 'false' ? false : undefined,
+      },
       fmt,
     );
     res.setHeader('Content-Type', contentType);
