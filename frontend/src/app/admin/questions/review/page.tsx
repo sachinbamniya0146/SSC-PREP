@@ -454,6 +454,16 @@ export default function QuestionReviewPage() {
                           ))}
                         </div>
                         <div>
+                          <label className="text-xs font-semibold text-muted-foreground">Explanation (English)</label>
+                          <textarea
+                            defaultValue={q.explanation ?? ""}
+                            onChange={(e) => updateDraft(q.id, { explanation: e.target.value })}
+                            placeholder="Explanation yahaan likho (English)"
+                            className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                            rows={2}
+                          />
+                        </div>
+                        <div>
                           <label className="text-xs font-semibold text-muted-foreground">Explanation (Hindi)</label>
                           <textarea
                             defaultValue={q.explanationHindi ?? ""}
