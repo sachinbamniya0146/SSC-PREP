@@ -121,6 +121,12 @@ export default function AdminPage() {
   // admin can see what's already in the bank before adding more. Backend:
   // GET /bank/admin/upload/export (BankUploadService.exportQuestionBank()).
   const [bankExportDownloading, setBankExportDownloading] = React.useState(false);
+  // NEW ("chuninda questions ka Excel export jinme Hindi translation ya
+  // solution ya answer key missing hai"): GET /bank/admin/upload/export-gaps
+  // (BankUploadService.exportQuestionGaps()) — same auth-header-needed blob
+  // download as downloadBankExport() above, narrowed to only the rows with
+  // a genuine gap instead of the whole bank.
+  const [gapsExportDownloading, setGapsExportDownloading] = React.useState(false);
   // NEW — "admin ke liye alag practice question upload feature": same
   // uploader, checked box forces every row's year/shift/paperCode blank on
   // the backend regardless of what the sheet has, so this batch always
@@ -309,6 +315,37 @@ export default function AdminPage() {
       setError(err instanceof Error ? err.message : "Failed to export question bank");
     } finally {
       setBankExportDownloading(false);
+    }
+  }
+
+  // NEW — downloads only the questions missing Hindi translation, solution,
+  // or answer key (admin's exact ask: "chuninda questions ko excel me pura
+  // format me download kar sake"). `type` narrows to one gap kind; omit
+  // (default) for all three in one file. Same blob-download pattern as
+  // downloadBankExport() above.
+  async function downloadGapsExport(type?: "hindi" | "solution" | "answer") {
+    setGapsExportDownloading(true);
+    setError("");
+    try {
+      const qs = type ? `?format=excel&type=${type}` : `?format=excel`;
+      const res = await fetchAuth(`${API_BASE}/bank/admin/upload/export-gaps${qs}`);
+      if (!res.ok) throw new Error(`Failed to export gaps (HTTP ${res.status})`);
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="(.+)"/);
+      const filename = match ? match[1] : "question_gaps.xlsx";
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to export gaps");
+    } finally {
+      setGapsExportDownloading(false);
     }
   }
 
@@ -604,6 +641,14 @@ export default function AdminPage() {
               title="Poora question bank isi upload-format mein download karein — dekhein kya already maujood hai"
             >
               {bankExportDownloading ? "Exporting..." : "Download Full Question Bank"}
+            </button>
+            <button
+              onClick={() => downloadGapsExport()}
+              disabled={gapsExportDownloading}
+              className="rounded-lg border border-danger/40 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+              title="Sirf vo questions jisme Hindi translation, solution, ya answer key missing hai — PYQ aur Practice dono"
+            >
+              {gapsExportDownloading ? "Exporting..." : "⬇️ Download Gaps (Missing Hindi/Solution/Answer)"}
             </button>
           </div>
           <div className="flex flex-wrap items-end gap-3">
