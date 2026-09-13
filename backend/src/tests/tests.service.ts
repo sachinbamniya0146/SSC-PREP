@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
+import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank } from '../common/pyq-mock-pricing';
 import { TelegramService } from '../telegram/telegram.service';
 import { QuestionBankPracticeService } from '../bank/question-bank-practice.service';
 
@@ -64,8 +65,26 @@ export class TestsService {
   // "purchase access to take it" — that's a real bug students would hit,
   // but an admin hitting it usually means they're testing/managing content
   // and got wrongly paywalled like a free student.
-  private async assertMockEntitled(userId: string, template: { id: string; isPremium?: boolean | null }) {
-    if (!template.isPremium) return;
+  private async assertMockEntitled(userId: string, template: { id: string; title?: string; isPremium?: boolean | null }) {
+    // NEW ("free honge bus top 10 rhenge bs baki paid") — auto-created PYQ
+    // mocks (id prefix `pyq-`) are ALWAYS created with isPremium: false
+    // (see BankUploadService.upsertPyqMockForPaper) because their pricing
+    // is rank-based (top 10 newest = free), not a fixed flag on the row.
+    // The `!template.isPremium` early-return below would otherwise let
+    // EVERY pyq- mock start for free via this endpoint regardless of rank
+    // — a real paywall bypass, since the /mocks LIST screen (mocks.service
+    // .ts) already correctly marks mocks past rank 10 as locked/PAID using
+    // this exact same shared helper. Checking rank here first keeps the
+    // list and the enforcement in permanent agreement.
+    if (isPyqAutoMockId(template.id)) {
+      const isFree = await this.isPyqMockFreeForStart(template.id);
+      if (isFree) return;
+      // Not in the free top 10 — fall through to the normal
+      // subscription/paid-pack checks below, exactly like any other
+      // premium mock.
+    } else if (!template.isPremium) {
+      return;
+    }
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -83,26 +102,47 @@ export class TestsService {
     });
     if (mock && mock.paidPacksPurchased > 0) return;
 
-    if (!mock) {
-      // First-ever attempt on this template for this user — create the
-      // row and consume free-trial use #1 in the same write.
-      await this.prisma.mockAccess.create({
-        data: { userId, testTemplateId: template.id, mocksUsed: 1 },
-      });
-      return;
-    }
+    // NEW — a pyq- mock outside the free-10 window has NO free-trial quota
+    // at all (unlike a regular premium mock's FREE_MOCKS_PER_EXAM trial) —
+    // it's simply not one of the free papers. Skip the
+    // create-row-and-consume-a-free-use path entirely for these; go
+    // straight to the paywall rejection below.
+    if (!isPyqAutoMockId(template.id)) {
+      if (!mock) {
+        // First-ever attempt on this template for this user — create the
+        // row and consume free-trial use #1 in the same write.
+        await this.prisma.mockAccess.create({
+          data: { userId, testTemplateId: template.id, mocksUsed: 1 },
+        });
+        return;
+      }
 
-    if (mock.mocksUsed < mock.freeMocksAllowed) {
-      const claim = await this.prisma.mockAccess.updateMany({
-        where: { userId, testTemplateId: template.id, mocksUsed: { lt: mock.freeMocksAllowed } },
-        data: { mocksUsed: { increment: 1 } },
-      });
-      if (claim.count > 0) return; // successfully claimed a free-trial use
-      // else: someone else (a racing concurrent start) claimed the last
-      // remaining free use between our read and write — fall through to reject.
+      if (mock.mocksUsed < mock.freeMocksAllowed) {
+        const claim = await this.prisma.mockAccess.updateMany({
+          where: { userId, testTemplateId: template.id, mocksUsed: { lt: mock.freeMocksAllowed } },
+          data: { mocksUsed: { increment: 1 } },
+        });
+        if (claim.count > 0) return; // successfully claimed a free-trial use
+        // else: someone else (a racing concurrent start) claimed the last
+        // remaining free use between our read and write — fall through to reject.
+      }
     }
 
     throw new BadRequestException('This mock is premium. Purchase access to take it.');
+  }
+
+  // Re-derives the same newest-first PYQ ranking mocks.service.ts uses for
+  // the /mocks list, scoped to just this one template — needed here
+  // because assertMockEntitled() only has a single template, not the full
+  // list mocks.service.ts already had in hand.
+  private async isPyqMockFreeForStart(templateId: string): Promise<boolean> {
+    const pyqTemplates = await this.prisma.testTemplate.findMany({
+      where: { isActive: true, id: { startsWith: 'pyq-' } },
+      select: { id: true, title: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const rank = rankPyqTemplatesNewestFirst(pyqTemplates);
+    return isPyqMockFreeByRank(rank.get(templateId));
   }
 
   // ---- Server-authoritative test session (P0: client clock never trusted) ----
@@ -701,6 +741,25 @@ async saveAnswers(
     });
     if (!template) throw new BadRequestException('Template not found');
     await this.assertMockEntitled(userId, template);
+
+    // NEW ("ek hee shift ke jo questions hote he ... to vo mock test me ho
+    // pyq based mock test esa hona chaiye"): a SHIFT_WISE template whose id
+    // is `pyq-<slug>` was auto-created by
+    // BankUploadService.upsertPyqMockForPaper() from a genuine single-paper
+    // upload (every question sharing one examId+year+shift+paperCode). Serve
+    // EXACTLY those questions, in one flat list — not a family-blended,
+    // randomly-sampled-across-years composition like the generic
+    // FULL_MOCK/PREVIOUS_YEAR path below. The paperCode is embedded in the
+    // template id itself (see slugifyPaperCode()), so this branch re-derives
+    // it from any question tagged with a paperCode matching the template's
+    // exam+title rather than needing a new schema column — simplest lookup
+    // is by matching template id back to any Question row that would slugify
+    // to the same id, which is exact and unambiguous by construction (see
+    // BankUploadService.slugifyPaperCode() — same slug fn, same input).
+    if (template.type === 'SHIFT_WISE' && templateId.startsWith('pyq-')) {
+      return this.shiftWisePyqPaper(template, templateId);
+    }
+
     const fam = templateId.includes('mts') ? 'mts' : templateId.includes('chsl') ? 'chsl' : templateId.includes('cpo') ? 'cpo' : 'cgl';
     // BUGFIX (Session 20 — "exam-wise button should only give that exam's
     // PYQs" audit): every section query below used to filter only by
@@ -861,6 +920,95 @@ async saveAnswers(
     // above due to a temporary content gap) rather than the static
     // template.totalMarks, so the exam header/results screen never shows
     // a max-marks figure the paper doesn't actually contain.
+    const actualTotalMarks = out.reduce((s, sec) => s + sec.marks, 0);
+    return {
+      templateId: template.id,
+      title: template.title,
+      description: template.description,
+      type: template.type,
+      durationMinutes: template.durationMinutes,
+      totalMarks: actualTotalMarks || template.totalMarks,
+      isPremium: template.isPremium,
+      sections: out,
+    };
+  }
+
+  // NEW — serves a `pyq-<slug>` SHIFT_WISE template's EXACT paper: every
+  // question that was part of the auto-detected examId+year+shift+paperCode
+  // group, grouped by subject the same way paper() groups its output (so
+  // the frontend test-runner, which already expects `sections[]`, needs no
+  // changes to render this).
+  //
+  // Matching by slug (not a stored FK) is intentional: BankUploadService
+  // never persists a Question→TestTemplate link (see doc-comment on
+  // upsertPyqMockForPaper) — the template id itself, `pyq-<slugifyPaperCode
+  // (paperCode)>`, IS the join key. Any question whose paperCode slugifies
+  // to the same string is definitionally part of this exact paper — slugify
+  // is deterministic and lossy only in ways (case, punctuation) that don't
+  // create cross-paper collisions in practice (paperCodes already follow a
+  // consistent "EXAM-TIER-DD-Mon-YYYY-Sx" convention across every upload
+  // template in this codebase).
+  private slugifyPaperCode(paperCode: string): string {
+    return paperCode.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  }
+
+  private async shiftWisePyqPaper(
+    template: { id: string; title: string; type: string; durationMinutes: number; totalQuestions: number; totalMarks: number; isPremium: boolean; description: string | null },
+    templateId: string,
+  ) {
+    const wantedSlug = templateId.slice('pyq-'.length);
+    // Pull every approved question tagged with a paperCode, then filter in
+    // JS to the ones matching this template's slug — a full LIKE/regex scan
+    // isn't available portably across Postgres setups here, and the
+    // candidate set (questions WITH a paperCode) is small relative to the
+    // whole bank, so this is cheap.
+    const candidates = await this.prisma.question.findMany({
+      where: { ...PUBLISHED_QUESTION_WHERE, paperCode: { not: null } },
+      include: {
+        exam: { select: { name: true } },
+        subject: { select: { name: true, slug: true } },
+        chapter: { select: { name: true } },
+      },
+      orderBy: [{ subjectId: 'asc' }, { createdAt: 'asc' }],
+    });
+    const rows = candidates.filter((r) => r.paperCode && this.slugifyPaperCode(r.paperCode) === wantedSlug);
+    if (rows.length === 0) {
+      throw new BadRequestException('This PYQ paper is no longer available (questions may have been removed). Please check /mocks for other papers.');
+    }
+
+    const bySubject = new Map<string, { name: string; slug: string; rows: typeof rows }>();
+    for (const r of rows) {
+      const slug = r.subject?.slug ?? 'other';
+      if (!bySubject.has(slug)) bySubject.set(slug, { name: r.subject?.name ?? 'Other', slug, rows: [] });
+      bySubject.get(slug)!.rows.push(r);
+    }
+
+    const out = [...bySubject.values()].map((sec) => ({
+      part: sec.slug,
+      name: sec.name,
+      subjectSlug: sec.slug,
+      questionCount: sec.rows.length,
+      marks: sec.rows.reduce((s, r) => s + (r.marks ?? 2), 0),
+      minutes: Math.max(5, Math.round(sec.rows.length * 0.6)),
+      questions: sec.rows.map((r) => ({
+        id: r.id,
+        questionText: r.questionText,
+        questionTextHindi: r.questionTextHindi,
+        questionDiagramType: r.questionDiagramType ?? null,
+        questionDiagramLabels: r.questionDiagramLabels ?? null,
+        questionImageUrl: r.questionImageUrl ?? null,
+        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
+        marks: r.marks ?? 2,
+        negativeMarks: r.negativeMarks ?? 0.5,
+        year: r.year,
+        shift: r.shift,
+        examName: r.exam?.name,
+        chapter: r.chapter?.name,
+        // Same answer-leak gate as paper() — correctAnswer/explanation
+        // intentionally withheld here; revealed post-submit only.
+      })),
+    }));
+
     const actualTotalMarks = out.reduce((s, sec) => s + sec.marks, 0);
     return {
       templateId: template.id,
