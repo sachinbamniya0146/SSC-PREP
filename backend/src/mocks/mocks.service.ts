@@ -124,8 +124,17 @@ export class MocksService {
     };
   }
 
-  /** Unlock access to extra mocks for a test (called after successful payment). */
-  async purchaseMockAccess(userId: string, testTemplateId: string, packPriceInr?: number) {
+  /** Unlock access to extra mocks for a test (called after successful payment).
+   *
+   * NOTE: as of the SECURITY FIX in mocks.controller.ts, the only caller of
+   * this method is the ADMIN-only POST /mocks/purchase comp tool — this is
+   * NOT part of the real student-facing purchase flow (that's Cashfree via
+   * monetization.service.ts#fulfill(), which writes mockAccess itself).
+   * `grantedByAdminId` + `metadataJson.kind: 'ADMIN_COMP'` below record that
+   * distinction so the revenue dashboard can tell a real payment apart from
+   * a free admin comp (see mocks.controller.ts's doc-comment on purchase()
+   * and admin.service.ts#getDashboardStats() for the other half of this). */
+  async purchaseMockAccess(userId: string, testTemplateId: string, packPriceInr?: number, grantedByAdminId?: string) {
     const price = packPriceInr ?? OFFER_PRICE_INR;
     const access = await this.prisma.mockAccess.upsert({
       where: { userId_testTemplateId: { userId, testTemplateId } },
@@ -135,9 +144,10 @@ export class MocksService {
     await this.prisma.payment.create({
       data: {
         userId,
-        razorpayOrderId: `local-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+        gatewayOrderId: `local-admin-comp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
         amountInr: price,
         status: 'SUCCESS',
+        metadataJson: { kind: 'ADMIN_COMP', mockTemplateId: testTemplateId, grantedByAdminId: grantedByAdminId ?? null },
       },
     });
     return { ok: true, access, priceInr: price };
