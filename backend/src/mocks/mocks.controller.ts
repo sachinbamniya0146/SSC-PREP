@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { MocksService } from './mocks.service';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -12,8 +12,8 @@ export class MocksController {
   constructor(private readonly mocksService: MocksService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthenticatedUser) {
-    return this.mocksService.listAvailableMocks(user.userId);
+  list(@CurrentUser() user: AuthenticatedUser, @Query('examId') examId?: string) {
+    return this.mocksService.listAvailableMocks(user.userId, examId);
   }
 
   // SECURITY FIX: this endpoint used to be callable by ANY logged-in user
