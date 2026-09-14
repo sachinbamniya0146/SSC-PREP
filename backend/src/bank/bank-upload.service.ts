@@ -330,12 +330,14 @@ export class BankUploadService {
         totalQuestions: actualCount,
         totalMarks,
         isPremium: false, // pricing (top-10-free / rest-paid) is applied at LIST time by MocksService, not baked into the row here
+        examId, // NEW — see schema.prisma TestTemplate.examId doc-comment; this is what makes /mocks?examId=... actually scope PYQ mocks to the right exam
       },
       update: {
         title,
         totalQuestions: actualCount,
         totalMarks,
         durationMinutes,
+        examId, // keep in sync — a re-upload/backfill should never leave a stale/missing exam link
       },
     });
   }
