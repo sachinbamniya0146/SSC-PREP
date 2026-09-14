@@ -241,6 +241,7 @@ model Exam {
   examPatterns ExamPattern[]
   questionBankSets QuestionBankSet[]
   userProgress     UserProgress[]
+  testTemplates    TestTemplate[]
 
   @@map("exams")
 }
@@ -536,14 +537,29 @@ model TestTemplate {
   isPremium        Boolean       @default(false)
   isActive         Boolean       @default(true)
   priceInr         Int           @default(0)  // Price in INR for premium tests
-  
+
+  // NEW (Sep 2026 — "us exam ke menu par usi exam ke mocks/questions dikhein"
+  // audit): TestTemplate had NO link to Exam at all — a mock test row had no
+  // way to record which exam it belonged to, so /mocks always returned every
+  // mock across every exam mixed together with no way to filter. Nullable
+  // because a few templates are deliberately cross-exam/generic (the
+  // "tpl-practice" quick-practice placeholder in bank.service.ts#attempt()
+  // has no single exam). Every exam-specific creation path (auto PYQ mocks
+  // in bank-upload.service.ts, year-wise custom tests and daily tests in
+  // tests.service.ts/daily-test.service.ts) now sets this — see those files
+  // for the actual writes. onDelete: SetNull so deleting an Exam doesn't
+  // cascade-delete historical mock templates/attempts tied to it.
+  examId           String?
+  exam             Exam?         @relation(fields: [examId], references: [id], onDelete: SetNull)
+
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   
   attempts         TestAttempt[]
   pdfExports       TestPdfExport[]
   attemptStats     TestAttemptStats?
-  
+
+  @@index([examId])
   @@map("test_templates")
 }
 
