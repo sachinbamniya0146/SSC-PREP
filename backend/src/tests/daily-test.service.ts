@@ -32,7 +32,7 @@ function istMidnightUtc(d: Date): Date {
 export class DailyTestService {
   constructor(private prisma: PrismaService) {}
 
-  private async templateFor(examName: string, maxQ: number, durationMinutes: number) {
+  private async templateFor(examId: string, examName: string, maxQ: number, durationMinutes: number) {
     const title = `Daily Test — ${examName}`;
     let tpl = await this.prisma.testTemplate.findFirst({
       where: { type: 'DAILY_PRACTICE', title },
@@ -48,8 +48,15 @@ export class DailyTestService {
           totalMarks: maxQ * 2,
           isPremium: false,
           isActive: true,
+          examId, // NEW — see schema.prisma TestTemplate.examId doc-comment
         },
       });
+    } else if (!tpl.examId) {
+      // Backfill path: a row created before this migration (or by an old
+      // deploy still mid-rollout) won't have examId set yet — fix it in
+      // place the next time it's touched, same self-healing pattern as
+      // upsertPyqMockForPaper()'s `update` branch.
+      tpl = await this.prisma.testTemplate.update({ where: { id: tpl.id }, data: { examId } });
     }
     return tpl;
   }
@@ -182,7 +189,7 @@ export class DailyTestService {
     } else {
       durationMinutes = Math.min(Math.max(Math.round(N * 0.6), 5), 60);
     }
-    const tpl = await this.templateFor(plan.exam.name, N, durationMinutes);
+    const tpl = await this.templateFor(plan.examId, plan.exam.name, N, durationMinutes);
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000);
