@@ -10,10 +10,22 @@ const OFFER_PRICE_INR = 10;
 export class MocksService {
   constructor(private prisma: PrismaService) {}
 
-  /** List mocks with the user's remaining free access. */
-  async listAvailableMocks(userId: string) {
+  /** List mocks with the user's remaining free access.
+   *
+   * NEW `examId` param (Sep 2026 — exam-scoping audit): filters to mocks
+   * belonging to that exam, PLUS any template with no exam link at all
+   * (examId IS NULL) — a handful of generic/legacy templates that predate
+   * this column and couldn't be confidently backfilled (see the migration's
+   * doc-comment) stay visible everywhere rather than disappearing from
+   * every exam's list. When examId is omitted, behavior is unchanged
+   * (every mock, exactly as before this fix). */
+  async listAvailableMocks(userId: string, examId?: string) {
     const tests = await this.prisma.testTemplate.findMany({
-      where: { isActive: true, type: { in: ['FULL_MOCK', 'MINI_MOCK', 'SHIFT_WISE', 'PREVIOUS_YEAR', 'YEAR_WISE'] } },
+      where: {
+        isActive: true,
+        type: { in: ['FULL_MOCK', 'MINI_MOCK', 'SHIFT_WISE', 'PREVIOUS_YEAR', 'YEAR_WISE'] },
+        ...(examId ? { OR: [{ examId }, { examId: null }] } : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
