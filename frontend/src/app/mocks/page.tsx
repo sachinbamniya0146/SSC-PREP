@@ -18,17 +18,49 @@ type Mock = {
   offerDays?: number;
 };
 
+// NEW (Sep 2026 — exam-scoping audit): minimal shape for the exam picker,
+// same fields /bank/meta already returns (question-bank/page.tsx uses the
+// same endpoint for its own exam dropdown).
+type ExamOption = { id: string; name: string; count: number };
+
 export default function MocksPage() {
   const [mocks, setMocks] = React.useState<Mock[]>([]);
   const [offer, setOffer] = React.useState<{ active: boolean; priceInr: number; days: number; message: string } | null>(null);
   const [loading, setLoading] = React.useState(true);
+  // NEW — exam-scoping (see mocks.service.ts#listAvailableMocks doc-comment
+  // and schema.prisma TestTemplate.examId doc-comment for the backend
+  // half of this fix). Empty string = "All Exams", same convention
+  // question-bank/page.tsx uses for its examId state.
+  const [exams, setExams] = React.useState<ExamOption[]>([]);
+  const [examId, setExamId] = React.useState<string>("");
+
+  // Exam list for the picker — same /bank/meta endpoint and same
+  // count > 0 filter question-bank/page.tsx already uses, so both pickers
+  // only ever offer exams that actually have content.
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/bank/meta`);
+        const d = await r.json();
+        const allExams = Array.isArray(d?.exams) ? d.exams.filter((e: ExamOption) => e.count > 0) : [];
+        setExams(allExams);
+        const urlExam =
+          typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("exam") : null;
+        if (urlExam && allExams.some((e: ExamOption) => e.id === urlExam)) setExamId(urlExam);
+      } catch {
+        // non-fatal — picker just stays empty/"All Exams" if this fails
+      }
+    })();
+  }, []);
 
   // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual
   // token, so an expired access token auto-refreshes instead of leaving
   // the mocks list stuck showing nothing (or worse, all-locked).
-  const load = async () => {
+  const load = async (forExamId: string) => {
     try {
-      const res = await fetchAuth(`${API_BASE}/mocks`);
+      setLoading(true);
+      const qs = forExamId ? `?examId=${encodeURIComponent(forExamId)}` : "";
+      const res = await fetchAuth(`${API_BASE}/mocks${qs}`);
       if (res.ok) {
         const d = await res.json();
         setMocks(d.mockAccess);
@@ -40,9 +72,9 @@ export default function MocksPage() {
   };
 
   React.useEffect(() => {
-    load();
+    load(examId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [examId]);
 
   // SECURITY FIX: this used to POST straight to /mocks/purchase, which
   // instantly granted access with a fake, unverified "payment" (no PayU
@@ -106,6 +138,27 @@ export default function MocksPage() {
           2 free mocks per test · Previous-year mocks are always FREE · unlock more for just
           ₹{offer?.priceInr ?? 10} for {offer?.days ?? 15} days!
         </p>
+
+        {/* NEW — exam picker (see mocks.service.ts#listAvailableMocks /
+            schema.prisma TestTemplate.examId doc-comments). Defaults to
+            "All Exams" so nothing changes for anyone who doesn't touch it. */}
+        {exams.length > 0 && (
+          <div className="mt-4">
+            <label className="mb-1 block text-xs font-semibold text-muted-foreground">Exam</label>
+            <select
+              value={examId}
+              onChange={(e) => setExamId(e.target.value)}
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm sm:w-72"
+            >
+              <option value="">All Exams</option>
+              {exams.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {loading && <p className="mt-8 text-muted-foreground">Loading mocks…</p>}
 
