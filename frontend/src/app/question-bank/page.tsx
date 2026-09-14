@@ -317,7 +317,28 @@ export default function QuestionBankPage() {
       const searchQ =
         typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("q") : null;
       if (searchQ) {
-        const r = await fetchAuth(`${apiBase()}/search?q=${encodeURIComponent(searchQ)}&limit=20`, {
+        // BUGFIX (Sep 2026 — "system usko pehchan ke us exam ke questions
+        // us exam ke menu par jaise dikhte hain waise kaam kare"): this
+        // search branch never sent examId/subjectId/chapterId to the
+        // backend at all — only `q` and `limit`. The exact-filter branch
+        // just below (non-search path) DOES scope by examId/subjectId/
+        // chapterId correctly, and the backend's GET /search endpoint has
+        // always accepted an `examId` query param (search.controller.ts) —
+        // it just never got sent from here. Net effect: a student inside
+        // e.g. /question-bank?exam=exam-cgl who typed anything into the
+        // search box would see questions from EVERY exam mixed together
+        // (CHSL, MTS, GD, etc.), not just CGL — exactly the "exam ka menu
+        // sirf usi exam ka dikhna chahiye" requirement this was violating.
+        // Same bug applied to subject/chapter scoping while browsing
+        // inside a chapter and searching. Now all three are forwarded,
+        // matching the non-search branch below.
+        const searchParams = new URLSearchParams();
+        searchParams.append("q", searchQ);
+        searchParams.append("limit", "20");
+        if (examId) searchParams.append("examId", examId);
+        if (chapterId) searchParams.append("chapterId", chapterId);
+        else if (subjectId) searchParams.append("subjectId", subjectId);
+        const r = await fetchAuth(`${apiBase()}/search?${searchParams}`, {
           headers: getAuthHeaders(),
         });
         const d = await r.json();
