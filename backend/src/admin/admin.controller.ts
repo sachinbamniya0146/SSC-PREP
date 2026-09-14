@@ -502,10 +502,15 @@ export class AdminController {
       } : null,
       couponCode: meta.couponCode,
       discount: meta.discount,
-      // Payment gateway is PayU (see monetization.service.ts payuConfig) — not Razorpay.
-      paymentMethod: 'PayU',
-      razorpayOrderId: payment.razorpayOrderId,
-      razorpayPaymentId: payment.razorpayPaymentId,
+      // BUGFIX (Sep 2026 — stale from the PayU→Cashfree migration): this
+      // was hardcoded to 'PayU' with a comment insisting it wasn't
+      // Razorpay — both wrong today. Gateway has been Cashfree since the
+      // migration documented in monetization.service.ts; field names
+      // renamed to match (gatewayOrderId/gatewayPaymentId — see migration
+      // 20260914100000_rename_payment_gateway_fields).
+      paymentMethod: 'Cashfree',
+      gatewayOrderId: payment.gatewayOrderId,
+      gatewayPaymentId: payment.gatewayPaymentId,
     };
   }
 
@@ -902,7 +907,7 @@ export class AdminController {
       }),
       this.prisma.referralEarning.findMany({
         where: { referrerId: userId },
-        include: { referee: { select: { fullName: true } }, payment: { select: { razorpayOrderId: true } } },
+        include: { referee: { select: { fullName: true } }, payment: { select: { gatewayOrderId: true } } },
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.withdrawalRequest.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } }),
@@ -924,7 +929,7 @@ export class AdminController {
       earnings: earnings.map((e) => ({
         id: e.id,
         refereeName: e.referee.fullName,
-        orderId: e.payment.razorpayOrderId,
+        orderId: e.payment.gatewayOrderId,
         purchaseAmountInr: e.purchaseAmountInr,
         commissionPct: e.commissionPct,
         commissionInr: e.commissionInr,
