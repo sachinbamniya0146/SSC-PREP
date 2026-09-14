@@ -279,15 +279,14 @@ export class MonetizationService {
       throw new BadRequestException('Cashfree did not return a payment session — please try again');
     }
 
-    // Create payment record. `razorpayOrderId`/`razorpayPaymentId` are
-    // legacy column names from an earlier gateway (see the "Reusing field"
-    // note this project has carried through PayU too) — they now hold the
-    // Cashfree order_id / cf_payment_id. Renaming would need a migration;
-    // not worth the risk purely for cosmetics.
+    // Create payment record. gatewayOrderId/gatewayPaymentId hold
+    // Cashfree's order_id / cf_payment_id (renamed from the old
+    // razorpayOrderId/razorpayPaymentId leftover names — see
+    // migration 20260914100000_rename_payment_gateway_fields).
     await this.prisma.payment.create({
       data: {
         userId,
-        razorpayOrderId: orderId,
+        gatewayOrderId: orderId,
         amountInr,
         status: 'PENDING',
         metadataJson: metadata,
@@ -312,7 +311,7 @@ export class MonetizationService {
   // the frontend-supplied orderId to know WHICH order to check, then asks
   // Cashfree's server directly for the authoritative status.
   async verifyPayment(userId: string, input: { orderId: string }) {
-    const payment = await this.prisma.payment.findUnique({ where: { razorpayOrderId: input.orderId } });
+    const payment = await this.prisma.payment.findUnique({ where: { gatewayOrderId: input.orderId } });
     if (!payment) throw new NotFoundException('Order not found');
     if (payment.userId !== userId) throw new BadRequestException('Order belongs to another user');
 
@@ -399,7 +398,7 @@ export class MonetizationService {
 
     if (!orderId) return { ok: true, ignored: true, reason: 'no_order_id' };
 
-    const payment = await this.prisma.payment.findUnique({ where: { razorpayOrderId: orderId } });
+    const payment = await this.prisma.payment.findUnique({ where: { gatewayOrderId: orderId } });
     if (!payment) return { ok: true, ignored: true, reason: 'unknown_order' };
     if (payment.status === 'SUCCESS') return { ok: true, duplicate: true };
 
@@ -410,7 +409,7 @@ export class MonetizationService {
 
     if (eventType === 'PAYMENT_FAILED_WEBHOOK' || eventType === 'PAYMENT_USER_DROPPED_WEBHOOK') {
       await this.prisma.payment.updateMany({
-        where: { razorpayOrderId: orderId, status: { not: 'SUCCESS' } },
+        where: { gatewayOrderId: orderId, status: { not: 'SUCCESS' } },
         data: { status: 'FAILED' },
       });
       return { ok: true, failed: true };
@@ -441,11 +440,11 @@ export class MonetizationService {
    * them can ever see `count === 1`; the other sees `count === 0` and
    * exits immediately without granting anything twice.
    */
-  private async fulfill(payment: any, payuPaymentId: string) {
+  private async fulfill(payment: any, gatewayPaymentId: string) {
     const claim = await this.prisma.payment.updateMany({
       where: { id: payment.id, status: { not: 'SUCCESS' } },
       data: {
-        razorpayPaymentId: payuPaymentId,
+        gatewayPaymentId,
         status: 'SUCCESS',
         invoiceUrl: `https://sscprephub.in/invoice/${payment.id}`,
       },
