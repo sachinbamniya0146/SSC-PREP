@@ -706,8 +706,16 @@ model Payment {
   id               String        @id @default(uuid())
   userId           String
   subscriptionId   String?
-  razorpayOrderId  String        @unique
-  razorpayPaymentId String?      @unique
+  // RENAMED (Sep 2026 — "Cashfree hai to razorpayOrderId kyun likha hai"):
+  // these two columns are pure legacy naming from before the PayU→Cashfree
+  // migration (see monetization.service.ts's "GATEWAY MIGRATION" comment) —
+  // every write/read of them has ALWAYS been Cashfree's order_id /
+  // cf_payment_id, never actual Razorpay data. Renamed to generic,
+  // gateway-agnostic names so the schema stops implying a gateway that
+  // isn't in use. See migration 20260914100000_rename_payment_gateway_fields
+  // for the safe RENAME COLUMN (no data loss, same @unique constraints).
+  gatewayOrderId   String        @unique
+  gatewayPaymentId String?       @unique
   amountInr        Float
   status           PaymentStatus @default(PENDING)
   invoiceUrl       String?
