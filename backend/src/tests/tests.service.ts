@@ -1384,6 +1384,7 @@ async saveAnswers(
         totalMarks,
         isPremium: false,
         description: `Custom year-wise test — ${exam?.name ?? ''} ${year} (${scopeLabel})`,
+        examId, // NEW — see schema.prisma TestTemplate.examId doc-comment; scopes this template to its exam for /mocks?examId=...
       },
     });
 
