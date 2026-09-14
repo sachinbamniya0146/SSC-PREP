@@ -31,8 +31,19 @@ export class AdminService {
         where: { testAttempts: { some: { startedAt: { gte: since } } } },
       }),
       this.prisma.user.count({ where: { createdAt: { gte: since } } }),
+      // BUGFIX (Sep 2026 — see mocks.controller.ts#purchase() /
+      // mocks.service.ts#purchaseMockAccess() doc-comments): a Payment row
+      // with status SUCCESS is no longer proof real money was collected —
+      // the admin-only mock-access comp tool creates one too (with no
+      // actual Cashfree transaction behind it) so the user's receipt/
+      // history still looks normal. Excluding metadataJson.kind ===
+      // 'ADMIN_COMP' here stops free comps from inflating this number.
       this.prisma.payment.aggregate({
-        where: { status: 'SUCCESS', createdAt: { gte: since } },
+        where: {
+          status: 'SUCCESS',
+          createdAt: { gte: since },
+          NOT: { metadataJson: { path: ['kind'], equals: 'ADMIN_COMP' } },
+        },
         _sum: { amountInr: true },
       }),
       this.prisma.subscription.count({ where: { status: 'ACTIVE', endsAt: { gt: new Date() } } }),
@@ -41,9 +52,15 @@ export class AdminService {
         where: { startedAt: { gte: since }, testTemplate: { type: 'FULL_MOCK' } },
       }),
       this.prisma.questionBankSet.count({ where: { startedAt: { gte: since } } }),
+      // Same ADMIN_COMP exclusion as the aggregate above, for the
+      // day-by-day revenue chart.
       this.prisma.payment.groupBy({
         by: ['createdAt'],
-        where: { status: 'SUCCESS', createdAt: { gte: since } },
+        where: {
+          status: 'SUCCESS',
+          createdAt: { gte: since },
+          NOT: { metadataJson: { path: ['kind'], equals: 'ADMIN_COMP' } },
+        },
         _sum: { amountInr: true },
         _count: true,
       }),
