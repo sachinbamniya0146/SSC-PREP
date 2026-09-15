@@ -462,6 +462,7 @@ export class BankController {
     @Body() body: {
       subjectId?: string;
       chapterId?: string;
+      topicId?: string; // NEW — weak-topic direct practice (see QuestionBankPracticeService.isTopicWeakForUser)
       examId?: string;
       setNumber?: number;
       mode?: 'practice' | 'test';
@@ -471,6 +472,19 @@ export class BankController {
   ) {
     const userId = req.user?.userId ?? req.user?.id;
     return this.practiceService.getOrCreateSet(userId, body);
+  }
+
+  // NEW — "sab topics dikhne chahiye, weak wale free practice ke liye
+  // unlock, baki click karne par premium mange": one call returns every
+  // topic under a chapter with an isWeak flag for the logged-in user, so
+  // the frontend can render the full topic list (nothing hidden) while
+  // gating the actual practice-start behind Premium for non-weak topics
+  // (enforced server-side in getOrCreateSet() above, not just in the UI).
+  @Get('topics/weak-status')
+  async topicsWeakStatus(@Req() req: any, @Query('chapterId') chapterId: string) {
+    const userId = req.user?.userId ?? req.user?.id;
+    if (!chapterId) throw new BadRequestException('chapterId is required');
+    return this.practiceService.getTopicsWithWeakStatus(userId, chapterId);
   }
 
   @Get('practice/set/:setId')
