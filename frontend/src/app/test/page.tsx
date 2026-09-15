@@ -39,6 +39,21 @@ type Attempt = {
   correctAnswer?: string;
   selectedOption: string;
   scoreDelta: number;
+  // BUGFIX (Sachin report, Sep 2026 — "solution/explanation results screen
+  // pe kabhi nahi dikhta"): server-authoritative tests (year-wise, daily
+  // test, full mock template) never send explanation/explanationHindi in
+  // the pre-attempt question payload (by design — see yearWiseStart() in
+  // tests.service.ts, "correctAnswer/explanation deliberately NOT sent").
+  // attemptDetail() DOES return them post-submit, but the submit handler
+  // below used to only pull correct/correctAnswer/selectedOption/scoreDelta
+  // into this map — explanation was fetched from the server and then
+  // silently dropped, never reaching the results screen at all. Carrying
+  // it here (alongside q.explanation, which non-exam-mode/practice tests
+  // already populate) fixes the review list and lets a real per-question
+  // solution panel be shown after submit for every test type.
+  explanation?: string | null;
+  explanationHindi?: string | null;
+  explanationSource?: string | null;
 };
 
 // Palette state values
@@ -159,6 +174,18 @@ export default function TestPage() {
 
   // results
   const [result, setResult] = React.useState<{ [qid: string]: Attempt }>({});
+  // BUGFIX (Sachin report, Sep 2026 — solutions results screen pe nahi
+  // dikhta): `result` only ever gets an entry for ANSWERED questions (see
+  // `if (!q.selectedOption) continue` in submitTest below) — a skipped
+  // question has no `result[qid]`, so it can never carry an explanation
+  // either, even though attemptDetail() returns explanation/correctAnswer
+  // for every question regardless of whether it was answered. This
+  // separate map is populated for ALL questions (answered + skipped) so
+  // the results review list and per-question solution panel work no
+  // matter what the student did with that question.
+  const [explanations, setExplanations] = React.useState<{
+    [qid: string]: { correctAnswer: string; explanation: string | null; explanationHindi: string | null; explanationSource: string | null };
+  }>({});
   const [finalScore, setFinalScore] = React.useState(0);
   const [reviewOpen, setReviewOpen] = React.useState(false);
   // v7 §1.1 — results-screen state MUST live at component top level
@@ -166,6 +193,8 @@ export default function TestPage() {
   // submit → React #310 "rendered more hooks" → the submit crash).
   const [reviewTab, setReviewTab] = React.useState<"all" | "wrong" | "skipped" | "correct">("all");
   const [navQ, setNavQ] = React.useState<number | null>(null); // navigator selection
+  // Per-question "View Solution" expand/collapse on the results review list.
+  const [solOpen, setSolOpen] = React.useState<{ [qid: string]: boolean }>({});
 
   const [paused, setPaused] = React.useState(false);
 
@@ -664,21 +693,36 @@ export default function TestPage() {
         });
         const detail = await dr.json().catch(() => null);
         const res: { [qid: string]: Attempt } = {};
+        const expl: typeof explanations = {};
         let score = 0;
         if (detail && Array.isArray(detail.questions)) {
           for (const q of detail.questions) {
-            if (!q.selectedOption) continue; // unattempted — nothing to show per-question
+            // BUGFIX: explanation/correctAnswer captured for EVERY question
+            // here (answered or skipped) — previously this whole block was
+            // skipped for unattempted questions, so they never got a
+            // correctAnswer or explanation on the results screen either.
+            expl[q.questionId] = {
+              correctAnswer: String(q.correctAnswer ?? "").trim().toUpperCase(),
+              explanation: q.explanation ?? null,
+              explanationHindi: q.explanationHindi ?? null,
+              explanationSource: q.explanationSource ?? null,
+            };
+            if (!q.selectedOption) continue; // unattempted — no score delta, no `result` entry
             const delta = q.isCorrect ? (q.marks ?? 2) : -(q.negativeMarks ?? 0.5);
             res[q.questionId] = {
               correct: !!q.isCorrect,
               correctAnswer: String(q.correctAnswer ?? "").trim().toUpperCase(),
               selectedOption: q.selectedOption,
               scoreDelta: delta,
+              explanation: q.explanation ?? null,
+              explanationHindi: q.explanationHindi ?? null,
+              explanationSource: q.explanationSource ?? null,
             };
             score += delta;
           }
         }
         setResult(res);
+        setExplanations(expl);
         setFinalScore(typeof detail?.score === "number" ? detail.score : score);
       } catch {
         // submit already happened above even if the detail re-fetch failed —
@@ -1154,43 +1198,84 @@ export default function TestPage() {
                 const a = result[q.id];
                 const ansText = answers[q.id] ? q.options.find((o) => o.key === answers[q.id])?.text : "—";
                 const spent = timeSpent[q.id] || 0;
+                // BUGFIX (Sachin report, Sep 2026 — solutions results screen
+                // pe kabhi nahi dikhta / "Answer not available — please
+                // report this question" on every row): for server-
+                // authoritative tests (year-wise/daily/mock) q.explanation
+                // was always undefined by design (see Attempt type comment
+                // above) so this fallback chain always hit its last resort.
+                // `explanations[q.id]` (populated post-submit from
+                // attemptDetail(), covers answered AND skipped questions)
+                // is now checked first; q.explanation stays as the fallback
+                // for the practice path (/sectional, chapter-wise, /bank/set)
+                // which never goes through the explanations map.
+                const ex = explanations[q.id];
+                const correctKey = (ex?.correctAnswer || a?.correctAnswer || "").trim().toUpperCase();
+                const correctOpt = q.options.find((o) => (o.key || "").trim().toUpperCase() === correctKey);
+                const correctLabel = correctOpt?.text || (correctKey ? `Option ${correctKey}` : null);
+                const expl = ex?.explanation ?? q.explanation ?? null;
+                const explHi = ex?.explanationHindi ?? q.explanationHindi ?? null;
+                const isOpen = solOpen[q.id];
                 return (
-                  <div key={q.id} className="flex items-start gap-3 px-5 py-4">
-                    <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${a?.correct ? "bg-success/15 text-success" : a ? "bg-danger/15 text-danger" : "bg-muted text-muted-foreground"}`}>
-                      {i + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                        {q.chapter && <span className="rounded bg-muted px-1.5 py-0.5 font-semibold text-muted-foreground">{q.chapter}</span>}
-                        {q.examName && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-semibold text-amber-600">{q.examName}{q.year ? ` ${q.year}` : ""}{q.shift ? ` · ${q.shift}` : ""}</span>}
-                        {spent > 0 && <span className="text-muted-foreground">⏱ {spent}s</span>}
+                  <div key={q.id} className="px-5 py-4">
+                    <div className="flex items-start gap-3">
+                      <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${a?.correct ? "bg-success/15 text-success" : a ? "bg-danger/15 text-danger" : "bg-muted text-muted-foreground"}`}>
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                          {q.chapter && <span className="rounded bg-muted px-1.5 py-0.5 font-semibold text-muted-foreground">{q.chapter}</span>}
+                          {q.examName && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-semibold text-amber-600">{q.examName}{q.year ? ` ${q.year}` : ""}{q.shift ? ` · ${q.shift}` : ""}</span>}
+                          {spent > 0 && <span className="text-muted-foreground">⏱ {spent}s</span>}
+                        </div>
+                        <p className="mt-1 text-sm font-medium line-clamp-2">{q.questionText}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Your answer: <span className="font-semibold">{ansText}</span>
+                          {!a?.correct && (
+                            <span> · Correct: <span className="font-semibold text-success">{correctLabel || "—"}</span></span>
+                          )}
+                        </p>
                       </div>
-                      <p className="mt-1 text-sm font-medium line-clamp-2">{q.questionText}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Your answer: <span className="font-semibold">{ansText}</span>
-                        {!a?.correct && (() => {
-                          // Match keys case/whitespace-insensitively — legacy
-                          // rows sometimes stored correctAnswer with stray
-                          // casing/spaces, which broke an exact === match.
-                          const correctKey = (a?.correctAnswer || "").trim().toUpperCase();
-                          const correctOpt = q.options.find((o) => (o.key || "").trim().toUpperCase() === correctKey);
-                          const correctLabel =
-                            correctOpt?.text ||
-                            (correctKey ? `Option ${correctKey}` : null) ||
-                            (q.explanation ? q.explanation.slice(0, 80) + "…" : null) ||
-                            "Answer not available — please report this question";
-                          return (
-                            <span> · Correct: <span className="font-semibold text-success">{correctLabel}</span></span>
-                          );
-                        })()}
-                      </p>
+                      {a?.correct ? (
+                        <span className="shrink-0 rounded-full bg-success/15 px-2.5 py-0.5 text-xs font-bold text-success">+{(q.marks ?? 1).toFixed(2).replace(/\.?0+$/, "")}</span>
+                      ) : a ? (
+                        <span className="shrink-0 rounded-full bg-danger/15 px-2.5 py-0.5 text-xs font-bold text-danger">−{(q.negativeMarks ?? 0.25).toFixed(2).replace(/\.?0+$/, "")}</span>
+                      ) : (
+                        <span className="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">Skip</span>
+                      )}
                     </div>
-                    {a?.correct ? (
-                      <span className="shrink-0 rounded-full bg-success/15 px-2.5 py-0.5 text-xs font-bold text-success">+{(q.marks ?? 1).toFixed(2).replace(/\.?0+$/, "")}</span>
-                    ) : a ? (
-                      <span className="shrink-0 rounded-full bg-danger/15 px-2.5 py-0.5 text-xs font-bold text-danger">−{(q.negativeMarks ?? 0.25).toFixed(2).replace(/\.?0+$/, "")}</span>
-                    ) : (
-                      <span className="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">Skip</span>
+
+                    {/* Tap to view detailed explanation — works for every
+                        test type since this only renders post-submit
+                        (phase === "results"), so there's no exam-integrity
+                        concern the way there was for the mid-attempt
+                        "Show Answer" button. */}
+                    <button
+                      onClick={() => {
+                        const willOpen = !isOpen;
+                        setSolOpen((p) => ({ ...p, [q.id]: willOpen }));
+                        if (willOpen && !expl && !aiExp[q.id]) fetchAiExplanation(q.id);
+                      }}
+                      className="mt-2 ml-9 text-xs font-semibold text-primary hover:underline"
+                    >
+                      {isOpen ? "▲ Hide Solution" : "▼ View Solution"}
+                    </button>
+                    {isOpen && (
+                      <div className="ml-9 mt-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs leading-relaxed">
+                        <p className="font-bold text-success">Correct Answer: {correctKey || "—"}{correctLabel ? ` — ${correctLabel}` : ""}</p>
+                        {expl && <p className="mt-2 whitespace-pre-line text-muted-foreground">{expl}</p>}
+                        {explHi && <p className="mt-2 whitespace-pre-line border-t border-success/20 pt-2 text-muted-foreground">🇮🇳 {explHi}</p>}
+                        {!expl && (
+                          <div className="mt-2 text-muted-foreground">
+                            <span className="mr-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
+                            {aiExp[q.id]?.loading && <p className="mt-1">Explanation ban rahi hai…</p>}
+                            {aiExp[q.id]?.error && <p className="mt-1 text-danger">{aiExp[q.id]?.error}</p>}
+                            {aiExp[q.id]?.data?.stepByStepSolution && (
+                              <p className="mt-1 whitespace-pre-line">{aiExp[q.id]?.data?.stepByStepSolution}</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 );
