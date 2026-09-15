@@ -69,6 +69,7 @@ export class QuestionBankPracticeService {
     options: {
       subjectId?: string;
       chapterId?: string;
+      topicId?: string; // NEW — see getWeakTopicIdsForUser() doc-comment below
       examId?: string;
       setNumber?: number;
       mode?: 'practice' | 'test';
@@ -76,7 +77,7 @@ export class QuestionBankPracticeService {
       size?: number; // NEW — student-chosen set size (min 15, default 25)
     }
   ): Promise<PracticeSet> {
-    const { subjectId, chapterId, examId, setNumber = 1, mode = 'practice', resume = false } = options;
+    const { subjectId, chapterId, topicId, examId, setNumber = 1, mode = 'practice', resume = false } = options;
     // NEW: "students ko minimum 15 question ki practice ka bhi option
     // milna chahiye" — clamp to [15, 50], default stays 25 for anyone who
     // doesn't pass a size.
@@ -138,8 +139,19 @@ export class QuestionBankPracticeService {
 
     const nextSetNumber = setNumber || (completedSets.length + 1);
 
+    // BUGFIX/NEW (Sachin — "khud sey un chapter k weak topic jin ka answer
+    // glt hoga unke questions direct practice ke liye dhun, lekin baki
+    // topics premium ke piche"): a topicId scoped to a topic the student
+    // has actually gotten wrong/skipped before is unlocked for UNLIMITED
+    // free practice — the FREE_SETS_LIMIT gate below is skipped entirely
+    // for it. Any other topic (including a topicId the student has never
+    // attempted, or one they're already strong at) still goes through the
+    // normal 3-free-sets-then-premium gate exactly as before. Chapter-wide
+    // practice (no topicId) is unaffected — same gate as always.
+    const isFreeWeakTopic = topicId ? await this.isTopicWeakForUser(userId, topicId) : false;
+
     // Check free limit
-    if (nextSetNumber > this.FREE_SETS_LIMIT) {
+    if (nextSetNumber > this.FREE_SETS_LIMIT && !isFreeWeakTopic) {
       const subscription = await this.checkPremiumAccess(userId);
       if (!subscription) {
         throw new ForbiddenException({
@@ -152,7 +164,7 @@ export class QuestionBankPracticeService {
     }
 
     // Fetch questions for the set
-    const questions = await this.fetchQuestionsForSet(userId, subjectId, chapterId, examId, size);
+    const questions = await this.fetchQuestionsForSet(userId, subjectId, chapterId, examId, size, topicId);
 
     if (questions.length === 0) {
       throw new NotFoundException('No questions available for this subject/chapter/exam combination');
@@ -205,6 +217,7 @@ export class QuestionBankPracticeService {
     chapterId?: string,
     examId?: string,
     size: number = this.QUESTIONS_PER_SET,
+    topicId?: string,
   ): Promise<any[]> {
     const where: any = {
       ...PUBLISHED_QUESTION_WHERE,
@@ -219,6 +232,7 @@ export class QuestionBankPracticeService {
 
     if (subjectId) where.subjectId = subjectId;
     if (chapterId) where.chapterId = chapterId;
+    if (topicId) where.topicId = topicId;
     if (examId) where.examId = examId;
     else where.examId = { not: null }; // Must have exam badge
 
@@ -710,6 +724,60 @@ export class QuestionBankPracticeService {
       },
     });
     return !!subscription;
+  }
+
+  // NEW (Sachin — "khud sey un chapter k weak topic jo honge, jin ka
+  // answer glt hoga students ka, un topics ke questions direct practice ke
+  // liye"): a topic is "weak" for a user if they have at least one wrong
+  // or skipped AttemptAnswer on a question that belongs to it, across
+  // every completed test they've ever taken. Deliberately simple/binary
+  // (not accuracy-percentage-based) to match how the existing chapter-level
+  // weak-areas-practice feature (tests.service.ts getWeakAreasPractice)
+  // already defines "weak" — any mistake counts, no minimum-attempts floor.
+  private async isTopicWeakForUser(userId: string, topicId: string): Promise<boolean> {
+    const wrongOrSkipped = await this.prisma.attemptAnswer.findFirst({
+      where: {
+        testAttempt: { userId, status: 'SUBMITTED' },
+        question: { topicId },
+        OR: [{ isCorrect: false }, { selectedOption: null }],
+      },
+      select: { id: true },
+    });
+    return !!wrongOrSkipped;
+  }
+
+  // NEW — powers the "browse all topics under this chapter, weak ones
+  // unlocked for free, the rest behind Premium when you click Start" UI:
+  // one call returns every topic under the chapter PLUS whether the
+  // logged-in user is weak in it, so the frontend can render every topic
+  // (nothing hidden — "vo practice me weak topic sb topic bhi dekh paye")
+  // while still gating the actual practice-start (getOrCreateSet() above)
+  // behind Premium for anything not flagged weak.
+  async getTopicsWithWeakStatus(userId: string, chapterId: string) {
+    const topics = await this.prisma.topic.findMany({
+      where: { chapterId },
+      select: { id: true, name: true, nameHindi: true, slug: true },
+      orderBy: { name: 'asc' },
+    });
+    if (topics.length === 0) return [];
+
+    const wrongOrSkipped = await this.prisma.attemptAnswer.findMany({
+      where: {
+        testAttempt: { userId, status: 'SUBMITTED' },
+        question: { chapterId, topicId: { not: null } },
+        OR: [{ isCorrect: false }, { selectedOption: null }],
+      },
+      select: { question: { select: { topicId: true } } },
+    });
+    const weakTopicIds = new Set(wrongOrSkipped.map((w) => w.question?.topicId).filter((id): id is string => Boolean(id)));
+
+    return topics.map((t) => ({
+      id: t.id,
+      name: t.name,
+      nameHindi: t.nameHindi,
+      slug: t.slug,
+      isWeak: weakTopicIds.has(t.id),
+    }));
   }
 
   // Update user progress
