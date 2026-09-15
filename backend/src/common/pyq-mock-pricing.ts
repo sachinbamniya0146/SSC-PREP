@@ -1,17 +1,12 @@
 /**
- * NEW ("free honge bus top 10 rhenge bs baki paid") — single source of
- * truth for which auto-created PYQ mocks (BankUploadService
- * .upsertPyqMockForPaper(), id prefix `pyq-`) are free vs paid.
- *
- * This logic used to live only in MocksService.listAvailableMocks() (the
- * /mocks list screen), but TestsService.assertMockEntitled() — the ACTUAL
- * gate that decides whether POST /tests/attempts/start is allowed to
- * proceed — only ever checked `template.isPremium`. Auto-created PYQ mocks
- * are always created with isPremium: false (pricing is rank-based, not a
- * fixed flag on the row), so without this shared helper every PYQ mock
- * beyond the free top 10 would show "🔒 Locked · Paid" on the list screen
- * while being START-ABLE for free by calling the API directly — a real
- * paywall bypass, not just a cosmetic gap.
+ * NEW (Sachin, Sep 2026 — reverses the earlier "free honge bus top 10
+ * rhenge bs baki paid" decision): "sbh pyq questions ka mock free ho" —
+ * every auto-created PYQ mock is now free, no rank window. Left the
+ * rank/FREE_PYQ_MOCK_COUNT machinery in place (harmless, and reusable if
+ * the pricing model changes again) but isPyqMockFreeByRank() below always
+ * returns true regardless of rank, so both call sites — the /mocks list
+ * screen (MocksService) and the actual start-gate (TestsService
+ * .assertMockEntitled()) — agree that no PYQ mock is ever locked.
  *
  * Both MocksService and TestsService import these PURE functions directly
  * (no DI/module wiring needed, avoiding the exact cross-module
@@ -77,7 +72,7 @@ export function rankPyqTemplatesNewestFirst<T extends { id: string; title: strin
   return rank;
 }
 
-/** True if this specific PYQ template is inside the free top-N window. */
-export function isPyqMockFreeByRank(rank: number | undefined): boolean {
-  return (rank ?? Number.MAX_SAFE_INTEGER) < FREE_PYQ_MOCK_COUNT;
+/** Every PYQ mock is free now — see the doc-comment at the top of this file. */
+export function isPyqMockFreeByRank(_rank: number | undefined): boolean {
+  return true;
 }
