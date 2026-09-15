@@ -49,6 +49,29 @@ function splitBilingualCell(raw: string): { en: string; hi: string | null } {
   return { en: parts[0] ?? raw.trim(), hi: parts[1] ?? null };
 }
 
+// BUGFIX (Sachin — "chapter names sey hee questions import ho, topic
+// subtopic bhi vaise hi"): resolveReferenceIds() already matched
+// topicId/subTopicId cells by slug and auto-created them from free-text
+// names when no slug matched, but chapterId only ever matched an EXACT
+// slug (e.g. "chap-blood-relations") — a sheet with the actual chapter
+// NAME typed in (e.g. "Blood Relations", or the bilingual
+// "Blood Relations\nरक्त संबंध" cell used by the syllabus workbook) always
+// missed both chapterSlugToId and chapterSlugInSubjectToId and every row
+// died with "chapterId not found in database", even though the chapter
+// genuinely existed (created via the syllabus-Excel importer) under that
+// exact name. Chapters are deliberately NOT auto-created here the way
+// topics/sub-topics are (see resolveReferenceIds()'s chapter branch) —
+// they're meant to come from the syllabus import, and validateReferences()
+// hard-rejects an examId/subjectId/chapterId mismatch on purpose (the
+// "galat subject me question dikhna" fix) — so a typo'd chapter name
+// should still fail loudly instead of silently spawning a duplicate
+// chapter. This helper just normalizes a name cell (bilingual-aware,
+// case/whitespace-insensitive) so it can be looked up against chapters
+// that already exist, the same way the slug lookup already does.
+function normalizeTaxonomyName(raw: string): string {
+  return splitBilingualCell(raw).en.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 export interface BulkUploadQuestion {
   examId: string;
   subjectId: string;
@@ -958,12 +981,19 @@ export class BankUploadService {
       ['5. year should be a valid year (e.g., 2023, 2024) — set this to enable Year-wise PYQ tests.'],
       ['6. shift + paperCode are optional but help students filter/identify the exact paper.'],
       ['7. marks default to 1, negativeMarks default to 0.25'],
-      ['8. examId, subjectId, chapterId MUST exactly match an existing ID — see the'],
+      ['8. examId and subjectId MUST exactly match an existing ID/slug — see the'],
       ['   "Reference IDs" sheet (next tab) for every real ID currently in the database.'],
-      ['8b. Chapter/Topic/Sub-Topic names must follow the official syllabus — see the'],
-      ['    "Syllabus (Hindi+English)" sheet (next tab after Reference IDs) for the full'],
-      ['    Subject → Chapter → Topic → Sub-Topic tree with both English and Hindi names.'],
-      ['    Pick the matching slug from "Reference IDs" for whichever row you need.'],
+      ['8a. chapterId accepts EITHER the slug from "Reference IDs" OR the chapter\'s actual'],
+      ['    name exactly as it appears in the "Syllabus (Hindi+English)" sheet (English name,'],
+      ['    or the bilingual "English name" + "Hindi name" on two lines in one cell — case'],
+      ['    and extra spaces don\'t matter). The chapter must already exist (import it first'],
+      ['    via Topic Management → Import Syllabus Excel) — a name that matches nothing'],
+      ['    fails that row with a clear "chapterId not found" error rather than creating a'],
+      ['    stray duplicate chapter.'],
+      ['8b. topicId and subTopicId work the same way — slug, or the real name (same'],
+      ['    bilingual-cell format). Unlike chapterId, an unmatched topic/sub-topic name is'],
+      ['    auto-created under the row\'s chapter instead of failing, since these are meant'],
+      ['    to grow freely as you add questions.'],
       ['9. topicId and subTopicId are optional but recommended — Year-wise custom tests let'],
       ['   students filter down to a specific topic, which only works if this is set.'],
       ['10. Duplicate questions (same text + same options + same answer) are auto-detected'],
@@ -1460,6 +1490,12 @@ export class BankUploadService {
     const chapterSlugInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${c.slug}`, c.id]));
     const topicSlugInChapterToId = new Map(topics.map(t => [`${t.chapterId}::${t.slug}`, t.id]));
     const subTopicSlugInTopicToId = new Map(subTopics.map(t => [`${t.topicId}::${t.slug}`, t.id]));
+    // BUGFIX (see normalizeTaxonomyName() doc-comment above) — name-based
+    // fallback maps so a sheet with real chapter NAMES (not slugs) resolves
+    // correctly. Scoped-by-subject map wins on a tie; global map is the
+    // fallback for when the row's subjectId itself hasn't resolved yet.
+    const chapterNameInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${normalizeTaxonomyName(c.name)}`, c.id]));
+    const chapterNameToId = new Map(chapters.map(c => [normalizeTaxonomyName(c.name), c.id]));
 
     const result: UploadResult = {
       success: false,
@@ -1497,6 +1533,7 @@ export class BankUploadService {
         await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
+          chapterNameInSubjectToId, chapterNameToId,
           topicSlugInChapterToId, subTopicSlugInTopicToId,
           topicIds, subTopicIds, topicChapterMap, subTopicTopicMap,
         );
@@ -1618,14 +1655,17 @@ export class BankUploadService {
     // Prisma error with no indication it wasn't a file/JSON problem.
     let exams: { id: string; slug: string }[];
     let subjects: { id: string; slug: string }[];
-    let chapters: { id: string; slug: string; subjectId: string }[];
+    // BUGFIX (see normalizeTaxonomyName() doc-comment above chapter's
+    // `name` is now selected too — needed for the name-based fallback
+    // match below, same as processBulkQuestions()'s prefetch.
+    let chapters: { id: string; name: string; slug: string; subjectId: string }[];
     let topics: { id: string; slug: string; chapterId: string }[];
     let subTopics: { id: string; slug: string; topicId: string }[];
     try {
       [exams, subjects, chapters, topics, subTopics] = await Promise.all([
         this.prisma.exam.findMany({ select: { id: true, slug: true } }),
         this.prisma.subject.findMany({ select: { id: true, slug: true } }),
-        this.prisma.chapter.findMany({ select: { id: true, slug: true, subjectId: true } }),
+        this.prisma.chapter.findMany({ select: { id: true, name: true, slug: true, subjectId: true } }),
         this.prisma.topic.findMany({ select: { id: true, slug: true, chapterId: true } }),
         this.prisma.subTopic.findMany({ select: { id: true, slug: true, topicId: true } }),
       ]);
@@ -1659,6 +1699,9 @@ export class BankUploadService {
     const chapterSlugInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${c.slug}`, c.id]));
     const topicSlugInChapterToId = new Map(topics.map(t => [`${t.chapterId}::${t.slug}`, t.id]));
     const subTopicSlugInTopicToId = new Map(subTopics.map(t => [`${t.topicId}::${t.slug}`, t.id]));
+    // BUGFIX — same name-based fallback as processBulkQuestions() above.
+    const chapterNameInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${normalizeTaxonomyName(c.name)}`, c.id]));
+    const chapterNameToId = new Map(chapters.map(c => [normalizeTaxonomyName(c.name), c.id]));
 
     const result: UploadResult = {
       success: false,
@@ -1688,6 +1731,7 @@ export class BankUploadService {
         await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
+          chapterNameInSubjectToId, chapterNameToId,
           topicSlugInChapterToId, subTopicSlugInTopicToId,
           topicIds, subTopicIds, topicChapterMap, subTopicTopicMap,
         );
@@ -1908,7 +1952,10 @@ export class BankUploadService {
    * Resolve a row's examId/subjectId/chapterId/topicId/subTopicId to real
    * database UUIDs when they were given as slugs instead (see the BUGFIX
    * comment in processBulkQuestions()'s pre-fetch block for the full
-   * background). Mutates `question` in place — after this call, every one
+   * background). chapterId ALSO accepts the chapter's real display name
+   * (plain or bilingual "English\nHindi" cell) — see
+   * normalizeTaxonomyName()'s doc-comment above. Mutates `question` in
+   * place — after this call, every one
    * of these fields is either a real UUID (unchanged if it already was
    * one) or left as-is if it matched no id AND no slug, so
    * validateReferences() below still reports it as "not found" instead of
@@ -1926,6 +1973,8 @@ export class BankUploadService {
     subjectSlugToId: Map<string, string>,
     chapterSlugToId: Map<string, string>,
     chapterSlugInSubjectToId: Map<string, string>,
+    chapterNameInSubjectToId: Map<string, string>,
+    chapterNameToId: Map<string, string>,
     topicSlugInChapterToId: Map<string, string>,
     subTopicSlugInTopicToId: Map<string, string>,
     topicIds: Set<string>,
@@ -1941,11 +1990,24 @@ export class BankUploadService {
     }
     if (question.chapterId) {
       const scoped = chapterSlugInSubjectToId.get(`${question.subjectId}::${question.chapterId}`);
+      const byName = chapterNameInSubjectToId.get(`${question.subjectId}::${normalizeTaxonomyName(question.chapterId)}`);
       if (scoped) {
         question.chapterId = scoped;
       } else if (chapterSlugToId.has(question.chapterId)) {
         question.chapterId = chapterSlugToId.get(question.chapterId)!;
+      } else if (byName) {
+        // Sheet had the chapter's real NAME (e.g. "Blood Relations", or a
+        // bilingual "Blood Relations\nरक्त संबंध" cell) instead of a slug —
+        // matched by name within the row's own subject.
+        question.chapterId = byName;
+      } else if (chapterNameToId.has(normalizeTaxonomyName(question.chapterId))) {
+        // Global name match (subject on this row didn't resolve to the same
+        // subject the chapter belongs to, or wasn't scoped) — same
+        // last-match-wins fallback tier chapterSlugToId already used.
+        question.chapterId = chapterNameToId.get(normalizeTaxonomyName(question.chapterId))!;
       }
+      // else: leave as raw text — validateReferences() below reports a
+      // proper "chapterId not found" error instead of silently dropping it.
     }
     // Phase 3 (Sachin, Sep 2026 — root cause of "topic-wise analysis
     // students ko nahi milta hai"): topicId/subTopicId used to be dropped
