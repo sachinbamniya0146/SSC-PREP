@@ -102,6 +102,14 @@ export class BankController {
     return this.bank.years(examId);
   }
 
+  // NEW — year-wise custom test picker: distinct shifts for an exam+year,
+  // so a student can attempt one real shift's paper (max 100 Q) instead of
+  // every shift of the year combined. See common/pyq-paper.ts doc-comment.
+  @Get('shifts')
+  shifts(@Query('examId') examId?: string, @Query('year') year?: string) {
+    return this.bank.shifts(examId, year ? Number(year) : undefined);
+  }
+
   // Session 18+ — year-wise custom test picker: topics under a chapter.
   // BUGFIX (Session 20): examId now threaded through — see BankService.topics()
   // doc comment for why this was missing while subjects/chapters/years all
