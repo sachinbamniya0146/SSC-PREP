@@ -122,6 +122,7 @@ export class TestsController {
     body: {
       examId: string;
       year: number;
+      shift?: string;
       subjectIds?: string[];
       chapterIds?: string[];
       topicIds?: string[];
@@ -131,6 +132,7 @@ export class TestsController {
     return this.testsService.yearWiseStart(user.userId, {
       examId: body.examId,
       year: Number(body.year),
+      shift: body.shift || undefined,
       subjectIds: body.subjectIds,
       chapterIds: body.chapterIds,
       topicIds: body.topicIds,
