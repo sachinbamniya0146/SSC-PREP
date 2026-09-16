@@ -668,6 +668,29 @@ export class BankService implements OnModuleInit {
     return out;
   }
 
+  // NEW (Sachin — year-wise "Full Paper" was silently combining every
+  // shift of a year into one uncapped mega-test; see
+  // common/pyq-paper.ts's doc-comment for the full incident). Lets the
+  // /year-wise picker offer a shift step (same pattern as years()) so a
+  // student can attempt ONE real shift's paper (max 100 Q, matches an
+  // actual SSC exam) instead of every shift of the year glued together.
+  async shifts(examId?: string, year?: number) {
+    const cacheKey = `bank:shifts:${examId ?? 'all'}:${year ?? 'all'}`;
+    const cached = cacheGet<any>(cacheKey);
+    if (cached) return cached;
+    const out = await this.prisma.$queryRaw`
+      SELECT q.shift AS shift, COUNT(q.id)::int AS "questionCount"
+      FROM questions q
+      WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+        AND q.shift IS NOT NULL AND q.shift <> ''
+        AND (${examId}::text IS NULL OR q."examId" = ${examId})
+        AND (${year}::int IS NULL OR q.year = ${year})
+      GROUP BY q.shift
+      ORDER BY q.shift ASC;`;
+    cacheSet(cacheKey, out, 300_000);
+    return out;
+  }
+
   // Topic picker for the year-wise test builder's "chapter → topic"
   // drill-down. Same HAVING-count-> 0 pattern as chapters() above so the UI
   // never offers a topic with zero actual questions in it.
