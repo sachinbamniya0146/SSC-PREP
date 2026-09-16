@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Controller, Get, Post, Put, Body, Query, Param } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Query, Param, BadRequestException } from '@nestjs/common';
 import { TestsService } from './tests.service';
 import { TestStatsService } from './test-stats.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -96,6 +96,50 @@ export class TestsController {
     return this.testsService.cglExam();
   }
 
+  // BUGFIX (bonus grep — "sari exams ke test dena ka option"): generalizes
+  // the sectional-exam flow beyond CGL to the other 3 exam families the
+  // full-paper flow (paper(), above) already supports. Additive route —
+  // /tests/sectional/cgl above is untouched and keeps working exactly as
+  // before for the existing frontend.
+  @Get('sectional/exam/:family')
+  sectionalExamForFamily(@Param('family') family: string) {
+    const f = family.toLowerCase();
+    if (f !== 'cgl' && f !== 'chsl' && f !== 'mts' && f !== 'cpo') {
+      throw new BadRequestException(`Unknown exam family: ${family}. Supported: cgl, chsl, mts, cpo`);
+    }
+    return this.testsService.sectionalExamForFamily(f as 'cgl' | 'chsl' | 'mts' | 'cpo');
+  }
+
+  // Session 18+ — Year-wise custom test: exam+year (+ optional subject/
+  // chapter/topic narrowing, or `full: true` for the whole year's paper).
+  // Returns an attemptId immediately (ad-hoc TestTemplate under the hood),
+  // so the live test page + submit + attemptDetail analysis all work
+  // exactly like every other test type.
+  @Post('year-wise/start')
+  yearWiseStart(
+    @CurrentUser() user: { userId: string },
+    @Body()
+    body: {
+      examId: string;
+      year: number;
+      shift?: string;
+      subjectIds?: string[];
+      chapterIds?: string[];
+      topicIds?: string[];
+      full?: boolean;
+    },
+  ) {
+    return this.testsService.yearWiseStart(user.userId, {
+      examId: body.examId,
+      year: Number(body.year),
+      shift: body.shift || undefined,
+      subjectIds: body.subjectIds,
+      chapterIds: body.chapterIds,
+      topicIds: body.topicIds,
+      full: !!body.full,
+    });
+  }
+
   // v7 §NEW — Wrong/Skipped Auto-Practice: practice from weak chapters
   @Get('weak-areas/practice')
   weakAreasPractice(
@@ -103,11 +147,13 @@ export class TestsController {
     @Query('limit') limit?: string,
     @Query('includeSkipped') includeSkipped?: string,
     @Query('examId') examId?: string,
+    @Query('chapterId') chapterId?: string,
   ) {
     return this.testsService.getWeakAreasPractice(user.userId, {
       limit: limit ? Number(limit) : 25,
       includeSkipped: includeSkipped !== 'false',
       examId,
+      chapterId,
     });
   }
 
