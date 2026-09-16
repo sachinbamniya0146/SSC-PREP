@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 import { cacheClearPrefix } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
+import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
 
 // Used by resolveReferenceIds() — a v4 UUID (Prisma's `@default(uuid())`
 // format) is the one case where a topicId/subTopicId that doesn't resolve
@@ -253,6 +254,8 @@ export class BankUploadService {
     cacheClearPrefix('bank:subjects');
     cacheClearPrefix('bank:chapters');
     cacheClearPrefix('bank:meta');
+    cacheClearPrefix('bank:years');
+    cacheClearPrefix('bank:shifts');
     // NEW ("ek hee shift ke jo questions hote he ... to vo mock test me ho
     // pyq based mock test esa hona chaiye"): after every upload, check
     // whether this batch's questions form one or more complete real papers
@@ -335,24 +338,35 @@ export class BankUploadService {
   // year+shift.
   private async upsertPyqMockForPaper(examId: string, year: number, shift: string, paperCode: string | null): Promise<void> {
     const effectiveCode = paperCode ?? `${year}-${shift}`;
-    const [exam, actualCount] = await Promise.all([
+    const [exam, candidateRows] = await Promise.all([
       this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } }),
-      // Count against PUBLISHED_QUESTION_WHERE (not the raw upload count) —
-      // if some rows are still pending Hindi translation and therefore not
-      // isApproved yet, the mock should reflect what's ACTUALLY servable
-      // today, not the on-paper total. It'll self-correct to the full count
-      // the next time this paperCode's batch is touched (e.g. after the
-      // gaps-Excel fills in the missing Hindi and gets re-uploaded).
-      this.prisma.question.count({ where: { ...PUBLISHED_QUESTION_WHERE, examId, year, shift, paperCode } }),
+      // BUGFIX (Sachin — "shift wise mock test me max 100 questions hone
+      // the, ye esa work kyu ni kr rha he"): this used to be a plain
+      // `.count()` against PUBLISHED_QUESTION_WHERE with no upper bound —
+      // a real SSC shift is always 100 questions, but if this paper's rows
+      // were ever uploaded twice (re-upload that inserted new rows instead
+      // of updating existing ones), the count silently grew past 100 and
+      // the mock's advertised totalQuestions followed it up, out of sync
+      // with what a real paper should be. Pull the actual rows (not just a
+      // count) so dedupeAndCapPaperRows() can drop duplicate-text rows
+      // AND hard-cap at MAX_PYQ_PAPER_QUESTIONS — see that function's
+      // doc-comment for the full story.
+      this.prisma.question.findMany({
+        where: { ...PUBLISHED_QUESTION_WHERE, examId, year, shift, paperCode },
+        select: { id: true, questionText: true, createdAt: true, marks: true },
+      }),
     ]);
+    const keptRows = dedupeAndCapPaperRows(candidateRows);
+    const actualCount = keptRows.length;
     if (actualCount < BankUploadService.MIN_PAPER_QUESTIONS) return; // not enough APPROVED rows yet to bother creating/keeping this live
 
     const templateId = `pyq-${this.slugifyPaperCode(effectiveCode)}`;
     const examName = exam?.name ?? 'SSC';
     const title = `${examName} — ${effectiveCode}`;
-    const totalMarks = await this.prisma.question
-      .aggregate({ where: { ...PUBLISHED_QUESTION_WHERE, examId, year, shift, paperCode }, _sum: { marks: true } })
-      .then((r) => r._sum.marks ?? actualCount * 2);
+    // Sum marks over the SAME kept (deduped + capped) rows, not the raw
+    // candidate set — otherwise totalMarks would still reflect the
+    // dropped duplicate/overflow rows even after totalQuestions was fixed.
+    const totalMarks = keptRows.reduce((s, r) => s + (r.marks ?? 2), 0);
     const durationMinutes = Math.max(10, Math.round(actualCount * 0.6)); // same 0.6 min/Q pacing as paper()/yearWiseStart()
 
     await this.prisma.testTemplate.upsert({
@@ -401,6 +415,8 @@ export class BankUploadService {
     cacheClearPrefix('bank:subjects');
     cacheClearPrefix('bank:chapters');
     cacheClearPrefix('bank:meta');
+    cacheClearPrefix('bank:years');
+    cacheClearPrefix('bank:shifts');
     // Same PYQ-mock auto-detection as finalizeUploadBatch() above — the
     // Word-upload path is a separate finalize step so it needs its own call.
     try {
