@@ -677,11 +677,41 @@ export default function TestPage() {
           selectedOption: answers[q.id] ?? null,
           timeSpentSeconds: timeSpent[q.id] || 0,
         }));
-        await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
+        // BUGFIX (Sachin report, Sep 2026 — "test submit nahi ho raha /
+        // results screen har question pe 'Answer not available' dikhata
+        // he"): this call's response was never checked. A failed submit
+        // (network hiccup, or the server erroring on an oversized/invalid
+        // attempt) used to fall straight through as if it had succeeded —
+        // the code below would clear ssc_active_attempt, then fetch
+        // attemptDetail() for an attempt that was STILL 'IN_PROGRESS' and
+        // had little/no persisted AttemptAnswer data, rendering a results
+        // screen where every question looked skipped with no correct
+        // answer to show. Now: check .ok, and on failure, leave the
+        // attempt token in place and let the student retry Submit instead
+        // of silently showing a broken/empty results screen.
+        const sr = await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
           method: "POST",
           headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({ answers: answersPayload }),
         });
+        if (!sr.ok) {
+          const errBody = await sr.json().catch(() => ({}));
+          // "Attempt already submitted" means an earlier tap actually DID
+          // go through server-side (e.g. the response was just slow/lost
+          // in transit) — that's not a real failure, so fall through to
+          // fetch the already-scored detail below instead of blocking the
+          // student from ever seeing their result.
+          const alreadySubmitted = /already submitted/i.test(errBody?.message || "");
+          if (!alreadySubmitted) {
+            alert(
+              `⚠️ ${errBody?.message || "Could not submit your test — please check your connection."} Your answers are safe (auto-saved) — tap Submit again to retry.`,
+            );
+            setRunning(true); // resume the clock — nothing was lost, let them retry
+            setStarting(false);
+            setLoading(false);
+            return; // stop here — never clear ssc_active_attempt or show results on a failed submit
+          }
+        }
         sessionStorage.removeItem("ssc_active_attempt");
 
         // Single source of truth for the results screen: the same
@@ -691,7 +721,22 @@ export default function TestPage() {
         const dr = await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}`, {
           headers: getAuthHeaders(),
         });
+        // BUGFIX: previously `.catch(() => null)` swallowed a failed fetch
+        // and silently rendered a blank results screen. Submit already
+        // succeeded at this point (or was already-submitted) — the score
+        // IS safely recorded server-side — so on a failed/erroring detail
+        // fetch, send the student to the dedicated /results/[attemptId]
+        // page (which does its own fetch/retry) instead of showing a
+        // broken in-place screen with no data.
+        if (!dr.ok) {
+          window.location.href = `/results/${activeAttempt}`;
+          return;
+        }
         const detail = await dr.json().catch(() => null);
+        if (!detail || !Array.isArray(detail.questions)) {
+          window.location.href = `/results/${activeAttempt}`;
+          return;
+        }
         const res: { [qid: string]: Attempt } = {};
         const expl: typeof explanations = {};
         let score = 0;
@@ -725,8 +770,19 @@ export default function TestPage() {
         setExplanations(expl);
         setFinalScore(typeof detail?.score === "number" ? detail.score : score);
       } catch {
-        // submit already happened above even if the detail re-fetch failed —
-        // student's attempt is safely recorded server-side either way.
+        // BUGFIX: this used to silently swallow ANY exception in the block
+        // above (including a genuine network failure on the submit POST
+        // itself) and still fall through to `finally { setPhase("results") }`
+        // — showing a blank/broken results screen while leaving the student
+        // uncertain whether their test was even recorded. If we got far
+        // enough to clear ssc_active_attempt, the submit call itself did
+        // go through (only the detail fetch/parse afterward is what can
+        // throw here) — the safest recovery is the dedicated
+        // /results/[attemptId] page, which fetches its own data.
+        if (typeof window !== "undefined" && sessionStorage.getItem("ssc_active_attempt") === null) {
+          window.location.href = `/results/${activeAttempt}`;
+          return;
+        }
       } finally {
         setPhase("results");
       }
