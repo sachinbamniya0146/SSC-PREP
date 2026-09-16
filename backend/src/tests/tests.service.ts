@@ -5,6 +5,7 @@ import { GamificationService } from '../gamification/gamification.service';
 import { cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank } from '../common/pyq-mock-pricing';
+import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
 import { TelegramService } from '../telegram/telegram.service';
 import { QuestionBankPracticeService } from '../bank/question-bank-practice.service';
 
@@ -1000,6 +1001,13 @@ async saveAnswers(
     if (rows.length === 0) {
       throw new BadRequestException('This PYQ paper is no longer available (questions may have been removed). Please check /mocks for other papers.');
     }
+    // BUGFIX (Sachin — same incident as yearWiseStart(): a re-uploaded
+    // paper could accumulate duplicate rows and serve 100+ questions for
+    // what should always be a real, max-100 SSC shift). De-dupe + cap
+    // BEFORE grouping by subject, so this served set always matches what
+    // upsertPyqMockForPaper() counted when it built the mock's
+    // totalQuestions — both use the exact same helper/ordering.
+    rows = dedupeAndCapPaperRows(rows as any) as any;
 
     const bySubject = new Map<string, { name: string; slug: string; rows: typeof rows }>();
     for (const r of rows) {
@@ -1333,7 +1341,7 @@ async saveAnswers(
   // No parallel scoring/analysis code to maintain or get out of sync.
   async yearWiseStart(
     userId: string,
-    opts: { examId: string; year: number; subjectIds?: string[]; chapterIds?: string[]; topicIds?: string[]; full?: boolean },
+    opts: { examId: string; year: number; shift?: string; subjectIds?: string[]; chapterIds?: string[]; topicIds?: string[]; full?: boolean },
   ) {
     const { examId, year } = opts;
     if (!examId) throw new BadRequestException('examId is required');
@@ -1350,6 +1358,12 @@ async saveAnswers(
       // for this selection yet"). Every other subject still requires it.
       OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
     };
+    // NEW — optional shift narrowing (see bank.service.ts shifts() +
+    // common/pyq-paper.ts doc-comment): a year with multiple shifts (the
+    // normal case for SSC CGL etc) used to have no way to pick just one,
+    // so "Full Paper" silently combined every shift's questions into one
+    // uncapped mega-test. When the student picked a shift, honor it.
+    if (opts.shift) where.shift = opts.shift;
     // "full" (attempt the whole year's paper) always wins over any
     // subject/chapter/topic narrowing the UI may still have selected —
     // matches the button's label ("Attempt Full Paper").
@@ -1371,7 +1385,7 @@ async saveAnswers(
       },
       orderBy: [{ subjectId: 'asc' }, { createdAt: 'asc' }],
     });
-    const validRows = rows.filter(
+    let validRows = rows.filter(
       (r) =>
         Array.isArray(r.optionsJson) &&
         r.optionsJson.length === 4 &&
@@ -1381,6 +1395,22 @@ async saveAnswers(
       throw new BadRequestException(
         'No bilingual questions available for this selection yet. Try a different year, or widen your subject/chapter/topic choice.',
       );
+    }
+    // BUGFIX (Sachin — "test submit nahi ho raha, results screen har
+    // question pe 'Answer not available' dikhata he"): a shift-less
+    // "Full Paper" (or a bloated group from a duplicate re-upload) could
+    // reach 200+ questions with nothing capping it. Papers that large made
+    // submit → attemptDetail() slow enough to trip the frontend's
+    // un-checked submit call (see test/page.tsx submitTest() fix), which
+    // is what actually produced the broken results screen. Cap + de-dupe
+    // here too (not just in shiftWisePyqPaper()) so EVERY path that can
+    // compose a big year-wise set stays at a real, submittable paper size.
+    // Only applied when the group is genuinely oversized for a single real
+    // paper (i.e. shift wasn't narrowed) — a topic/chapter/subject-scoped
+    // practice set legitimately has its own natural size and shouldn't be
+    // silently truncated.
+    if (!opts.shift && validRows.length > MAX_PYQ_PAPER_QUESTIONS) {
+      validRows = dedupeAndCapPaperRows(validRows as any) as any;
     }
 
     const exam = await this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } });
