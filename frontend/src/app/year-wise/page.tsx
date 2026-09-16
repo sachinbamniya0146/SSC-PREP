@@ -5,6 +5,7 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 
 type Exam = { id: string; name: string; slug: string; count: number };
 type YearRow = { year: number; questionCount: number };
+type ShiftRow = { shift: string; questionCount: number };
 type Subject = { id: string; name: string; slug: string; questionCount: number };
 type Chapter = { id: string; name: string; slug: string; count: number };
 type TopicRow = { id: string; name: string; slug: string; count: number };
@@ -25,6 +26,14 @@ export default function YearWisePage() {
 
   const [years, setYears] = React.useState<YearRow[]>([]);
   const [year, setYear] = React.useState<number | null>(null);
+
+  // NEW — shift picker (see tests.service.ts yearWiseStart() BUGFIX):
+  // a year with multiple shifts used to have no way to attempt just ONE
+  // real shift's paper, so "Full Paper" silently combined every shift into
+  // one uncapped mega-test. `shift === null` means "not chosen yet";
+  // `shift === ""` means the student explicitly chose "all shifts combined".
+  const [shifts, setShifts] = React.useState<ShiftRow[]>([]);
+  const [shift, setShift] = React.useState<string | null>(null);
 
   const [subjects, setSubjects] = React.useState<Subject[]>([]);
   const [selectedSubjects, setSelectedSubjects] = React.useState<Set<string>>(new Set());
@@ -93,6 +102,29 @@ export default function YearWisePage() {
         setSubjects(list.filter((s) => s.questionCount > 0));
       } catch {
         /* ignore */
+      }
+    })();
+  }, [examId, year]);
+
+  // NEW — load shifts for exam+year whenever the year changes, and reset
+  // any previously-chosen shift (a shift from a different year makes no
+  // sense to carry over). When a year has only one shift (or none tagged
+  // at all — older/legacy uploads), auto-select it/skip the step so the
+  // flow isn't slowed down for the common case.
+  React.useEffect(() => {
+    setShift(null);
+    setShifts([]);
+    if (!examId || !year) return;
+    (async () => {
+      try {
+        const r = await fetchAuth(`${apiBase()}/bank/shifts?examId=${examId}&year=${year}`, { headers: authHeaders() });
+        if (!r.ok) return;
+        const d = await r.json();
+        const list: ShiftRow[] = Array.isArray(d) ? d : [];
+        setShifts(list);
+        if (list.length === 1) setShift(list[0].shift); // only one shift — nothing to choose
+      } catch {
+        /* keep list empty — start() below still works, just without shift narrowing */
       }
     })();
   }, [examId, year]);
@@ -171,6 +203,10 @@ export default function YearWisePage() {
       const cfg = {
         examId,
         year,
+        // "" (all shifts combined) is sent as undefined — omitting the
+        // field entirely means the backend's opts.shift stays falsy, same
+        // as before this feature existed.
+        shift: shift || undefined,
         full,
         subjectIds: full ? [] : Array.from(selectedSubjects),
         chapterIds: full ? [] : Array.from(selectedChapters),
@@ -249,14 +285,51 @@ export default function YearWisePage() {
               </div>
             )}
 
+            {/* Shift — new. Shown only when this year has more than one
+                shift tagged (the common multi-shift case); a single-shift
+                or untagged year auto-skips this step, see the effect above. */}
+            {year && shifts.length > 1 && (
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground">Choose Shift</label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  A real SSC paper is one shift (max 100 Q). Pick one, or attempt every shift combined as one longer practice set.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {shifts.map((s) => (
+                    <button
+                      key={s.shift}
+                      onClick={() => setShift(s.shift)}
+                      className={`rounded-lg border px-4 py-2 text-sm transition ${
+                        shift === s.shift ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
+                      }`}
+                    >
+                      {s.shift} <span className="text-xs text-muted-foreground">({s.questionCount})</span>
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setShift("")}
+                    className={`rounded-lg border px-4 py-2 text-sm transition ${
+                      shift === "" ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
+                    }`}
+                  >
+                    All shifts combined
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Full paper shortcut */}
-            {year && (
+            {year && (shifts.length <= 1 || shift !== null) && (
               <button
                 onClick={() => start(true)}
                 disabled={starting}
                 className="btn w-full bg-primary py-3 text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
-                {starting ? "Composing…" : `🚀 Attempt Full ${year} Paper (all subjects)`}
+                {starting
+                  ? "Composing…"
+                  : shift
+                    ? `🚀 Attempt ${year} ${shift} Paper`
+                    : `🚀 Attempt Full ${year} Paper (all subjects)`}
               </button>
             )}
 
