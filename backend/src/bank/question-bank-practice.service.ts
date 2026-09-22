@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
+import { PUBLISHED_QUESTION_WHERE, PRACTICE_QUESTION_WHERE } from '../common/question-visibility';
 
 export interface PracticeQuestion {
   id: string;
@@ -18,6 +18,8 @@ export interface PracticeQuestion {
   explanation?: string | null;
   explanationHindi?: string | null;
   subjectId?: string;
+  topic?: string | null;
+  subTopic?: string | null;
   _weakMeta?: { chapterId: string; chapterName: string; wasWrong: boolean; wasSkipped: boolean };
 }
 
@@ -25,6 +27,8 @@ export interface PracticeSet {
   id: string;
   subjectId?: string;
   chapterId?: string;
+  topicId?: string;
+  subTopicId?: string;
   examId?: string;
   setNumber: number;
   questions: PracticeQuestion[];
@@ -63,129 +67,181 @@ export class QuestionBankPracticeService {
 
   constructor(private prisma: PrismaService) {}
 
+  // ---------------------------------------------------------------------------
+  // scope resolution (NEW — Sep 21 2026)
+  //
+  // A practice set can now be scoped to a subject, a chapter, a TOPIC or a
+  // SUB-TOPIC. The client only ever has to send the deepest id it knows —
+  // the parents are derived here from the database so the four ids can never
+  // disagree with each other (a topic that doesn't belong to the chapter the
+  // client claimed, etc).
+  // ---------------------------------------------------------------------------
+  private async resolveScope(input: {
+    subjectId?: string;
+    chapterId?: string;
+    topicId?: string;
+    subTopicId?: string;
+  }): Promise<{ subjectId?: string; chapterId?: string; topicId?: string; subTopicId?: string }> {
+    const clean = (v?: string) => (v && String(v).trim() ? String(v).trim() : undefined);
+    const subTopicId = clean(input.subTopicId);
+    const topicId = clean(input.topicId);
+    const chapterId = clean(input.chapterId);
+    const subjectId = clean(input.subjectId);
+
+    if (subTopicId) {
+      const sub = await this.prisma.subTopic.findUnique({
+        where: { id: subTopicId },
+        select: { id: true, topicId: true, topic: { select: { chapterId: true, chapter: { select: { subjectId: true } } } } },
+      });
+      if (!sub) throw new NotFoundException('Sub-topic not found');
+      return { subjectId: sub.topic.chapter.subjectId, chapterId: sub.topic.chapterId, topicId: sub.topicId, subTopicId: sub.id };
+    }
+    if (topicId) {
+      const topic = await this.prisma.topic.findUnique({
+        where: { id: topicId },
+        select: { id: true, chapterId: true, chapter: { select: { subjectId: true } } },
+      });
+      if (!topic) throw new NotFoundException('Topic not found');
+      return { subjectId: topic.chapter.subjectId, chapterId: topic.chapterId, topicId: topic.id };
+    }
+    if (chapterId) {
+      const chapter = await this.prisma.chapter.findUnique({ where: { id: chapterId }, select: { id: true, subjectId: true } });
+      if (!chapter) throw new NotFoundException('Chapter not found');
+      return { subjectId: chapter.subjectId, chapterId: chapter.id };
+    }
+    return { subjectId };
+  }
+
   // Get or create a practice set for a user
+  //
+  // REWRITTEN (Sep 21 2026) — root causes fixed here:
+  //  1. Students could not see admin-uploaded practice questions: the pool
+  //     query demanded `questionTextHindi != ''` on top of isApproved, so an
+  //     approved English question with no Hindi text (every Noun/Spotting-Errors
+  //     sheet) never matched. The single gate is now isApproved (the upload /
+  //     approve step already enforces the bilingual rule — see
+  //     isHindiExemptSubjectSlug()).
+  //  2. PYQ questions leaked into Practice: the pool now only takes year-less
+  //     (practice) questions (PRACTICE_QUESTION_WHERE).
+  //  3. The "existing incomplete set" lookup passed `chapterId: undefined` to
+  //     Prisma, which means "no filter" — so clicking a NEW topic returned an
+  //     OLD in-progress set of some other scope. Scope is now matched exactly
+  //     (null means null), including topic + sub-topic.
+  //  4. setNumber was always 1 (client default), so the free-set gate never
+  //     advanced. The server now numbers sets itself.
+  //  5. Topic and sub-topic scoped practice (the whole syllabus tree).
   async getOrCreateSet(
     userId: string,
     options: {
       subjectId?: string;
       chapterId?: string;
-      topicId?: string; // NEW — see getWeakTopicIdsForUser() doc-comment below
+      topicId?: string;
+      subTopicId?: string;
       examId?: string;
-      setNumber?: number;
+      setNumber?: number; // accepted for backwards compatibility, ignored — the server numbers sets
       mode?: 'practice' | 'test';
-      resume?: boolean; // if true, resume existing incomplete set
-      size?: number; // NEW — student-chosen set size (min 15, default 25)
+      resume?: boolean; // accepted for backwards compatibility — resuming an in-progress set is always the default
+      size?: number; // student-chosen set size (server clamps to 10-50)
     }
   ): Promise<PracticeSet> {
-    const { subjectId, chapterId, topicId, examId, setNumber = 1, mode = 'practice', resume = false } = options;
-    // NEW: "students ko minimum 15 question ki practice ka bhi option
-    // milna chahiye" — clamp to [15, 50], default stays 25 for anyone who
-    // doesn't pass a size.
-    const size = Math.min(50, Math.max(15, options.size || this.QUESTIONS_PER_SET));
+    const mode = options.mode ?? 'practice';
+    const examId = options.examId && String(options.examId).trim() ? String(options.examId).trim() : undefined;
+    const size = Math.min(50, Math.max(10, Number(options.size) || this.QUESTIONS_PER_SET));
 
-    // If resume is true, try to find existing incomplete set
-    if (resume) {
-      const existingSet = await this.prisma.questionBankSet.findFirst({
-        where: {
-          userId,
-          subjectId,
-          chapterId,
-          examId,
-          setNumber,
-          isCompleted: false,
-        },
-        orderBy: { startedAt: 'desc' },
-      });
+    const scope = await this.resolveScope({
+      subjectId: options.subjectId,
+      chapterId: options.chapterId,
+      topicId: options.topicId,
+      subTopicId: options.subTopicId,
+    });
+    const { subjectId, chapterId, topicId, subTopicId } = scope;
 
-      if (existingSet) {
-        // BUGFIX: was `formatSet(existingSet)` with no questions arg → an
-        // empty `questions: []` on every resume. See loadOrderedQuestions()
-        // doc comment above for the full explanation.
-        const orderedQuestions = await this.loadOrderedQuestions(existingSet.questions as string[]);
-        return this.formatSet(existingSet, orderedQuestions);
-      }
-    }
+    // Exact-scope filter: null really means null (never "ignore this field").
+    const scopeWhere = {
+      userId,
+      subjectId: subjectId ?? null,
+      chapterId: chapterId ?? null,
+      topicId: topicId ?? null,
+      subTopicId: subTopicId ?? null,
+      examId: examId ?? null,
+    };
 
-    // Check if user has an existing incomplete set for this subject/chapter/setNumber (prevent duplicates)
-    const existingIncompleteSet = await this.prisma.questionBankSet.findFirst({
-      where: {
-        userId,
-        subjectId,
-        chapterId,
-        examId,
-        setNumber: setNumber || 1,
-        isCompleted: false,
-      },
+    // 1) Resume an unfinished set of the SAME scope (this is the normal
+    //    "continue where I left off" flow).
+    const existingIncomplete = await this.prisma.questionBankSet.findFirst({
+      where: { ...scopeWhere, isCompleted: false },
       orderBy: { startedAt: 'desc' },
     });
-
-    if (existingIncompleteSet) {
-      // BUGFIX: same empty-questions bug as the resume branch above.
-      const orderedQuestions = await this.loadOrderedQuestions(existingIncompleteSet.questions as string[]);
-      return this.formatSet(existingIncompleteSet, orderedQuestions);
+    if (existingIncomplete) {
+      const ordered = await this.loadOrderedQuestions(existingIncomplete.questions as string[], true);
+      if (ordered.length > 0) {
+        return this.formatSet(existingIncomplete, ordered);
+      }
+      // Every question of that old set was since deleted/unpublished by an
+      // admin — retire the dead set and fall through to build a fresh one.
+      await this.prisma.questionBankSet.update({
+        where: { id: existingIncomplete.id },
+        data: { isCompleted: true, completedAt: new Date() },
+      });
     }
 
-    // Check if user has completed sets for this subject/chapter
-    const completedSets = await this.prisma.questionBankSet.findMany({
-      where: {
-        userId,
-        subjectId,
-        chapterId,
-        examId,
-        isCompleted: true,
-      },
-      orderBy: { setNumber: 'asc' },
-    });
-
-    const nextSetNumber = setNumber || (completedSets.length + 1);
-
-    // BUGFIX/NEW (Sachin — "khud sey un chapter k weak topic jin ka answer
-    // glt hoga unke questions direct practice ke liye dhun, lekin baki
-    // topics premium ke piche"): a topicId scoped to a topic the student
-    // has actually gotten wrong/skipped before is unlocked for UNLIMITED
-    // free practice — the FREE_SETS_LIMIT gate below is skipped entirely
-    // for it. Any other topic (including a topicId the student has never
-    // attempted, or one they're already strong at) still goes through the
-    // normal 3-free-sets-then-premium gate exactly as before. Chapter-wide
-    // practice (no topicId) is unaffected — same gate as always.
-    const isFreeWeakTopic = topicId ? await this.isTopicWeakForUser(userId, topicId) : false;
-
-    // Check free limit
-    if (nextSetNumber > this.FREE_SETS_LIMIT && !isFreeWeakTopic) {
-      const subscription = await this.checkPremiumAccess(userId);
-      if (!subscription) {
+    // 2) Free-tier gate. `scopeSets` = how many sets this student has already
+    //    started in exactly this scope. A student who is WEAK in a topic (or
+    //    sub-topic) is never gated for it — unlimited free practice there.
+    const scopeSets = await this.prisma.questionBankSet.count({ where: scopeWhere });
+    const isFreeWeakScope = topicId || subTopicId ? await this.isScopeWeakForUser(userId, topicId, subTopicId) : false;
+    if (scopeSets >= this.FREE_SETS_LIMIT && !isFreeWeakScope) {
+      const premium = await this.checkPremiumAccess(userId);
+      if (!premium) {
         throw new ForbiddenException({
-          message: `Free users can only practice ${this.FREE_SETS_LIMIT} sets per subject/chapter. Upgrade to Premium for unlimited practice.`,
+          message: `Free users can only practice ${this.FREE_SETS_LIMIT} sets per subject/chapter/topic. Upgrade to Premium for unlimited practice.`,
           code: 'PREMIUM_REQUIRED',
           freeSetsUsed: this.FREE_SETS_LIMIT,
-          nextSetNumber,
+          nextSetNumber: scopeSets + 1,
         });
       }
     }
 
-    // Fetch questions for the set
-    const questions = await this.fetchQuestionsForSet(userId, subjectId, chapterId, examId, size, topicId);
-
+    // 3) Pick the questions.
+    const questions = await this.fetchQuestionsForSet(userId, { subjectId, chapterId, topicId, subTopicId, examId }, size);
     if (questions.length === 0) {
-      throw new NotFoundException('No questions available for this subject/chapter/exam combination');
+      throw new NotFoundException(
+        'Is selection me abhi koi practice question available nahi hai. Koi aur chapter/topic chunein, ya thodi der baad try karein.',
+      );
     }
 
-    // Create new practice set
-    const newSet = await this.prisma.questionBankSet.create({
-      data: {
-        userId,
-        subjectId,
-        chapterId,
-        examId,
-        setNumber: nextSetNumber,
-        questions: questions.map(q => q.id),
-        currentIndex: 0,
-        answers: {},
-        mode,
-      },
-    });
+    // 4) Create the set. setNumber is unique per (user, subject, chapter,
+    //    exam) — number it as max+1 across ALL scopes sharing that tuple so a
+    //    topic set can never collide with a chapter-wide one. One retry
+    //    covers two requests racing for the same number.
+    let created: any = null;
+    for (let attempt = 0; attempt < 2 && !created; attempt++) {
+      const agg = await this.prisma.questionBankSet.aggregate({
+        where: { userId, subjectId: subjectId ?? null, chapterId: chapterId ?? null, examId: examId ?? null },
+        _max: { setNumber: true },
+      });
+      const setNumber = (agg._max.setNumber ?? 0) + 1;
+      try {
+        created = await this.prisma.questionBankSet.create({
+          data: {
+            userId,
+            subjectId: subjectId ?? null,
+            chapterId: chapterId ?? null,
+            topicId: topicId ?? null,
+            subTopicId: subTopicId ?? null,
+            examId: examId ?? null,
+            setNumber,
+            questions: questions.map((q) => q.id),
+            currentIndex: 0,
+            answers: {},
+            mode,
+          },
+        });
+      } catch (e: any) {
+        if (e?.code !== 'P2002' || attempt === 1) throw e;
+      }
+    }
 
-    // Create or update user progress
     await this.updateUserProgress(userId, subjectId, chapterId, examId, {
       setsCompleted: 0,
       totalQuestions: 0,
@@ -194,66 +250,52 @@ export class QuestionBankPracticeService {
       skippedAnswers: 0,
     });
 
-    // BUGFIX: a brand-new set has zero answers recorded yet, so no question in
-    // it should reveal correctAnswer/explanation. formatSet() strips those
-    // fields for any question not present in `answers` (see formatSet below).
-    return this.formatSet(newSet, questions);
+    // A brand-new set has no answers yet, so formatSet() strips
+    // correctAnswer/explanation from every question (no answer-key leak).
+    return this.formatSet(created, questions);
   }
 
-  // Fetch questions for a practice set
+  // Fetch questions for a practice set.
   //
-  // FIX ("jab tak repeat na ho jab tak us topic ke sabhi questions student
-  // ke saamne na aa gaye ho"): this used to shuffle the ENTIRE matching pool
-  // and take N every single time — with pure randomness, a student could
-  // get the same 25 questions again in set #2, or never see 40% of the
-  // chapter at all. Now: pull the IDs already SEEN by this user for this
-  // exact subject/chapter/exam combo (from every past set, completed or
-  // not) via QuestionBankSet.questions[], exclude those first, and only
-  // fall back to already-seen ones (oldest-seen first) once every question
-  // in the pool has been shown — i.e. recycle only after full exhaustion.
+  // Pool = APPROVED + live + year-less (practice) questions inside the exact
+  // scope. Questions this student has already been shown in a past set of the
+  // same scope are excluded until the whole pool has been used once — only
+  // then are the longest-unseen ones recycled. (Previously the pool was
+  // capped at the 1000 OLDEST rows, so on a big subject most questions could
+  // never appear at all; now only ids are pulled — cheap — and the chosen ids
+  // are loaded afterwards.)
   private async fetchQuestionsForSet(
     userId: string,
-    subjectId?: string,
-    chapterId?: string,
-    examId?: string,
+    scope: { subjectId?: string; chapterId?: string; topicId?: string; subTopicId?: string; examId?: string },
     size: number = this.QUESTIONS_PER_SET,
-    topicId?: string,
   ): Promise<any[]> {
-    const where: any = {
-      ...PUBLISHED_QUESTION_WHERE,
-      // BUGFIX: was `{ not: null }`, but missing Hindi is stored as '' not
-      // NULL everywhere else in this codebase (see bank.service.ts "v7 §5"
-      // comment) — so this filter never actually excluded anything. Fixed
-      // to `{ not: '' }`, with an exemption for subject "english" (the
-      // question itself IS the English-language test, nothing to
-      // translate) matching the same fix applied in tests.service.ts.
-      OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
-    };
+    const where: any = { ...PRACTICE_QUESTION_WHERE };
+    if (scope.subjectId) where.subjectId = scope.subjectId;
+    if (scope.chapterId) where.chapterId = scope.chapterId;
+    if (scope.topicId) where.topicId = scope.topicId;
+    if (scope.subTopicId) where.subTopicId = scope.subTopicId;
+    if (scope.examId) where.examId = scope.examId;
+    else where.examId = { not: null }; // must carry an exam badge
 
-    if (subjectId) where.subjectId = subjectId;
-    if (chapterId) where.chapterId = chapterId;
-    if (topicId) where.topicId = topicId;
-    if (examId) where.examId = examId;
-    else where.examId = { not: null }; // Must have exam badge
-
-    const rows = await this.prisma.question.findMany({
+    const poolRows = await this.prisma.question.findMany({
       where,
-      include: {
-        chapter: { select: { name: true } },
-        exam: { select: { name: true } },
-        subject: { select: { name: true } },
-      },
+      select: { id: true },
       orderBy: { createdAt: 'asc' },
-      take: 1000,
+      take: 50000,
     });
+    if (poolRows.length === 0) return [];
+    const poolIds = poolRows.map((r) => r.id);
+    const poolSet = new Set(poolIds);
 
-    if (rows.length === 0) return [];
-
-    // Every past set (any status) for this same subject/chapter/exam combo,
-    // oldest first, so if we do need to recycle we bring back the
-    // longest-unseen ones first rather than a fresh random repeat.
     const pastSets = await this.prisma.questionBankSet.findMany({
-      where: { userId, subjectId, chapterId, examId },
+      where: {
+        userId,
+        subjectId: scope.subjectId ?? null,
+        chapterId: scope.chapterId ?? null,
+        topicId: scope.topicId ?? null,
+        subTopicId: scope.subTopicId ?? null,
+        examId: scope.examId ?? null,
+      },
       orderBy: { startedAt: 'asc' },
       select: { questions: true },
     });
@@ -261,54 +303,51 @@ export class QuestionBankPracticeService {
     const seen = new Set<string>();
     for (const s of pastSets) {
       for (const qid of (s.questions as string[]) ?? []) {
-        if (!seen.has(qid)) { seen.add(qid); seenOrder.push(qid); }
+        if (!seen.has(qid)) {
+          seen.add(qid);
+          seenOrder.push(qid);
+        }
       }
     }
 
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const unseen = rows.filter((r) => !seen.has(r.id));
-    const shuffledUnseen = unseen.slice().sort(() => Math.random() - 0.5);
-
-    if (shuffledUnseen.length >= size) {
-      return shuffledUnseen.slice(0, size);
+    const unseen = poolIds.filter((id) => !seen.has(id));
+    // Fisher-Yates — the old `sort(() => Math.random() - 0.5)` is biased.
+    for (let i = unseen.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [unseen[i], unseen[j]] = [unseen[j], unseen[i]];
     }
 
-    // Not enough fresh questions left — take all remaining unseen ones,
-    // then top up with the oldest-seen ones to reach `size` (full chapter
-    // has now been exhausted at least once for this student).
-    const need = size - shuffledUnseen.length;
-    const recycled = seenOrder
-      .map((id) => byId.get(id))
-      .filter(Boolean)
-      .slice(0, need);
-    return [...shuffledUnseen, ...recycled];
+    let chosen: string[];
+    if (unseen.length >= size) {
+      chosen = unseen.slice(0, size);
+    } else {
+      // Pool exhausted for this student: everything unseen + the
+      // longest-unseen ones (that still exist in the pool) to reach `size`.
+      const need = size - unseen.length;
+      const recycled = seenOrder.filter((id) => poolSet.has(id)).slice(0, need);
+      chosen = [...unseen, ...recycled];
+    }
+
+    return this.loadOrderedQuestions(chosen, false);
   }
 
-  // BUGFIX (this session): getOrCreateSet()'s two "resume an existing
-  // incomplete set" branches used to call `this.formatSet(existingSet)`
-  // with NO `questions` argument. formatSet() only serializes questions
-  // from that second parameter — it never reads `set.questions` (the
-  // stored array of question IDs) itself. Result: resuming a set (or
-  // re-hitting getOrCreateSet for a set already in progress, which is the
-  // normal "continue where I left off" flow) silently returned
-  // `questions: []`, i.e. a practice set with zero questions to answer,
-  // even though the set had real progress (`answers`, `currentIndex`)
-  // recorded. Extracted the "fetch full question rows for a set's stored
-  // ID list, in original order" logic (previously inlined only in
-  // getSetById()) into this shared helper so both resume branches below
-  // and getSetById() build the exact same, complete PracticeSet shape.
-  private async loadOrderedQuestions(questionIds: string[]): Promise<any[]> {
+  // Loads full question rows for a list of ids, preserving that order.
+  // `onlyPublished` drops questions an admin has since deleted/unpublished
+  // (used when RESUMING an old set — a hidden question must not reappear).
+  private async loadOrderedQuestions(questionIds: string[], onlyPublished = false): Promise<any[]> {
     if (questionIds.length === 0) return [];
     const questions = await this.prisma.question.findMany({
-      where: { id: { in: questionIds } },
+      where: { id: { in: questionIds }, ...(onlyPublished ? PUBLISHED_QUESTION_WHERE : {}) },
       include: {
         chapter: { select: { name: true } },
         exam: { select: { name: true } },
         subject: { select: { name: true } },
+        topic: { select: { name: true } },
+        subTopic: { select: { name: true } },
       },
     });
-    const questionMap = new Map(questions.map(q => [q.id, q]));
-    return questionIds.map(id => questionMap.get(id)).filter(Boolean);
+    const questionMap = new Map(questions.map((q) => [q.id, q]));
+    return questionIds.map((id) => questionMap.get(id)).filter(Boolean);
   }
 
   // Get a specific set by ID
@@ -653,55 +692,269 @@ export class QuestionBankPracticeService {
     }));
   }
 
-  // Get available subjects for practice
+  // Get available subjects for practice (legacy flat shape — kept so any old
+  // client keeps working; the new /practice page uses getPracticeTaxonomy()).
+  //
+  // FIXED (Sep 21 2026): only PRACTICE (year-less) questions count, and the
+  // extra Hindi-text filter is gone (isApproved is the single gate).
   async getAvailableSubjects(userId: string, examId?: string): Promise<any[]> {
-    // Get subjects with approved bilingual questions
-    // BUGFIX: subject "english" needs no Hindi translation (the question
-    // itself IS the English-language test) — without this, English never
-    // showed up as an "available subject" for practice even when it had
-    // plenty of fully-valid, approved questions.
+    const qWhere: any = { ...PRACTICE_QUESTION_WHERE };
+    if (examId) qWhere.examId = examId;
     const subjects = await this.prisma.subject.findMany({
-      where: {
-        questions: {
-          some: { ...PUBLISHED_QUESTION_WHERE, OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }] },
-        },
-      },
+      where: { questions: { some: qWhere } },
       include: {
         chapters: {
-          where: {
-            questions: {
-              some: { ...PUBLISHED_QUESTION_WHERE, OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }] },
-            },
-          },
+          where: { questions: { some: qWhere } },
           select: { id: true, name: true },
         },
       },
       orderBy: { name: 'asc' },
     });
 
-    // Add progress info
-    const userProgress = await this.prisma.userProgress.findMany({
-      where: { userId },
-    });
-
+    const userProgress = await this.prisma.userProgress.findMany({ where: { userId } });
     const progressMap = new Map(
-      userProgress.map(p => {
+      userProgress.map((p) => {
         const chapterKey = p.chapterId ? `-${p.chapterId}` : '-';
         const examKey = p.examId ? `-${p.examId}` : '-';
         return [`${p.subjectId}${chapterKey}${examKey}`, p];
-      })
+      }),
     );
 
-    return subjects.map(s => ({
+    return subjects.map((s) => ({
       id: s.id,
       name: s.name,
-      chapters: s.chapters.map(c => ({
+      chapters: s.chapters.map((c) => ({
         id: c.id,
         name: c.name,
         progress: progressMap.get(`${s.id}-${c.id}-${examId ?? '-'}`) ?? null,
       })),
       progress: progressMap.get(`${s.id}--${examId ?? '-'}`) ?? null,
     }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // NEW (Sep 21 2026) — the FULL syllabus tree for the student Practice screen:
+  //   Subject → Chapter → Topic → Sub-topic
+  // with the number of PRACTICE questions at every level, a weak flag on every
+  // topic/sub-topic the student has got wrong, and any in-progress sets.
+  //
+  // The tree comes from the SYLLABUS tables (not from "which topics happen to
+  // have questions"), so a topic/sub-topic the admin just created in
+  // Chapter/Topic Manage shows up for students immediately — with a 0 count —
+  // and lights up the moment questions are uploaded into it. Nothing is typed
+  // by anyone; everything is picked from this list.
+  // ---------------------------------------------------------------------------
+  async getPracticeTaxonomy(userId: string, examId?: string) {
+    const qWhere: any = { ...PRACTICE_QUESTION_WHERE };
+    if (examId) qWhere.examId = examId;
+    else qWhere.examId = { not: null };
+
+    const [subjects, grouped, examGroups, weakRows, inProgress] = await Promise.all([
+      this.prisma.subject.findMany({
+        select: {
+          id: true,
+          name: true,
+          nameHindi: true,
+          slug: true,
+          chapters: {
+            select: {
+              id: true,
+              name: true,
+              nameHindi: true,
+              slug: true,
+              topics: {
+                select: {
+                  id: true,
+                  name: true,
+                  nameHindi: true,
+                  slug: true,
+                  subTopics: { select: { id: true, name: true, nameHindi: true, slug: true }, orderBy: { name: 'asc' } },
+                },
+                orderBy: { name: 'asc' },
+              },
+            },
+            orderBy: { name: 'asc' },
+          },
+        },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.question.groupBy({
+        by: ['subjectId', 'chapterId', 'topicId', 'subTopicId'],
+        where: qWhere,
+        _count: { _all: true },
+      }),
+      this.prisma.question.groupBy({
+        by: ['examId'],
+        where: { ...PRACTICE_QUESTION_WHERE, examId: { not: null } },
+        _count: { _all: true },
+      }),
+      this.weakScopeRows(userId),
+      this.getInProgressSets(userId),
+    ]);
+
+    const subjectCount = new Map<string, number>();
+    const chapterCount = new Map<string, number>();
+    const chapterUnassigned = new Map<string, number>();
+    const topicCount = new Map<string, number>();
+    const subTopicCount = new Map<string, number>();
+    for (const g of grouped) {
+      const n = g._count._all;
+      subjectCount.set(g.subjectId, (subjectCount.get(g.subjectId) ?? 0) + n);
+      if (g.chapterId) {
+        chapterCount.set(g.chapterId, (chapterCount.get(g.chapterId) ?? 0) + n);
+        if (!g.topicId) chapterUnassigned.set(g.chapterId, (chapterUnassigned.get(g.chapterId) ?? 0) + n);
+      }
+      if (g.topicId) topicCount.set(g.topicId, (topicCount.get(g.topicId) ?? 0) + n);
+      if (g.subTopicId) subTopicCount.set(g.subTopicId, (subTopicCount.get(g.subTopicId) ?? 0) + n);
+    }
+
+    const weakTopics = new Set<string>();
+    const weakSubTopics = new Set<string>();
+    for (const w of weakRows) {
+      if (w.topicId) weakTopics.add(w.topicId);
+      if (w.subTopicId) weakSubTopics.add(w.subTopicId);
+    }
+
+    const examIds = examGroups.map((g) => g.examId).filter((id): id is string => Boolean(id));
+    const exams = examIds.length
+      ? await this.prisma.exam.findMany({ where: { id: { in: examIds } }, select: { id: true, name: true } })
+      : [];
+    const examCountMap = new Map(examGroups.map((g) => [g.examId, g._count._all]));
+
+    const tree = subjects
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        nameHindi: s.nameHindi,
+        slug: s.slug,
+        questionCount: subjectCount.get(s.id) ?? 0,
+        chapters: s.chapters
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            nameHindi: c.nameHindi,
+            questionCount: chapterCount.get(c.id) ?? 0,
+            unassignedCount: chapterUnassigned.get(c.id) ?? 0,
+            topics: c.topics.map((t) => ({
+              id: t.id,
+              name: t.name,
+              nameHindi: t.nameHindi,
+              questionCount: topicCount.get(t.id) ?? 0,
+              isWeak: weakTopics.has(t.id),
+              subTopics: t.subTopics.map((st) => ({
+                id: st.id,
+                name: st.name,
+                nameHindi: st.nameHindi,
+                questionCount: subTopicCount.get(st.id) ?? 0,
+                isWeak: weakSubTopics.has(st.id),
+              })),
+            })),
+          }))
+          // chapters that actually have practice questions first, then the rest of the syllabus
+          .sort((a, b) => (b.questionCount > 0 ? 1 : 0) - (a.questionCount > 0 ? 1 : 0)),
+      }))
+      // a subject with no chapters at all (empty duplicate) is just noise for a student
+      .filter((s) => s.chapters.length > 0)
+      .sort((a, b) => (b.questionCount > 0 ? 1 : 0) - (a.questionCount > 0 ? 1 : 0));
+
+    return {
+      subjects: tree,
+      exams: exams
+        .map((e) => ({ id: e.id, name: e.name, count: examCountMap.get(e.id) ?? 0 }))
+        .sort((a, b) => b.count - a.count),
+      inProgress,
+      freeSetsPerScope: this.FREE_SETS_LIMIT,
+    };
+  }
+
+  // Unfinished sets of this student, with human-readable scope names, for the
+  // "Continue where you left off" cards.
+  async getInProgressSets(userId: string) {
+    const sets = await this.prisma.questionBankSet.findMany({
+      where: { userId, isCompleted: false },
+      orderBy: { startedAt: 'desc' },
+      take: 12,
+    });
+    if (sets.length === 0) return [];
+    const uniq = (arr: (string | null | undefined)[]) => [...new Set(arr.filter((x): x is string => Boolean(x)))];
+    const [subjects, chapters, topics, subTopics, exams] = await Promise.all([
+      this.prisma.subject.findMany({ where: { id: { in: uniq(sets.map((s) => s.subjectId)) } }, select: { id: true, name: true } }),
+      this.prisma.chapter.findMany({ where: { id: { in: uniq(sets.map((s) => s.chapterId)) } }, select: { id: true, name: true } }),
+      this.prisma.topic.findMany({ where: { id: { in: uniq(sets.map((s) => s.topicId)) } }, select: { id: true, name: true } }),
+      this.prisma.subTopic.findMany({ where: { id: { in: uniq(sets.map((s) => s.subTopicId)) } }, select: { id: true, name: true } }),
+      this.prisma.exam.findMany({ where: { id: { in: uniq(sets.map((s) => s.examId)) } }, select: { id: true, name: true } }),
+    ]);
+    const nameOf = (list: { id: string; name: string }[]) => new Map(list.map((x) => [x.id, x.name]));
+    const sM = nameOf(subjects);
+    const cM = nameOf(chapters);
+    const tM = nameOf(topics);
+    const stM = nameOf(subTopics);
+    const eM = nameOf(exams);
+    return sets.map((s) => ({
+      id: s.id,
+      setNumber: s.setNumber,
+      total: Array.isArray(s.questions) ? (s.questions as any[]).length : 0,
+      answered: s.answers && typeof s.answers === 'object' ? Object.keys(s.answers as object).length : 0,
+      subject: s.subjectId ? sM.get(s.subjectId) ?? null : null,
+      chapter: s.chapterId ? cM.get(s.chapterId) ?? null : null,
+      topic: s.topicId ? tM.get(s.topicId) ?? null : null,
+      subTopic: s.subTopicId ? stM.get(s.subTopicId) ?? null : null,
+      exam: s.examId ? eM.get(s.examId) ?? null : null,
+      startedAt: s.startedAt,
+    }));
+  }
+
+  // Finish a practice set. The /test screen scores the answers itself (and
+  // records the TestAttempt used by Results / Deep Analysis), but it never
+  // told THIS service the set was done — so every set stayed "in progress"
+  // forever, the student was handed the SAME set again on every Start, the
+  // free-set counter never moved and progress never updated. The test page
+  // now calls this once on submit.
+  async completeSet(userId: string, setId: string, answers?: Record<string, string>) {
+    const set = await this.prisma.questionBankSet.findFirst({ where: { id: setId, userId } });
+    if (!set) throw new NotFoundException('Practice set not found');
+    if (set.isCompleted) {
+      return { alreadyCompleted: true, score: set.score ?? 0 };
+    }
+    const questionIds = (set.questions as string[]) ?? [];
+    const rows = await this.prisma.question.findMany({
+      where: { id: { in: questionIds } },
+      select: { id: true, correctAnswer: true },
+    });
+    const correctMap = new Map(rows.map((r) => [r.id, String(r.correctAnswer ?? '').trim().toUpperCase()]));
+
+    const given = answers && typeof answers === 'object' ? answers : {};
+    const stored: Record<string, string> = {};
+    let correct = 0;
+    let wrong = 0;
+    let skipped = 0;
+    for (const qid of questionIds) {
+      const a = String(given[qid] ?? '').trim().toUpperCase();
+      if (!a || a === 'SKIPPED') {
+        skipped++;
+        stored[qid] = 'SKIPPED';
+      } else if (correctMap.get(qid) === a) {
+        correct++;
+        stored[qid] = a;
+      } else {
+        wrong++;
+        stored[qid] = a;
+      }
+    }
+    const score = questionIds.length ? Math.round((correct / questionIds.length) * 100) : 0;
+
+    await this.prisma.questionBankSet.update({
+      where: { id: setId },
+      data: { answers: stored, currentIndex: questionIds.length, isCompleted: true, completedAt: new Date(), score },
+    });
+    await this.updateUserProgress(userId, set.subjectId ?? undefined, set.chapterId ?? undefined, set.examId ?? undefined, {
+      setsCompleted: 1,
+      totalQuestions: questionIds.length,
+      correctAnswers: correct,
+      wrongAnswers: wrong,
+      skippedAnswers: skipped,
+    });
+    return { alreadyCompleted: false, score, correct, wrong, skipped, total: questionIds.length };
   }
 
   // Check if user has premium access.
@@ -728,17 +981,19 @@ export class QuestionBankPracticeService {
 
   // NEW (Sachin — "khud sey un chapter k weak topic jo honge, jin ka
   // answer glt hoga students ka, un topics ke questions direct practice ke
-  // liye"): a topic is "weak" for a user if they have at least one wrong
-  // or skipped AttemptAnswer on a question that belongs to it, across
-  // every completed test they've ever taken. Deliberately simple/binary
-  // (not accuracy-percentage-based) to match how the existing chapter-level
-  // weak-areas-practice feature (tests.service.ts getWeakAreasPractice)
-  // already defines "weak" — any mistake counts, no minimum-attempts floor.
-  private async isTopicWeakForUser(userId: string, topicId: string): Promise<boolean> {
+  // liye"): a topic / sub-topic is "weak" for a user if they have at least one
+  // wrong or skipped AttemptAnswer on a question that belongs to it, across
+  // every submitted test they've ever taken. Deliberately simple/binary (not
+  // accuracy-percentage-based) to match how the chapter-level weak-areas
+  // feature (tests.service.ts getWeakAreasPractice) already defines "weak".
+  // Practice-set attempts count too, because the /test screen records every
+  // finished practice set as a submitted TestAttempt.
+  private async isScopeWeakForUser(userId: string, topicId?: string, subTopicId?: string): Promise<boolean> {
+    if (!topicId && !subTopicId) return false;
     const wrongOrSkipped = await this.prisma.attemptAnswer.findFirst({
       where: {
         testAttempt: { userId, status: 'SUBMITTED' },
-        question: { topicId },
+        question: subTopicId ? { subTopicId } : { topicId },
         OR: [{ isCorrect: false }, { selectedOption: null }],
       },
       select: { id: true },
@@ -746,13 +1001,26 @@ export class QuestionBankPracticeService {
     return !!wrongOrSkipped;
   }
 
-  // NEW — powers the "browse all topics under this chapter, weak ones
-  // unlocked for free, the rest behind Premium when you click Start" UI:
-  // one call returns every topic under the chapter PLUS whether the
-  // logged-in user is weak in it, so the frontend can render every topic
-  // (nothing hidden — "vo practice me weak topic sb topic bhi dekh paye")
-  // while still gating the actual practice-start (getOrCreateSet() above)
-  // behind Premium for anything not flagged weak.
+  // One grouped query: every (topic, sub-topic) the user has got wrong/skipped.
+  // Never throws — a failure here must not take the whole practice screen down.
+  private async weakScopeRows(userId: string): Promise<{ topicId: string | null; subTopicId: string | null }[]> {
+    try {
+      return await this.prisma.$queryRaw<{ topicId: string | null; subTopicId: string | null }[]>`
+        SELECT DISTINCT q."topicId" AS "topicId", q."subTopicId" AS "subTopicId"
+        FROM attempt_answers aa
+        JOIN test_attempts ta ON ta.id = aa."testAttemptId"
+        JOIN questions q ON q.id = aa."questionId"
+        WHERE ta."userId" = ${userId}
+          AND ta.status = 'SUBMITTED'
+          AND (aa."isCorrect" = false OR aa."selectedOption" IS NULL)
+          AND (q."topicId" IS NOT NULL OR q."subTopicId" IS NOT NULL)`;
+    } catch {
+      return [];
+    }
+  }
+
+  // Powers the "browse all topics under this chapter, weak ones flagged" UI
+  // (GET /bank/topics/weak-status). Kept for the weak-practice page.
   async getTopicsWithWeakStatus(userId: string, chapterId: string) {
     const topics = await this.prisma.topic.findMany({
       where: { chapterId },
@@ -780,7 +1048,16 @@ export class QuestionBankPracticeService {
     }));
   }
 
-  // Update user progress
+  // Update user progress.
+  //
+  // BUGFIX (Sep 21 2026): this used Prisma's compound-unique upsert with
+  // `chapterId ?? ''` / `examId ?? ''` in the WHERE. Rows are stored with
+  // NULL (not '') for "no chapter / no exam", and NULL never equals '' — so
+  // the upsert never found the existing row and inserted a NEW progress row
+  // on every single Start and every Finish (and a NULL in a unique index is
+  // never a conflict, so nothing stopped it). The Progress cards then showed
+  // the same subject many times with split counters. Now: look the row up
+  // with real nulls, update it if it exists, create it otherwise.
   private async updateUserProgress(
     userId: string,
     subjectId: string | undefined,
@@ -796,33 +1073,37 @@ export class QuestionBankPracticeService {
   ): Promise<void> {
     if (!subjectId) return;
 
-    await this.prisma.userProgress.upsert({
-      where: {
-        userId_subjectId_chapterId_examId: {
-          userId,
-          subjectId,
-          chapterId: chapterId ?? '',
-          examId: examId ?? '',
+    const existing = await this.prisma.userProgress.findFirst({
+      where: { userId, subjectId, chapterId: chapterId ?? null, examId: examId ?? null },
+      select: { id: true },
+    });
+
+    if (existing) {
+      await this.prisma.userProgress.update({
+        where: { id: existing.id },
+        data: {
+          setsCompleted: { increment: delta.setsCompleted },
+          totalQuestions: { increment: delta.totalQuestions },
+          correctAnswers: { increment: delta.correctAnswers },
+          wrongAnswers: { increment: delta.wrongAnswers },
+          skippedAnswers: { increment: delta.skippedAnswers },
+          lastPracticedAt: new Date(),
         },
-      },
-      create: {
+      });
+      return;
+    }
+
+    await this.prisma.userProgress.create({
+      data: {
         userId,
         subjectId,
-        chapterId,
-        examId,
+        chapterId: chapterId ?? null,
+        examId: examId ?? null,
         setsCompleted: delta.setsCompleted,
         totalQuestions: delta.totalQuestions,
         correctAnswers: delta.correctAnswers,
         wrongAnswers: delta.wrongAnswers,
         skippedAnswers: delta.skippedAnswers,
-      },
-      update: {
-        setsCompleted: { increment: delta.setsCompleted },
-        totalQuestions: { increment: delta.totalQuestions },
-        correctAnswers: { increment: delta.correctAnswers },
-        wrongAnswers: { increment: delta.wrongAnswers },
-        skippedAnswers: { increment: delta.skippedAnswers },
-        lastPracticedAt: new Date(),
       },
     });
   }
@@ -844,6 +1125,8 @@ export class QuestionBankPracticeService {
       id: set.id,
       subjectId: set.subjectId ?? undefined,
       chapterId: set.chapterId ?? undefined,
+      topicId: set.topicId ?? undefined,
+      subTopicId: set.subTopicId ?? undefined,
       examId: set.examId ?? undefined,
       setNumber: set.setNumber,
       questions: formattedQuestions,
@@ -875,6 +1158,8 @@ export class QuestionBankPracticeService {
         textHi: o.textHi ?? null,
       })),
       chapter: q.chapter?.name ?? '',
+      topic: q.topic?.name ?? null,
+      subTopic: q.subTopic?.name ?? null,
       examName: q.exam?.name ?? null,
       year: q.year ?? null,
       shift: q.shift ?? null,
