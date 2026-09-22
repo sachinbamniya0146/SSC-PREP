@@ -106,10 +106,18 @@ export default function AdminPage() {
   type UploadBatchSummary = {
     id: string; adminId: string; sourceType: string; filename: string | null;
     totalRows: number; createdCount: number; failedCount: number; createdAt: string;
+    // NEW (Sep 21 2026) — live/current state of this batch's questions
+    remainingCount?: number; liveCount?: number; pendingCount?: number;
+    pyqCount?: number; practiceCount?: number; kind?: "empty" | "practice" | "pyq" | "mixed";
   };
   type UploadBatchDetail = UploadBatchSummary & {
     errorsJson: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string }[] | null;
     warningsJson: { row: number; message: string; questionPreview?: string }[] | null;
+    breakdown?: {
+      subjectId: string; subject: string | null; chapterId: string | null; chapter: string | null;
+      topicId: string | null; topic: string | null; subTopicId: string | null; subTopic: string | null;
+      live: number; pending: number; total: number;
+    }[];
   };
   const [batches, setBatches] = React.useState<UploadBatchSummary[]>([]);
   const [batchesLoading, setBatchesLoading] = React.useState(false);
@@ -127,11 +135,14 @@ export default function AdminPage() {
   // download as downloadBankExport() above, narrowed to only the rows with
   // a genuine gap instead of the whole bank.
   const [gapsExportDownloading, setGapsExportDownloading] = React.useState(false);
-  // NEW — "admin ke liye alag practice question upload feature": same
-  // uploader, checked box forces every row's year/shift/paperCode blank on
-  // the backend regardless of what the sheet has, so this batch always
-  // counts as practice-only and never shows up in a Year-wise PYQ Test.
-  const [isPracticeOnly, setIsPracticeOnly] = React.useState(false);
+  // REPLACED (Sep 21 2026 — "practice vale questions upload krne ka excel se
+  // vo alg hee ek तरफ bda vala button do, chota sa click glti krva dega"):
+  // one generic Upload button risked the admin uploading a PYQ paper into
+  // Practice (or vice-versa) by forgetting a checkbox. Now there are two
+  // large, clearly separated, differently-coloured buttons — no checkbox,
+  // no silent default — and the chosen kind is sent to the backend, which
+  // also force-blanks year/shift/paperCode for Practice uploads.
+  const [isPracticeOnly, setIsPracticeOnly] = React.useState(false); // kept: read by submitUpload for the (still supported) checkbox-free legacy path
 
   async function loadUsers() {
     setLoading(true);
@@ -349,7 +360,7 @@ export default function AdminPage() {
     }
   }
 
-  async function submitUpload() {
+  async function submitUpload(kind: "practice" | "pyq") {
     if (!uploadFile) {
       setError("Pehle koi file select karein (Excel/CSV/JSON/Text/Word)");
       return;
@@ -360,7 +371,8 @@ export default function AdminPage() {
     try {
       const formData = new FormData();
       formData.append("file", uploadFile);
-      if (isPracticeOnly) formData.append("isPracticeOnly", "true");
+      formData.append("kind", kind);
+      if (kind === "practice") formData.append("isPracticeOnly", "true");
       const res = await fetchAuth(`${API_BASE}/bank/admin/upload/${uploadFormat}`, {
         method: "POST",
         body: formData,
@@ -372,7 +384,7 @@ export default function AdminPage() {
       setUploadResult(data as UploadResult);
       loadBatches(); // Phase 3 — refresh history so this upload shows up immediately
       if ((data as UploadResult).created > 0) {
-        setInfo(`${(data as UploadResult).created} question(s) upload ho gaye`);
+        setInfo(`${(data as UploadResult).created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -439,6 +451,72 @@ export default function AdminPage() {
       if (r.ok) setExpandedBatchDetail(await r.json());
     } catch {
       /* silent — the row still shows its summary counts either way */
+    }
+  }
+
+  // NEW (Sep 21 2026) — publish/download/scoped-delete helpers alongside the
+  // existing whole-batch delete.
+  async function publishBatchHandler(id: string) {
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches/${id}/publish`, { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setBatchesErr(d?.message || `HTTP ${r.status}`);
+        return;
+      }
+      setInfo(`${d.published ?? 0} question(s) publish ho gaye.`);
+      await loadBatches();
+      if (expandedBatchId === id) toggleBatchDetail(id).then(() => toggleBatchDetail(id));
+    } catch (e) {
+      setBatchesErr(e instanceof Error ? e.message : "Publish nahi hua");
+    }
+  }
+
+  async function downloadBatchHandler(id: string, filename: string | null) {
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches/${id}/download?format=excel`);
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setBatchesErr(d?.message || `HTTP ${r.status}`);
+        return;
+      }
+      const blob = await r.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(filename || "upload").replace(/\.[a-z0-9]+$/i, "")}_current.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setBatchesErr(e instanceof Error ? e.message : "Download nahi hua");
+    }
+  }
+
+  async function deleteBatchScopedHandler(
+    batchId: string,
+    row: { subjectId: string; chapterId: string | null; topicId: string | null; subTopicId: string | null; total: number },
+  ) {
+    if (!confirm(`Is hisse ke ${row.total} question(s) PERMANENTLY delete karein?`)) return;
+    try {
+      const params = new URLSearchParams();
+      params.set("subjectId", row.subjectId);
+      if (row.chapterId) params.set("chapterId", row.chapterId);
+      if (row.topicId) params.set("topicId", row.topicId);
+      if (row.subTopicId) params.set("subTopicId", row.subTopicId);
+      const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches/${batchId}/questions?${params}`, { method: "DELETE" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setBatchesErr(d?.message || `HTTP ${r.status}`);
+        return;
+      }
+      setInfo(`${d.deletedQuestions ?? 0} question(s) delete ho gaye.`);
+      await loadBatches();
+      setExpandedBatchId(null);
+      setExpandedBatchDetail(null);
+    } catch (e) {
+      setBatchesErr(e instanceof Error ? e.message : "Delete nahi hua");
     }
   }
 
@@ -623,6 +701,12 @@ export default function AdminPage() {
           >
             🕳️ Kaunse Topic/Sub-Topic mein question missing hai? Coverage / Gap Finder →
           </a>
+          <a
+            href="/admin/questions/manage"
+            className="mb-3 ml-2 inline-block rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
+          >
+            🗂️ Questions ko chapter/topic/sub-topic me move, publish ya delete karein — Question Manager →
+          </a>
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
               <button
@@ -675,28 +759,33 @@ export default function AdminPage() {
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
               />
             </div>
-            <button
-              onClick={submitUpload}
-              disabled={uploading || !uploadFile}
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
-            >
-              {uploading ? "Uploading..." : "Upload Questions"}
-            </button>
           </div>
 
-          {/* NEW — Practice-only upload toggle (separate from PYQ upload) */}
-          <label className="mt-3 flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={isPracticeOnly}
-              onChange={(e) => setIsPracticeOnly(e.target.checked)}
-              className="h-4 w-4 rounded border-border"
-            />
-            <span>
-              This is <b>Practice-only</b> content, not real PYQs (year/shift/paper-code will be ignored even if the sheet has them —
-              these questions won&apos;t appear in Year-wise PYQ Tests, only in Sectional/Chapter/Weak-topic practice)
-            </span>
-          </label>
+          {/* NEW (Sep 21 2026) — two large, unmistakably separate upload buttons
+              instead of one button + a checkbox that was easy to forget. */}
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <button
+              onClick={() => submitUpload("practice")}
+              disabled={uploading || !uploadFile}
+              className="flex flex-col items-center gap-1 rounded-xl border-2 border-emerald-500 bg-emerald-500/10 px-4 py-5 text-center font-semibold text-emerald-700 transition hover:bg-emerald-500/20 disabled:opacity-50 dark:text-emerald-400"
+            >
+              <span className="text-lg">📗 Upload PRACTICE Questions</span>
+              <span className="text-xs font-normal opacity-80">
+                Year/shift/paper-code ignored even if sheet has them. Sirf Practice screens (chapter/topic/sub-topic) me dikhenge — Year-wise PYQ test me NAHI.
+              </span>
+            </button>
+            <button
+              onClick={() => submitUpload("pyq")}
+              disabled={uploading || !uploadFile}
+              className="flex flex-col items-center gap-1 rounded-xl border-2 border-sky-500 bg-sky-500/10 px-4 py-5 text-center font-semibold text-sky-700 transition hover:bg-sky-500/20 disabled:opacity-50 dark:text-sky-400"
+            >
+              <span className="text-lg">📘 Upload PYQ Questions</span>
+              <span className="text-xs font-normal opacity-80">
+                Har row me 'year' zaroori hai. Yahi questions Year-wise PYQ Test aur chapter-wise PYQ me dikhenge — Practice screens me NAHI.
+              </span>
+            </button>
+          </div>
+          {uploading && <p className="mt-2 text-sm text-muted-foreground">Uploading...</p>}
 
           {uploadResult && (
             <div className="mt-4 rounded-lg border border-border bg-background p-3 text-sm">
@@ -804,6 +893,7 @@ export default function AdminPage() {
                     <th className="px-3 py-2 text-right">Total</th>
                     <th className="px-3 py-2 text-right">Created</th>
                     <th className="px-3 py-2 text-right">Failed</th>
+                    <th className="px-3 py-2">Ab Live/Pending</th>
                     <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
@@ -819,12 +909,48 @@ export default function AdminPage() {
                         <td className="px-3 py-2 text-right">{b.totalRows}</td>
                         <td className="px-3 py-2 text-right text-emerald-600 dark:text-emerald-400">{b.createdCount}</td>
                         <td className="px-3 py-2 text-right text-red-600 dark:text-red-400">{b.failedCount}</td>
+                        <td className="px-3 py-2 text-xs">
+                          {b.kind && (
+                            <span
+                              className={`mr-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                                b.kind === "pyq"
+                                  ? "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+                                  : b.kind === "practice"
+                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                  : b.kind === "mixed"
+                                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                  : "bg-muted text-muted-foreground"
+                              }`}
+                            >
+                              {b.kind.toUpperCase()}
+                            </span>
+                          )}
+                          <span className="text-emerald-600 dark:text-emerald-400">{b.liveCount ?? 0} live</span>
+                          {" / "}
+                          <span className="text-amber-600 dark:text-amber-400">{b.pendingCount ?? 0} pending</span>
+                        </td>
                         <td className="px-3 py-2 text-right">
                           <button
                             onClick={() => toggleBatchDetail(b.id)}
                             className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted"
                           >
-                            {expandedBatchId === b.id ? "Hide" : "Errors ▾"}
+                            {expandedBatchId === b.id ? "Hide" : "Details ▾"}
+                          </button>
+                          {(b.pendingCount ?? 0) > 0 && (
+                            <button
+                              onClick={() => publishBatchHandler(b.id)}
+                              className="ml-2 rounded-lg border border-emerald-500/30 px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
+                              title="Is batch ke sabhi pending questions ko ek click me publish (live) karein"
+                            >
+                              Publish All
+                            </button>
+                          )}
+                          <button
+                            onClick={() => downloadBatchHandler(b.id, b.filename)}
+                            className="ml-2 rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted"
+                            title="Is batch ke abhi maujood questions Excel me download karein"
+                          >
+                            ⬇️
                           </button>
                           <button
                             onClick={() => deleteBatchHandler(b.id, b.filename)}
@@ -836,10 +962,38 @@ export default function AdminPage() {
                       </tr>
                       {expandedBatchId === b.id && (
                         <tr className="border-b border-border last:border-0 bg-muted/20">
-                          <td colSpan={7} className="px-3 py-3">
+                          <td colSpan={8} className="px-3 py-3">
                             {!expandedBatchDetail ? (
-                              <p className="text-xs text-muted-foreground">Loading errors...</p>
-                            ) : (expandedBatchDetail.errorsJson?.length ?? 0) === 0 ? (
+                              <p className="text-xs text-muted-foreground">Loading...</p>
+                            ) : (
+                              <>
+                                {(expandedBatchDetail.breakdown?.length ?? 0) > 0 && (
+                                  <div className="mb-3">
+                                    <p className="mb-1 text-xs font-semibold text-foreground">
+                                      Chapter / Topic / Sub-topic wise (delete sirf isi hisse ke questions):
+                                    </p>
+                                    <div className="max-h-48 space-y-1 overflow-y-auto">
+                                      {expandedBatchDetail.breakdown!.map((row, i) => (
+                                        <div key={i} className="flex items-center justify-between gap-2 rounded border border-border/60 px-2 py-1 text-xs">
+                                          <span className="truncate">
+                                            {row.subject} {row.chapter ? `› ${row.chapter}` : ""} {row.topic ? `› ${row.topic}` : ""} {row.subTopic ? `› ${row.subTopic}` : ""}
+                                            {" — "}
+                                            <span className="text-emerald-600 dark:text-emerald-400">{row.live} live</span>
+                                            {", "}
+                                            <span className="text-amber-600 dark:text-amber-400">{row.pending} pending</span>
+                                          </span>
+                                          <button
+                                            onClick={() => deleteBatchScopedHandler(b.id, row)}
+                                            className="shrink-0 rounded border border-danger/30 px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10"
+                                          >
+                                            Delete this
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                            {(expandedBatchDetail.errorsJson?.length ?? 0) === 0 ? (
                               <p className="text-xs text-muted-foreground">Is upload me koi error nahi tha.</p>
                             ) : (
                               <div>
@@ -879,6 +1033,8 @@ export default function AdminPage() {
                                   ))}
                                 </ul>
                               </div>
+                            )}
+                              </>
                             )}
                           </td>
                         </tr>
