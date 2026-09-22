@@ -1152,6 +1152,12 @@ model QuestionBankSet {
   subjectId       String?
   chapterId       String?
   examId          String?
+  // NEW (Sep 21 2026 — topic/sub-topic wise practice): plain string columns
+  // (no FK relation on purpose — keeps this a zero-risk additive migration and
+  // a topic/sub-topic delete can never cascade into a student's practice
+  // history). null = chapter-wide (or subject-wide) set, exactly as before.
+  topicId         String?
+  subTopicId      String?
   setNumber       Int      // 1, 2, 3... for each subject/chapter
   questions       Json     // Array of question IDs in order
   currentIndex    Int      @default(0) // 0-based index of current question
@@ -1170,6 +1176,7 @@ model QuestionBankSet {
   @@unique([userId, subjectId, chapterId, examId, setNumber])
   @@index([userId, subjectId, chapterId])
   @@index([userId, isCompleted])
+  @@index([userId, topicId])
   @@map("question_bank_sets")
 }
 
