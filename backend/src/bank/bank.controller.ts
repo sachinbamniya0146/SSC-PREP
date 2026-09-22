@@ -6,6 +6,7 @@ import { QuestionBankPracticeService } from './question-bank-practice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { parseQuestionKind } from '../common/question-visibility';
 
 @Controller('bank')
 @UseGuards(JwtAuthGuard)
@@ -83,8 +84,8 @@ export class BankController {
   }
 
   @Get('subjects')
-  subjects(@Query('examId') examId?: string) {
-    return this.bank.subjects(examId);
+  subjects(@Query('examId') examId?: string, @Query('kind') kind?: string) {
+    return this.bank.subjects(examId, parseQuestionKind(kind));
   }
 
   @Get('chapters')
@@ -92,8 +93,9 @@ export class BankController {
     @Query('subjectId') subjectId?: string,
     @Query('examId') examId?: string,
     @Query('includeEmpty') includeEmpty?: string,
+    @Query('kind') kind?: string,
   ) {
-    return this.bank.chapters(subjectId, examId, includeEmpty === 'true');
+    return this.bank.chapters(subjectId, examId, includeEmpty === 'true', parseQuestionKind(kind));
   }
 
   // Session 18+ — year-wise custom test picker: distinct years for an exam.
@@ -115,8 +117,15 @@ export class BankController {
   // doc comment for why this was missing while subjects/chapters/years all
   // already had it.
   @Get('topics')
-  topics(@Query('chapterId') chapterId?: string, @Query('examId') examId?: string) {
-    return this.bank.topics(chapterId, examId);
+  topics(@Query('chapterId') chapterId?: string, @Query('examId') examId?: string, @Query('kind') kind?: string) {
+    return this.bank.topics(chapterId, examId, parseQuestionKind(kind));
+  }
+
+  // NEW (Sep 21 2026) — sub-topics (with question counts) under a topic, for
+  // the PYQ browser's Topic -> Sub-topic filter.
+  @Get('subtopics')
+  subTopics(@Query('topicId') topicId?: string, @Query('examId') examId?: string, @Query('kind') kind?: string) {
+    return this.bank.subTopicsWithCounts(topicId, examId, parseQuestionKind(kind));
   }
 
   // Admin chapter management — see BankService.createChapter/
@@ -286,6 +295,9 @@ export class BankController {
     @Query('chapterId') chapterId?: string,
     @Query('skip') skip?: string,
     @Query('take') take?: string,
+    @Query('topicId') topicId?: string,
+    @Query('subTopicId') subTopicId?: string,
+    @Query('kind') kind?: string,
   ) {
     const userId = req.user?.userId ?? req.user?.id;
     return this.bank.browse(
@@ -293,6 +305,9 @@ export class BankController {
         examId,
         subjectId,
         chapterId,
+        topicId,
+        subTopicId,
+        kind: parseQuestionKind(kind),
         skip: skip ? parseInt(skip, 10) : undefined,
         take: take ? parseInt(take, 10) : undefined,
       },
@@ -325,9 +340,13 @@ export class BankController {
     @Query('year') year?: string,
     @Query('skip') skip?: string,
     @Query('take') take?: string,
+    @Query('topicId') topicId?: string,
+    @Query('subTopicId') subTopicId?: string,
   ) {
     return this.bank.chapterPyq({
       chapterId: id,
+      topicId,
+      subTopicId,
       examId,
       year: year ? parseInt(year, 10) : undefined,
       skip: skip ? parseInt(skip, 10) : undefined,
@@ -452,6 +471,26 @@ export class BankController {
     return this.practiceService.getAvailableSubjects(userId, examId);
   }
 
+  // NEW (Sep 21 2026) — the FULL syllabus tree (Subject -> Chapter -> Topic ->
+  // Sub-topic) with PRACTICE question counts, weak flags and in-progress sets.
+  @Get('practice/taxonomy')
+  async getPracticeTaxonomy(@Req() req: any, @Query('examId') examId?: string) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.getPracticeTaxonomy(userId, examId || undefined);
+  }
+
+  // NEW — called by /test once a practice set is submitted, so the set is
+  // marked complete (progress + free-set counter move, next Start gives fresh questions).
+  @Post('practice/set/:setId/complete')
+  async completePracticeSet(
+    @Req() req: any,
+    @Param('setId') setId: string,
+    @Body() body: { answers?: Record<string, string> },
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.completeSet(userId, setId, body?.answers);
+  }
+
   @Get('practice/progress')
   async getUserProgress(@Req() req: any) {
     const userId = req.user?.userId ?? req.user?.id;
@@ -470,7 +509,8 @@ export class BankController {
     @Body() body: {
       subjectId?: string;
       chapterId?: string;
-      topicId?: string; // NEW — weak-topic direct practice (see QuestionBankPracticeService.isTopicWeakForUser)
+      topicId?: string; // topic-wise practice (weak topics are unlimited-free, see isScopeWeakForUser)
+      subTopicId?: string; // NEW (Sep 21 2026) — sub-topic-wise practice
       examId?: string;
       setNumber?: number;
       mode?: 'practice' | 'test';
