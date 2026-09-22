@@ -595,8 +595,10 @@ export class BankService implements OnModuleInit {
     });
   }
 
-  async subjects(examId?: string) {
-    const cacheKey = examId ? `bank:subjects:${examId}` : 'bank:subjects';
+  // `kind` (NEW, Sep 21 2026): 'pyq' counts only year-tagged questions,
+  // 'practice' only year-less ones, omitted = everything (unchanged default).
+  async subjects(examId?: string, kind?: 'pyq' | 'practice') {
+    const cacheKey = `bank:subjects:${examId ?? ''}:${kind ?? ''}`;
     const cached = cacheGet<any>(cacheKey);
     if (cached) return cached;
     const out = await this.prisma.$queryRaw`
@@ -607,12 +609,13 @@ export class BankService implements OnModuleInit {
       LEFT JOIN questions q ON q."subjectId" = s.id
            AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
            AND (${examId}::text IS NULL OR q."examId" = ${examId})
+           AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
       GROUP BY s.id ORDER BY s.name;`;
     cacheSet(cacheKey, out, 300_000);
     return out;
   }
 
-  async chapters(subjectId?: string, examId?: string, includeEmpty = false) {
+  async chapters(subjectId?: string, examId?: string, includeEmpty = false, kind?: 'pyq' | 'practice') {
     // NEW `includeEmpty` — admin chapter-assignment pickers (e.g. the PDF
     // review queue's chapter dropdown/AI-suggest) need to see EVERY
     // chapter in a subject, including ones that don't have any approved
@@ -626,6 +629,7 @@ export class BankService implements OnModuleInit {
                COUNT(q.id) FILTER (
                  WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
                  AND (${examId}::text IS NULL OR q."examId" = ${examId})
+                 AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
                )::int AS count
         FROM chapters c
         JOIN subjects sub ON sub.id = c."subjectId"
@@ -641,6 +645,7 @@ export class BankService implements OnModuleInit {
       LEFT JOIN questions q ON q."chapterId" = c.id
            AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
            AND (${examId}::text IS NULL OR q."examId" = ${examId})
+           AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
       WHERE (${subjectId}::text IS NULL OR c."subjectId" = ${subjectId})
       GROUP BY c.id, sub.name
       HAVING COUNT(q.id) > 0
@@ -712,17 +717,34 @@ export class BankService implements OnModuleInit {
   // parameter here, same pattern as subjects()/chapters()/years(), closes
   // that gap so the topic list a student sees is always honest for the
   // exam they actually picked.
-  async topics(chapterId?: string, examId?: string) {
+  async topics(chapterId?: string, examId?: string, kind?: 'pyq' | 'practice') {
     return this.prisma.$queryRaw`
       SELECT t.id, t.name, t."nameHindi", t.slug, COUNT(q.id)::int AS count
       FROM topics t
       LEFT JOIN questions q ON q."topicId" = t.id
            AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
            AND (${examId}::text IS NULL OR q."examId" = ${examId})
+           AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
       WHERE (${chapterId}::text IS NULL OR t."chapterId" = ${chapterId})
       GROUP BY t.id
       HAVING COUNT(q.id) > 0
       ORDER BY t.name;`;
+  }
+
+  // NEW (Sep 21 2026) — sub-topics of a topic that have questions, for the PYQ
+  // browser's Topic → Sub-topic filter (same rules/`kind` as topics()).
+  async subTopicsWithCounts(topicId?: string, examId?: string, kind?: 'pyq' | 'practice') {
+    return this.prisma.$queryRaw`
+      SELECT st.id, st.name, st."nameHindi", st.slug, COUNT(q.id)::int AS count
+      FROM sub_topics st
+      LEFT JOIN questions q ON q."subTopicId" = st.id
+           AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+           AND (${examId ?? null}::text IS NULL OR q."examId" = ${examId ?? null})
+           AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
+      WHERE (${topicId ?? null}::text IS NULL OR st."topicId" = ${topicId ?? null})
+      GROUP BY st.id
+      HAVING COUNT(q.id) > 0
+      ORDER BY st.name;`;
   }
 
   // ---- Admin chapter management ----
@@ -746,11 +768,16 @@ export class BankService implements OnModuleInit {
   // chapters too, otherwise a chapter they just created would look like it
   // never got created.
   async listAllChaptersForAdmin(subjectId?: string) {
+    // `_count` (Sep 21 2026) — lets the Chapter Manage UI show a live
+    // question/topic count per chapter, so it can offer Delete only for an
+    // empty chapter and Merge otherwise (see BankAdminService.deleteChapter/
+    // mergeChapter for the actual guard — this count is UI-only guidance).
     return this.prisma.chapter.findMany({
       where: subjectId ? { subjectId } : undefined,
       select: {
         id: true, name: true, nameHindi: true, slug: true, subjectId: true,
         subject: { select: { name: true, nameHindi: true, slug: true } },
+        _count: { select: { questions: true, topics: true } },
       },
       orderBy: { name: 'asc' },
     });
@@ -1008,6 +1035,7 @@ export class BankService implements OnModuleInit {
         slug: true,
         chapterId: true,
         chapter: { select: { name: true, nameHindi: true, slug: true, subject: { select: { name: true, nameHindi: true } } } },
+        _count: { select: { questions: true, subTopics: true } },
       },
       orderBy: { name: 'asc' },
     });
@@ -1049,6 +1077,7 @@ export class BankService implements OnModuleInit {
         slug: true,
         topicId: true,
         topic: { select: { name: true, slug: true, chapter: { select: { name: true, subject: { select: { name: true } } } } } },
+        _count: { select: { questions: true } },
       },
       orderBy: { name: 'asc' },
     });
@@ -1116,7 +1145,7 @@ export class BankService implements OnModuleInit {
   }
 
   // Browse questions by filters (exam/subject/chapter), bilingual rows.
-  async browse(f: { examId?: string; subjectId?: string; chapterId?: string; skip?: number; take?: number }, userId?: string | null) {
+  async browse(f: { examId?: string; subjectId?: string; chapterId?: string; topicId?: string; subTopicId?: string; kind?: 'pyq' | 'practice'; skip?: number; take?: number }, userId?: string | null) {
     const take = Math.min(f.take ?? 20, 50);
     const skip = f.skip ?? 0;
     // FIX Error #6: was { isApproved: true } only — auto-suspended /
@@ -1125,6 +1154,11 @@ export class BankService implements OnModuleInit {
     if (f.examId) where.examId = f.examId;
     if (f.chapterId) where.chapterId = f.chapterId;
     else if (f.subjectId) where.subjectId = f.subjectId;
+    // NEW (Sep 21 2026): topic / sub-topic drill-down and PYQ-vs-practice split.
+    if (f.topicId) where.topicId = f.topicId;
+    if (f.subTopicId) where.subTopicId = f.subTopicId;
+    if (f.kind === 'pyq') where.year = { not: null };
+    else if (f.kind === 'practice') where.year = null;
     const rows = await this.prisma.question.findMany({
       where,
       include: {
@@ -1132,6 +1166,7 @@ export class BankService implements OnModuleInit {
         exam: { select: { name: true } },
         subject: { select: { name: true } },
         topic: { select: { name: true } },
+        subTopic: { select: { name: true } },
       },
       orderBy: { createdAt: 'asc' },
       skip,
@@ -1167,6 +1202,7 @@ export class BankService implements OnModuleInit {
         // this browse() response never surfaced the topic's name, and no
         // frontend page displayed it even when present. Now included.
         topic: r.topic?.name ?? null,
+        subTopic: r.subTopic?.name ?? null,
         difficulty: r.difficulty,
         marks: r.marks,
         negativeMarks: r.negativeMarks,
@@ -1323,12 +1359,16 @@ export class BankService implements OnModuleInit {
   // *before* the student picks an option — that is the feature, not a bug,
   // so correctAnswer/explanation are intentionally left ungated here. Do not
   // apply the browse()/getById() attempted-gate to this method.
-  async chapterPyq(f: { chapterId: string; examId?: string; year?: number; skip?: number; take?: number }) {
+  async chapterPyq(f: { chapterId: string; examId?: string; year?: number; topicId?: string; subTopicId?: string; skip?: number; take?: number }) {
     const take = Math.min(f.take ?? 25, 50);
     const skip = f.skip ?? 0;
-    const where: any = { ...PUBLISHED_QUESTION_WHERE, chapterId: f.chapterId };
+    // PYQ by definition = tied to a year: year-less PRACTICE questions never
+    // show up here (Sep 21 2026).
+    const where: any = { ...PUBLISHED_QUESTION_WHERE, chapterId: f.chapterId, year: { not: null } };
     if (f.examId) where.examId = f.examId;
     if (f.year) where.year = f.year;
+    if (f.topicId) where.topicId = f.topicId;
+    if (f.subTopicId) where.subTopicId = f.subTopicId;
     const rows = await this.prisma.question.findMany({
       where,
       include: { exam: { select: { name: true } } },
