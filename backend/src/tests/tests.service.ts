@@ -615,6 +615,10 @@ async saveAnswers(
                 exam: { select: { name: true } },
                 chapter: { select: { name: true } },
                 subject: { select: { name: true } },
+                // NEW (Sep 21 2026 — topic-wise deep analysis): so Results /
+                // weak-area review can drill below chapter level.
+                topic: { select: { name: true } },
+                subTopic: { select: { name: true } },
                 year: true,
                 shift: true,
                 marks: true,
@@ -691,6 +695,8 @@ async saveAnswers(
         examName: q.exam?.name,
         chapter: q.chapter?.name,
         subject: q.subject?.name,
+        topic: (q as any).topic?.name ?? null,
+        subTopic: (q as any).subTopic?.name ?? null,
         year: q.year,
         shift: q.shift,
         marks: q.marks,
