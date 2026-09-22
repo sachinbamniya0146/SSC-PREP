@@ -3,12 +3,13 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { BankService } from './bank.service';
+import { BankAdminService } from './bank-admin.service';
 import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
 import { randomUUID } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 import { cacheClearPrefix } from '../common/cache';
-import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
+import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, QuestionKind } from '../common/question-visibility';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
 
 // Used by resolveReferenceIds() — a v4 UUID (Prisma's `@default(uuid())`
@@ -181,7 +182,7 @@ interface DuplicateIndex {
 
 @Injectable()
 export class BankUploadService {
-  constructor(private prisma: PrismaService, private s3: S3Service, private bank: BankService) {}
+  constructor(private prisma: PrismaService, private s3: S3Service, private bank: BankService, private bankAdmin: BankAdminService) {}
 
   /**
    * Validate and parse Excel file for bulk question upload
@@ -568,8 +569,14 @@ export class BankUploadService {
   }
 
   // ---- Phase 3: upload history (admin panel "past uploads" view) ----
+  //
+  // ENHANCED (Sep 21 2026): every batch now also reports what is CURRENTLY in
+  // the database for it — live vs pending-approval vs PYQ vs practice — so
+  // the admin sees at a glance "kab upload hua, kitne questions abhi bache
+  // hain, kitne students ko dikh rahe hain" (and can spot a batch whose
+  // questions are stuck unpublished).
   async listUploadBatches(adminId?: string) {
-    return this.prisma.questionUploadBatch.findMany({
+    const batches = await this.prisma.questionUploadBatch.findMany({
       where: adminId ? { adminId } : undefined,
       select: {
         id: true, adminId: true, sourceType: true, filename: true,
@@ -578,12 +585,75 @@ export class BankUploadService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
+    if (batches.length === 0) return [];
+    const ids = batches.map((b) => b.id);
+    const [byApproval, pyqRows] = await Promise.all([
+      this.prisma.question.groupBy({ by: ['uploadBatchId', 'isApproved'], where: { uploadBatchId: { in: ids } }, _count: { _all: true } }),
+      this.prisma.question.groupBy({ by: ['uploadBatchId'], where: { uploadBatchId: { in: ids }, year: { not: null } }, _count: { _all: true } }),
+    ]);
+    const live = new Map<string, number>();
+    const pending = new Map<string, number>();
+    for (const r of byApproval) {
+      if (!r.uploadBatchId) continue;
+      (r.isApproved ? live : pending).set(r.uploadBatchId, r._count._all);
+    }
+    const pyq = new Map<string, number>();
+    for (const r of pyqRows) if (r.uploadBatchId) pyq.set(r.uploadBatchId, r._count._all);
+    return batches.map((b) => {
+      const l = live.get(b.id) ?? 0;
+      const pnd = pending.get(b.id) ?? 0;
+      const py = pyq.get(b.id) ?? 0;
+      const remaining = l + pnd;
+      return {
+        ...b,
+        remainingCount: remaining,
+        liveCount: l,
+        pendingCount: pnd,
+        pyqCount: py,
+        practiceCount: Math.max(remaining - py, 0),
+        kind: remaining === 0 ? 'empty' : py === 0 ? 'practice' : py === remaining ? 'pyq' : 'mixed',
+      };
+    });
   }
 
+  // Detail of one batch + a subject / chapter / topic / sub-topic breakdown of
+  // the questions it still holds — this is what powers "delete only this
+  // chapter's / topic's questions out of that Excel".
   async getUploadBatchDetail(id: string) {
     const batch = await this.prisma.questionUploadBatch.findUnique({ where: { id } });
     if (!batch) throw new BadRequestException('Upload batch not found');
-    return batch;
+    const grouped = await this.prisma.question.groupBy({
+      by: ['subjectId', 'chapterId', 'topicId', 'subTopicId', 'isApproved'],
+      where: { uploadBatchId: id },
+      _count: { _all: true },
+    });
+    const uniq = (arr: (string | null)[]) => [...new Set(arr.filter((x): x is string => Boolean(x)))];
+    const [subjects, chapters, topics, subTopics] = await Promise.all([
+      this.prisma.subject.findMany({ where: { id: { in: uniq(grouped.map((g) => g.subjectId)) } }, select: { id: true, name: true } }),
+      this.prisma.chapter.findMany({ where: { id: { in: uniq(grouped.map((g) => g.chapterId)) } }, select: { id: true, name: true, subjectId: true } }),
+      this.prisma.topic.findMany({ where: { id: { in: uniq(grouped.map((g) => g.topicId)) } }, select: { id: true, name: true, chapterId: true } }),
+      this.prisma.subTopic.findMany({ where: { id: { in: uniq(grouped.map((g) => g.subTopicId)) } }, select: { id: true, name: true, topicId: true } }),
+    ]);
+    const sName = new Map(subjects.map((x) => [x.id, x.name]));
+    const cName = new Map(chapters.map((x) => [x.id, x.name]));
+    const tName = new Map(topics.map((x) => [x.id, x.name]));
+    const stName = new Map(subTopics.map((x) => [x.id, x.name]));
+
+    const rows = new Map<string, any>();
+    for (const g of grouped) {
+      const key = `${g.subjectId}|${g.chapterId ?? ''}|${g.topicId ?? ''}|${g.subTopicId ?? ''}`;
+      const cur = rows.get(key) ?? {
+        subjectId: g.subjectId, subject: sName.get(g.subjectId) ?? null,
+        chapterId: g.chapterId, chapter: g.chapterId ? cName.get(g.chapterId) ?? null : null,
+        topicId: g.topicId, topic: g.topicId ? tName.get(g.topicId) ?? null : null,
+        subTopicId: g.subTopicId, subTopic: g.subTopicId ? stName.get(g.subTopicId) ?? null : null,
+        live: 0, pending: 0, total: 0,
+      };
+      if (g.isApproved) cur.live += g._count._all; else cur.pending += g._count._all;
+      cur.total += g._count._all;
+      rows.set(key, cur);
+    }
+    return { ...batch, breakdown: [...rows.values()].sort((a, b) => b.total - a.total) };
   }
 
   // "uploaded question ko delete bhi kar sake" — removes every Question
@@ -591,16 +661,87 @@ export class BankUploadService {
   // realizes an entire upload was wrong (bad chapter mapping, duplicate
   // run, AI-generated set that needs redoing, etc). Pass keepQuestions to
   // only clear the history entry and leave the questions live.
-  async deleteUploadBatch(id: string, keepQuestions: boolean) {
+  //
+  // FIXED (Sep 21 2026): the old deleteMany() threw a foreign-key error the
+  // moment ANY student had attempted one of the batch's questions
+  // (AttemptAnswer -> Question is RESTRICT), so a batch that had gone live
+  // for even a day could no longer be deleted. Attempted questions are now
+  // hidden instead of hard-deleted (reported back as `hiddenQuestions`).
+  async deleteUploadBatch(id: string, keepQuestions: boolean, adminId?: string) {
     const batch = await this.prisma.questionUploadBatch.findUnique({ where: { id } });
     if (!batch) throw new BadRequestException('Upload batch not found');
     let deletedQuestions = 0;
+    let hiddenQuestions = 0;
     if (!keepQuestions) {
-      const del = await this.prisma.question.deleteMany({ where: { uploadBatchId: id } });
-      deletedQuestions = del.count;
+      const rows = await this.prisma.question.findMany({ where: { uploadBatchId: id }, select: { id: true } });
+      const r = await this.bankAdmin.deleteQuestionIds(rows.map((x) => x.id), adminId);
+      deletedQuestions = r.deleted;
+      hiddenQuestions = r.hidden;
+    }
+    // The batch row is only removed once nothing (or only hidden rows that are
+    // detached below) still points at it.
+    if (hiddenQuestions > 0) {
+      await this.prisma.question.updateMany({ where: { uploadBatchId: id }, data: { uploadBatchId: null } });
     }
     await this.prisma.questionUploadBatch.delete({ where: { id } });
-    return { deleted: true, deletedQuestions };
+    cacheClearPrefix('bank:subjects');
+    cacheClearPrefix('bank:chapters');
+    cacheClearPrefix('bank:meta');
+    return { deleted: true, deletedQuestions, hiddenQuestions };
+  }
+
+  // NEW — delete only PART of an upload: "us excel ke sirf is chapter / topic /
+  // sub-topic / subject ke questions delete karo". The batch record stays (its
+  // remaining questions are still there), the counts drop.
+  async deleteUploadBatchQuestions(
+    id: string,
+    scope: { subjectId?: string; chapterId?: string; topicId?: string; subTopicId?: string },
+    adminId?: string,
+  ) {
+    const batch = await this.prisma.questionUploadBatch.findUnique({ where: { id }, select: { id: true } });
+    if (!batch) throw new BadRequestException('Upload batch not found');
+    if (!scope.subjectId && !scope.chapterId && !scope.topicId && !scope.subTopicId) {
+      throw new BadRequestException('Subject / chapter / topic / sub-topic me se koi ek select karein (poori batch delete karne ke liye "Delete whole upload" use karein).');
+    }
+    const where: any = { uploadBatchId: id };
+    if (scope.subjectId) where.subjectId = scope.subjectId;
+    if (scope.chapterId) where.chapterId = scope.chapterId;
+    if (scope.topicId) where.topicId = scope.topicId;
+    if (scope.subTopicId) where.subTopicId = scope.subTopicId;
+    const rows = await this.prisma.question.findMany({ where, select: { id: true } });
+    const r = await this.bankAdmin.deleteQuestionIds(rows.map((x) => x.id), adminId);
+    return { deletedQuestions: r.deleted, hiddenQuestions: r.hidden };
+  }
+
+  // NEW — one click "publish everything from this upload" (approve every
+  // still-pending question of the batch). Admin's explicit decision, so the
+  // Hindi requirement is not re-applied (same rule as bulk-approve).
+  async publishUploadBatch(id: string) {
+    const batch = await this.prisma.questionUploadBatch.findUnique({ where: { id }, select: { id: true } });
+    if (!batch) throw new BadRequestException('Upload batch not found');
+    const r = await this.prisma.question.updateMany({
+      where: { uploadBatchId: id, isApproved: false },
+      data: { isApproved: true, isActive: true, autoSuspended: false, reviewStatus: 'APPROVED' },
+    });
+    cacheClearPrefix('bank:subjects');
+    cacheClearPrefix('bank:chapters');
+    cacheClearPrefix('bank:meta');
+    return { published: r.count };
+  }
+
+  // NEW — a PYQ upload must carry a year; rows without one are (by the
+  // codebase's definition) practice questions and will NOT appear in PYQ
+  // pages. Adds a visible warning to the result so a mis-clicked
+  // "PYQ upload" on a practice sheet is caught immediately.
+  async warnYearlessInPyqUpload(result: UploadResult): Promise<void> {
+    if (!result.uploadBatchId) return;
+    const n = await this.prisma.question.count({ where: { uploadBatchId: result.uploadBatchId, year: null } });
+    if (n > 0) {
+      result.warnings.push({
+        row: 0,
+        message: `${n} question(s) me 'year' column khali tha — ye PYQ nahi ban sakte, Practice questions ki tarah save hue hain. Agar ye PYQ the to year bharkar dobara upload karein.`,
+      });
+    }
   }
 
   /**
@@ -1182,11 +1323,15 @@ export class BankUploadService {
    * safety limit — filter down (by exam/year) for anything bigger.
    */
   async exportQuestionBank(
-    filters: { examId?: string; subjectId?: string; chapterId?: string; year?: number },
+    filters: { examId?: string; subjectId?: string; chapterId?: string; topicId?: string; subTopicId?: string; year?: number; uploadBatchId?: string; kind?: QuestionKind },
     format: 'json' | 'excel' | 'csv',
   ): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
     const EXPORT_ROW_CAP = 20000;
     const where: any = {};
+    if (filters.topicId) where.topicId = filters.topicId;
+    if (filters.subTopicId) where.subTopicId = filters.subTopicId;
+    if (filters.uploadBatchId) where.uploadBatchId = filters.uploadBatchId;
+    if (filters.kind && !filters.year) Object.assign(where, kindWhere(filters.kind));
     if (filters.examId) where.examId = filters.examId;
     if (filters.subjectId) where.subjectId = filters.subjectId;
     if (filters.chapterId) where.chapterId = filters.chapterId;
@@ -1218,6 +1363,11 @@ export class BankUploadService {
         isApproved: true,
         reviewStatus: true,
         answerVerificationStatus: true,
+        exam: { select: { name: true } },
+        subject: { select: { name: true } },
+        chapter: { select: { name: true } },
+        topic: { select: { name: true } },
+        subTopic: { select: { name: true } },
       },
     });
 
@@ -1246,6 +1396,14 @@ export class BankUploadService {
         marks: q.marks,
         negativeMarks: q.negativeMarks,
         difficulty: q.difficulty,
+        // Human-readable names (Sep 21 2026) — informational only, ignored on
+        // re-upload, so a downloaded batch is readable AND re-uploadable.
+        examName: q.exam?.name ?? '',
+        subjectName: q.subject?.name ?? '',
+        chapterName: q.chapter?.name ?? '',
+        topicName: q.topic?.name ?? '',
+        subTopicName: q.subTopic?.name ?? '',
+        type: q.year != null ? 'PYQ' : 'Practice',
         // Status columns — informational only, ignored on re-upload:
         isPublishedToStudents: q.isApproved,
         reviewStatus: q.reviewStatus,
@@ -1407,6 +1565,7 @@ export class BankUploadService {
   private async processBulkQuestions(headers: string[], rows: any[][], adminId: string, uploadBatchId?: string | null, isPracticeOnly?: boolean): Promise<UploadResult> {
     const requiredHeaders = ['examId', 'subjectId', 'chapterId', 'questionText', 'correctAnswer'];
     const optionHeaders = ['optionA', 'optionB', 'optionC', 'optionD'];
+    const hindiExempt = await this.loadHindiExemptSubjectIds();
 
     // Map column indices.
     // BUGFIX (bonus grep, item c — a "template" that its own parser
@@ -1614,7 +1773,7 @@ export class BankUploadService {
           // object, so it can't be prepared synchronously. Fall back to
           // the original one-row-at-a-time createQuestion() for just this
           // row — correctness over speed for the uncommon image case.
-          const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId);
+          const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId, hindiExempt);
           result.created++;
           if (!published) {
             result.warnings.push({
@@ -1625,7 +1784,7 @@ export class BankUploadService {
           }
           continue;
         }
-        const prepared = this.prepareQuestion(question, duplicateIndex, uploadBatchId);
+        const prepared = this.prepareQuestion(question, duplicateIndex, uploadBatchId, hindiExempt);
         toCommit.push({ rowNum, row, question, data: prepared.data, published: prepared.published });
       } catch (error) {
         result.failed++;
@@ -1674,6 +1833,7 @@ export class BankUploadService {
    * Process structured questions (JSON format)
    */
   private async processStructuredQuestions(questions: BulkUploadQuestion[], adminId: string, uploadBatchId?: string | null, isPracticeOnly?: boolean): Promise<UploadResult> {
+    const hindiExempt = await this.loadHindiExemptSubjectIds();
     // Same slug-resolution fix as processBulkQuestions() above — JSON/Word
     // uploads go through this method, and can just as easily contain
     // human-readable slugs (e.g. an AI-generated question set) instead of
@@ -1789,7 +1949,7 @@ export class BankUploadService {
     for (const { rowNum, question } of validRows) {
       try {
         if (question.questionImageBase64 || question.options.some((o) => o.imageBase64)) {
-          const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId);
+          const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId, hindiExempt);
           result.created++;
           if (!published) {
             result.warnings.push({
@@ -1800,7 +1960,7 @@ export class BankUploadService {
           }
           continue;
         }
-        const prepared = this.prepareQuestion(question, duplicateIndex, uploadBatchId);
+        const prepared = this.prepareQuestion(question, duplicateIndex, uploadBatchId, hindiExempt);
         toCommit.push({ rowNum, row: question, question, data: prepared.data, published: prepared.published });
       } catch (error) {
         result.failed++;
@@ -2368,7 +2528,14 @@ export class BankUploadService {
    * chunks — see processBulkQuestions()/processStructuredQuestions()'s
    * `commitQuestionsBatch()` calls below.
    */
-  private prepareQuestion(question: BulkUploadQuestion, duplicateIndex?: DuplicateIndex, uploadBatchId?: string | null): { data: any; question: BulkUploadQuestion; searchHash: string; published: boolean } {
+  // Ids of subjects that don't need a Hindi translation to be published
+  // (English). Tiny table, so it is simply re-read once per upload.
+  private async loadHindiExemptSubjectIds(): Promise<Set<string>> {
+    const subs = await this.prisma.subject.findMany({ select: { id: true, slug: true } });
+    return new Set(subs.filter((x) => isHindiExemptSubjectSlug(x.slug)).map((x) => x.id));
+  }
+
+  private prepareQuestion(question: BulkUploadQuestion, duplicateIndex?: DuplicateIndex, uploadBatchId?: string | null, hindiExempt?: Set<string>): { data: any; question: BulkUploadQuestion; searchHash: string; published: boolean } {
     // Callers (processBulkQuestions/processStructuredQuestions) already
     // route any row with a base64 image through the original sequential
     // createQuestion() before ever calling this — see the
@@ -2416,7 +2583,16 @@ export class BankUploadService {
     }));
 
     const searchHash = this.computeSearchHash(question);
-    const hasHindiTranslation = !!(question.questionTextHindi && question.questionTextHindi.trim() !== '');
+    // BUGFIX (Sep 21 2026 — "Noun ke 200 questions upload kiye par students ko
+    // nahi dikh rahe"): English-subject questions have nothing to translate,
+    // and every read path already exempts them from the Hindi requirement,
+    // but this write-side gate did not — so every English question without a
+    // Hindi column was saved isApproved=false / PENDING and stayed invisible.
+    // The bilingual gate now passes when the row has Hindi OR its subject is
+    // Hindi-exempt (English).
+    const hasHindiTranslation =
+      !!(question.questionTextHindi && question.questionTextHindi.trim() !== '') ||
+      !!(hindiExempt && question.subjectId && hindiExempt.has(question.subjectId));
 
     const data = {
       examId: question.examId,
@@ -2519,7 +2695,7 @@ export class BankUploadService {
     }
   }
 
-  private async createQuestion(question: BulkUploadQuestion, adminId: string, duplicateIndex?: DuplicateIndex, uploadBatchId?: string | null): Promise<{ published: boolean }> {
+  private async createQuestion(question: BulkUploadQuestion, adminId: string, duplicateIndex?: DuplicateIndex, uploadBatchId?: string | null, hindiExempt?: Set<string>): Promise<{ published: boolean }> {
     // Session 25 — resolve any base64 images to real S3 URLs FIRST, before
     // any validation runs (so the "has an image" checks below see the
     // resolved questionImageUrl / option.imageUrl either way, regardless
@@ -2618,7 +2794,16 @@ export class BankUploadService {
 
     // Bilingual gate — same condition pdf-export.service.ts and
     // question-review.worker.ts use (questionTextHindi present and non-empty).
-    const hasHindiTranslation = !!(question.questionTextHindi && question.questionTextHindi.trim() !== '');
+    // BUGFIX (Sep 21 2026 — "Noun ke 200 questions upload kiye par students ko
+    // nahi dikh rahe"): English-subject questions have nothing to translate,
+    // and every read path already exempts them from the Hindi requirement,
+    // but this write-side gate did not — so every English question without a
+    // Hindi column was saved isApproved=false / PENDING and stayed invisible.
+    // The bilingual gate now passes when the row has Hindi OR its subject is
+    // Hindi-exempt (English).
+    const hasHindiTranslation =
+      !!(question.questionTextHindi && question.questionTextHindi.trim() !== '') ||
+      !!(hindiExempt && question.subjectId && hindiExempt.has(question.subjectId));
 
     const createdQuestion = await this.prisma.question.create({
       data: {
