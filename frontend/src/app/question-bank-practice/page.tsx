@@ -1,53 +1,42 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { API_BASE, fetchAuth } from "@/lib/api";
 
-type PracticeSetData = {
+// ---------------------------------------------------------------------------
+// REWRITTEN (Sep 21 2026) — "practice vale me topic subtopic ka pura syllabus
+// bhi ho ... students topic subtopics bhi select krkr preparing kr paye":
+// this page used to only offer Subject -> (optional flat) Chapter. It now
+// walks the FULL syllabus tree — Subject -> Chapter -> Topic -> Sub-topic —
+// straight from GET /bank/practice/taxonomy (the same tree an admin manages
+// under Chapter/Topic Manage), with a question-count badge and a weak-topic
+// (🔥 free) badge at every level. Nothing is typed; everything is picked
+// from the list, so a topic an admin just created shows up here immediately.
+// ---------------------------------------------------------------------------
+
+type SubTopicNode = { id: string; name: string; nameHindi?: string | null; questionCount: number; isWeak: boolean };
+type TopicNode = { id: string; name: string; nameHindi?: string | null; questionCount: number; isWeak: boolean; subTopics: SubTopicNode[] };
+type ChapterNode = { id: string; name: string; nameHindi?: string | null; questionCount: number; unassignedCount: number; topics: TopicNode[] };
+type SubjectNode = { id: string; name: string; nameHindi?: string | null; questionCount: number; chapters: ChapterNode[] };
+
+type InProgressSet = {
   id: string;
-  subjectId?: string;
-  chapterId?: string;
-  examId?: string;
   setNumber: number;
-  questions: {
-    id: string;
-    questionText: string;
-    questionTextHindi?: string | null;
-    options: { key: string; text: string; textHi?: string | null }[];
-    chapter: string;
-    examName?: string | null;
-    year?: number | null;
-    shift?: string | null;
-    marks?: number;
-    negativeMarks?: number;
-    correctAnswer?: string | null;
-    explanation?: string | null;
-    explanationHindi?: string | null;
-    subjectId?: string;
-    _weakMeta?: { chapterId: string; chapterName: string; wasWrong: boolean; wasSkipped: boolean };
-  }[];
-  currentIndex: number;
-  answers: Record<string, string>;
+  total: number;
+  answered: number;
+  subject: string | null;
+  chapter: string | null;
+  topic: string | null;
+  subTopic: string | null;
+  exam: string | null;
   startedAt: string;
-  completedAt?: string;
-  score?: number;
-  isCompleted: boolean;
-  mode: string;
-  subjectName?: string;
-  chapterName?: string;
-  examName?: string;
 };
 
-type SubjectData = {
-  id: string;
-  name: string;
-  chapters: {
-    id: string;
-    name: string;
-    progress: any;
-  }[];
-  progress: any;
+type TaxonomyResponse = {
+  subjects: SubjectNode[];
+  exams: { id: string; name: string; count: number }[];
+  inProgress: InProgressSet[];
+  freeSetsPerScope: number;
 };
 
 type UserProgress = {
@@ -55,98 +44,95 @@ type UserProgress = {
   subjectName: string;
   chapterId?: string;
   chapterName?: string;
-  examId?: string;
-  examName?: string;
   setsCompleted: number;
   totalQuestions: number;
   correctAnswers: number;
   wrongAnswers: number;
   skippedAnswers: number;
   accuracyPercent: number;
-  lastPracticedAt: string;
 };
 
+type Selection = { subjectId?: string; chapterId?: string; topicId?: string; subTopicId?: string };
+
 export default function QuestionBankPracticePage() {
-  const [subjects, setSubjects] = React.useState<SubjectData[]>([]);
-  const [selectedSubject, setSelectedSubject] = React.useState<string>("");
-  const [selectedChapter, setSelectedChapter] = React.useState<string>("");
-  const [count, setCount] = React.useState(25);
-  const [loading, setLoading] = React.useState(true);
-  const [starting, setStarting] = React.useState(false);
-  const [error, setError] = React.useState("");
+  const [taxonomy, setTaxonomy] = React.useState<TaxonomyResponse | null>(null);
   const [userProgress, setUserProgress] = React.useState<UserProgress[]>([]);
-  const [currentSet, setCurrentSet] = React.useState<PracticeSetData | null>(null);
-  const [resumeSet, setResumeSet] = React.useState<string>("");
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+  const [starting, setStarting] = React.useState(false);
+  const [count, setCount] = React.useState(25);
+
+  const [openSubject, setOpenSubject] = React.useState<string>("");
+  const [openChapter, setOpenChapter] = React.useState<string>("");
+  const [openTopic, setOpenTopic] = React.useState<string>("");
+  const [selection, setSelection] = React.useState<Selection>({});
 
   const apiBase = () => API_BASE;
-
   const authHeaders = (): Record<string, string> => {
     const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
-  const load = async () => {
+  const load = React.useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [subjectsRes, progressRes] = await Promise.all([
-        fetchAuth(`${apiBase()}/bank/practice/subjects`, { headers: authHeaders() }),
+      const [taxRes, progRes] = await Promise.all([
+        fetchAuth(`${apiBase()}/bank/practice/taxonomy`, { headers: authHeaders() }),
         fetchAuth(`${apiBase()}/bank/practice/progress`, { headers: authHeaders() }),
       ]);
-      if (!subjectsRes.ok || !progressRes.ok) {
-        throw new Error("Failed to load data");
-      }
-      const subjectsData = await subjectsRes.json();
-      const progressData = await progressRes.json();
-      setSubjects(subjectsData);
-      setUserProgress(progressData);
-      
-      // Check for resume parameter in URL
-      if (typeof window !== "undefined") {
-        const urlSet = new URLSearchParams(window.location.search).get("set");
-        if (urlSet) {
-          setResumeSet(urlSet);
-        }
-      }
+      if (!taxRes.ok || !progRes.ok) throw new Error("Failed to load data");
+      setTaxonomy(await taxRes.json());
+      setUserProgress(await progRes.json());
     } catch {
       setError("Network error — backend unreachable");
     } finally {
       setLoading(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
-  const start = async () => {
-    if (!selectedSubject) return;
+  const selectedLabel = React.useMemo(() => {
+    if (!taxonomy) return "";
+    const s = taxonomy.subjects.find((x) => x.id === selection.subjectId);
+    if (!s) return "";
+    const c = s.chapters.find((x) => x.id === selection.chapterId);
+    if (!c) return s.name;
+    const t = c.topics.find((x) => x.id === selection.topicId);
+    if (!t) return `${s.name} › ${c.name}`;
+    const st = t.subTopics.find((x) => x.id === selection.subTopicId);
+    if (!st) return `${s.name} › ${c.name} › ${t.name}`;
+    return `${s.name} › ${c.name} › ${t.name} › ${st.name}`;
+  }, [taxonomy, selection]);
+
+  const start = async (sel: Selection) => {
     setStarting(true);
     setError("");
     try {
       const r = await fetchAuth(`${apiBase()}/bank/practice/start`, {
         method: "POST",
         headers: { ...authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          subjectId: selectedSubject, 
-          chapterId: selectedChapter || undefined,
-          setNumber: 1,
-          mode: "practice",
-        }),
+        body: JSON.stringify({ ...sel, mode: "practice", size: count }),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         if (d.code === "PREMIUM_REQUIRED") {
-          setError(`Free users can only practice 3 sets per subject/chapter. Upgrade to Premium for unlimited practice.`);
+          setError(`Is chapter/topic me free ${taxonomy?.freeSetsPerScope ?? 3} sets ho chuke hain. Unlimited practice ke liye Premium lein.`);
         } else {
           setError(`Failed: ${d.message || r.status}`);
         }
         return;
       }
       const d = await r.json();
-      // Store the practice set in sessionStorage for the test page
       sessionStorage.setItem("ssc_sectional_set", JSON.stringify(d));
-      sessionStorage.setItem("ssc_sectional_subject", d.subjectName || "Question Bank Practice");
+      sessionStorage.setItem(
+        "ssc_sectional_subject",
+        [d.subjectId && selectedLabel, d.examName].filter(Boolean).join(" — ") || "Question Bank Practice",
+      );
       window.location.href = "/test?sectional=1";
     } catch {
       setError("Network error while starting practice");
@@ -157,6 +143,7 @@ export default function QuestionBankPracticePage() {
 
   const resumePractice = async (setId: string) => {
     setStarting(true);
+    setError("");
     try {
       const r = await fetchAuth(`${apiBase()}/bank/practice/set/${setId}`, { headers: authHeaders() });
       if (!r.ok) throw new Error("Failed to load set");
@@ -185,34 +172,18 @@ export default function QuestionBankPracticePage() {
         <main className="mx-auto max-w-4xl px-4 py-10">
           <div className="text-center py-20">
             <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent mx-auto"></div>
-            <p className="mt-4 text-muted-foreground">Loading practice subjects…</p>
+            <p className="mt-4 text-muted-foreground">Loading syllabus…</p>
           </div>
         </main>
       </div>
     );
   }
 
-  // If there's a resume set, load it and show resume button
-  if (resumeSet && !currentSet) {
-    return (
-      <div className="min-h-screen bg-background text-foreground">
-        <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-          <div className="mx-auto flex max-w-4xl items-center justify-between">
-            <a href="/dashboard" className="text-lg font-bold">
-              ← <span className="text-primary">SSC</span>PrepHub
-            </a>
-            <a href="/dashboard" className="btn btn-outline text-sm">Dashboard</a>
-          </div>
-        </header>
-        <main className="mx-auto max-w-4xl px-4 py-10">
-          <div className="text-center py-20">
-            <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent mx-auto"></div>
-            <p className="mt-4 text-muted-foreground">Resuming your practice set…</p>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  const subjects = taxonomy?.subjects ?? [];
+  const openSubjectNode = subjects.find((s) => s.id === openSubject);
+  const openChapterNode = openSubjectNode?.chapters.find((c) => c.id === openChapter);
+  const openTopicNode = openChapterNode?.topics.find((t) => t.id === openTopic);
+  void openTopicNode; // reserved for future breadcrumb use
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -227,7 +198,8 @@ export default function QuestionBankPracticePage() {
       <main className="mx-auto max-w-4xl px-4 py-10">
         <h1 className="text-2xl font-bold">📚 Question Bank Practice</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Practice 25-question sets per subject/chapter. First 3 sets free, then Premium required.
+          Subject → Chapter → Topic → Sub-topic chunein aur seedhe usi par practice karein. 🔥 wale topics aapke liye
+          weak hain — unpar unlimited free practice hai.
         </p>
 
         {error && (
@@ -236,38 +208,50 @@ export default function QuestionBankPracticePage() {
           </div>
         )}
 
-        {/* User Progress Summary */}
+        {/* Continue where you left off */}
+        {taxonomy && taxonomy.inProgress.length > 0 && (
+          <div className="mt-6 rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <h2 className="font-semibold text-primary">▶ Continue where you left off</h2>
+            <div className="mt-3 space-y-2">
+              {taxonomy.inProgress.map((s) => (
+                <div key={s.id} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background p-3 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">
+                      {[s.subject, s.chapter, s.topic, s.subTopic].filter(Boolean).join(" › ") || "Practice Set"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Set {s.setNumber} — {s.answered}/{s.total} done
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => resumePractice(s.id)}
+                    disabled={starting}
+                    className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-50"
+                  >
+                    Resume
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Your Progress */}
         {userProgress.length > 0 && (
           <div className="mt-6 rounded-xl border border-border bg-card p-6">
             <h2 className="font-semibold text-lg">Your Progress</h2>
             <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {userProgress.map((p) => (
-                <div key={p.subjectId} className="rounded-xl border border-border bg-background p-4">
+                <div key={`${p.subjectId}-${p.chapterId ?? ""}`} className="rounded-xl border border-border bg-background p-4">
                   <p className="font-semibold text-primary">{p.subjectName}</p>
                   {p.chapterName && <p className="mt-1 text-xs text-muted-foreground">{p.chapterName}</p>}
-                  {p.examName && <p className="mt-1 text-xs text-info">{p.examName}</p>}
                   <div className="mt-3 space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Sets Completed</span>
-                      <span className="font-semibold">{p.setsCompleted}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Questions</span>
-                      <span className="font-semibold">{p.totalQuestions}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-success">Correct: {p.correctAnswers}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-destructive">Wrong: {p.wrongAnswers}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-warning">Skipped: {p.skippedAnswers}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Accuracy</span>
-                      <span className="font-semibold">{p.accuracyPercent}%</span>
-                    </div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Sets Completed</span><span className="font-semibold">{p.setsCompleted}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Questions</span><span className="font-semibold">{p.totalQuestions}</span></div>
+                    <div className="flex justify-between"><span className="text-success">Correct: {p.correctAnswers}</span></div>
+                    <div className="flex justify-between"><span className="text-destructive">Wrong: {p.wrongAnswers}</span></div>
+                    <div className="flex justify-between"><span className="text-warning">Skipped: {p.skippedAnswers}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Accuracy</span><span className="font-semibold">{p.accuracyPercent}%</span></div>
                   </div>
                 </div>
               ))}
@@ -275,118 +259,148 @@ export default function QuestionBankPracticePage() {
           </div>
         )}
 
-        {/* Subject Selection */}
-        <div className="card mt-6 space-y-5 p-6">
-          <h2 className="font-semibold text-lg">Choose Subject</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {subjects.length} subjects available — click a subject to see chapters and start practice
-          </p>
-          
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {/* Syllabus tree */}
+        <div className="card mt-6 space-y-3 p-6">
+          <h2 className="font-semibold text-lg">Syllabus</h2>
+          {subjects.length === 0 && <p className="text-sm text-muted-foreground">Abhi syllabus me kuch nahi hai.</p>}
+
+          <div className="space-y-2">
             {subjects.map((s) => (
-              <div key={s.id} className="rounded-xl border border-border bg-card p-4">
-                <p className="font-semibold">{s.name}</p>
-                {s.chapters && s.chapters.length > 0 && (
-                  <div className="mt-2">
-                    <label className="text-xs font-medium text-muted-foreground">Chapter (optional)</label>
-                    <select
-                      value={selectedSubject === s.id ? selectedChapter : ""}
-                      onChange={(e) => {
-                        setSelectedSubject(s.id);
-                        setSelectedChapter(e.target.value);
-                      }}
-                      disabled={selectedSubject !== s.id}
-                      className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="">All Chapters</option>
-                      {s.chapters.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
+              <div key={s.id} className="rounded-lg border border-border">
+                <button
+                  onClick={() => {
+                    setOpenSubject(openSubject === s.id ? "" : s.id);
+                    setOpenChapter("");
+                    setOpenTopic("");
+                  }}
+                  className="flex w-full items-center justify-between px-4 py-3 text-left"
+                >
+                  <span className="font-semibold">{s.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {s.questionCount} question{s.questionCount === 1 ? "" : "s"} {openSubject === s.id ? "▾" : "▸"}
+                  </span>
+                </button>
+
+                {openSubject === s.id && (
+                  <div className="space-y-1.5 border-t border-border px-3 py-2">
+                    {s.chapters.map((c) => (
+                      <div key={c.id} className="rounded-lg border border-border/60">
+                        <div className="flex items-center justify-between px-3 py-2">
+                          <button
+                            onClick={() => {
+                              setOpenChapter(openChapter === c.id ? "" : c.id);
+                              setOpenTopic("");
+                            }}
+                            className="flex-1 text-left text-sm font-medium"
+                          >
+                            {c.name} <span className="text-xs text-muted-foreground">({c.questionCount})</span>{" "}
+                            {openChapter === c.id ? "▾" : "▸"}
+                          </button>
+                          <button
+                            onClick={() => setSelection({ subjectId: s.id, chapterId: c.id })}
+                            disabled={c.questionCount === 0}
+                            className={`ml-2 shrink-0 rounded-lg border px-2 py-1 text-xs ${
+                              selection.chapterId === c.id && !selection.topicId
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border"
+                            } disabled:opacity-40`}
+                          >
+                            Poora chapter select
+                          </button>
+                        </div>
+
+                        {openChapter === c.id && (
+                          <div className="space-y-1 border-t border-border/60 px-3 py-2">
+                            {c.topics.length === 0 && (
+                              <p className="text-xs text-muted-foreground">Is chapter me abhi koi topic nahi bana.</p>
+                            )}
+                            {c.topics.map((t) => (
+                              <div key={t.id} className="rounded-lg border border-border/40">
+                                <div className="flex items-center justify-between px-3 py-1.5">
+                                  <button
+                                    onClick={() => setOpenTopic(openTopic === t.id ? "" : t.id)}
+                                    className="flex-1 text-left text-sm"
+                                  >
+                                    {t.isWeak && <span title="Weak — unlimited free practice">🔥 </span>}
+                                    {t.name} <span className="text-xs text-muted-foreground">({t.questionCount})</span>{" "}
+                                    {t.subTopics.length > 0 && (openTopic === t.id ? "▾" : "▸")}
+                                  </button>
+                                  <button
+                                    onClick={() => setSelection({ subjectId: s.id, chapterId: c.id, topicId: t.id })}
+                                    disabled={t.questionCount === 0}
+                                    className={`ml-2 shrink-0 rounded-lg border px-2 py-1 text-xs ${
+                                      selection.topicId === t.id && !selection.subTopicId
+                                        ? "border-primary bg-primary/10 text-primary"
+                                        : "border-border"
+                                    } disabled:opacity-40`}
+                                  >
+                                    Select
+                                  </button>
+                                </div>
+                                {openTopic === t.id && t.subTopics.length > 0 && (
+                                  <div className="space-y-1 border-t border-border/40 px-3 py-1.5">
+                                    {t.subTopics.map((st) => (
+                                      <div key={st.id} className="flex items-center justify-between py-0.5 text-xs">
+                                        <span>
+                                          {st.isWeak && <span title="Weak — unlimited free practice">🔥 </span>}
+                                          {st.name} <span className="text-muted-foreground">({st.questionCount})</span>
+                                        </span>
+                                        <button
+                                          onClick={() =>
+                                            setSelection({ subjectId: s.id, chapterId: c.id, topicId: t.id, subTopicId: st.id })
+                                          }
+                                          disabled={st.questionCount === 0}
+                                          className={`shrink-0 rounded-lg border px-2 py-0.5 ${
+                                            selection.subTopicId === st.id ? "border-primary bg-primary/10 text-primary" : "border-border"
+                                          } disabled:opacity-40`}
+                                        >
+                                          Select
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
-                <button
-                  onClick={() => setSelectedSubject(s.id)}
-                  className={`mt-3 w-full rounded-xl transition ${selectedSubject === s.id
-                    ? "bg-primary text-primary-foreground"
-                    : "border border-border bg-card hover:border-primary/50"}`}
-                >
-                  {selectedSubject === s.id ? "✓ Selected" : "Select Subject"}
-                </button>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Practice Settings */}
-        {!loading && !error && selectedSubject && (
-          <div className="card mt-6 space-y-5 p-6">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground">Questions per practice set</label>
-                <select
-                  value={count}
-                  onChange={(e) => setCount(Number(e.target.value))}
-                  className="mt-1 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm"
-                >
-                  {[10, 25, 50].map((c) => (
-                    <option key={c} value={c}>{c} questions</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={true}
-                    onChange={() => {}}
-                    disabled
-                    className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-                  />
-                  <span className="text-muted-foreground">Fixed at 25 questions per set (optimized)</span>
-                </label>
-              </div>
-            </div>
-
-            <div className="border-t border-border pt-4">
-              {userProgress.find((p) => p.subjectId === selectedSubject) && (
-                <div className="rounded-lg bg-info/5 p-3 text-sm text-info">
-                  💡 You've completed <strong>{userProgress.find((p) => p.subjectId === selectedSubject)?.setsCompleted || 0} sets</strong> in this subject. 
-                  {userProgress.find((p) => p.subjectId === selectedSubject)!.setsCompleted >= 3 && (
-                    <span> Upgrade to Premium for unlimited practice.</span>
-                  )}
-                </div>
-              )}
-              
-              <button
-                onClick={start}
-                disabled={starting || !selectedSubject}
-                className="btn w-full bg-primary py-3 text-primary-foreground hover:opacity-90 disabled:opacity-50"
-              >
-                {starting ? "Starting…" : `🚀 Start Practice Set ${(userProgress.find((p) => p.subjectId === selectedSubject)?.setsCompleted || 0) + 1} (25 Questions)`}
-              </button>
-
-              <p className="text-center text-xs text-muted-foreground">
-                First 3 sets free per subject/chapter. After that, upgrade to Premium for unlimited practice.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Resume Practice */}
-        {currentSet && (
-          <div className="card mt-6 space-y-5 p-6 border-primary/30 bg-primary/5">
-            <h2 className="font-semibold text-lg text-primary">📖 Resume Practice</h2>
-            <p className="text-sm text-muted-foreground">
-              You have an in-progress practice set: <strong>Set {currentSet.setNumber}</strong> ({currentSet.currentIndex}/{currentSet.questions.length} questions done)
+        {/* Start */}
+        {selection.subjectId && (
+          <div className="card mt-6 space-y-4 p-6 border-primary/30 bg-primary/5">
+            <p className="text-sm">
+              Selected: <strong>{selectedLabel}</strong>
             </p>
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground">Questions per set</label>
+              <select
+                value={count}
+                onChange={(e) => setCount(Number(e.target.value))}
+                className="mt-1 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm"
+              >
+                {[10, 25, 50].map((c) => (
+                  <option key={c} value={c}>{c} questions</option>
+                ))}
+              </select>
+            </div>
             <button
-              onClick={() => resumePractice(currentSet.id)}
+              onClick={() => start(selection)}
               disabled={starting}
               className="btn w-full bg-primary py-3 text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
-              {starting ? "Resuming…" : "▶ Continue Practice"}
+              {starting ? "Starting…" : "🚀 Start Practice"}
             </button>
+            <p className="text-center text-xs text-muted-foreground">
+              Pehle {taxonomy?.freeSetsPerScope ?? 3} sets free (is chapter/topic/sub-topic ke liye), uske baad Premium chahiye — 🔥 weak topics hamesha free.
+            </p>
           </div>
         )}
       </main>
