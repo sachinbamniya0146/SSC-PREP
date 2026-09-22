@@ -167,6 +167,12 @@ export default function TestPage() {
   // student answers + status
   const [answers, setAnswers] = React.useState<{ [qid: string]: string }>({});
   const [attemptId, setAttemptId] = React.useState<string | null>(null);
+  // NEW (Sep 21 2026) — id of a Question-Bank-Practice set (topic/sub-topic
+  // practice), so submitTest() can mark it complete once scored (see
+  // completePracticeSetIfAny() below). Chapter-wise PYQ / default /bank/set
+  // never set this — only the bank/practice/start flow's response shape
+  // (has `id` + `mode`) matches.
+  const practiceSetIdRef = React.useRef<string | null>(null);
   const [status, setStatus] = React.useState<{ [qid: string]: QStatus }>({});
   const [visited, setVisited] = React.useState<{ [qid: string]: boolean }>({});
   const [timeLeft, setTimeLeft] = React.useState(0);
@@ -469,6 +475,11 @@ export default function TestPage() {
         if (sectionalRaw) {
           const d = JSON.parse(sectionalRaw);
           qs = Array.isArray(d?.questions) ? d.questions : [];
+          // A Question-Bank-Practice set (started from /question-bank-practice)
+          // has `id` + `mode` on its root object; a /sectional or /year-wise
+          // composed set does not — this is how we tell them apart without a
+          // second sessionStorage key.
+          if (d?.id && d?.mode) practiceSetIdRef.current = d.id;
           sessionStorage.removeItem("ssc_sectional_set");
         }
       }
@@ -850,6 +861,23 @@ export default function TestPage() {
     setResult(res);
     setFinalScore(score);
     setPhase("results");
+
+    // NEW (Sep 21 2026) — mark the Question-Bank-Practice set complete so its
+    // free-set counter and progress actually advance (previously this never
+    // happened, so the SAME set was handed back on every Start and Progress
+    // stayed at 0 forever). Best-effort: results are already shown either way.
+    if (practiceSetIdRef.current) {
+      const answersForComplete: Record<string, string> = {};
+      for (const q of qs) answersForComplete[q.id] = answers[q.id] || "SKIPPED";
+      fetchAuth(`${apiBase()}/bank/practice/set/${practiceSetIdRef.current}/complete`, {
+        method: "POST",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ answers: answersForComplete }),
+      }).catch(() => {
+        // best-effort — the student's score/results are already shown from
+        // the /bank/attempt scoring above regardless of this call's outcome
+      });
+    }
 
     // P1 — best-effort save to results history (never blocks results view)
     try {
