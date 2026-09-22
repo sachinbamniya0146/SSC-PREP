@@ -13,12 +13,18 @@
 // /page.tsx) a dead end: every row would fail "chapterId not found" with
 // no way to fix it from the UI. This page closes that gap.
 //
-// Backend only exposes LIST + CREATE for chapters (no update/delete route
-// exists in bank.controller.ts), and createChapter() is idempotent by
-// (subjectId, slug) — re-submitting the same name just returns the
-// existing row instead of erroring or duplicating. The UI reflects exactly
-// that: no rename/delete controls, and a "already existed" hint after a
-// create that didn't grow the list.
+// createChapter() is idempotent by (subjectId, slug) — re-submitting the
+// same name just returns the existing row instead of erroring or
+// duplicating, and the UI shows an "already existed" hint when that happens.
+//
+// UPDATED (Sep 21 2026): rename / delete / merge added, backed by the new
+// /bank/admin/manage/chapters/:id routes (BankAdminController). Delete only
+// works on an EMPTY chapter (0 questions, 0 paid purchases) — otherwise use
+// Merge, which folds a duplicate chapter's topics/sub-topics/questions/paid
+// purchases into another chapter of the SAME subject (same-slug topics are
+// combined, not duplicated) and then deletes the empty duplicate. This is
+// the fix for a duplicate chapter like the two "Spotting Errors" rows shown
+// on the syllabus screen.
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -40,6 +46,7 @@ type AdminChapter = {
   slug: string;
   subjectId: string;
   subject: { name: string; nameHindi?: string | null; slug: string };
+  _count?: { questions: number; topics: number };
 };
 
 export default function ChapterManagementPage() {
@@ -60,6 +67,15 @@ export default function ChapterManagementPage() {
   const [creating, setCreating] = React.useState(false);
   const [createMsg, setCreateMsg] = React.useState("");
   const [createErr, setCreateErr] = React.useState("");
+
+  // NEW (Sep 21 2026) — inline rename + delete + merge for an existing chapter.
+  const [editingId, setEditingId] = React.useState("");
+  const [editName, setEditName] = React.useState("");
+  const [editNameHindi, setEditNameHindi] = React.useState("");
+  const [rowBusyId, setRowBusyId] = React.useState("");
+  const [rowErr, setRowErr] = React.useState("");
+  const [mergeSourceId, setMergeSourceId] = React.useState("");
+  const [mergeTargetId, setMergeTargetId] = React.useState("");
 
   React.useEffect(() => {
     try {
@@ -196,6 +212,77 @@ export default function ChapterManagementPage() {
     }
   }
 
+  function startEdit(c: AdminChapter) {
+    setEditingId(c.id);
+    setEditName(c.name);
+    setEditNameHindi(c.nameHindi || "");
+    setRowErr("");
+  }
+
+  async function saveEdit(id: string) {
+    if (!editName.trim()) { setRowErr("Chapter ka naam khali nahi ho sakta"); return; }
+    setRowBusyId(id);
+    setRowErr("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/manage/chapters/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editName.trim(), nameHindi: editNameHindi.trim() || null }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setRowErr(d?.message || `HTTP ${r.status}`); return; }
+      setEditingId("");
+      await loadChapters(selectedSubjectId);
+    } catch (e) {
+      setRowErr(e instanceof Error ? e.message : "Rename nahi hua");
+    } finally {
+      setRowBusyId("");
+    }
+  }
+
+  async function deleteChapterRow(c: AdminChapter) {
+    if (!confirm(`"${c.name}" chapter delete karein? (Sirf tabhi hoga agar isme koi question na ho.)`)) return;
+    setRowBusyId(c.id);
+    setRowErr("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/manage/chapters/${c.id}`, { method: "DELETE" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setRowErr(d?.message || `HTTP ${r.status}`); return; }
+      await loadChapters(selectedSubjectId);
+    } catch (e) {
+      setRowErr(e instanceof Error ? e.message : "Delete nahi hua");
+    } finally {
+      setRowBusyId("");
+    }
+  }
+
+  async function mergeChapters() {
+    if (!mergeSourceId || !mergeTargetId || mergeSourceId === mergeTargetId) {
+      setRowErr("Merge ke liye alag-alag source aur target chapter chunein");
+      return;
+    }
+    const src = chapters.find((c) => c.id === mergeSourceId);
+    if (!confirm(`"${src?.name}" ke sabhi topics/questions doosre chapter me move karke "${src?.name}" delete kar diya jayega. Continue?`)) return;
+    setRowBusyId(mergeSourceId);
+    setRowErr("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/manage/chapters/${mergeSourceId}/merge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetId: mergeTargetId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setRowErr(d?.message || `HTTP ${r.status}`); return; }
+      setMergeSourceId("");
+      setMergeTargetId("");
+      await loadChapters(selectedSubjectId);
+    } catch (e) {
+      setRowErr(e instanceof Error ? e.message : "Merge nahi hua");
+    } finally {
+      setRowBusyId("");
+    }
+  }
+
   if (!authChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
@@ -288,6 +375,7 @@ export default function ChapterManagementPage() {
                     <th className="px-4 py-3">हिंदी नाम</th>
                     <th className="px-4 py-3">Slug</th>
                     <th className="px-4 py-3">Chapter ID</th>
+                    <th className="px-4 py-3">Questions</th>
                     <th className="px-4 py-3"></th>
                   </tr>
                 </thead>
@@ -304,30 +392,78 @@ export default function ChapterManagementPage() {
                   )}
                   {!chaptersErr && !chaptersLoading && chapters.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                      <td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">
                         Is subject mein abhi koi chapter nahi hai — upar se pehla chapter banayein.
                       </td>
                     </tr>
                   )}
-                  {!chaptersErr && !chaptersLoading && chapters.map((c) => (
-                    <tr key={c.id} className="border-b border-border last:border-0">
-                      <td className="px-4 py-3 font-medium">{c.name}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{c.nameHindi || "—"}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{c.slug}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{c.id}</td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => copyId(c.id)}
-                          className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted"
-                        >
-                          Copy ID
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {!chaptersErr && !chaptersLoading && chapters.map((c) =>
+                    editingId === c.id ? (
+                      <tr key={c.id} className="border-b border-border last:border-0 bg-primary/5">
+                        <td className="px-4 py-2">
+                          <input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                        </td>
+                        <td className="px-4 py-2">
+                          <input value={editNameHindi} onChange={(e) => setEditNameHindi(e.target.value)} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                        </td>
+                        <td className="px-4 py-2 text-muted-foreground">{c.slug}</td>
+                        <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{c.id}</td>
+                        <td className="px-4 py-2 text-xs text-muted-foreground">{c._count?.questions ?? "—"}</td>
+                        <td className="px-4 py-2 text-right space-x-1">
+                          <button onClick={() => saveEdit(c.id)} disabled={rowBusyId === c.id} className="rounded-lg bg-primary px-2 py-1 text-xs font-semibold text-primary-foreground disabled:opacity-50">Save</button>
+                          <button onClick={() => setEditingId("")} className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted">Cancel</button>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={c.id} className="border-b border-border last:border-0">
+                        <td className="px-4 py-3 font-medium">{c.name}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{c.nameHindi || "—"}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{c.slug}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{c.id}</td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{c._count?.questions ?? "—"}</td>
+                        <td className="px-4 py-3 text-right space-x-1">
+                          <button onClick={() => copyId(c.id)} className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted">Copy ID</button>
+                          <button onClick={() => startEdit(c)} className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted">Rename</button>
+                          <button onClick={() => deleteChapterRow(c)} disabled={rowBusyId === c.id} className="rounded-lg border border-danger/30 px-2 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">Delete</button>
+                        </td>
+                      </tr>
+                    ),
+                  )}
                 </tbody>
               </table>
             </div>
+
+            {rowErr && <p className="mt-2 text-sm text-danger">{rowErr}</p>}
+
+            {/* Merge — for duplicate chapters under this subject (e.g. two
+                "Spotting Errors" chapters shown on the syllabus screen). */}
+            {chapters.length > 1 && (
+              <div className="card mt-4 p-4">
+                <h2 className="font-semibold">🔀 Merge duplicate chapters</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Source chapter ke sabhi topics/sub-topics/questions/paid purchases target chapter me chale jayenge, phir source delete ho jayega.
+                </p>
+                <div className="mt-3 flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="block text-xs text-muted-foreground">Source (ye delete hoga)</label>
+                    <select value={mergeSourceId} onChange={(e) => setMergeSourceId(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
+                      <option value="">—</option>
+                      {chapters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted-foreground">Target (ismein merge hoga)</label>
+                    <select value={mergeTargetId} onChange={(e) => setMergeTargetId(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
+                      <option value="">—</option>
+                      {chapters.filter((c) => c.id !== mergeSourceId).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  <button onClick={mergeChapters} disabled={!mergeSourceId || !mergeTargetId || rowBusyId === mergeSourceId} className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary disabled:opacity-40">
+                    Merge
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
