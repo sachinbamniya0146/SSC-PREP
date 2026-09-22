@@ -28,6 +28,8 @@ type ReviewQuestion = {
   examName?: string;
   chapter: string | null;
   subject: string | null;
+  topic?: string | null;
+  subTopic?: string | null;
   year?: number | null;
   shift?: string | null;
   difficulty?: string | null;
@@ -117,16 +119,22 @@ export default function AttemptReviewPage() {
   const maxScore = tpl.totalMarks || questions.reduce((s, q) => s + (q.marks || 2), 0);
   const pct = maxScore ? ((detail.score / maxScore) * 100).toFixed(1) : "0.0";
 
-  // v6 §6 — topic breakdown, weakest-first (chapter/subject labels)
-  const topicMap = new Map<string, { correct: number; total: number; time: number }>();
+  // v6 §6 — chapter breakdown, weakest-first (chapter/subject labels)
+  const chapterMap = new Map<string, { correct: number; total: number; time: number }>();
   const sectionMap = new Map<string, { correct: number; total: number; score: number; time: number }>();
+  // NEW (Sep 21 2026) — TRUE topic/sub-topic breakdown (drills below chapter
+  // level, straight from each question's real topic/subTopic). Older
+  // questions with no topic set are grouped under "Other (no topic set)" so
+  // they're never silently dropped from the analysis.
+  const realTopicMap = new Map<string, { correct: number; total: number; time: number }>();
+  const subTopicMap = new Map<string, { correct: number; total: number; time: number }>();
   questions.forEach((q) => {
     const t = q.chapter || q.subject || "General";
-    const cur = topicMap.get(t) || { correct: 0, total: 0, time: 0 };
+    const cur = chapterMap.get(t) || { correct: 0, total: 0, time: 0 };
     cur.total += 1;
     if (q.isCorrect) cur.correct += 1;
     cur.time += q.timeSpentSeconds || 0;
-    topicMap.set(t, cur);
+    chapterMap.set(t, cur);
     // section-wise (subject) aggregation for exam-style breakdown
     const s = q.subject || "General";
     const sc = sectionMap.get(s) || { correct: 0, total: 0, score: 0, time: 0 };
@@ -135,13 +143,33 @@ export default function AttemptReviewPage() {
     else if (q.selectedOption) sc.score -= q.negativeMarks || 0.5;
     sc.time += q.timeSpentSeconds || 0;
     sectionMap.set(s, sc);
+    if (q.topic) {
+      const rt = realTopicMap.get(q.topic) || { correct: 0, total: 0, time: 0 };
+      rt.total += 1;
+      if (q.isCorrect) rt.correct += 1;
+      rt.time += q.timeSpentSeconds || 0;
+      realTopicMap.set(q.topic, rt);
+      if (q.subTopic) {
+        const st = subTopicMap.get(`${q.topic} › ${q.subTopic}`) || { correct: 0, total: 0, time: 0 };
+        st.total += 1;
+        if (q.isCorrect) st.correct += 1;
+        st.time += q.timeSpentSeconds || 0;
+        subTopicMap.set(`${q.topic} › ${q.subTopic}`, st);
+      }
+    }
   });
   const sections = Array.from(sectionMap.entries()).map(([name, v]) => ({
     name,
     ...v,
     acc: v.total ? Math.round((v.correct / v.total) * 100) : 0,
   }));
-  const topics = Array.from(topicMap.entries())
+  const topics = Array.from(chapterMap.entries())
+    .map(([name, v]) => ({ name, ...v, acc: v.total ? Math.round((v.correct / v.total) * 100) : 0 }))
+    .sort((a, b) => a.acc - b.acc);
+  const realTopics = Array.from(realTopicMap.entries())
+    .map(([name, v]) => ({ name, ...v, acc: v.total ? Math.round((v.correct / v.total) * 100) : 0 }))
+    .sort((a, b) => a.acc - b.acc);
+  const subTopics = Array.from(subTopicMap.entries())
     .map(([name, v]) => ({ name, ...v, acc: v.total ? Math.round((v.correct / v.total) * 100) : 0 }))
     .sort((a, b) => a.acc - b.acc);
   const filtered =
@@ -310,9 +338,9 @@ export default function AttemptReviewPage() {
           </div>
         )}
 
-        {/* Topic breakdown — weakest first */}
+        {/* Chapter breakdown — weakest first */}
         <div className="card mt-4 p-5">
-          <h2 className="text-sm font-bold">📚 Topic Breakdown <span className="font-normal text-muted-foreground">(weakest first)</span></h2>
+          <h2 className="text-sm font-bold">📚 Chapter Breakdown <span className="font-normal text-muted-foreground">(weakest first)</span></h2>
           <div className="mt-3 space-y-2">
             {topics.map((t) => (
               <div key={t.name} className="flex items-center gap-3 text-sm">
@@ -328,6 +356,48 @@ export default function AttemptReviewPage() {
             ))}
           </div>
         </div>
+
+        {/* NEW (Sep 21 2026) — TRUE Topic (and Sub-topic) deep analysis, drilled
+            below chapter level. Only rendered when at least one question in
+            this attempt actually carries a topic (older PYQ sets may not). */}
+        {realTopics.length > 0 && (
+          <div className="card mt-4 p-5">
+            <h2 className="text-sm font-bold">🏷️ Topic-wise Deep Analysis <span className="font-normal text-muted-foreground">(weakest first)</span></h2>
+            <div className="mt-3 space-y-2">
+              {realTopics.map((t) => (
+                <div key={t.name} className="flex items-center gap-3 text-sm">
+                  <span className="w-40 truncate text-muted-foreground">{t.name}</span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className={`h-full rounded-full ${t.acc < 40 ? "bg-danger" : t.acc < 70 ? "bg-warning" : "bg-success"}`}
+                      style={{ width: `${t.acc}%` }}
+                    />
+                  </div>
+                  <span className="w-24 text-right text-xs text-muted-foreground">{t.correct}/{t.total} · {t.acc}%</span>
+                </div>
+              ))}
+            </div>
+            {subTopics.length > 0 && (
+              <>
+                <h3 className="mt-5 text-xs font-bold text-muted-foreground">Sub-topic wise</h3>
+                <div className="mt-2 space-y-2">
+                  {subTopics.map((t) => (
+                    <div key={t.name} className="flex items-center gap-3 text-sm">
+                      <span className="w-48 truncate text-xs text-muted-foreground">{t.name}</span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`h-full rounded-full ${t.acc < 40 ? "bg-danger" : t.acc < 70 ? "bg-warning" : "bg-success"}`}
+                          style={{ width: `${t.acc}%` }}
+                        />
+                      </div>
+                      <span className="w-24 text-right text-xs text-muted-foreground">{t.correct}/{t.total} · {t.acc}%</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Filter tabs */}
         <div className="mt-6 flex flex-wrap gap-2">
@@ -472,6 +542,8 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
           Q{index + 1} · {q.marks || 2} marks{q.examName ? ` · ${q.examName}` : ""}
           {q.year ? ` · ${q.year}` : ""}
           {q.chapter ? ` · ${q.chapter}` : ""}
+          {q.topic ? ` › ${q.topic}` : ""}
+          {q.subTopic ? ` › ${q.subTopic}` : ""}
         </p>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">⏱ {fmtTime(q.timeSpentSeconds || 0)}</span>
