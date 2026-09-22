@@ -29,6 +29,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { BankUploadService } from './bank-upload.service';
 import { TaxonomyImportService } from './taxonomy-import.service';
+import { parseQuestionKind } from '../common/question-visibility';
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB — question files are text/spreadsheets, not media
 
@@ -55,22 +56,41 @@ export class BankUploadController {
   // reads it as the string "true" (multipart fields are always strings) —
   // compared explicitly below rather than truthy-checked, since the
   // string "false" would otherwise also count as checked.
+  //
+  // Sep 21 2026: the admin page now has two big separate buttons and sends
+  // `kind=practice` or `kind=pyq` (plus the legacy isPracticeOnly flag, still
+  // honoured). kind=practice == isPracticeOnly.
   private isPracticeOnlyFlag(body: any): boolean {
-    return body?.isPracticeOnly === 'true' || body?.isPracticeOnly === true;
+    return body?.isPracticeOnly === 'true' || body?.isPracticeOnly === true || body?.kind === 'practice';
+  }
+
+  // A PYQ upload whose rows have no year would silently become practice
+  // questions — surface that as a warning on the result instead.
+  private async afterUpload<T extends { uploadBatchId?: string; warnings: any[] }>(result: T, body: any): Promise<T> {
+    if (body?.kind === 'pyq') {
+      await this.uploadService.warnYearlessInPyqUpload(result as any);
+    }
+    return result;
   }
 
   @Post('excel')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadExcel(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
-    return this.uploadService.uploadFromExcel(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
+    return this.afterUpload(
+      await this.uploadService.uploadFromExcel(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
+      body,
+    );
   }
 
   @Post('csv')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadCsv(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.csv) is required');
-    return this.uploadService.uploadFromCSV(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
+    return this.afterUpload(
+      await this.uploadService.uploadFromCSV(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
+      body,
+    );
   }
 
   // Accepts both tab-separated .txt files AND raw JSON-array .json/.txt files —
@@ -79,7 +99,10 @@ export class BankUploadController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadText(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.txt/.json) is required');
-    return this.uploadService.uploadFromText(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
+    return this.afterUpload(
+      await this.uploadService.uploadFromText(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
+      body,
+    );
   }
 
   // Same handler as /text but named for clarity when the admin picks "JSON file" in the UI.
@@ -87,7 +110,10 @@ export class BankUploadController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadJsonFile(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.json) is required');
-    return this.uploadService.uploadFromText(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
+    return this.afterUpload(
+      await this.uploadService.uploadFromText(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
+      body,
+    );
   }
 
   // Paste-in JSON (no file) — e.g. admin copy-pastes an array of question
@@ -110,7 +136,10 @@ export class BankUploadController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadWord(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.docx) is required');
-    return this.uploadService.uploadFromWord(file.buffer, this.adminId(req), undefined, this.isPracticeOnlyFlag(body));
+    return this.afterUpload(
+      await this.uploadService.uploadFromWord(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
+      body,
+    );
   }
 
   // Session 24 — for diagram question types that AREN'T simple Venn circles
@@ -140,11 +169,20 @@ export class BankUploadController {
     @Query('subjectId') subjectId: string | undefined,
     @Query('chapterId') chapterId: string | undefined,
     @Query('year') year: string | undefined,
+    @Query('topicId') topicId: string | undefined,
+    @Query('subTopicId') subTopicId: string | undefined,
+    @Query('batchId') batchId: string | undefined,
+    @Query('kind') kind: string | undefined,
     @Res() res: Response,
   ) {
     const fmt = (format === 'json' || format === 'csv' || format === 'excel') ? format : 'excel';
     const { buffer, contentType, filename } = await this.uploadService.exportQuestionBank(
-      { examId, subjectId, chapterId, year: year ? parseInt(year, 10) : undefined },
+      {
+        examId, subjectId, chapterId, topicId, subTopicId,
+        year: year ? parseInt(year, 10) : undefined,
+        uploadBatchId: batchId,
+        kind: parseQuestionKind(kind),
+      },
       fmt,
     );
     res.setHeader('Content-Type', contentType);
@@ -207,8 +245,44 @@ export class BankUploadController {
   }
 
   @Delete('batches/:id')
-  async deleteBatch(@Param('id') id: string, @Query('keepQuestions') keepQuestions: string | undefined) {
-    return this.uploadService.deleteUploadBatch(id, keepQuestions === '1' || keepQuestions === 'true');
+  async deleteBatch(@Param('id') id: string, @Query('keepQuestions') keepQuestions: string | undefined, @Req() req: any) {
+    return this.uploadService.deleteUploadBatch(id, keepQuestions === '1' || keepQuestions === 'true', this.adminId(req));
+  }
+
+  // NEW (Sep 21 2026) — "us excel ke questions download bhi kar sake":
+  // re-exports every question that upload still holds, in the same column
+  // shape as the upload template (+ readable name columns), so the file can
+  // be re-uploaded as-is.
+  @Get('batches/:id/download')
+  async downloadBatch(@Param('id') id: string, @Query('format') format: string | undefined, @Res() res: Response) {
+    const fmt = (format === 'json' || format === 'csv' || format === 'excel') ? format : 'excel';
+    const batch = await this.uploadService.getUploadBatchDetail(id);
+    const { buffer, contentType, filename } = await this.uploadService.exportQuestionBank({ uploadBatchId: id }, fmt);
+    const base = (batch.filename || `upload_${id.slice(0, 8)}`).replace(/\.[a-z0-9]+$/i, '').replace(/[^\w\-]+/g, '_');
+    const ext = filename.split('.').pop();
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${base}_current.${ext}"`);
+    res.send(buffer);
+  }
+
+  // NEW — publish every still-pending question of this upload in one click.
+  @Post('batches/:id/publish')
+  async publishBatch(@Param('id') id: string) {
+    return this.uploadService.publishUploadBatch(id);
+  }
+
+  // NEW — delete only one subject's / chapter's / topic's / sub-topic's
+  // questions out of an upload (the upload record itself stays).
+  @Delete('batches/:id/questions')
+  async deleteBatchQuestions(
+    @Param('id') id: string,
+    @Query('subjectId') subjectId: string | undefined,
+    @Query('chapterId') chapterId: string | undefined,
+    @Query('topicId') topicId: string | undefined,
+    @Query('subTopicId') subTopicId: string | undefined,
+    @Req() req: any,
+  ) {
+    return this.uploadService.deleteUploadBatchQuestions(id, { subjectId, chapterId, topicId, subTopicId }, this.adminId(req));
   }
 
   // Bulk syllabus (taxonomy) importer — upload a bilingual syllabus workbook
