@@ -163,6 +163,20 @@ export default function TestPage() {
   const [idx, setIdx] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
+  // BUGFIX (Sachin report, Sep 2026 — "test submit karte hain to instant
+  // submit nahi hota, 2-3 baar submit karna padta hai tab result show hota
+  // hai"): the Submit button had no re-entrancy guard at all. On a slow
+  // connection, a tap that feels unresponsive gets tapped again (or the
+  // review-screen Submit + this button both fire) while the first
+  // submitTest() call is still awaiting /bank/attempt or /tests/.../submit
+  // — firing a second, overlapping submitTest() run. The two runs race:
+  // whichever Promise.all/fetch resolves last silently overwrites
+  // setResult/setFinalScore from the other, and on the server-authoritative
+  // path the second POST /submit can even land as "already submitted" and
+  // bounce the student to a blank in-place retry. A simple ref-based guard
+  // (checked and set synchronously, before any await) makes every submit
+  // tap after the first a no-op until the in-flight one finishes.
+  const submittingRef = React.useRef(false);
 
   // student answers + status
   const [answers, setAnswers] = React.useState<{ [qid: string]: string }>({});
@@ -668,6 +682,12 @@ export default function TestPage() {
 
   // ---- Submit ----
   const submitTest = async () => {
+    // Re-entrancy guard — see submittingRef doc-comment above. Checked and
+    // set synchronously (no await before this line) so two rapid taps can
+    // never both pass the check.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    try {
     const qs = questions;
     setRunning(false);
     setReviewOpen(false);
@@ -932,6 +952,12 @@ export default function TestPage() {
       });
     } catch {
       // history save is best-effort — ignore failures
+    }
+    } finally {
+      // Always release the guard, however this run exited (early return on
+      // a failed authoritative submit, an exception, or normal completion)
+      // — otherwise a genuine failure would permanently lock out Submit.
+      submittingRef.current = false;
     }
   };
 
