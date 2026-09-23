@@ -158,7 +158,7 @@ export class PdfExtractionWorker extends WorkerHost {
         let structured: StructuredQ;
         if (parsed.answerKey) {
                   // Normalize answer key: convert Hindi numerals to English, handle 1-9
-                  let normalizedAnswer = parsed.answerKey;
+                  let normalizedAnswer = parsed.answerKey.trim().toUpperCase();
                   const hindiToEnglish: Record<string, string> = {
                     '०': '0', '१': '1', '२': '2', '३': '3', '४': '4',
                     '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'
