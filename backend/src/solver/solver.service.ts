@@ -44,7 +44,12 @@ export class SolverService {
       };
     }
 
-    const matchesStored = result.optionKey === q.correctAnswer;
+    // BUGFIX (same class as attempt()/submitAnswer()): normalize
+    // q.correctAnswer — a dirty stored value (whitespace/case) would falsely
+    // report a mismatch here even when the computed answer is actually right,
+    // sending a correct question to manual review for no reason.
+    const storedAnswerNormalized = String(q.correctAnswer ?? '').trim().toUpperCase();
+    const matchesStored = result.optionKey === storedAnswerNormalized;
     if (matchesStored) {
       const updated = await this.prisma.question.update({
         where: { id: questionId },
@@ -83,8 +88,8 @@ export class SolverService {
       matchesStored: false,
       computedOptionKey: result.optionKey,
       computedText: optionText,
-      storedAnswerKey: q.correctAnswer,
-      storedAnswerText: options.find((o) => o.key === q.correctAnswer)?.text ?? null,
+      storedAnswerKey: storedAnswerNormalized,
+      storedAnswerText: options.find((o) => o.key === storedAnswerNormalized)?.text ?? null,
       evidence: result.evidence,
       status: q.answerVerificationStatus,
       warning: 'Deterministic re-derivation disagrees with the stored answer key. Review manually (consider DISPUTED).',
