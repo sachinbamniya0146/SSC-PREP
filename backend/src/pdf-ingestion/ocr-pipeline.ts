@@ -22,7 +22,11 @@ const HINDI_TO_ENGLISH: Record<string, string> = {
 
 /** Answer key normalization: numeric -> A/B/C/D/E/F/G/H/I */
 export function normalizeAnswerKey(raw: string): string {
-  let norm = raw.replace(/[०-९]/g, (m) => HINDI_TO_ENGLISH[m] || m);
+  // BUGFIX: trim before/after — OCR output frequently has leading/trailing
+  // whitespace (e.g. " B" or "B "), which previously survived through to
+  // the final .toUpperCase() and made a valid, correctly-read answer key
+  // fail every downstream A/B/C/D match, silently discarding the question.
+  let norm = raw.trim().replace(/[०-९]/g, (m) => HINDI_TO_ENGLISH[m] || m).trim();
   if (/^[1-9]$/.test(norm)) {
     const num = parseInt(norm, 10);
     if (num >= 1 && num <= 9) norm = String.fromCharCode(64 + num);
