@@ -250,7 +250,7 @@ async submitAttempt(
     for (const a of answers) {
       const q = qmap.get(a.questionId);
       if (!q) continue;
-      const correct = a.selectedOption != null && a.selectedOption === q.correctAnswer;
+      const correct = a.selectedOption != null && String(a.selectedOption).trim().toUpperCase() === String(q.correctAnswer ?? '').trim().toUpperCase();
       if (a.selectedOption == null) totalSkipped++;
       else if (correct) {
         totalCorrect++;
@@ -444,7 +444,11 @@ async saveAnswers(
   for (const a of answers) {
     const q = qmap.get(a.questionId);
     if (!q) continue;
-    const selected = a.selectedOption ?? null;
+    const selected = a.selectedOption != null ? String(a.selectedOption).trim().toUpperCase() : null;
+    // BUGFIX (same class as attempt()/submitAnswer()): normalize
+    // q.correctAnswer too — an un-normalized DB value silently marks a
+    // genuinely correct autosaved answer as wrong.
+    const correctAnswerNormalized = String(q.correctAnswer ?? '').trim().toUpperCase();
     const time = Math.max(0, Math.floor(Number(a.timeSpentSeconds ?? input.timeSpentByQuestion?.[a.questionId]) || 0));
     await this.prisma.attemptAnswer.upsert({
       where: { testAttemptId_questionId: { testAttemptId: attempt.id, questionId: a.questionId } },
@@ -452,12 +456,12 @@ async saveAnswers(
         testAttemptId: attempt.id,
         questionId: a.questionId,
         selectedOption: selected,
-        isCorrect: selected != null && selected === q.correctAnswer,
+        isCorrect: selected != null && selected === correctAnswerNormalized,
         timeSpentSeconds: time,
       },
       update: {
         selectedOption: selected,
-        isCorrect: selected != null && selected === q.correctAnswer,
+        isCorrect: selected != null && selected === correctAnswerNormalized,
         ...(time > 0 ? { timeSpentSeconds: time } : {}),
       },
     });
@@ -515,7 +519,7 @@ async saveAnswers(
       for (const a of input.answers) {
         const q = qmap.get(a.questionId);
         if (!q) continue; // unknown question → skip, never count
-        const correct = a.selectedOption != null && a.selectedOption === q.correctAnswer;
+        const correct = a.selectedOption != null && String(a.selectedOption).trim().toUpperCase() === String(q.correctAnswer ?? '').trim().toUpperCase();
         if (a.selectedOption == null) {
           totalSkipped++;
         } else if (correct) {
