@@ -980,7 +980,11 @@ export class BankService implements OnModuleInit {
       const options = Array.isArray(q.optionsJson) ? (q.optionsJson as Array<{ key: string; text: string }>) : [];
       const hasQuestionText = !!q.questionText && q.questionText.trim().length > 0;
       const hasOptions = options.length >= 2 && options.every((o) => !!o.text && o.text.trim().length > 0);
-      const hasCorrectAnswer = !!q.correctAnswer && options.some((o) => o.key === q.correctAnswer);
+      const correctAnswerNormalized = String(q.correctAnswer ?? '').trim().toUpperCase();
+      // BUGFIX (same class as attempt()): normalize before matching against
+      // option keys — a dirty correctAnswer (whitespace/case) would wrongly
+      // skip an otherwise-valid question from bulk-approval.
+      const hasCorrectAnswer = !!correctAnswerNormalized && options.some((o) => o.key === correctAnswerNormalized);
       // Deliberately NOT requiring questionTextHindi here — that's the
       // whole point of this bulk action (sweep the "complete in English,
       // just missing Hindi" pile). Anything missing the basics below still
@@ -1282,7 +1286,16 @@ export class BankService implements OnModuleInit {
     if (!q) throw new NotFoundException('Question not found');
 
     const option = dto.selectedOption.trim().toUpperCase();
-    const correct = option === q.correctAnswer;
+    // BUGFIX (Sachin report, Sep 2026 — "practice sections mein sahi answer
+    // bhi wrong dikhata hai"): this compared the normalized `option` against
+    // `q.correctAnswer` RAW — any legacy/edited row whose correctAnswer has
+    // stray whitespace or lowercase (e.g. "a", " A", "A ") would never match
+    // even when the student picked the actual correct option, silently
+    // marking a correct answer wrong. Every other comparison site in the
+    // codebase (question-bank-practice.service.ts, test/page.tsx) already
+    // normalizes both sides — this was the one spot that didn't.
+    const correctAnswerNormalized = String(q.correctAnswer ?? '').trim().toUpperCase();
+    const correct = option === correctAnswerNormalized;
 
     // BUGFIX: was unconditional — see the doc comment on attempt() above
     // (bank.controller.ts) for the full explanation. Only record a
@@ -1340,7 +1353,7 @@ export class BankService implements OnModuleInit {
 
     return {
       correct,
-      correctAnswer: q.correctAnswer,
+      correctAnswer: correctAnswerNormalized,
       selectedOption: option,
       explanation: q.explanation,
       explanationHindi: q.explanationHindi,
