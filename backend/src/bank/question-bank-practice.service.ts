@@ -419,7 +419,11 @@ export class QuestionBankPracticeService {
     }
 
     const option = selectedOption.trim().toUpperCase();
-    const correct = option === question.correctAnswer;
+    // BUGFIX (same class as bank.service.ts's attempt()): normalize
+    // question.correctAnswer too, not just the student's option — an
+    // un-normalized DB value silently fails this match even when the
+    // student picked the actually-correct option.
+    const correct = option === String(question.correctAnswer ?? '').trim().toUpperCase();
 
     // Update answers
     const answers = (set.answers as Record<string, string>) || {};
@@ -452,7 +456,7 @@ export class QuestionBankPracticeService {
           skippedCount++;
         } else {
           const q = await this.prisma.question.findUnique({ where: { id: qId } });
-          if (q && userAnswer === q.correctAnswer) {
+          if (q && userAnswer === String(q.correctAnswer ?? '').trim().toUpperCase()) {
             correctCount++;
           } else {
             wrongCount++;
