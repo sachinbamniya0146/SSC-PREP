@@ -845,11 +845,29 @@ export default function TestPage() {
           // to silently fail the o.key === correctAnswer match later and
           // show a dead "(see solution)" placeholder instead of the answer.
           const normalizedCorrect = String(d.correctAnswer ?? "").trim().toUpperCase();
+          // BUGFIX (Sachin report, Sep 2026 — "practice questions aa rahe
+          // hain, solution/badi wali explanation nahi aati"): bank.service.ts's
+          // attempt() has always returned explanation/explanationHindi in
+          // its response (d.explanation / d.explanationHindi below), but this
+          // was the one path in this file that never read it off the
+          // response — every OTHER path (authoritative attemptDetail(),
+          // chapter-wise-PYQ's ungated q.explanation) carried it through.
+          // Question-Bank-Practice / Sectional / random-set /bank/set all
+          // route through here, and Question-Bank-Practice's questions start
+          // with q.explanation deliberately blank (no answer-key leak before
+          // answering — see getOrCreateSet()/formatSet() in
+          // question-bank-practice.service.ts), so the results screen's
+          // fallback chain (`ex?.explanation ?? q.explanation`) had nothing
+          // left to fall back to and "View Solution" showed nothing for
+          // every practice-mode question, however detailed the uploaded
+          // Excel's explanation column was.
           const a: Attempt = {
             correct: !!d.correct,
             correctAnswer: normalizedCorrect,
             selectedOption: ans,
             scoreDelta: Number(d.scoreDelta || 0),
+            explanation: d.explanation ?? null,
+            explanationHindi: d.explanationHindi ?? null,
           };
           res[q.id] = a;
           score += a.scoreDelta; // server-side: correct→+marks, wrong→−negativeMarks
@@ -1297,8 +1315,13 @@ export default function TestPage() {
                 const correctKey = (ex?.correctAnswer || a?.correctAnswer || "").trim().toUpperCase();
                 const correctOpt = q.options.find((o) => (o.key || "").trim().toUpperCase() === correctKey);
                 const correctLabel = correctOpt?.text || (correctKey ? `Option ${correctKey}` : null);
-                const expl = ex?.explanation ?? q.explanation ?? null;
-                const explHi = ex?.explanationHindi ?? q.explanationHindi ?? null;
+                // `a` (= result[q.id], filled from /bank/attempt above) is now
+                // checked too — the practice/sectional/chapter-wise-PYQ path's
+                // only source for explanation (see BUGFIX above the /bank/attempt
+                // call). `explanations` (authoritative path) still wins when both
+                // exist since it's the server's post-submit source of truth.
+                const expl = ex?.explanation ?? a?.explanation ?? q.explanation ?? null;
+                const explHi = ex?.explanationHindi ?? a?.explanationHindi ?? q.explanationHindi ?? null;
                 const isOpen = solOpen[q.id];
                 return (
                   <div key={q.id} className="px-5 py-4">
