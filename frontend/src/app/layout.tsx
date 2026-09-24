@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { SupportChatMount } from "@/components/SupportChatMount";
 
 export const metadata: Metadata = {
   title: "SSC Prep Hub — India's Most Advanced SSC Practice Platform",
@@ -44,7 +45,10 @@ export default function RootLayout({
       }
     >
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          {children}
+          <SupportChatMount />
+        </ThemeProvider>
       </body>
     </html>
   );
