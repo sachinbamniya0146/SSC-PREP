@@ -118,4 +118,12 @@ export const envValidationSchema = Joi.object({
   // only to override with a DIFFERENT free model (must end in ":free").
   OPENROUTER_API_KEY: Joi.string().allow('').default(''),
   OPENROUTER_MODEL: Joi.string().allow('').default('nvidia/nemotron-3-ultra-550b-a55b:free'),
+
+  // Chat message encryption-at-rest (report-thread + general support chat).
+  // Generate with: openssl rand -hex 32
+  // See backend/src/common/crypto/message-encryption.ts for the full model.
+  // Optional at the env-schema level so the app still boots without chat
+  // configured; the crypto helper itself throws a clear error the first
+  // time a message is actually sent/read without this set.
+  MESSAGE_ENCRYPTION_KEY: Joi.string().allow('').default(''),
 }).unknown(true);
