@@ -227,6 +227,14 @@ export default function DashboardPage() {
                 <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Error Reports</div>
                 <div className="mt-0.5 text-xs text-muted-foreground">Review student-reported errors, unsuspend flagged questions</div>
               </a>
+              {/* General student <-> admin support chat (separate from
+                  per-question error-report threads above) — backend/src/support-chat.
+                  Sachin's requirement: "dono — per-report thread + general
+                  support chat bhi". */}
+              <a href="/admin/support-chat" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
+                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">💬 Support Chat</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">Live chat inbox — reply to students directly</div>
+              </a>
               {/* SESSION 13 FIX: GET /bank/admin/coverage (backend/src/bank/bank.service.ts
                   contentCoverageReport()) already ran the full exam×subject ×
                   translation-coverage SQL — nobody could see the result without
