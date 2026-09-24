@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { ReportQuestion } from "@/components/ReportQuestion";
 
 type QuizQ = {
   id: string;
@@ -109,129 +110,22 @@ function VideoPlayer({ url, title }: { url: string; title?: string | null }) {
   );
 }
 
-// v5 §37.4 — Report Error: student flags a suspected wrong answer (auto soft-suspend on threshold)
-function ReportError({ questionId }: { questionId: string }) {
-  const [open, setOpen] = React.useState(false);
-  const [desc, setDesc] = React.useState("");
-  const [category, setCategory] = React.useState("OTHER");
-  const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
-  const [sending, setSending] = React.useState(false);
-
-  const CATEGORIES = [
-    { value: "WRONG_ANSWER", label: "Galat answer" },
-    { value: "WRONG_OPTION", label: "Galat option" },
-    { value: "WRONG_EXPLANATION", label: "Galat explanation" },
-    { value: "TRANSLATION", label: "Hindi translation galat" },
-    { value: "TYPO", label: "Typo / spelling" },
-    { value: "MISSING_OPTION", label: "Option missing" },
-    { value: "DUPLICATE", label: "Duplicate question" },
-    { value: "OTHER", label: "Kuch aur" },
-  ];
-
-  const submit = async () => {
-    const token = localStorage.getItem("ssc_access_token");
-    if (!token) {
-      setMsg({ ok: false, text: "Login karke report karo." });
-      return;
-    }
-    setSending(true);
-    try {
-      // BUGFIX (2026-09 audit — access-token expiry causes silent
-      // failures on this page, same class of bug found across
-      // dashboard/review/etc.): switched from raw fetch() to fetchAuth()
-      // so an expired token gets auto-refreshed instead of failing.
-      const res = await fetchAuth(
-        `${API_BASE}/report-error`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            questionId,
-            description: desc.trim() || "Reported error",
-            category,
-          }),
-        },
-      );
-      const d = await res.json();
-      if (res.ok) {
-        setMsg({
-          ok: true,
-          text: d.suspended
-            ? "🙏 Report mil gaya. Is question ko review ke liye suspend kar diya — kami fix karenge."
-            : `🙏 Report mil gaya (${d.openReports}/${d.threshold} reports).`,
-        });
-        setDesc("");
-      } else {
-        setMsg({ ok: false, text: d.message || "Kuch galat gaya. Dobara try karo." });
-      }
-    } catch {
-      setMsg({ ok: false, text: "Network error. Dobara try karo." });
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <div className="mt-3">
-      {!open ? (
-        <button
-          onClick={() => setOpen(true)}
-          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-danger"
-        >
-          ⚠️ Is question me galat answer lage? Report karo
-        </button>
-      ) : (
-        <div className="rounded-lg border border-border bg-muted/40 p-3">
-          <p className="text-xs font-semibold text-muted-foreground">
-            Batchao — is question me kya galat lag raha hai:
-          </p>
-          <textarea
-            value={desc}
-            onChange={(e) => setDesc(e.target.value)}
-            placeholder="e.g. Sahi answer C hona chahiye, option B galat laga…"
-            className="mt-2 w-full rounded-lg border border-border bg-card p-2 text-sm"
-            rows={2}
-          />
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="mt-2 w-full rounded-lg border border-border bg-card p-2 text-sm"
-          >
-            {CATEGORIES.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-          <div className="mt-2 flex items-center gap-3">
-            <button
-              onClick={submit}
-              disabled={sending}
-              className="rounded-lg bg-danger px-4 py-1.5 text-xs font-semibold text-danger-foreground hover:opacity-90 disabled:opacity-40"
-            >
-              {sending ? "Bhej rahe…" : "Submit Report"}
-            </button>
-            <button
-              onClick={() => setOpen(false)}
-              className="text-xs text-muted-foreground"
-            >
-              Cancel
-            </button>
-          </div>
-          {msg && (
-            <p className={`mt-2 text-xs ${msg.ok ? "text-success" : "text-danger"}`}>
-              {msg.text}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// v5 §37.4 — Report Error was previously a standalone inline component here.
+// Replaced by the shared ReportQuestion component (frontend/src/components/ReportQuestion.tsx),
+// which adds a real-time chat thread with admin on top of the same report
+// flow — see its usage below, near the explanation block.
 
 export default function DailyQuizPage() {
+  // Needed only for ReportQuestion (chat bubble alignment) — see
+  // test/page.tsx's identical comment above its own currentUserId fetch.
+  const [currentUserId, setCurrentUserId] = React.useState("");
+  React.useEffect(() => {
+    fetchAuth(`${API_BASE}/users/me`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((me) => { if (me?.id) setCurrentUserId(me.id); })
+      .catch(() => {});
+  }, []);
+
   const [quizId, setQuizId] = React.useState("");
   const [title, setTitle] = React.useState("");
   const [questions, setQuestions] = React.useState<QuizQ[]>([]);
@@ -518,7 +412,7 @@ export default function DailyQuizPage() {
 
                       {r.videoUrl && <VideoPlayer url={r.videoUrl} title={r.videoTitle} />}
 
-                      <ReportError questionId={r.questionId} />
+                      {currentUserId && <ReportQuestion questionId={r.questionId} currentUserId={currentUserId} compact />}
                     </div>
                   ))}
                 </div>
