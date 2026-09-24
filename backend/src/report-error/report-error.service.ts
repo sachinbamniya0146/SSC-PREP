@@ -1,12 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, ErrorReportStatus } from '@prisma/client';
 import { SearchService } from '../search/search.service';
+import { ChatGateway } from '../chat/chat.gateway';
+import { encryptMessageContent, decryptMessageContent } from '../common/crypto/message-encryption';
 
 // v5 §37.4 — Report Error loop
 // A question is auto soft-suspended once OPEN reports cross the threshold.
 const SOFT_SUSPEND_THRESHOLD = 3;
+
+// Chat: a single message body is capped to keep the encrypted payload and
+// the resulting DB rows/socket frames bounded — generous for a support
+// conversation, not a document-paste target.
+const MAX_MESSAGE_LENGTH = 4000;
 
 @Injectable()
 export class ReportErrorService {
@@ -14,6 +21,7 @@ export class ReportErrorService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly searchService: SearchService,
+    private readonly chatGateway: ChatGateway,
   ) {}
 
   async getExports() {
@@ -217,5 +225,140 @@ export class ReportErrorService {
         open: openMap.get(g.category) ?? 0,
       })),
     };
+  }
+
+  // ================= REPORT-THREAD CHAT =================
+  // Direct Q&A attached to one QuestionErrorReport — "is question mein kya
+  // wrong hai" from the student, and the admin's replies/resolution notes,
+  // in one place instead of the student having no way to explain further
+  // or the admin having no way to ask a follow-up.
+
+  /**
+   * Checks whether `userId` may read/post in this report's thread: the
+   * reporting student themself, or any ADMIN/MODERATOR. Returns the report
+   * row (small enough to reuse) so callers don't re-fetch.
+   */
+  private async assertReportAccess(reportId: string, userId: string, role: string) {
+    const report = await this.prisma.questionErrorReport.findUnique({ where: { id: reportId } });
+    if (!report) throw new NotFoundException('Report not found');
+    const isOwner = report.userId === userId;
+    const isStaff = role === 'ADMIN' || role === 'MODERATOR';
+    if (!isOwner && !isStaff) {
+      throw new ForbiddenException('You do not have access to this report thread');
+    }
+    return { report, isStaff };
+  }
+
+  /** Post a message in a report's thread. Encrypts before storing, then pushes the decrypted message live via ChatGateway. */
+  async postReportMessage(
+    reportId: string,
+    senderId: string,
+    senderRole: 'STUDENT' | 'ADMIN' | 'MODERATOR',
+    content: string,
+  ) {
+    const trimmed = (content || '').trim();
+    if (!trimmed) throw new ConflictException('Message cannot be empty');
+    if (trimmed.length > MAX_MESSAGE_LENGTH) {
+      throw new ConflictException(`Message too long (max ${MAX_MESSAGE_LENGTH} characters)`);
+    }
+
+    const { report, isStaff } = await this.assertReportAccess(reportId, senderId, senderRole);
+    const encrypted = encryptMessageContent(trimmed);
+
+    const message = await this.prisma.reportMessage.create({
+      data: {
+        reportId,
+        senderId,
+        senderRole: senderRole as any,
+        ...encrypted,
+      },
+      include: { sender: { select: { id: true, fullName: true, role: true } } },
+    });
+
+    // First time ANY admin/moderator replies (or even just posts) in a
+    // still-OPEN report's thread, flip it to REVIEWING — the "admin is now
+    // looking at this" signal Sachin asked for ("uska problem solve bhi
+    // tick kare — under review mein jaaye"). Only moves OPEN -> REVIEWING;
+    // never overrides a report an admin already resolved (CONFIRMED/REJECTED).
+    let statusChanged: ErrorReportStatus | null = null;
+    if (isStaff && report.status === 'OPEN') {
+      const updated = await this.prisma.questionErrorReport.update({
+        where: { id: reportId },
+        data: { status: 'REVIEWING', firstAdminViewAt: report.firstAdminViewAt ?? new Date() },
+      });
+      statusChanged = updated.status;
+    }
+
+    const plain = {
+      id: message.id,
+      reportId: message.reportId,
+      senderId: message.senderId,
+      senderRole: message.senderRole,
+      senderName: message.sender.fullName,
+      content: trimmed,
+      createdAt: message.createdAt,
+      readAt: message.readAt,
+    };
+
+    // Notify the OTHER party's personal room: if a student sent it, ping
+    // the admin inbox room (already done inside emitReportMessage); if
+    // staff sent it, ping the reporting student directly so they see a
+    // reply even if they've navigated away from the report page.
+    const notifyUserId = isStaff ? report.userId : undefined;
+    this.chatGateway.emitReportMessage(reportId, plain, notifyUserId);
+    if (statusChanged) {
+      this.chatGateway.emitReportStatusChange(reportId, statusChanged, report.userId);
+    }
+
+    return { message: plain, statusChanged };
+  }
+
+  /** List a report thread's messages, decrypted, oldest-first. */
+  async listReportMessages(reportId: string, userId: string, role: string) {
+    await this.assertReportAccess(reportId, userId, role);
+
+    const messages = await this.prisma.reportMessage.findMany({
+      where: { reportId },
+      orderBy: { createdAt: 'asc' },
+      include: { sender: { select: { id: true, fullName: true, role: true } } },
+    });
+
+    const decrypted = messages.map((m) => {
+      let content: string;
+      try {
+        content = decryptMessageContent({
+          contentEncrypted: m.contentEncrypted,
+          contentIv: m.contentIv,
+          contentAuthTag: m.contentAuthTag,
+        });
+      } catch (e) {
+        // A single corrupted/undecryptable row (e.g. key rotated without
+        // migrating old rows) should not break the whole thread's listing.
+        this.logger.warn(`Failed to decrypt report message ${m.id}: ${(e as Error).message}`);
+        content = '[message unavailable]';
+      }
+      return {
+        id: m.id,
+        reportId: m.reportId,
+        senderId: m.senderId,
+        senderRole: m.senderRole,
+        senderName: m.sender.fullName,
+        content,
+        createdAt: m.createdAt,
+        readAt: m.readAt,
+      };
+    });
+
+    return { messages: decrypted, count: decrypted.length };
+  }
+
+  /** Mark all messages NOT sent by `userId` as read, in this thread. */
+  async markReportThreadRead(reportId: string, userId: string, role: string) {
+    await this.assertReportAccess(reportId, userId, role);
+    await this.prisma.reportMessage.updateMany({
+      where: { reportId, senderId: { not: userId }, readAt: null },
+      data: { readAt: new Date() },
+    });
+    return { success: true };
   }
 }
