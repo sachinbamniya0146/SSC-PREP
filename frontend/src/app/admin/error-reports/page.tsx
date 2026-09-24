@@ -14,6 +14,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { ReportQuestion } from "@/components/ReportQuestion";
 
 type ReportRow = {
   id: string;
@@ -50,6 +51,7 @@ const STATUS_BADGE: Record<string, string> = {
 export default function ErrorReportsPage() {
   const router = useRouter();
   const [authChecked, setAuthChecked] = React.useState(false);
+  const [adminId, setAdminId] = React.useState("");
   const [reports, setReports] = React.useState<ReportRow[]>([]);
   const [stats, setStats] = React.useState<CategoryStats | null>(null);
   const [statusFilter, setStatusFilter] = React.useState("OPEN");
@@ -72,6 +74,7 @@ export default function ErrorReportsPage() {
         router.replace("/dashboard");
         return;
       }
+      if (user?.id) setAdminId(user.id);
     } catch {
       router.replace("/dashboard");
       return;
@@ -236,6 +239,19 @@ export default function ErrorReportsPage() {
                       <span className="font-semibold">{r.user.fullName}</span> ne likha: “{r.description}”
                     </p>
                     <p className="mt-1 text-[10px] text-muted-foreground">{new Date(r.createdAt).toLocaleString()}</p>
+                    {/* Admin ↔ student chat for THIS report — same
+                        ReportQuestion component students see, reused here
+                        with existingReportId so it opens straight into the
+                        thread instead of showing the report form (which
+                        makes no sense for an admin, since the report
+                        already exists). Sending a message here auto-flips
+                        OPEN -> REVIEWING server-side (see
+                        report-error.service.ts's postReportMessage). */}
+                    {adminId && (
+                      <div className="mt-2">
+                        <ReportQuestion questionId={r.question.id} existingReportId={r.id} currentUserId={adminId} compact />
+                      </div>
+                    )}
                   </div>
                   <div className="flex shrink-0 flex-col gap-2">
                     {(r.status === "OPEN" || r.status === "REVIEWING") && (
