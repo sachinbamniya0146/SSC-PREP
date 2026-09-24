@@ -11,7 +11,7 @@ import {
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { ErrorReportStatus } from '@prisma/client';
 import { ReportErrorService } from './report-error.service';
 
@@ -103,5 +103,31 @@ export class ReportErrorController {
   @Roles('ADMIN')
   async unsuspend(@CurrentUser() user: { userId: string }, @Param('questionId') questionId: string) {
     return this.reportError.unsuspendQuestion(questionId, user.userId);
+  }
+
+  // ---- Report-thread chat: student ↔ admin Q&A on ONE report ----
+  // Access is checked inside the service (report owner OR any admin/mod),
+  // not via @Roles, since a student needs access to their OWN report's
+  // thread — plain JwtAuthGuard (already applied at class level) is enough
+  // here; ReportErrorService.assertReportAccess does the real check.
+
+  @Get(':id/messages')
+  async listMessages(@CurrentUser() user: AuthenticatedUser, @Param('id') reportId: string) {
+    return this.reportError.listReportMessages(reportId, user.userId, user.role);
+  }
+
+  @Post(':id/messages')
+  async postMessage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') reportId: string,
+    @Body() body: { content: string },
+  ) {
+    if (!body?.content) throw new BadRequestException('content is required');
+    return this.reportError.postReportMessage(reportId, user.userId, user.role, body.content);
+  }
+
+  @Post(':id/messages/read')
+  async markRead(@CurrentUser() user: AuthenticatedUser, @Param('id') reportId: string) {
+    return this.reportError.markReportThreadRead(reportId, user.userId, user.role);
   }
 }
