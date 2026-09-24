@@ -5,6 +5,7 @@ import * as React from "react";
 import { motion } from "framer-motion";
 import { API_BASE } from "@/lib/api";
 import DiagramVenn from "@/components/DiagramVenn";
+import { ReportQuestion } from "@/components/ReportQuestion";
 
 type UgQ = {
   id: string;
@@ -177,6 +178,19 @@ export default function TestPage() {
   // (checked and set synchronously, before any await) makes every submit
   // tap after the first a no-op until the in-flight one finishes.
   const submittingRef = React.useRef(false);
+
+  // Current user id — needed only for the report/chat feature (ReportQuestion
+  // component below needs to know "am I the sender of this message" so it
+  // can align chat bubbles left/right). Fetched once and cached in state;
+  // not used for anything auth-critical (that's all handled server-side via
+  // the JWT on every request), just UI presentation.
+  const [currentUserId, setCurrentUserId] = React.useState<string>("");
+  React.useEffect(() => {
+    fetchAuth(`${API_BASE}/users/me`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((me) => { if (me?.id) setCurrentUserId(me.id); })
+      .catch(() => {});
+  }, []);
 
   // student answers + status
   const [answers, setAnswers] = React.useState<{ [qid: string]: string }>({});
@@ -1383,16 +1397,25 @@ export default function TestPage() {
                         (phase === "results"), so there's no exam-integrity
                         concern the way there was for the mid-attempt
                         "Show Answer" button. */}
-                    <button
-                      onClick={() => {
-                        const willOpen = !isOpen;
-                        setSolOpen((p) => ({ ...p, [q.id]: willOpen }));
-                        if (willOpen && !expl && !aiExp[q.id]) fetchAiExplanation(q.id);
-                      }}
-                      className="mt-2 ml-9 text-xs font-semibold text-primary hover:underline"
-                    >
-                      {isOpen ? "▲ Hide Solution" : "▼ View Solution"}
-                    </button>
+                    <div className="mt-2 ml-9 flex flex-wrap items-center gap-3">
+                      <button
+                        onClick={() => {
+                          const willOpen = !isOpen;
+                          setSolOpen((p) => ({ ...p, [q.id]: willOpen }));
+                          if (willOpen && !expl && !aiExp[q.id]) fetchAiExplanation(q.id);
+                        }}
+                        className="text-xs font-semibold text-primary hover:underline"
+                      >
+                        {isOpen ? "▲ Hide Solution" : "▼ View Solution"}
+                      </button>
+                      {/* Report + chat — works for every test type since this
+                          only renders post-submit (phase === "results"), same
+                          reasoning as the Show Solution button above. Lets a
+                          student flag "answer/explanation galat hai" right
+                          where they're looking at it, and then talk to admin
+                          about it without leaving this page. */}
+                      {currentUserId && <ReportQuestion questionId={q.id} currentUserId={currentUserId} compact />}
+                    </div>
                     {isOpen && (
                       <div className="ml-9 mt-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs leading-relaxed">
                         <p className="font-bold text-success">Correct Answer: {correctKey || "—"}{correctLabel ? ` — ${correctLabel}` : ""}</p>
@@ -1559,6 +1582,13 @@ export default function TestPage() {
                   ⚑ Mark for Review
                 </button>
                 <button onClick={clearAnswer} className="btn btn-outline">Clear Response</button>
+                {/* Report button available mid-test too (not just on the
+                    results screen) — a student shouldn't have to finish and
+                    submit the whole test just to flag a question that's
+                    obviously wrong right now. Safe to show even in exam
+                    mode: reporting doesn't reveal the correct answer or
+                    otherwise affect exam integrity. */}
+                {currentUserId && <ReportQuestion questionId={q.id} currentUserId={currentUserId} compact />}
                 {/* Show Answer / AI Hint are practice-only aids. Hidden in
                     isExamMode (sectional / year-wise / full mock — any
                     server-authoritative timed attempt) so a real exam can't
