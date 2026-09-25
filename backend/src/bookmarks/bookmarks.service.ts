@@ -101,6 +101,9 @@ export class BookmarksService {
       orderBy: { createdAt: 'desc' },
       take: 100,
       include: {
+        // NEW (Sep 2026) — pull each user's own note for the bookmarked
+        // question (if any) in the same query, so the Bookmarks page can
+        // show/edit it inline without a second round trip per question.
         question: {
           select: {
             id: true,
@@ -121,6 +124,13 @@ export class BookmarksService {
     if (rows.length === 0) {
       return { count: 0, bookmarks: [] };
     }
+
+    // Notes for these exact bookmarked questions (one query, not N+1).
+    const noteRows = await this.prisma.userNote.findMany({
+      where: { userId, questionId: { in: rows.map((r) => r.questionId) } },
+      select: { questionId: true, noteText: true, updatedAt: true },
+    });
+    const noteMap = new Map(noteRows.map((n) => [n.questionId, n]));
 
     const questionIds = rows.map((r) => r.questionId);
 
@@ -179,8 +189,76 @@ export class BookmarksService {
             year: r.question.year,
             shift: r.question.shift,
           },
+          note: noteMap.get(r.questionId)?.noteText ?? null,
+          noteUpdatedAt: noteMap.get(r.questionId)?.updatedAt ?? null,
         };
       }),
+    };
+  }
+
+  /** Delete my note on a question. No-op (not an error) if there wasn't one. */
+  async deleteNote(userId: string, questionId: string) {
+    try {
+      await this.prisma.userNote.delete({ where: { userId_questionId: { userId, questionId } } });
+    } catch {
+      // ok — either it never existed, or was already deleted (idempotent)
+    }
+    return { deleted: true };
+  }
+
+  /**
+   * NEW — "Practice my bookmarks": builds a practice-style question set out
+   * of everything the student has bookmarked (published questions only),
+   * shuffled, capped at 50. Deliberately mirrors the shape /bank/set and
+   * /sectional already send (id/questionText/options/chapter/examName/...,
+   * NO correctAnswer/explanation up front) so it can be dropped straight
+   * into sessionStorage's `ssc_sectional_set` and opened via
+   * /test?sectional=1 like every other practice flow — the existing
+   * non-authoritative /bank/attempt scoring path (test/page.tsx) then
+   * handles answering, scoring and revealing the explanation per question,
+   * no new code needed there.
+   */
+  async practiceSet(userId: string) {
+    const bookmarks = await this.prisma.bookmark.findMany({
+      where: { userId, question: { ...PUBLISHED_QUESTION_WHERE } },
+      select: { questionId: true },
+    });
+    if (bookmarks.length === 0) {
+      throw new BadRequestException('Koi bookmark nahi mila — pehle kuch questions bookmark karein.');
+    }
+    const ids = bookmarks.map((b) => b.questionId);
+    // Fisher-Yates, then cap — same non-biased shuffle used by
+    // question-bank-practice.service.ts's fetchQuestionsForSet().
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    const chosen = ids.slice(0, 50);
+    const questions = await this.prisma.question.findMany({
+      where: { id: { in: chosen } },
+      include: {
+        chapter: { select: { name: true } },
+        exam: { select: { name: true } },
+        subject: { select: { name: true } },
+      },
+    });
+    const byId = new Map(questions.map((q) => [q.id, q]));
+    const ordered = chosen.map((id) => byId.get(id)).filter((q): q is NonNullable<typeof q> => Boolean(q));
+    return {
+      questions: ordered.map((q) => ({
+        id: q.id,
+        questionText: q.questionText,
+        questionTextHindi: q.questionTextHindi,
+        options: Array.isArray(q.optionsJson) ? (q.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text })) : [],
+        chapter: q.chapter?.name ?? '',
+        examName: q.exam?.name ?? null,
+        subject: q.subject?.name ?? null,
+        year: q.year,
+        shift: q.shift,
+        marks: q.marks,
+        negativeMarks: q.negativeMarks,
+      })),
+      total: ordered.length,
     };
   }
 
