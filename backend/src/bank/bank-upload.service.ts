@@ -1696,7 +1696,14 @@ export class BankUploadService {
 
     // First pass: parse + resolve + validate every row WITHOUT touching the
     // DB, so we know up front which rows are even eligible for creation.
-    const parsedRows: { rowNum: number; row: any[]; question: BulkUploadQuestion }[] = [];
+    //
+    // Split into a PARSE-ONLY loop followed by preCreateMissingTaxonomy()
+    // (this session — see its doc-comment for the full "why": auto-creating
+    // 400+ unique topic/sub-topic names one at a time, sequentially, inside
+    // this loop is what was causing HTTP 524 on large sheets) and then a
+    // second RESOLVE+VALIDATE loop, instead of one loop doing parse +
+    // resolve + validate together like before.
+    const rawParsed: { rowNum: number; row: any[]; question: BulkUploadQuestion }[] = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowNum = i + 2; // 1-indexed + header
@@ -1718,6 +1725,31 @@ export class BankUploadService {
           question.shift = undefined;
           question.paperCode = undefined;
         }
+        rawParsed.push({ rowNum, row, question });
+      } catch (error) {
+        result.failed++;
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push({
+          row: rowNum,
+          error: message,
+          category: this.categorizeUploadError(message),
+          questionPreview: this.extractQuestionPreview(row, headerMap),
+          data: row,
+        });
+      }
+    }
+
+    await this.preCreateMissingTaxonomy(
+      rawParsed.map((r) => r.question),
+      examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
+      chapterNameInSubjectToId, chapterNameToId,
+      topicSlugInChapterToId, subTopicSlugInTopicToId,
+      topicIds, subTopicIds, topicChapterMap, subTopicTopicMap,
+    );
+
+    const parsedRows: { rowNum: number; row: any[]; question: BulkUploadQuestion }[] = [];
+    for (const { rowNum, row, question } of rawParsed) {
+      try {
         await this.resolveReferenceIds(
           question,
           examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
@@ -1904,6 +1936,19 @@ export class BankUploadService {
     // First pass: resolve + validate every row without touching the DB
     // (same two-pass structure as processBulkQuestions() — see the
     // buildDuplicateIndex() doc-comment there for why).
+    //
+    // preCreateMissingTaxonomy() (this session — 524-timeout fix, see its
+    // doc-comment) runs first so the resolveReferenceIds() call inside the
+    // loop below never needs to auto-create a topic/sub-topic one at a
+    // time — everything this batch needs is already in the maps.
+    await this.preCreateMissingTaxonomy(
+      questions,
+      examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId,
+      chapterNameInSubjectToId, chapterNameToId,
+      topicSlugInChapterToId, subTopicSlugInTopicToId,
+      topicIds, subTopicIds, topicChapterMap, subTopicTopicMap,
+    );
+
     const validRows: { rowNum: number; question: BulkUploadQuestion }[] = [];
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
@@ -2156,21 +2201,29 @@ export class BankUploadService {
    * chapter under a different subject), then topic using the resolved
    * chapterId, then subTopic using the resolved topicId.
    */
-  private async resolveReferenceIds(
-    question: BulkUploadQuestion,
+  /**
+   * Pure, synchronous, no DB — resolves exam/subject/chapter slugs (or
+   * names) to real ids using the in-memory maps built at the top of
+   * processBulkQuestions()/processStructuredQuestions(). Idempotent: safe
+   * to call more than once on the same question (once a field is a real
+   * id it simply won't match any slug/name map key, so a second call is a
+   * harmless no-op for that field).
+   *
+   * Extracted out of resolveReferenceIds() (this session, 524-timeout fix
+   * — see preCreateMissingTaxonomy() doc-comment) so the new taxonomy
+   * pre-pass can resolve a row's chapterId the EXACT same way
+   * resolveReferenceIds() does, without a second hand-written copy of this
+   * matching logic drifting out of sync with it over time.
+   */
+  private resolveExamSubjectChapter(
+    question: Pick<BulkUploadQuestion, 'examId' | 'subjectId' | 'chapterId'>,
     examSlugToId: Map<string, string>,
     subjectSlugToId: Map<string, string>,
     chapterSlugToId: Map<string, string>,
     chapterSlugInSubjectToId: Map<string, string>,
     chapterNameInSubjectToId: Map<string, string>,
     chapterNameToId: Map<string, string>,
-    topicSlugInChapterToId: Map<string, string>,
-    subTopicSlugInTopicToId: Map<string, string>,
-    topicIds: Set<string>,
-    subTopicIds: Set<string>,
-    topicChapterMap: Map<string, string>,
-    subTopicTopicMap: Map<string, string>,
-  ): Promise<void> {
+  ): void {
     if (question.examId && examSlugToId.has(question.examId)) {
       question.examId = examSlugToId.get(question.examId)!;
     }
@@ -2198,6 +2251,26 @@ export class BankUploadService {
       // else: leave as raw text — validateReferences() below reports a
       // proper "chapterId not found" error instead of silently dropping it.
     }
+  }
+
+  private async resolveReferenceIds(
+    question: BulkUploadQuestion,
+    examSlugToId: Map<string, string>,
+    subjectSlugToId: Map<string, string>,
+    chapterSlugToId: Map<string, string>,
+    chapterSlugInSubjectToId: Map<string, string>,
+    chapterNameInSubjectToId: Map<string, string>,
+    chapterNameToId: Map<string, string>,
+    topicSlugInChapterToId: Map<string, string>,
+    subTopicSlugInTopicToId: Map<string, string>,
+    topicIds: Set<string>,
+    subTopicIds: Set<string>,
+    topicChapterMap: Map<string, string>,
+    subTopicTopicMap: Map<string, string>,
+  ): Promise<void> {
+    this.resolveExamSubjectChapter(
+      question, examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId, chapterNameInSubjectToId, chapterNameToId,
+    );
     // Phase 3 (Sachin, Sep 2026 — root cause of "topic-wise analysis
     // students ko nahi milta hai"): topicId/subTopicId used to be dropped
     // SILENTLY here whenever the sheet's value was a free-text descriptive
@@ -2263,6 +2336,112 @@ export class BankUploadService {
       }
       // else: looks like a UUID that doesn't match — leave as-is so
       // validateReferences() reports a proper "not found" error below.
+    }
+  }
+
+  /**
+   * NEW (perf/524-timeout fix, this session — "Upload failed HTTP 524" on
+   * SSC_CGL_MASTER_2025_SYLLABUS_MAPPED_FINAL.xlsx's 4,789 rows): the
+   * topic/sub-topic AUTO-CREATE branch inside resolveReferenceIds() does
+   * 2-3 sequential, AWAITED DB round trips the FIRST time each unique
+   * topic/sub-topic NAME is seen in the sheet (findUnique chapter/topic +
+   * findUnique-by-slug + create). This sheet's topicId column is full of
+   * free-text titles like "Blood Relations - Family Puzzle" rather than
+   * slugs — 400+ unique ones — so the main per-row loop was making
+   * 1,000+ sequential DB calls before it ever reached the already-fast
+   * concurrent commit stage (commitQuestionsBatch()'s chunk-of-10). On a
+   * real (non-localhost) Postgres connection that's easily 60-120+
+   * seconds stacked up INSIDE one HTTP request — past Cloudflare's ~100s
+   * edge timeout → 524, even though the upload was still running fine
+   * server-side and would have finished if given more time.
+   *
+   * Fix: BEFORE the main per-row loop, walk every row, resolve just its
+   * chapter (resolveExamSubjectChapter() — pure, in-memory, no DB), and
+   * collect every UNIQUE (chapterId, topicName) pair that will need
+   * auto-creating. Create them ALL UP FRONT in bounded-concurrency chunks
+   * of 10 (same pattern as commitQuestionsBatch()), registering each one
+   * into the same maps resolveReferenceIds() already reads. Do the same
+   * for sub-topics once every topic is resolved. By the time the main
+   * loop's resolveReferenceIds() runs per row, every topic/sub-topic name
+   * it could need is already in the maps — its own auto-create branch
+   * never fires for any row, so the per-row loop makes ZERO additional DB
+   * calls for taxonomy. A `Promise.allSettled` failure for any one
+   * candidate (e.g. a chapter that doesn't actually exist) is silently
+   * skipped here — resolveReferenceIds()'s own try/catch fallback handles
+   * that row exactly as it always did, just for that one row instead of
+   * for the whole batch.
+   */
+  private async preCreateMissingTaxonomy(
+    questions: BulkUploadQuestion[],
+    examSlugToId: Map<string, string>,
+    subjectSlugToId: Map<string, string>,
+    chapterSlugToId: Map<string, string>,
+    chapterSlugInSubjectToId: Map<string, string>,
+    chapterNameInSubjectToId: Map<string, string>,
+    chapterNameToId: Map<string, string>,
+    topicSlugInChapterToId: Map<string, string>,
+    subTopicSlugInTopicToId: Map<string, string>,
+    topicIds: Set<string>,
+    subTopicIds: Set<string>,
+    topicChapterMap: Map<string, string>,
+    subTopicTopicMap: Map<string, string>,
+  ): Promise<void> {
+    const CHUNK_SIZE = 10;
+
+    // ---- Phase 1: topics (only need the chapter resolved) ----
+    const topicCandidates = new Map<string, { chapterId: string; en: string; hi?: string }>();
+    for (const q of questions) {
+      if (!q.topicId || isLikelyUuid(q.topicId)) continue;
+      const view = { examId: q.examId, subjectId: q.subjectId, chapterId: q.chapterId };
+      this.resolveExamSubjectChapter(view, examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId, chapterNameInSubjectToId, chapterNameToId);
+      if (!view.chapterId) continue;
+      if (topicSlugInChapterToId.has(`${view.chapterId}::${q.topicId}`)) continue; // already a known slug — resolveReferenceIds() will hit this with zero DB calls
+      const { en, hi } = splitBilingualCell(q.topicId);
+      const key = `${view.chapterId}::${normalizeTaxonomyName(en)}`;
+      if (!topicCandidates.has(key)) topicCandidates.set(key, { chapterId: view.chapterId, en, hi: hi || undefined });
+    }
+    const topicList = Array.from(topicCandidates.values());
+    for (let i = 0; i < topicList.length; i += CHUNK_SIZE) {
+      const chunk = topicList.slice(i, i + CHUNK_SIZE);
+      const outcomes = await Promise.allSettled(chunk.map((c) => this.bank.createTopic(c.chapterId, c.en, c.hi)));
+      outcomes.forEach((o, idx) => {
+        if (o.status !== 'fulfilled') return;
+        const c = chunk[idx];
+        const created = o.value;
+        topicSlugInChapterToId.set(`${c.chapterId}::${created.slug}`, created.id);
+        topicIds.add(created.id);
+        topicChapterMap.set(created.id, c.chapterId);
+      });
+    }
+
+    // ---- Phase 2: sub-topics (need the topic resolved — Phase 1 just populated it) ----
+    const subTopicCandidates = new Map<string, { topicId: string; en: string; hi?: string }>();
+    for (const q of questions) {
+      if (!q.subTopicId || !q.topicId || isLikelyUuid(q.subTopicId)) continue;
+      const view = { examId: q.examId, subjectId: q.subjectId, chapterId: q.chapterId };
+      this.resolveExamSubjectChapter(view, examSlugToId, subjectSlugToId, chapterSlugToId, chapterSlugInSubjectToId, chapterNameInSubjectToId, chapterNameToId);
+      if (!view.chapterId) continue;
+      let topicId: string | undefined;
+      if (isLikelyUuid(q.topicId)) topicId = q.topicId;
+      else topicId = topicSlugInChapterToId.get(`${view.chapterId}::${q.topicId}`);
+      if (!topicId) continue; // topic itself never resolved — resolveReferenceIds()'s fallback handles this row later
+      if (subTopicSlugInTopicToId.has(`${topicId}::${q.subTopicId}`)) continue;
+      const { en, hi } = splitBilingualCell(q.subTopicId);
+      const key = `${topicId}::${normalizeTaxonomyName(en)}`;
+      if (!subTopicCandidates.has(key)) subTopicCandidates.set(key, { topicId, en, hi: hi || undefined });
+    }
+    const subTopicList = Array.from(subTopicCandidates.values());
+    for (let i = 0; i < subTopicList.length; i += CHUNK_SIZE) {
+      const chunk = subTopicList.slice(i, i + CHUNK_SIZE);
+      const outcomes = await Promise.allSettled(chunk.map((c) => this.bank.createSubTopic(c.topicId, c.en, c.hi)));
+      outcomes.forEach((o, idx) => {
+        if (o.status !== 'fulfilled') return;
+        const c = chunk[idx];
+        const created = o.value;
+        subTopicSlugInTopicToId.set(`${c.topicId}::${created.slug}`, created.id);
+        subTopicIds.add(created.id);
+        subTopicTopicMap.set(created.id, c.topicId);
+      });
     }
   }
 
@@ -2644,22 +2823,23 @@ export class BankUploadService {
   }
 
   /**
-   * Commit one already-prepared row's DB writes (question.create +
-   * auditLog.create). Pure DB I/O, no shared mutable state touched here —
-   * safe to run many of these concurrently via Promise.allSettled, unlike
-   * prepareQuestion() above.
+   * Commit one already-prepared row's DB write (question.create only).
+   * Pure DB I/O, no shared mutable state touched here — safe to run many
+   * of these concurrently via Promise.allSettled, unlike prepareQuestion()
+   * above.
+   *
+   * PERF (this session, same 524-timeout fix as preCreateMissingTaxonomy()
+   * — see its doc-comment): this used to ALSO insert one AuditLog row per
+   * question here, doubling the DB round trips in the already-largest
+   * stage of a big upload (4,789 rows → ~9,578 round trips instead of
+   * ~4,789). A per-row audit entry never actually said anything a
+   * per-batch one doesn't — every row's action/entityId were identical
+   * ('QUESTION_BULK_CREATED' / 'bulk') and only the question preview
+   * differed. commitQuestionsBatch() below now writes ONE summary audit
+   * row for the whole batch instead.
    */
-  private async commitPreparedQuestion(prepared: { data: any; question: BulkUploadQuestion }, adminId: string): Promise<void> {
+  private async commitPreparedQuestion(prepared: { data: any; question: BulkUploadQuestion }, _adminId: string): Promise<void> {
     await this.prisma.question.create({ data: prepared.data });
-    await this.prisma.auditLog.create({
-      data: {
-        userId: adminId,
-        action: 'QUESTION_BULK_CREATED',
-        targetEntity: 'Question',
-        entityId: 'bulk',
-        metadataJson: { questionText: prepared.question.questionText.substring(0, 100) } as any,
-      },
-    });
   }
 
   /**
@@ -2679,6 +2859,7 @@ export class BankUploadService {
     onError: (rowNum: number, row: TRow, question: BulkUploadQuestion, error: unknown) => void,
   ): Promise<void> {
     const CHUNK_SIZE = 10;
+    let successCount = 0;
     for (let i = 0; i < prepared.length; i += CHUNK_SIZE) {
       const chunk = prepared.slice(i, i + CHUNK_SIZE);
       const outcomes = await Promise.allSettled(
@@ -2687,11 +2868,28 @@ export class BankUploadService {
       outcomes.forEach((outcome, idx) => {
         const p = chunk[idx];
         if (outcome.status === 'fulfilled') {
+          successCount++;
           onSuccess(p.rowNum, p.row, p.published);
         } else {
           onError(p.rowNum, p.row, p.question, outcome.reason);
         }
       });
+    }
+    // One summary row instead of one-per-question (see commitPreparedQuestion() doc-comment).
+    if (successCount > 0) {
+      try {
+        await this.prisma.auditLog.create({
+          data: {
+            userId: adminId,
+            action: 'QUESTION_BULK_CREATED',
+            targetEntity: 'Question',
+            entityId: 'bulk',
+            metadataJson: { count: successCount } as any,
+          },
+        });
+      } catch {
+        // audit trail is best-effort — never fail a successful upload over it
+      }
     }
   }
 
