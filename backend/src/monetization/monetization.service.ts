@@ -185,7 +185,7 @@ export class MonetizationService {
   }
 
   // ---- Cashfree order creation ----
-  async createOrder(userId: string, input: { planId?: string; mockTemplateId?: string; chapterId?: string; couponCode?: string }) {
+  async createOrder(userId: string, input: { planId?: string; mockTemplateId?: string; chapterId?: string; vocabWordId?: string; couponCode?: string }) {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, fullName: true, phone: true } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -233,8 +233,23 @@ export class MonetizationService {
       productInfo = `SSC Prep Hub - Mock Test: ${tpl.title}`;
       mockTitle = tpl.title;
       metadata = { kind: 'MOCK', mockTemplateId: tpl.id };
+    } else if (input.vocabWordId) {
+      // "force unlock karne ke liye 10 rs dene honge" — Vocabulary Mastery's
+      // pay-to-skip-ahead option (see VocabService — unlock is otherwise
+      // strictly sequential, gated on mastering the previous word at 95%+).
+      const word = await this.prisma.vocabWord.findUnique({ where: { id: input.vocabWordId } });
+      if (!word) throw new BadRequestException('Word not found');
+      const existing = await this.prisma.vocabWordProgress.findUnique({
+        where: { userId_wordId: { userId, wordId: input.vocabWordId } },
+      });
+      if (existing?.masteredAt || existing?.forceUnlocked) {
+        throw new BadRequestException('Ye word already unlocked hai');
+      }
+      amountInr = 10;
+      productInfo = `SSC Prep Hub - Unlock Word: ${word.word}`;
+      metadata = { kind: 'VOCAB_WORD', vocabWordId: word.id, vocabWord: word.word };
     } else {
-      throw new BadRequestException('Provide planId, mockTemplateId, or chapterId');
+      throw new BadRequestException('Provide planId, mockTemplateId, chapterId, or vocabWordId');
     }
 
     if (amountInr <= 0) {
@@ -499,6 +514,18 @@ export class MonetizationService {
         where: { userId_testTemplateId: { userId, testTemplateId: meta.mockTemplateId } },
         create: { userId, testTemplateId: meta.mockTemplateId, paidPacksPurchased: 1 },
         update: { paidPacksPurchased: { increment: 1 } },
+      });
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+    } else if (meta.kind === 'VOCAB_WORD') {
+      await this.prisma.vocabWordPurchase.upsert({
+        where: { userId_wordId: { userId, wordId: meta.vocabWordId } },
+        create: { userId, wordId: meta.vocabWordId, amountInr: payment.amountInr, status: 'SUCCESS' },
+        update: { status: 'SUCCESS' },
+      });
+      await this.prisma.vocabWordProgress.upsert({
+        where: { userId_wordId: { userId, wordId: meta.vocabWordId } },
+        create: { userId, wordId: meta.vocabWordId, forceUnlocked: true },
+        update: { forceUnlocked: true },
       });
       await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
     }
