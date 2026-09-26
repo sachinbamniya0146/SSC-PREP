@@ -87,7 +87,7 @@ export default function WeakPracticePage() {
       const r = await fetchAuth(`${apiBase()}/bank/practice/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chapterId, size: topicSize, mode: "practice" }),
+        body: JSON.stringify({ chapterId, size: topicSize, mode: "practice", allowPyqFallback: true }),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
