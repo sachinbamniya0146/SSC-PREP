@@ -1508,6 +1508,10 @@ async saveAnswers(
         examId: options.examId,
         size,
         mode: 'practice',
+        // Weak-topic-triggered practice: fall back to PYQ questions in this
+        // chapter when there aren't enough practice-only ones yet — see
+        // allowPyqFallback doc-comment on getOrCreateSet.
+        allowPyqFallback: true,
       });
       return { type: 'WEAK_AREAS_PRACTICE', singleChapter: true, set };
     }
