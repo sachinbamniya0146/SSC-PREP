@@ -31,8 +31,14 @@ function slugify(s: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+// Template headers mark required columns with a trailing '*' (e.g. 'word*',
+// 'meaningHindi*') for human readability. xlsx's sheet_to_json keeps that
+// '*' as part of the literal header string, so a row's key is 'word*', not
+// 'word'. Try the plain key first, then the '*'-suffixed variant, so both
+// a hand-typed plain header and the starred template header resolve.
 function cell(row: any, key: string): string {
-  const v = row[key];
+  let v = row[key];
+  if (v === undefined || v === null) v = row[`${key}*`];
   if (v === undefined || v === null) return '';
   return String(v).trim();
 }
