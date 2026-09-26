@@ -707,6 +707,12 @@ export default function AdminPage() {
           >
             🗂️ Questions ko chapter/topic/sub-topic me move, publish ya delete karein — Question Manager →
           </a>
+          <a
+            href="/admin/vocab"
+            className="mb-3 ml-2 inline-block rounded-lg border border-purple-500/40 bg-purple-500/5 px-3 py-1.5 text-xs font-medium text-purple-600 hover:bg-purple-500/10 dark:text-purple-400"
+          >
+            📖 Vocabulary words + questions Excel se upload karein — Vocabulary Manage →
+          </a>
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
               <button
