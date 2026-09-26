@@ -16,6 +16,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { QuizModule } from './quiz/quiz.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { BookmarksModule } from './bookmarks/bookmarks.module';
+import { VocabModule } from './vocab/vocab.module';
 import { MocksModule } from './mocks/mocks.module';
 import { BankModule } from './bank/bank.module';
 import { StudyPlanModule } from './study-plan/study-plan.module';
@@ -31,8 +32,6 @@ import { SolverModule } from './solver/solver.module';
 import { AIExplanationModule } from './ai-explanation/ai-explanation.module';
 import { AdminApiKeyModule } from './admin-api-keys/admin-api-keys.module';
 import { AiProviderModule } from './ai-provider/ai-provider.module';
-import { SupportChatModule } from './support-chat/support-chat.module';
-import { ChatModule } from './chat/chat.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { envValidationSchema } from './config/env.validation';
@@ -75,6 +74,7 @@ import { envValidationSchema } from './config/env.validation';
     AnalyticsModule,
     GamificationModule,
     BookmarksModule,
+    VocabModule,
     QuizModule,
     MocksModule,
     BankModule,
@@ -93,8 +93,6 @@ import { envValidationSchema } from './config/env.validation';
     AIExplanationModule,
     AdminApiKeyModule,
     AiProviderModule,
-    ChatModule,
-    SupportChatModule,
   ],
   controllers: [HealthController],
   providers: [
