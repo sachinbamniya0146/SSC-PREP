@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { PUBLISHED_QUESTION_WHERE, PRACTICE_QUESTION_WHERE } from '../common/question-visibility';
+import { PUBLISHED_QUESTION_WHERE, PRACTICE_QUESTION_WHERE, PYQ_QUESTION_WHERE } from '../common/question-visibility';
 
 export interface PracticeQuestion {
   id: string;
@@ -142,11 +142,26 @@ export class QuestionBankPracticeService {
       mode?: 'practice' | 'test';
       resume?: boolean; // accepted for backwards compatibility — resuming an in-progress set is always the default
       size?: number; // student-chosen set size (server clamps to 10-50)
+      // NEW (Sachin, Sep 2026 — "student ke jis topic mein galti hui uska
+      // DIRECT practice question se attempt ho, PYQ se nahi; PYQ se tabhi
+      // ho jab us topic ka practice question available hi na ho"): the
+      // Sep 21 fix (see fetchQuestionsForSet doc-comment) correctly made
+      // general/browsed practice PYQ-free, but left weak-topic practice
+      // with no fallback at all — a weak topic with zero admin-uploaded
+      // practice-only questions yet threw "no practice question available"
+      // even though PYQ questions on that exact topic already exist in the
+      // bank. Callers that KNOW this is a weak-topic-triggered practice
+      // (getWeakAreasPractice below, and the weak-practice page's "practice
+      // this chapter" button) pass this explicitly true; ordinary
+      // subject/chapter browsing (question-bank-practice page) never sets
+      // it, so that flow stays exactly as PYQ-free as the Sep 21 fix intended.
+      allowPyqFallback?: boolean;
     }
   ): Promise<PracticeSet> {
     const mode = options.mode ?? 'practice';
     const examId = options.examId && String(options.examId).trim() ? String(options.examId).trim() : undefined;
     const size = Math.min(50, Math.max(10, Number(options.size) || this.QUESTIONS_PER_SET));
+    const allowPyqFallback = options.allowPyqFallback === true;
 
     const scope = await this.resolveScope({
       subjectId: options.subjectId,
@@ -203,7 +218,12 @@ export class QuestionBankPracticeService {
     }
 
     // 3) Pick the questions.
-    const questions = await this.fetchQuestionsForSet(userId, { subjectId, chapterId, topicId, subTopicId, examId }, size);
+    const questions = await this.fetchQuestionsForSet(
+      userId,
+      { subjectId, chapterId, topicId, subTopicId, examId },
+      size,
+      allowPyqFallback,
+    );
     if (questions.length === 0) {
       throw new NotFoundException(
         'Is selection me abhi koi practice question available nahi hai. Koi aur chapter/topic chunein, ya thodi der baad try karein.',
@@ -268,6 +288,7 @@ export class QuestionBankPracticeService {
     userId: string,
     scope: { subjectId?: string; chapterId?: string; topicId?: string; subTopicId?: string; examId?: string },
     size: number = this.QUESTIONS_PER_SET,
+    allowPyqFallback: boolean = false,
   ): Promise<any[]> {
     const where: any = { ...PRACTICE_QUESTION_WHERE };
     if (scope.subjectId) where.subjectId = scope.subjectId;
@@ -277,12 +298,40 @@ export class QuestionBankPracticeService {
     if (scope.examId) where.examId = scope.examId;
     else where.examId = { not: null }; // must carry an exam badge
 
-    const poolRows = await this.prisma.question.findMany({
+    let poolRows = await this.prisma.question.findMany({
       where,
       select: { id: true },
       orderBy: { createdAt: 'asc' },
       take: 50000,
     });
+
+    // PYQ fallback (weak-topic practice only — see allowPyqFallback
+    // doc-comment on getOrCreateSet): when this exact scope has fewer
+    // practice-only questions than a full set needs (including zero), top
+    // up from PYQ_QUESTION_WHERE questions in the SAME scope so a student
+    // whose weak topic has no dedicated practice questions yet still gets
+    // real practice instead of a hard "not available" error. Practice-only
+    // rows always come first — PYQ rows only fill the remaining slots.
+    if (allowPyqFallback && poolRows.length < size) {
+      const pyqWhere: any = { ...PYQ_QUESTION_WHERE };
+      if (scope.subjectId) pyqWhere.subjectId = scope.subjectId;
+      if (scope.chapterId) pyqWhere.chapterId = scope.chapterId;
+      if (scope.topicId) pyqWhere.topicId = scope.topicId;
+      if (scope.subTopicId) pyqWhere.subTopicId = scope.subTopicId;
+      if (scope.examId) pyqWhere.examId = scope.examId;
+      else pyqWhere.examId = { not: null };
+
+      const existingIds = new Set(poolRows.map((r) => r.id));
+      const pyqRows = await this.prisma.question.findMany({
+        where: pyqWhere,
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+        take: 50000,
+      });
+      const extra = pyqRows.filter((r) => !existingIds.has(r.id));
+      poolRows = [...poolRows, ...extra];
+    }
+
     if (poolRows.length === 0) return [];
     const poolIds = poolRows.map((r) => r.id);
     const poolSet = new Set(poolIds);
