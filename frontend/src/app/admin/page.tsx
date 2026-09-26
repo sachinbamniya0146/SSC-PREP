@@ -92,6 +92,32 @@ export default function AdminPage() {
   const [planPriceInr, setPlanPriceInr] = React.useState("");
   const [planDurationMonths, setPlanDurationMonths] = React.useState("");
 
+  // FIX (Sachin — "chat support ka feature admin ki ID pe show nahi ho
+  // raha"): /admin/support-chat (SupportChatController's admin inbox) has
+  // always existed and worked end-to-end, but nothing in this nav ever
+  // linked to it — an admin had no way to discover the page short of
+  // typing the URL by hand, which read exactly like "the feature doesn't
+  // work". Adds a real nav link plus a live open-conversation count so an
+  // admin sees at a glance that students are waiting.
+  const [openChatCount, setOpenChatCount] = React.useState(0);
+  React.useEffect(() => {
+    let cancelled = false;
+    const loadOpenChats = async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/support-chat/admin/inbox?status=OPEN`);
+        if (!r.ok || cancelled) return;
+        const d = await r.json();
+        const list = Array.isArray(d?.conversations) ? d.conversations : Array.isArray(d) ? d : [];
+        if (!cancelled) setOpenChatCount(list.length);
+      } catch {
+        // non-fatal — badge just stays at 0 if this fails
+      }
+    };
+    loadOpenChats();
+    const interval = setInterval(loadOpenChats, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
   // Bulk Question Upload — the backend (BankUploadService) always had the
   // Excel/CSV/JSON/Text/Word parsing + duplicate-detection logic, but it was
   // never wired to a controller and this page had zero UI for it, so admins
@@ -606,6 +632,17 @@ export default function AdminPage() {
             </span>
           </div>
           <div className="flex items-center gap-3 text-sm">
+            <a
+              href="/admin/support-chat"
+              className="relative rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+            >
+              💬 Support Chat
+              {openChatCount > 0 && (
+                <span className="absolute -top-2 -right-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+                  {openChatCount > 9 ? "9+" : openChatCount}
+                </span>
+              )}
+            </a>
             <a href="/admin/referrals" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
               Refer & Earn
             </a>
