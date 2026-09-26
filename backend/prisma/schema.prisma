@@ -143,6 +143,9 @@ model User {
   weakTopicReports  WeakTopicReport[]
   mockAccesses      MockAccess[]
   chapterPurchases  ChapterPurchase[]
+  vocabWordProgress VocabWordProgress[]
+  vocabDailyGoal    VocabDailyGoal?
+  vocabWordPurchases VocabWordPurchase[]
   referralsMade     Referral[]      @relation("Referrer")
   referralsReceived Referral[]      @relation("Referee")
   referralWallet     ReferralWallet?
@@ -158,9 +161,6 @@ model User {
   searchMisses      SearchMiss[]
   questionBankSets  QuestionBankSet[]
   userProgress      UserProgress[]
-  reportMessagesSent       ReportMessage[]        @relation("ReportMessageSender")
-  supportConversationsAsStudent SupportConversation[] @relation("SupportConversationsAsStudent")
-  supportMessagesSent      SupportMessage[]       @relation("SupportMessageSender")
 
   @@map("users")
 }
@@ -1103,14 +1103,6 @@ model QuestionErrorReport {
   resolvedBy  String?
   createdAt   DateTime @default(now())
 
-  // Report-thread chat: student ↔ admin discussion attached to THIS report,
-  // so a student can explain what's wrong and an admin can ask follow-up
-  // questions or tell them it's fixed, without leaving the report page.
-  messages    ReportMessage[]
-  // Set the first time an admin opens/replies to this report — used to
-  // auto-flip status OPEN → REVIEWING (see report-error.service.ts).
-  firstAdminViewAt DateTime?
-
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
@@ -1118,30 +1110,6 @@ model QuestionErrorReport {
   @@index([status])
   @@index([category, status])
   @@map("question_error_reports")
-}
-
-// Chat thread attached to a single QuestionErrorReport. Content is stored
-// encrypted at rest (AES-256-GCM — see backend/src/common/crypto/message-encryption.ts);
-// contentEncrypted/contentIv/contentAuthTag together let the server decrypt
-// for display (admin panel needs to read reports — see the "Q&A" section of
-// backend/src/report-error/report-error.service.ts's module doc comment for
-// why this is encryption-at-rest, not literal end-to-end).
-model ReportMessage {
-  id              String   @id @default(uuid())
-  reportId        String
-  senderId        String
-  senderRole      Role     // STUDENT or ADMIN/MODERATOR at time of sending
-  contentEncrypted String  // base64 ciphertext
-  contentIv        String  // base64 AES-GCM IV, unique per message
-  contentAuthTag   String  // base64 AES-GCM auth tag
-  readAt          DateTime? // null until the OTHER party has seen it
-  createdAt       DateTime @default(now())
-
-  report QuestionErrorReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
-  sender User     @relation("ReportMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
-
-  @@index([reportId, createdAt])
-  @@map("report_messages")
 }
 
 enum ErrorReportCategory {
@@ -1160,57 +1128,6 @@ enum ErrorReportStatus {
   REVIEWING
   CONFIRMED
   REJECTED
-}
-
-// ================= ADMIN <-> STUDENT SUPPORT CHAT =================
-// General support conversation — NOT tied to a specific question/report.
-// A student can open one from a "Chat with Admin" entry point; any
-// ADMIN/MODERATOR can pick it up and reply. Kept deliberately separate from
-// ReportMessage (per-report threads) per Sachin's decision: "dono — per-report
-// thread + general support chat bhi".
-model SupportConversation {
-  id          String   @id @default(uuid())
-  studentId   String
-  // Which admin most recently claimed/replied to this conversation — shown
-  // in the admin inbox so two admins don't collide replying to the same
-  // student; not an access restriction (any admin can still open/reply).
-  assignedAdminId String?
-  status      SupportConversationStatus @default(OPEN)
-  subject     String?  // optional short label, e.g. first message preview
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  student  User @relation("SupportConversationsAsStudent", fields: [studentId], references: [id], onDelete: Cascade)
-  messages SupportMessage[]
-
-  @@index([studentId, status])
-  @@index([status, updatedAt])
-  @@map("support_conversations")
-}
-
-enum SupportConversationStatus {
-  OPEN
-  RESOLVED
-}
-
-// Same encryption-at-rest pattern as ReportMessage — see that model's
-// doc comment.
-model SupportMessage {
-  id              String   @id @default(uuid())
-  conversationId  String
-  senderId        String
-  senderRole      Role
-  contentEncrypted String
-  contentIv        String
-  contentAuthTag   String
-  readAt          DateTime?
-  createdAt       DateTime @default(now())
-
-  conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       User @relation("SupportMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
-
-  @@index([conversationId, createdAt])
-  @@map("support_messages")
 }
 
 // v4 §18 / v6 §8 — SearchMiss: user searched and found nothing → demand log
@@ -1373,4 +1290,131 @@ model AdminAlert {
 
   @@index([isResolved, type])
   @@map("admin_alerts")
+}
+
+
+// =============================================================================
+// VOCABULARY MASTERY (NEW — Sep 2026)
+//
+// "vocabulary ka padhne ka button jisme vocabulary ke questions test practice
+// bhi rahenge... ek ek word ka pura revision... uske baad usi word ka quiz...
+// 95% sahi kare tab hi complete mark lage, jab tak agla word test nahi khulega":
+// a strictly sequential word-mastery track. Deliberately its own small set of
+// tables rather than reusing Subject/Chapter/Topic/Question — a vocab word's
+// content shape (etymology, memory trick, synonym/antonym lists with their
+// own example sentences) doesn't fit the exam-question schema at all, and the
+// unlock-by-mastery workflow (95% gate, sequential, force-unlockable with a
+// ₹10 payment) has no equivalent anywhere else in the app.
+// =============================================================================
+
+model VocabWord {
+  id                String   @id @default(uuid())
+  slug              String   @unique
+  word              String
+  // 1, 2, 3... — the mastery sequence. Word 1 is always unlocked; finishing
+  // word N with >=95% is what unlocks word N+1 (see VocabWordProgress).
+  orderIndex        Int
+  partOfSpeech      String?
+  pronunciation     String?
+  meaningHindi      String
+  meaningEnglish    String
+  memoryTrick       String?  @db.Text
+  etymology         String?  @db.Text
+  registerNote      String?  @db.Text
+  examTrendNote     String?  @db.Text
+  confusingPairNote String?  @db.Text
+  examplesJson      Json?    // [{ en: string, hi: string }]
+  synonymsJson      Json?    // [{ word: string, hindi: string, sentence: string }]
+  antonymsJson      Json?    // same shape as synonymsJson
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  questions VocabQuestion[]
+  progress  VocabWordProgress[]
+  purchases VocabWordPurchase[]
+
+  @@index([orderIndex])
+  @@map("vocab_words")
+}
+
+model VocabQuestion {
+  id            String   @id @default(uuid())
+  wordId        String
+  questionText  String   @db.Text
+  optionsJson   Json     // [{ key: "A", text: "..." }, ...]
+  correctAnswer String   // "A" | "B" | "C" | "D"
+  explanation   String?  @db.Text
+  questionType  String?  // SYNONYM | ANTONYM | CONTEXT — informational only
+  createdAt     DateTime @default(now())
+
+  word VocabWord @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@index([wordId])
+  @@map("vocab_questions")
+}
+
+// One row per (user, word). Absence of a row = LOCKED and never attempted.
+model VocabWordProgress {
+  id             String    @id @default(uuid())
+  userId         String
+  wordId         String
+  // No "status" column on purpose — LOCKED / UNLOCKED / MASTERED is always
+  // DERIVED (see VocabService.computeStates()): MASTERED = masteredAt is
+  // set; UNLOCKED = the first word, OR the previous word's masteredAt is
+  // set, OR forceUnlocked; otherwise LOCKED. Storing it as a second,
+  // separately-updated column would risk it drifting out of sync with the
+  // masteredAt/forceUnlocked facts that actually define it.
+  bestScorePct   Int       @default(0)
+  attemptsCount  Int       @default(0)
+  // Wrong-answer count on the MOST RECENT attempt (pass or fail) — a
+  // mastered word with lastWrongCount > 0 is surfaced in "Aaj ka Revision"
+  // (see VocabService.todaysPlan()) even though it's already unlocked the
+  // next word.
+  lastWrongCount Int       @default(0)
+  masteredAt     DateTime?
+  // Set true by a successful ₹10 VocabWordPurchase — lets a student jump
+  // ahead to this specific word without mastering everything before it.
+  forceUnlocked  Boolean   @default(false)
+  updatedAt      DateTime  @updatedAt
+
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  word VocabWord @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, wordId])
+  @@index([userId, masteredAt])
+  @@map("vocab_word_progress")
+}
+
+// One row per user — how many NEW words they want to master per day. Purely
+// a target/reminder (unlock is still strictly sequential); used to size
+// "Aaj ka Plan" on the vocabulary dashboard.
+model VocabDailyGoal {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  wordsPerDay Int      @default(1)
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("vocab_daily_goals")
+}
+
+// "force unlock karne ke liye 10 rs dene honge" — same shape as
+// ChapterPurchase, reusing MonetizationService's existing Cashfree order/
+// verify/webhook pipeline (see createOrder()'s `vocabWordId` branch) rather
+// than a new payment integration.
+model VocabWordPurchase {
+  id        String        @id @default(uuid())
+  userId    String
+  wordId    String
+  amountInr Float         @default(10)
+  status    PaymentStatus @default(SUCCESS)
+  createdAt DateTime      @default(now())
+
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  word VocabWord @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, wordId])
+  @@map("vocab_word_purchases")
 }
