@@ -516,6 +516,7 @@ export class BankController {
       mode?: 'practice' | 'test';
       resume?: boolean; // if true, resume existing incomplete set
       size?: number; // NEW — student-chosen set size (server clamps to 15-50)
+      allowPyqFallback?: boolean; // NEW — weak-topic practice only, see getOrCreateSet doc-comment
     }
   ) {
     const userId = req.user?.userId ?? req.user?.id;
