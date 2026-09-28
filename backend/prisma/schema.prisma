@@ -146,6 +146,8 @@ model User {
   vocabWordProgress VocabWordProgress[]
   vocabDailyGoal    VocabDailyGoal?
   vocabWordPurchases VocabWordPurchase[]
+  vocabSubscription  VocabSubscription?
+  pushSubscriptions  PushSubscription[]
   referralsMade     Referral[]      @relation("Referrer")
   referralsReceived Referral[]      @relation("Referee")
   referralWallet     ReferralWallet?
@@ -1492,4 +1494,48 @@ model VocabWordPurchase {
 
   @@unique([userId, wordId])
   @@map("vocab_word_purchases")
+}
+
+// "students chahta hai ki ye words unlock ho to usko 10rs per month dene
+// honge... ye vocab ka alag subscription rahe": a dedicated recurring
+// subscription (₹10/month) that — while active — treats every vocabulary
+// word as UNLOCKED regardless of sequential mastery (see
+// VocabService.loadWordsWithProgress()). This REPLACES the earlier
+// one-off ₹10-per-word VocabWordPurchase flow as the intended path (that
+// table/flow is left in place, unused, rather than migrated away — it's
+// harmless dead code, and removing a table is a riskier migration than
+// leaving it idle).
+model VocabSubscription {
+  id        String        @id @default(uuid())
+  userId    String        @unique
+  startsAt  DateTime      @default(now())
+  expiresAt DateTime
+  amountInr Float         @default(10)
+  status    PaymentStatus @default(SUCCESS)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("vocab_subscriptions")
+}
+
+// ================= WEB PUSH NOTIFICATIONS =================
+// One row per browser/device subscription a user has granted notification
+// permission on (a student can have several: phone + laptop, etc). Admin
+// broadcast (POST /push/admin/broadcast) sends to every row here.
+model PushSubscription {
+  id         String   @id @default(uuid())
+  userId     String
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
 }

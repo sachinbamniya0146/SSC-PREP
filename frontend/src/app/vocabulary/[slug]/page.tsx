@@ -36,6 +36,7 @@ type WordDetail = {
   attemptsCount: number;
   questionCount: number;
   masteryThresholdPct: number;
+  requiredCorrectCount: number;
 };
 
 let cashfreeSdkPromise: Promise<any> | null = null;
@@ -62,7 +63,10 @@ export default function VocabWordDetailPage() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [lockedMessage, setLockedMessage] = React.useState("");
-  const [unlocking, setUnlocking] = React.useState(false);
+  const [nextActionableWordSlug, setNextActionableWordSlug] = React.useState("");
+  const [nextActionableWord, setNextActionableWord] = React.useState("");
+  const [subscribing, setSubscribing] = React.useState(false);
+
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -73,6 +77,8 @@ export default function VocabWordDetailPage() {
       if (r.status === 403) {
         const d = await r.json().catch(() => ({}));
         setLockedMessage(d?.message || "Ye word abhi locked hai.");
+        setNextActionableWordSlug(d?.nextActionableWordSlug || "");
+        setNextActionableWord(d?.nextActionableWord || "");
         return;
       }
       if (!r.ok) throw new Error("Load failed");
@@ -88,21 +94,16 @@ export default function VocabWordDetailPage() {
     load();
   }, [load]);
 
-  const unlockWithPayment = async () => {
-    setUnlocking(true);
+  // REVISED (Sep 26 2026) — "ye vocab ka alag subscription rahe, ₹10 per
+  // month": promotes the recurring subscription (unlocks every word for
+  // 30 days) instead of a one-off single-word unlock.
+  const subscribeVocab = async () => {
+    setSubscribing(true);
     try {
-      // Need the word's real id to create the order — locked words 403 on
-      // the detail endpoint, so fetch the hub list (which always includes
-      // every word + its id, locked or not) to resolve slug -> id.
-      const listRes = await fetchAuth(`${API_BASE}/vocab/words`);
-      const listData = await listRes.json();
-      const target = (listData.words || []).find((w: any) => w.slug === slug);
-      if (!target) throw new Error("Word not found");
-
       const orderRes = await fetchAuth(`${API_BASE}/payments/order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vocabWordId: target.id }),
+        body: JSON.stringify({ vocabSubscription: true }),
       });
       if (!orderRes.ok) {
         const d = await orderRes.json().catch(() => ({}));
@@ -115,7 +116,7 @@ export default function VocabWordDetailPage() {
       await cashfree.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: "_self" });
     } catch (e: any) {
       setError(e.message || "Payment start nahi hua");
-      setUnlocking(false);
+      setSubscribing(false);
     }
   };
 
@@ -131,13 +132,21 @@ export default function VocabWordDetailPage() {
           <h1 className="mt-3 text-lg font-bold">Ye word locked hai</h1>
           <p className="mt-2 text-sm text-muted-foreground">{lockedMessage}</p>
           {error && <p className="mt-2 text-sm text-danger">{error}</p>}
+          {nextActionableWord && (
+            <a
+              href={`/vocabulary/${nextActionableWordSlug}`}
+              className="mt-4 inline-block rounded-lg border border-primary/40 bg-primary/5 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/10"
+            >
+              👉 "{nextActionableWord}" seekhein aur test dein →
+            </a>
+          )}
           <div className="mt-6 flex flex-col gap-2">
             <button
-              onClick={unlockWithPayment}
-              disabled={unlocking}
+              onClick={subscribeVocab}
+              disabled={subscribing}
               className="btn bg-primary py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
             >
-              {unlocking ? "Redirecting…" : "₹10 me abhi unlock karein"}
+              {subscribing ? "Redirecting…" : "₹10/month me sabhi words abhi unlock karein"}
             </button>
             <a href="/vocabulary" className="btn btn-outline py-2.5 text-sm">← Vocabulary list par wapas jaayein</a>
           </div>
@@ -240,7 +249,7 @@ export default function VocabWordDetailPage() {
             onClick={() => router.push(`/vocabulary/${word.slug}/quiz`)}
             className="btn w-full bg-primary py-3 text-sm font-semibold text-primary-foreground hover:opacity-90"
           >
-            🚀 {word.attemptsCount > 0 ? "Quiz dobara dein" : "Quiz shuru karein"} ({word.questionCount} questions, {word.masteryThresholdPct}%+ chahiye)
+            🚀 {word.attemptsCount > 0 ? "Quiz dobara dein" : "Quiz shuru karein"} ({word.questionCount} questions me se {word.requiredCorrectCount} sahi chahiye — {word.masteryThresholdPct}%+)
           </button>
         </div>
       </main>

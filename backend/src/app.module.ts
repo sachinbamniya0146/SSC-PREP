@@ -17,6 +17,7 @@ import { QuizModule } from './quiz/quiz.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { BookmarksModule } from './bookmarks/bookmarks.module';
 import { VocabModule } from './vocab/vocab.module';
+import { PushModule } from './push/push.module';
 import { MocksModule } from './mocks/mocks.module';
 import { BankModule } from './bank/bank.module';
 import { StudyPlanModule } from './study-plan/study-plan.module';
@@ -75,6 +76,7 @@ import { envValidationSchema } from './config/env.validation';
     GamificationModule,
     BookmarksModule,
     VocabModule,
+    PushModule,
     QuizModule,
     MocksModule,
     BankModule,

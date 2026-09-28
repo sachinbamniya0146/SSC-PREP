@@ -456,6 +456,53 @@ export class AuthService implements OnModuleInit {
   // ------------------------------------------------------------------ logout
 
   /**
+   * FIX (Sep 2026 — Profile page crash): GET /auth/me returned only the
+   * narrow JWT-derived `AuthenticatedUser` shape
+   * ({userId, email, role, sessionId, platform}) as `user`, but
+   * frontend/src/app/profile/page.tsx has always expected a full profile
+   * object — fullName, phone, isEmailVerified, createdAt, `_count`
+   * (testAttempts/bookmarks), and `subscriptions`. Reading
+   * `user._count.testAttempts` on the actually-returned shape threw
+   * "Cannot read properties of undefined" on every single load — the
+   * Profile page has been crashing for every user, not just failing to
+   * show a stat. This was never caused by anything in the chat/vocab work
+   * — it's a pre-existing endpoint/frontend-contract mismatch this session
+   * surfaced while wiring in the new Vocabulary Mastery subscription
+   * status (`vocabSubscription`, added here for the same reason: it's the
+   * one place the frontend already renders "Active Subscriptions").
+   */
+  async getFullProfile(userId: string) {
+    const [user, vocabSub] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          email: true,
+          phone: true,
+          fullName: true,
+          role: true,
+          isEmailVerified: true,
+          createdAt: true,
+          _count: { select: { testAttempts: true, bookmarks: true } },
+          subscriptions: {
+            select: { status: true, endsAt: true, planId: true },
+            orderBy: { startsAt: 'desc' },
+            take: 5,
+          },
+        },
+      }),
+      this.prisma.vocabSubscription.findUnique({ where: { userId } }),
+    ]);
+    if (!user) throw new UnauthorizedException('User no longer exists');
+    return {
+      ...user,
+      vocabSubscription: vocabSub && vocabSub.expiresAt > new Date()
+        ? { active: true, expiresAt: vocabSub.expiresAt }
+        : { active: false, expiresAt: vocabSub?.expiresAt ?? null },
+    };
+  }
+
+  /**
    * v2 §16 — entitlement summary for the client (upsell + gating hints).
    * Free tier: 10 daily quiz questions/day (1 quiz), 100 bookmarks, basic
    * analytics. Premium (ACTIVE subscription): everything unlimited.

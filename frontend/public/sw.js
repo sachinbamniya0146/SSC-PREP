@@ -1,36 +1,94 @@
-// This project does not use a service worker / PWA offline caching — there
-// is no `serviceWorker.register()` call anywhere in frontend/src. The
-// repeated `GET /sw.js -> 404` requests in the logs come from browsers
-// that registered a service worker from some earlier version of this site
-// (or a different app on the same origin during testing); those browsers
-// periodically re-fetch their registered script to check for updates.
+// SSC Prep Hub service worker.
 //
-// Per spec, a browser that gets a 404 for its registered SW script will
-// eventually unregister it on its own — but that can take a while and
-// keeps generating noisy 404s in the meantime. Serving this instead (a
-// real, minimal service worker whose only job is to immediately unregister
-// itself and clear any caches it might have created) clears it out on the
-// very next visit rather than waiting on the browser's own retry/backoff
-// schedule. This is not a fake success response — it's a real service
-// worker that runs, does its one job (clean up), and removes itself.
-self.addEventListener("install", () => {
+// Two jobs:
+//  1. Make the site installable / feel like a native app (basic offline
+//     shell caching for the icons + manifest, so a flaky connection on a
+//     student's phone doesn't show a browser error page).
+//  2. Receive Web Push notifications sent by the admin broadcast tool
+//     (see backend/src/push) and show them as real OS-level notifications,
+//     even when the app/tab is closed.
+//
+// NOTE: an earlier version of this file was a stub that immediately
+// unregistered itself (see git history) — that's why it was safe to
+// overwrite here, but it also means every already-installed client will
+// need one visit to pick up this new version before push will work for
+// them.
+
+const CACHE_NAME = "ssc-prep-shell-v1";
+const APP_SHELL = [
+  "/manifest.webmanifest",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-192-maskable.png",
+  "/icon-512-maskable.png",
+];
+
+self.addEventListener("install", (event) => {
   self.skipWaiting();
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)),
+  );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      // Remove any caches a previous version of this site's service worker
-      // may have created.
       const keys = await caches.keys();
-      await Promise.all(keys.map((key) => caches.delete(key)));
-      // Unregister this service worker so it stops being installed at all
-      // for future visits.
-      await self.registration.unregister();
-      // Take control of any open tabs so they stop routing through this
-      // worker immediately, rather than waiting for a reload.
-      const clientsList = await self.clients.matchAll({ type: "window" });
-      clientsList.forEach((client) => client.navigate(client.url));
+      await Promise.all(
+        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)),
+      );
+      await self.clients.claim();
+    })(),
+  );
+});
+
+// Cache-first for the small static app-shell assets only. Everything else
+// (API calls, pages) goes straight to the network — we are not trying to
+// build a full offline mode here, just avoid a broken icon/manifest.
+self.addEventListener("fetch", (event) => {
+  if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  if (!APP_SHELL.includes(url.pathname)) return;
+
+  event.respondWith(
+    caches.match(event.request).then((cached) => cached || fetch(event.request)),
+  );
+});
+
+// ---- Push notifications ----------------------------------------------
+
+self.addEventListener("push", (event) => {
+  let data = { title: "SSC Prep Hub", body: "You have a new update." };
+  try {
+    if (event.data) data = { ...data, ...event.data.json() };
+  } catch {
+    if (event.data) data.body = event.data.text();
+  }
+
+  const options = {
+    body: data.body,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    data: { url: data.url || "/dashboard" },
+    tag: data.tag || undefined,
+  };
+
+  event.waitUntil(self.registration.showNotification(data.title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/dashboard";
+
+  event.waitUntil(
+    (async () => {
+      const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const existing = allClients.find((c) => c.url.includes(targetUrl));
+      if (existing) {
+        existing.focus();
+      } else {
+        self.clients.openWindow(targetUrl);
+      }
     })(),
   );
 });

@@ -1,5 +1,6 @@
 "use client";
 import { fetchAuth } from "@/lib/api";
+import { Logo } from "@/components/Logo";
 
 import * as React from "react";
 import { motion } from "framer-motion";
@@ -1046,8 +1047,7 @@ export default function TestPage() {
         <div className="mx-auto max-w-4xl px-4 py-10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">S</span>
-              <span className="text-lg font-bold">SSC<span className="text-primary">PrepHub</span></span>
+              <Logo size={32} />
             </div>
             <a href="/dashboard" className="btn btn-outline">Back to Dashboard</a>
           </div>

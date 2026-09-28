@@ -12,7 +12,7 @@ import { useParams, useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 
 type QuizQuestion = { id: string; questionText: string; options: { key: string; text: string }[] };
-type QuizData = { wordId: string; word: string; slug: string; masteryThresholdPct: number; questions: QuizQuestion[] };
+type QuizData = { wordId: string; word: string; slug: string; masteryThresholdPct: number; requiredCorrectCount: number; questions: QuizQuestion[] };
 type ReviewItem = {
   id: string;
   questionText: string;
@@ -28,6 +28,7 @@ type SubmitResult = {
   wrong: number;
   total: number;
   masteryThresholdPct: number;
+  requiredCorrectCount: number;
   justMastered: boolean;
   alreadyMastered: boolean;
   review: ReviewItem[];
@@ -45,6 +46,22 @@ export default function VocabWordQuizPage() {
   const [error, setError] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const [result, setResult] = React.useState<SubmitResult | null>(null);
+  // NEW (Sep 26 2026) — "students test dete time timer bhi chalna chahiye":
+  // a simple count-up stopwatch, visible for the whole attempt. Not a
+  // countdown/time-limit (nothing was asked for a cutoff) — just always-
+  // visible elapsed time, same spirit as the exam-prep /test page's timer.
+  const [elapsedSec, setElapsedSec] = React.useState(0);
+
+  React.useEffect(() => {
+    const timer = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatTime = (totalSec: number) => {
+    const m = Math.floor(totalSec / 60).toString().padStart(2, "0");
+    const s = (totalSec % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  };
 
   React.useEffect(() => {
     (async () => {
@@ -114,7 +131,7 @@ export default function VocabWordQuizPage() {
               </p>
             ) : (
               <p className="mt-3 text-sm text-amber-700 dark:text-amber-400">
-                {result.masteryThresholdPct}%+ chahiye agla word unlock karne ke liye — word ko dobara padhein aur quiz phir se dein.
+                {result.total} me se {result.requiredCorrectCount} sahi chahiye ({result.masteryThresholdPct}%+) agla word unlock karne ke liye — word ko dobara padhein aur quiz phir se dein.
               </p>
             )}
           </div>
@@ -160,7 +177,10 @@ export default function VocabWordQuizPage() {
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-lg">
         <div className="mx-auto flex max-w-xl items-center justify-between">
           <span className="text-sm font-semibold">{quiz.word} — Quiz</span>
-          <span className="text-xs text-muted-foreground">{answeredCount}/{quiz.questions.length} answered</span>
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-xs text-muted-foreground">⏱ {formatTime(elapsedSec)}</span>
+            <span className="text-xs text-muted-foreground">{answeredCount}/{quiz.questions.length} answered</span>
+          </div>
         </div>
       </header>
 

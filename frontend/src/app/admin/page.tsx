@@ -3,6 +3,7 @@
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
 import { BackButton } from "@/components/BackButton";
+import { Logo } from "@/components/Logo";
 import { api, API_BASE, fetchAuth } from "@/lib/api";
 
 interface User {
@@ -627,11 +628,15 @@ export default function AdminPage() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-3">
             <BackButton />
+            <Logo size={32} withWordmark={false} />
             <span className="text-lg font-bold tracking-tight">
               SSC<span className="text-primary">PrepHub</span> <span className="text-muted-foreground">Admin</span>
             </span>
           </div>
           <div className="flex items-center gap-3 text-sm">
+            <a href="/admin/notifications" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
+              🔔 Notifications
+            </a>
             <a
               href="/admin/support-chat"
               className="relative rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Logo } from "@/components/Logo";
 import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
 
@@ -14,6 +15,7 @@ interface UserProfile {
   createdAt: string;
   _count: { testAttempts: number; bookmarks: number };
   subscriptions: { status: string; endsAt: string | null; planId: string }[];
+  vocabSubscription?: { active: boolean; expiresAt: string | null };
 }
 
 export default function ProfilePage() {
@@ -218,9 +220,7 @@ export default function ProfilePage() {
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-4">
-          <span className="text-lg font-bold">
-            SSC<span className="text-primary">PrepHub</span>
-          </span>
+          <Logo size={32} />
           <div className="flex items-center gap-3 text-sm">
             <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm">
               {theme === "dark" ? "☀️" : "🌙"}
@@ -278,6 +278,26 @@ export default function ProfilePage() {
                       .map((s) => `${s.planId} (until ${s.endsAt ? new Date(s.endsAt).toLocaleDateString() : "N/A"})`)
                       .join(", ")
                   : "Free Tier"}
+              </p>
+              {/* NEW (Sep 2026) — Vocabulary Mastery's own ₹10/month
+                  subscription, separate from the main Plan/Subscription
+                  above (see VocabSubscription in schema.prisma). */}
+              <p className="mt-1 text-sm">
+                📖 Vocabulary Mastery:{" "}
+                {user.vocabSubscription?.active ? (
+                  <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                    Active (expires {new Date(user.vocabSubscription.expiresAt!).toLocaleDateString()})
+                  </span>
+                ) : user.vocabSubscription?.expiresAt ? (
+                  <span className="text-muted-foreground">
+                    Expired ({new Date(user.vocabSubscription.expiresAt).toLocaleDateString()}) —{" "}
+                    <a href="/vocabulary" className="font-medium text-primary hover:underline">Renew for ₹10/month</a>
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    Not subscribed — <a href="/vocabulary" className="font-medium text-primary hover:underline">₹10/month to unlock all words</a>
+                  </span>
+                )}
               </p>
             </div>
           </div>

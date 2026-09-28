@@ -185,7 +185,7 @@ export class MonetizationService {
   }
 
   // ---- Cashfree order creation ----
-  async createOrder(userId: string, input: { planId?: string; mockTemplateId?: string; chapterId?: string; vocabWordId?: string; couponCode?: string }) {
+  async createOrder(userId: string, input: { planId?: string; mockTemplateId?: string; chapterId?: string; vocabWordId?: string; vocabSubscription?: boolean; couponCode?: string }) {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, fullName: true, phone: true } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -248,8 +248,18 @@ export class MonetizationService {
       amountInr = 10;
       productInfo = `SSC Prep Hub - Unlock Word: ${word.word}`;
       metadata = { kind: 'VOCAB_WORD', vocabWordId: word.id, vocabWord: word.word };
+    } else if (input.vocabSubscription) {
+      // "ye vocab ka alag subscription rahe... students ko subscriptions me
+      // dikhe kab end ho raha hai" — ₹10/month, unlocks every word for the
+      // subscription's duration (see VocabService.loadWordsWithProgress()).
+      // Renewing early just EXTENDS from the current expiry (or from now,
+      // if it already lapsed) rather than restarting from today, so a
+      // student never loses paid-for days by renewing a few days early.
+      amountInr = 10;
+      productInfo = 'SSC Prep Hub - Vocabulary Mastery Monthly Subscription';
+      metadata = { kind: 'VOCAB_SUBSCRIPTION' };
     } else {
-      throw new BadRequestException('Provide planId, mockTemplateId, chapterId, or vocabWordId');
+      throw new BadRequestException('Provide planId, mockTemplateId, chapterId, vocabWordId, or vocabSubscription');
     }
 
     if (amountInr <= 0) {
@@ -526,6 +536,16 @@ export class MonetizationService {
         where: { userId_wordId: { userId, wordId: meta.vocabWordId } },
         create: { userId, wordId: meta.vocabWordId, forceUnlocked: true },
         update: { forceUnlocked: true },
+      });
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+    } else if (meta.kind === 'VOCAB_SUBSCRIPTION') {
+      const existing = await this.prisma.vocabSubscription.findUnique({ where: { userId } });
+      const base = existing && existing.expiresAt > new Date() ? existing.expiresAt : new Date();
+      const expiresAt = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
+      await this.prisma.vocabSubscription.upsert({
+        where: { userId },
+        create: { userId, expiresAt, amountInr: payment.amountInr, status: 'SUCCESS' },
+        update: { expiresAt, amountInr: payment.amountInr, status: 'SUCCESS' },
       });
       await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
     }

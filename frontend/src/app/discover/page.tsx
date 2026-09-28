@@ -1,5 +1,6 @@
 "use client";
 import { fetchAuth } from "@/lib/api";
+import { Logo } from "@/components/Logo";
 
 import * as React from "react";
 import { motion } from "framer-motion";
@@ -143,8 +144,7 @@ export default function DiscoveryPage() {
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
           <a href="/" className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">S</span>
-            <span className="text-lg font-bold">SSC<span className="text-primary">PrepHub</span></span>
+            <Logo size={32} />
           </a>
           <div className="flex items-center gap-3">
             <a href="/test" className="btn btn-primary">Start Test</a>

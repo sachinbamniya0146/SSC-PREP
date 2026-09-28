@@ -100,6 +100,7 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: https://sscprephub.in/api/v1
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: 449330513452-02oguopf78aldfio3r2pa98dujkbkheo.apps.googleusercontent.com
+        NEXT_PUBLIC_VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
     container_name: ssc-frontend
     logging:
       driver: json-file

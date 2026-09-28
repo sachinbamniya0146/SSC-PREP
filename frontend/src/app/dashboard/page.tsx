@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Logo } from "@/components/Logo";
 import { ThemeContext } from "@/components/theme-provider";
 import { API_BASE, fetchAuth } from "@/lib/api";
 
@@ -120,9 +121,7 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <span className="text-lg font-bold tracking-tight">
-            SSC<span className="text-primary">PrepHub</span>
-          </span>
+          <Logo size={32} />
           <div className="flex items-center gap-3 text-sm">
             <button
               onClick={toggleTheme}

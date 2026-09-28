@@ -91,7 +91,10 @@ export class AuthController {
   @Get('me')
   async me(@CurrentUser() user: AuthenticatedUser) {
     // v2 §16 — entitlement summary for upsell + client gating hints
-    const entitlements = await this.authService.entitlements(user.userId);
-    return { user, entitlements };
+    const [profile, entitlements] = await Promise.all([
+      this.authService.getFullProfile(user.userId),
+      this.authService.entitlements(user.userId),
+    ]);
+    return { user: profile, entitlements };
   }
 }

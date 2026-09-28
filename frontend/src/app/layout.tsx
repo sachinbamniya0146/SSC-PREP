@@ -1,7 +1,37 @@
 import type { Metadata } from "next";
+import { Noto_Sans_Devanagari } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SupportChatMount } from "@/components/SupportChatMount";
+import { PushNotificationMount } from "@/components/PushNotificationMount";
+
+// FIX (Sep 2026 — "hindi font me mistake ho rahi hai matrao ki"): the app
+// referenced 'Noto Sans Devanagari' by NAME in a CSS variable, but never
+// actually loaded it — no next/font import, no Google Fonts <link>, no
+// @font-face. So the browser silently fell through to whatever
+// Devanagari-capable font happened to be installed on that OS (or none),
+// which is exactly what produces inconsistent/broken matra and conjunct
+// rendering across devices. Loading it for real via next/font/google
+// self-hosts the font at build time (no runtime Google Fonts request,
+// works offline, no layout-shift flash) and guarantees every device
+// renders Hindi text with a font that actually shapes Devanagari
+// correctly, instead of whatever gamble the OS's fallback picked.
+//
+// Also: the old '.font-hindi' opt-in class was applied to only 3 elements
+// in the ENTIRE app — every other Hindi string everywhere else (the vast
+// majority of the app's Hindi text, mixed inline with English on nearly
+// every page) never got it and rendered in the pure-Latin font stack. See
+// globals.css: this font is now folded into the BASE body font-family
+// stack instead, so the browser's standard per-character font-fallback
+// (Devanagari code points that Inter doesn't cover automatically fall
+// through to this font) covers every Hindi character on the site with
+// zero per-element tagging required.
+const notoDevanagari = Noto_Sans_Devanagari({
+  subsets: ["devanagari", "latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-noto-devanagari",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "SSC Prep Hub — India's Most Advanced SSC Practice Platform",
@@ -16,8 +46,11 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
   },
   icons: {
-    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
-    apple: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
+    icon: [
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
   openGraph: {
     title: "SSC Prep Hub",
@@ -35,12 +68,11 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
+      className={notoDevanagari.variable}
       style={
         {
           "--font-inter":
             "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-          "--font-noto-devanagari":
-            "'Noto Sans Devanagari', 'Nirmala UI', 'Kohinoor Devanagari', Mangal, sans-serif",
         } as React.CSSProperties
       }
     >
@@ -48,6 +80,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
           <SupportChatMount />
+          <PushNotificationMount />
         </ThemeProvider>
       </body>
     </html>

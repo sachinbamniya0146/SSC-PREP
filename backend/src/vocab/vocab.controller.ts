@@ -45,4 +45,9 @@ export class VocabController {
   todaysPlan(@Req() req: any) {
     return this.vocab.todaysPlan(this.uid(req));
   }
+
+  @Get('subscription')
+  getSubscriptionStatus(@Req() req: any) {
+    return this.vocab.getSubscriptionStatus(this.uid(req));
+  }
 }

@@ -4,6 +4,7 @@ import * as React from "react";
 import { motion } from "framer-motion";
 import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
+import { Logo } from "@/components/Logo";
 
 const exams = [
   { id: "exam-cgl", name: "SSC CGL", short: "CGL", color: "from-blue-500 to-cyan-500" },
@@ -208,12 +209,7 @@ export default function HomePage() {
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
           <a href="/" className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
-              S
-            </span>
-            <span className="text-lg font-bold tracking-tight">
-              SSC<span className="text-primary">PrepHub</span>
-            </span>
+            <Logo />
           </a>
           <nav className="hidden items-center gap-8 text-sm font-medium text-muted-foreground md:flex">
             <a href="#tests" className="hover:text-foreground">Tests</a>

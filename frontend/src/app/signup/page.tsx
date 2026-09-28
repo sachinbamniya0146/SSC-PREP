@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Logo } from "@/components/Logo";
 import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
 
@@ -215,8 +216,8 @@ export default function SignupPage() {
       <div className="relative hidden overflow-hidden bg-gradient-to-br from-primary/10 via-background to-accent/10 lg:flex lg:flex-col lg:justify-between lg:p-12">
         <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-32 -right-16 h-96 w-96 rounded-full bg-accent/20 blur-3xl" />
-        <span className="relative text-lg font-bold tracking-tight">
-          SSC<span className="text-primary">PrepHub</span>
+        <span className="relative">
+          <Logo size={32} />
         </span>
         <div className="relative max-w-md">
           <h2 className="text-3xl font-bold leading-tight tracking-tight">
