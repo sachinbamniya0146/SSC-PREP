@@ -10,6 +10,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { ReviewModule } from './review/review.module';
 import { ReportErrorModule } from './report-error/report-error.module';
+import { SupportChatModule } from './support-chat/support-chat.module';
 import { TestsModule } from './tests/tests.module';
 import { ReferralModule } from './referral/referral.module';
 import { AnalyticsModule } from './analytics/analytics.module';
@@ -92,6 +93,7 @@ import { envValidationSchema } from './config/env.validation';
     TelegramModule,
     ReviewModule,
     ReportErrorModule,
+    SupportChatModule,
     AIExplanationModule,
     AdminApiKeyModule,
     AiProviderModule,
