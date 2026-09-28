@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
-import { Noto_Sans_Devanagari } from "next/font/google";
+import "@fontsource/noto-sans-devanagari/devanagari-400.css";
+import "@fontsource/noto-sans-devanagari/devanagari-500.css";
+import "@fontsource/noto-sans-devanagari/devanagari-600.css";
+import "@fontsource/noto-sans-devanagari/devanagari-700.css";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SupportChatMount } from "@/components/SupportChatMount";
@@ -26,12 +29,6 @@ import { PushNotificationMount } from "@/components/PushNotificationMount";
 // (Devanagari code points that Inter doesn't cover automatically fall
 // through to this font) covers every Hindi character on the site with
 // zero per-element tagging required.
-const notoDevanagari = Noto_Sans_Devanagari({
-  subsets: ["devanagari", "latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-noto-devanagari",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "SSC Prep Hub — India's Most Advanced SSC Practice Platform",
@@ -68,11 +65,11 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={notoDevanagari.variable}
       style={
         {
           "--font-inter":
             "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+          "--font-noto-devanagari": "'Noto Sans Devanagari'",
         } as React.CSSProperties
       }
     >
