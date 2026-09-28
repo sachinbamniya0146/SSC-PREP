@@ -119,6 +119,31 @@ export default function AdminPage() {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
+  // Open error-report count for the nav badge. Students' "Report question"
+  // submissions were saved correctly but nothing in the admin UI ever showed
+  // that a new one had arrived, so admins never noticed them. Same pattern
+  // as the support-chat badge above: link + live count, refreshed every 30s.
+  const [openReportCount, setOpenReportCount] = React.useState(0);
+  React.useEffect(() => {
+    let cancelled = false;
+    const loadOpenReports = async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/report-error/category-stats`);
+        if (!r.ok || cancelled) return;
+        const d = await r.json();
+        const open = Array.isArray(d?.byCategory)
+          ? d.byCategory.reduce((sum: number, c: { open?: number }) => sum + (c.open ?? 0), 0)
+          : 0;
+        if (!cancelled) setOpenReportCount(open);
+      } catch {
+        // non-fatal — badge just stays at 0 if this fails
+      }
+    };
+    loadOpenReports();
+    const interval = setInterval(loadOpenReports, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
   // Bulk Question Upload — the backend (BankUploadService) always had the
   // Excel/CSV/JSON/Text/Word parsing + duplicate-detection logic, but it was
   // never wired to a controller and this page had zero UI for it, so admins
@@ -645,6 +670,17 @@ export default function AdminPage() {
               {openChatCount > 0 && (
                 <span className="absolute -top-2 -right-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
                   {openChatCount > 9 ? "9+" : openChatCount}
+                </span>
+              )}
+            </a>
+            <a
+              href="/admin/error-reports"
+              className="relative rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+            >
+              🚩 Error Reports
+              {openReportCount > 0 && (
+                <span className="absolute -top-2 -right-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+                  {openReportCount > 9 ? "9+" : openReportCount}
                 </span>
               )}
             </a>

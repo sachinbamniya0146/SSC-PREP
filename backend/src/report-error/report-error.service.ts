@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, ErrorReportStatus } from '@prisma/client';
 import { SearchService } from '../search/search.service';
 import { ChatGateway } from '../chat/chat.gateway';
+import { PushService } from '../push/push.service';
 import { encryptMessageContent, decryptMessageContent } from '../common/crypto/message-encryption';
 
 // v5 §37.4 — Report Error loop
@@ -22,6 +23,7 @@ export class ReportErrorService {
     private readonly prisma: PrismaService,
     private readonly searchService: SearchService,
     private readonly chatGateway: ChatGateway,
+    private readonly pushService: PushService,
   ) {}
 
   async getExports() {
@@ -71,6 +73,15 @@ export class ReportErrorService {
     if (nowSuspended) {
       this.reindexAfterVisibilityChange(questionId);
     }
+
+    // Tell admins/moderators a new report arrived, so they don't have to keep
+    // /admin/error-reports open to notice it. Fire-and-forget: notifyStaff
+    // never throws, and the student's report must succeed regardless.
+    void this.pushService.notifyStaff({
+      title: '🚩 New question error report',
+      body: (description || 'A student reported an error').slice(0, 120),
+      url: '/admin/error-reports',
+    });
 
     return {
       report,

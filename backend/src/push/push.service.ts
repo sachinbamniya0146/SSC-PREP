@@ -101,4 +101,56 @@ export class PushService {
 
     return { sent, failed, total: subscriptions.length };
   }
+
+  /**
+   * Sends one notification to every subscribed device of every ADMIN /
+   * MODERATOR. Used for "a student just reported a question error" so staff
+   * find out without having to keep /admin/error-reports open. Never throws —
+   * a push failure must not break the action that triggered it.
+   */
+  async notifyStaff(dto: BroadcastDto) {
+    if (!this.enabled) {
+      return { sent: 0, failed: 0, disabled: true };
+    }
+    try {
+      const subscriptions = await this.prisma.pushSubscription.findMany({
+        where: { user: { role: { in: ['ADMIN', 'MODERATOR'] } } },
+        select: { id: true, endpoint: true, p256dh: true, auth: true },
+      });
+      const payload = JSON.stringify({
+        title: dto.title,
+        body: dto.body,
+        url: dto.url || '/admin',
+      });
+      let sent = 0;
+      let failed = 0;
+      const deadIds: string[] = [];
+      await Promise.all(
+        subscriptions.map(async (sub) => {
+          try {
+            await webpush.sendNotification(
+              { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+              payload,
+            );
+            sent += 1;
+          } catch (err) {
+            failed += 1;
+            const statusCode = (err as { statusCode?: number }).statusCode;
+            if (statusCode === 404 || statusCode === 410) {
+              deadIds.push(sub.id);
+            } else {
+              this.logger.warn(`Staff push failed for subscription ${sub.id}: ${err}`);
+            }
+          }
+        }),
+      );
+      if (deadIds.length) {
+        await this.prisma.pushSubscription.deleteMany({ where: { id: { in: deadIds } } });
+      }
+      return { sent, failed, total: subscriptions.length };
+    } catch (err) {
+      this.logger.warn(`notifyStaff failed: ${err}`);
+      return { sent: 0, failed: 0, error: true };
+    }
+  }
 }

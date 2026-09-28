@@ -15,21 +15,21 @@ const DISMISSED_KEY = "ssc_push_prompt_dismissed";
  * Mounted once in the root layout (mirrors SupportChatMount's pattern):
  *   1. Always registers the service worker (needed for installability +
  *      push), for every visitor, regardless of login state.
- *   2. For a logged-in STUDENT who hasn't granted or permanently dismissed
- *      notification permission yet, shows a small bottom banner so they can
- *      opt in to admin broadcast notifications with one tap.
- * Not shown on auth pages or inside /admin (staff enable it from their own
- * settings, not via a student-facing banner).
+ *   2. For a logged-in STUDENT, ADMIN or MODERATOR who hasn't granted or
+ *      permanently dismissed notification permission yet, shows a small
+ *      bottom banner so they can opt in with one tap (students: admin
+ *      broadcasts; staff: new question-error reports).
+ * Not shown on auth pages.
  */
 export function PushNotificationMount() {
   const pathname = usePathname();
   const [showBanner, setShowBanner] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [isStaff, setIsStaff] = React.useState(false);
 
   const hideOnThisRoute =
     pathname?.startsWith("/login") ||
     pathname?.startsWith("/signup") ||
-    pathname?.startsWith("/admin") ||
     pathname?.startsWith("/verification");
 
   React.useEffect(() => {
@@ -47,7 +47,15 @@ export function PushNotificationMount() {
     let cancelled = false;
     api<{ role: string }>("/users/me")
       .then((me) => {
-        if (!cancelled && me.role === "STUDENT") setShowBanner(true);
+        if (cancelled) return;
+        // Students opt in to admin broadcasts; ADMIN/MODERATOR opt in to
+        // alerts such as "a student reported a question error".
+        if (me.role === "STUDENT") {
+          setShowBanner(true);
+        } else if (me.role === "ADMIN" || me.role === "MODERATOR") {
+          setIsStaff(true);
+          setShowBanner(true);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -80,7 +88,9 @@ export function PushNotificationMount() {
         <div className="flex-1 text-sm">
           <p className="font-semibold">Turn on notifications</p>
           <p className="text-muted-foreground">
-            Get notified about new mock tests, results and updates.
+            {isStaff
+              ? "Get notified when a student reports a question error."
+              : "Get notified about new mock tests, results and updates."}
           </p>
         </div>
         <div className="flex flex-col gap-1.5">
