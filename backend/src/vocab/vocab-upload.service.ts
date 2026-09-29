@@ -52,6 +52,55 @@ function optionalCell(row: any, key: string): string | null {
 export class VocabUploadService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Ready-to-fill Excel template (Words + Questions + Instructions sheets)
+   * matching exactly what uploadFromExcel() parses — so a Vocabulary editor
+   * never has to guess the columns.
+   */
+  buildTemplate(): Buffer {
+    const wb = XLSX.utils.book_new();
+
+    const wordsHeader = [
+      'word*', 'slug', 'orderIndex', 'partOfSpeech', 'pronunciation',
+      'meaningHindi*', 'meaningEnglish*', 'memoryTrick', 'etymology',
+      'registerNote', 'examTrendNote', 'confusingPairNote',
+      'exampleSentenceEn1', 'exampleSentenceHi1',
+      'exampleSentenceEn2', 'exampleSentenceHi2',
+      'exampleSentenceEn3', 'exampleSentenceHi3',
+      'synonymsJson', 'antonymsJson',
+    ];
+    const wordsRow = [
+      'Abate', 'abate', 1, 'verb', '/əˈbeɪt/',
+      'कम होना / घटना', 'To become less intense or widespread', 'A-bate: bait kam ho gaya', '',
+      '', 'SSC CGL 2019', 'abate vs abet',
+      'The storm began to abate.', 'तूफान कम होने लगा।',
+      '', '', '', '',
+      '["subside","diminish"]', '["intensify","increase"]',
+    ];
+    const wsWords = XLSX.utils.aoa_to_sheet([wordsHeader, wordsRow]);
+    XLSX.utils.book_append_sheet(wb, wsWords, 'Words');
+
+    const qHeader = ['wordSlug*', 'questionText*', 'optionA*', 'optionB*', 'optionC*', 'optionD*', 'correctAnswer*', 'explanation', 'questionType'];
+    const qRow = [
+      'abate', 'Choose the word closest in meaning to "ABATE".', 'Subside', 'Intensify', 'Ignore', 'Postpone', 'A',
+      'Abate means to become less intense — "subside" is the closest.', 'SYNONYM',
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([qHeader, qRow]), 'Questions');
+
+    const notes = [
+      ['Vocabulary bulk import — instructions'],
+      ['1. Sheet "Words": one row per word. Columns marked * are required.'],
+      ['2. Sheet "Questions": one row per quiz question. wordSlug must match a word\'s slug (slug defaults to the lower-case word).'],
+      ['3. correctAnswer must be A, B, C or D.'],
+      ['4. synonymsJson / antonymsJson must be a JSON list, e.g. ["a","b"] — or leave empty.'],
+      ['5. Re-uploading the same file is safe: words are matched by slug and questions by (word + question text) and updated, not duplicated.'],
+      ['6. You can upload only the Questions sheet to add questions to words that already exist.'],
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(notes), 'Instructions');
+
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  }
+
   async uploadFromExcel(buffer: Buffer): Promise<VocabUploadResult> {
     let workbook: XLSX.WorkBook;
     try {
@@ -207,7 +256,10 @@ export class VocabUploadService {
             await this.prisma.vocabQuestion.update({ where: { id: existing.id }, data });
             result.questionsUpdated++;
           } else {
-            await this.prisma.vocabQuestion.create({ data });
+            const created = await this.prisma.vocabQuestion.create({ data });
+            // remember it, so the same question repeated later in THIS file
+            // updates the row instead of creating a duplicate
+            existingByKey.set(key, created);
             result.questionsCreated++;
           }
         } catch (e) {

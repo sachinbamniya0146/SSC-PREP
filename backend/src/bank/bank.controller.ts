@@ -6,6 +6,7 @@ import { QuestionBankPracticeService } from './question-bank-practice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 import { parseQuestionKind } from '../common/question-visibility';
 
 @Controller('bank')
@@ -29,6 +30,7 @@ export class BankController {
   @Get('admin/coverage')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   coverageReport() {
     return this.bank.contentCoverageReport();
   }
@@ -39,6 +41,7 @@ export class BankController {
   @Get('admin/coverage/by-year')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   coverageReportByYear() {
     return this.bank.contentCoverageReportByYear();
   }
@@ -51,6 +54,7 @@ export class BankController {
   @Get('admin/coverage/drilldown')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   coverageDrilldown() {
     return this.bank.contentCoverageDrilldown();
   }
@@ -62,6 +66,7 @@ export class BankController {
   @Get('admin/questions/missing-hindi')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   missingHindi(
     @Query('examId') examId?: string,
     @Query('chapterId') chapterId?: string,
@@ -134,6 +139,7 @@ export class BankController {
   @Get('admin/chapters')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   listChaptersForAdmin(@Query('subjectId') subjectId?: string) {
     return this.bank.listAllChaptersForAdmin(subjectId);
   }
@@ -141,6 +147,7 @@ export class BankController {
   @Post('admin/chapters')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   createChapter(@Body() body: { subjectId: string; name: string; nameHindi?: string }) {
     if (!body?.subjectId || !body?.name) {
       throw new BadRequestException('subjectId and name are required');
@@ -158,6 +165,7 @@ export class BankController {
   @Get('admin/topics')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   listTopicsForAdmin(@Query('chapterId') chapterId?: string) {
     return this.bank.listAllTopicsForAdmin(chapterId);
   }
@@ -165,6 +173,7 @@ export class BankController {
   @Post('admin/topics')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   createTopic(@Body() body: { chapterId: string; name: string; nameHindi?: string }) {
     if (!body?.chapterId || !body?.name) {
       throw new BadRequestException('chapterId and name are required');
@@ -176,6 +185,7 @@ export class BankController {
   @Get('admin/subtopics')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   listSubTopicsForAdmin(@Query('topicId') topicId?: string) {
     return this.bank.listAllSubTopicsForAdmin(topicId);
   }
@@ -183,6 +193,7 @@ export class BankController {
   @Post('admin/subtopics')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   createSubTopic(@Body() body: { topicId: string; name: string; nameHindi?: string }) {
     if (!body?.topicId || !body?.name) {
       throw new BadRequestException('topicId and name are required');
@@ -193,6 +204,7 @@ export class BankController {
   @Delete('admin/subtopics/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   deleteSubTopic(@Param('id') id: string) {
     return this.bank.deleteSubTopic(id);
   }
@@ -204,6 +216,7 @@ export class BankController {
   @Get('admin/taxonomy/tree')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   taxonomyTree() {
     return this.bank.getTaxonomyTree();
   }
@@ -216,6 +229,7 @@ export class BankController {
   @Get('admin/questions/pending')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   listPending(
     @Query('examId') examId?: string,
     @Query('subjectId') subjectId?: string,
@@ -235,6 +249,7 @@ export class BankController {
   @Post('admin/questions/:id/approve')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   approvePending(
     @Param('id') id: string,
     @Req() req: any,
@@ -255,6 +270,7 @@ export class BankController {
   @Post('admin/questions/:id/reject')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   rejectPending(@Param('id') id: string, @Req() req: any, @Body() body?: { reason?: string }) {
     const adminId = req.user?.userId ?? req.user?.id;
     return this.bank.rejectPendingQuestion(id, adminId, body?.reason);
@@ -269,6 +285,7 @@ export class BankController {
   @Post('admin/questions/bulk-approve')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   bulkApprovePending(
     @Req() req: any,
     @Body() body?: { examId?: string; subjectId?: string; chapterId?: string },
@@ -378,6 +395,7 @@ export class BankController {
   @Post('questions/:id/video')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   addVideoSolution(
     @Param('id') id: string,
     @Body() dto: { 
@@ -405,6 +423,7 @@ export class BankController {
   @Delete('questions/:id/video')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   removeVideoSolution(
     @Param('id') id: string,
     @Req() req: any,
@@ -415,6 +434,7 @@ export class BankController {
   @Put('questions/:id/verify')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   verifyQuestion(
     @Param('id') id: string,
     @Body() body: { status: string },
@@ -430,6 +450,7 @@ export class BankController {
   @Put('admin/questions/:id/translation')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   updateHindiTranslation(
     @Param('id') id: string,
     @Body() body: { questionTextHindi: string; explanationHindi?: string },
@@ -452,6 +473,7 @@ export class BankController {
   @Get('questions/:id/verification')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   getQuestionWithVerification(@Param('id') id: string) {
     return this.bank.getQuestionWithVerification(id);
   }
@@ -459,6 +481,7 @@ export class BankController {
   @Get('topic-weightage')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   topicWeightage(@Query('examId') examId?: string) {
     return this.bank.getTopicWeightage(examId);
   }

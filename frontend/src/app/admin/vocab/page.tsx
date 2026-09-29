@@ -110,6 +110,32 @@ export default function AdminVocabPage() {
             Do sheets: <b>Words</b> (poora learning content) + <b>Questions</b> (wordSlug se link). Dobara upload karna safe hai —
             slug/questionText se match karke update hota hai, duplicate nahi banta.
           </p>
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={async () => {
+                setError("");
+                try {
+                  const r = await fetchAuth(`${API_BASE}/vocab/admin/template`);
+                  if (!r.ok) throw new Error(`Template download failed (HTTP ${r.status})`);
+                  const blob = await r.blob();
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "vocabulary_import_template.xlsx";
+                  document.body.appendChild(a);
+                  a.click();
+                  a.remove();
+                  window.URL.revokeObjectURL(url);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Template download failed");
+                }
+              }}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+            >
+              ⬇️ Excel Template download karein
+            </button>
+          </div>
           <div className="mt-3 flex items-center gap-3">
             <input type="file" accept=".xlsx,.xls" onChange={(e) => setFile(e.target.files?.[0] || null)} className="text-sm" />
             <button

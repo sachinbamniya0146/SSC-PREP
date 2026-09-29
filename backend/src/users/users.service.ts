@@ -10,6 +10,7 @@ const PUBLIC_USER_SELECT = {
   phone: true,
   fullName: true,
   role: true,
+  permissions: true,
   isEmailVerified: true,
   avatarUrl: true,
   currentStreak: true,

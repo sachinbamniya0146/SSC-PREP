@@ -3,6 +3,7 @@ import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Q
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 import { BankAdminService } from './bank-admin.service';
 
 // =============================================================================
@@ -12,6 +13,7 @@ import { BankAdminService } from './bank-admin.service';
 @Controller('bank/admin/manage')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN', 'MODERATOR')
+@Department('QUESTIONS')
 export class BankAdminController {
   constructor(private readonly admin: BankAdminService) {}
 

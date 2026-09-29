@@ -2,6 +2,7 @@ import { Controller, Get, Post, Param, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Role } from '@prisma/client';
 import { AIExplanationService } from './ai-explanation.service';
@@ -43,6 +44,7 @@ export class AIExplanationController {
   @Post('questions/:id/regenerate')
   @UseGuards(RolesGuard)
   @Roles(Role.ADMIN, Role.MODERATOR)
+  @Department('QUESTIONS', 'PRACTICE')
   async regenerateExplanation(
     @CurrentUser() user: { userId: string },
     @Param('id') questionId: string,

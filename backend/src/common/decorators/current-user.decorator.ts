@@ -6,6 +6,8 @@ export interface AuthenticatedUser {
   role: 'STUDENT' | 'ADMIN' | 'MODERATOR';
   sessionId: string;
   platform: 'WEB' | 'APP';
+  /** Filled live by RolesGuard on @Roles routes (department access for MODERATOR). */
+  permissions?: string[];
 }
 
 /** Extract the authenticated user (attached by JwtAuthGuard) from the request. */

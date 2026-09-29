@@ -5,6 +5,7 @@ import { Public } from '../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 
 @Controller('tests/:testTemplateId/pdf')
 export class PdfExportController {
@@ -19,6 +20,7 @@ export class PdfExportController {
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async generate(@Param('testTemplateId') id: string) {
     return this.service.generate(id);
   }
@@ -27,6 +29,7 @@ export class PdfExportController {
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async spotCheck(@Param('testTemplateId') id: string) {
     return this.service.spotCheck(id);
   }
@@ -35,6 +38,7 @@ export class PdfExportController {
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async publish(@Param('testTemplateId') id: string) {
     return this.service.publish(id);
   }
@@ -42,6 +46,7 @@ export class PdfExportController {
   @Get('status')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async status(@Param('testTemplateId') id: string) {
     return this.service.status(id);
   }

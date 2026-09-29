@@ -21,12 +21,15 @@ import {
   Body,
   Req,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
+import { PrismaService } from '../prisma/prisma.service';
 import { BankUploadService } from './bank-upload.service';
 import { TaxonomyImportService } from './taxonomy-import.service';
 import { parseQuestionKind } from '../common/question-visibility';
@@ -36,14 +39,51 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB — question files are text/s
 @Controller('bank/admin/upload')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN', 'MODERATOR')
+@Department('QUESTIONS', 'PRACTICE') // class default: either question department
 export class BankUploadController {
   constructor(
     private readonly uploadService: BankUploadService,
     private readonly taxonomyImportService: TaxonomyImportService,
+    private readonly prisma: PrismaService,
   ) {}
 
   private adminId(req: any): string {
     return req.user?.userId ?? req.user?.id;
+  }
+
+  private isAdmin(req: any): boolean {
+    return req.user?.role === 'ADMIN';
+  }
+
+  // DEPARTMENT RULE: PYQ / main-bank uploads need the QUESTIONS department,
+  // practice-only uploads need PRACTICE. Admin passes both. RolesGuard has
+  // already copied the live permissions onto req.user.
+  private assertUploadDepartment(req: any, practice: boolean) {
+    if (this.isAdmin(req)) return;
+    const need = practice ? 'PRACTICE' : 'QUESTIONS';
+    const has: string[] = req.user?.permissions ?? [];
+    if (!has.includes(need)) {
+      throw new ForbiddenException(
+        practice
+          ? 'Aapko Practice Questions upload karne ka access nahi hai. Admin se contact karein.'
+          : 'Aapko PYQ / Question Bank upload karne ka access nahi hai. Admin se contact karein.',
+      );
+    }
+  }
+
+  // Staff (non-admin) can only see / touch upload batches they created
+  // themselves — so a Practice uploader can never publish or wipe a
+  // Questions uploader's batch (and vice-versa). Admin sees everything.
+  private async assertBatchAccess(req: any, id: string) {
+    if (this.isAdmin(req)) return;
+    const b = await this.prisma.questionUploadBatch.findUnique({
+      where: { id },
+      select: { adminId: true },
+    });
+    if (!b) throw new BadRequestException('Upload batch not found');
+    if (b.adminId !== this.adminId(req)) {
+      throw new ForbiddenException('Ye upload kisi aur ne kiya hai — aap sirf apne uploads manage kar sakte hain.');
+    }
   }
 
   // BUGFIX ("admin ke liye alag practice question upload feature" —
@@ -76,6 +116,7 @@ export class BankUploadController {
   @Post('excel')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadExcel(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
+    this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
     return this.afterUpload(
       await this.uploadService.uploadFromExcel(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
@@ -86,6 +127,7 @@ export class BankUploadController {
   @Post('csv')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadCsv(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
+    this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.csv) is required');
     return this.afterUpload(
       await this.uploadService.uploadFromCSV(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
@@ -98,6 +140,7 @@ export class BankUploadController {
   @Post('text')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadText(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
+    this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.txt/.json) is required');
     return this.afterUpload(
       await this.uploadService.uploadFromText(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
@@ -109,6 +152,7 @@ export class BankUploadController {
   @Post('json')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadJsonFile(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
+    this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.json) is required');
     return this.afterUpload(
       await this.uploadService.uploadFromText(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
@@ -120,6 +164,7 @@ export class BankUploadController {
   // objects generated by an AI prompt straight into a textarea.
   @Post('json-paste')
   async uploadJsonPaste(@Body() body: any, @Req() req: any) {
+    this.assertUploadDepartment(req, !Array.isArray(body) && this.isPracticeOnlyFlag(body));
     const questions = Array.isArray(body) ? body : body?.questions;
     if (!Array.isArray(questions) || questions.length === 0) {
       throw new BadRequestException('Body must be a JSON array of questions, or { "questions": [...] }');
@@ -135,6 +180,7 @@ export class BankUploadController {
   @Post('word')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadWord(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
+    this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.docx) is required');
     return this.afterUpload(
       await this.uploadService.uploadFromWord(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
@@ -234,18 +280,22 @@ export class BankUploadController {
   // fully implemented and completely unreachable. Wires them up for real.
   @Get('batches')
   async listBatches(@Req() req: any, @Query('mine') mine: string | undefined) {
+    // Non-admin staff are always scoped to their own uploads.
+    if (!this.isAdmin(req)) return this.uploadService.listUploadBatches(this.adminId(req));
     // `?mine=1` scopes to the calling admin's own uploads; omit it to see
     // every admin's upload history (both are ADMIN/MODERATOR-only anyway).
     return this.uploadService.listUploadBatches(mine === '1' || mine === 'true' ? this.adminId(req) : undefined);
   }
 
   @Get('batches/:id')
-  async getBatch(@Param('id') id: string) {
+  async getBatch(@Param('id') id: string, @Req() req: any) {
+    await this.assertBatchAccess(req, id);
     return this.uploadService.getUploadBatchDetail(id);
   }
 
   @Delete('batches/:id')
   async deleteBatch(@Param('id') id: string, @Query('keepQuestions') keepQuestions: string | undefined, @Req() req: any) {
+    await this.assertBatchAccess(req, id);
     return this.uploadService.deleteUploadBatch(id, keepQuestions === '1' || keepQuestions === 'true', this.adminId(req));
   }
 
@@ -254,7 +304,8 @@ export class BankUploadController {
   // shape as the upload template (+ readable name columns), so the file can
   // be re-uploaded as-is.
   @Get('batches/:id/download')
-  async downloadBatch(@Param('id') id: string, @Query('format') format: string | undefined, @Res() res: Response) {
+  async downloadBatch(@Param('id') id: string, @Query('format') format: string | undefined, @Res() res: Response, @Req() req: any) {
+    await this.assertBatchAccess(req, id);
     const fmt = (format === 'json' || format === 'csv' || format === 'excel') ? format : 'excel';
     const batch = await this.uploadService.getUploadBatchDetail(id);
     const { buffer, contentType, filename } = await this.uploadService.exportQuestionBank({ uploadBatchId: id }, fmt);
@@ -267,7 +318,8 @@ export class BankUploadController {
 
   // NEW — publish every still-pending question of this upload in one click.
   @Post('batches/:id/publish')
-  async publishBatch(@Param('id') id: string) {
+  async publishBatch(@Param('id') id: string, @Req() req: any) {
+    await this.assertBatchAccess(req, id);
     return this.uploadService.publishUploadBatch(id);
   }
 
@@ -282,6 +334,7 @@ export class BankUploadController {
     @Query('subTopicId') subTopicId: string | undefined,
     @Req() req: any,
   ) {
+    await this.assertBatchAccess(req, id);
     return this.uploadService.deleteUploadBatchQuestions(id, { subjectId, chapterId, topicId, subTopicId }, this.adminId(req));
   }
 
@@ -292,6 +345,7 @@ export class BankUploadController {
   // re-run on the same or an edited file — matching rows are updated, not
   // duplicated. See TaxonomyImportService for the exact expected layout.
   @Post('syllabus-excel')
+  @Department('QUESTIONS')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadSyllabusExcel(@UploadedFile() file: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');

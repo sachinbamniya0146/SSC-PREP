@@ -4,6 +4,7 @@ import { SearchService } from './search.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import { SkipThrottle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
@@ -60,6 +61,7 @@ export class SearchController {
   @Post('reindex')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.MODERATOR)
+  @Department('QUESTIONS', 'PRACTICE')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Reindex all approved questions (admin)' })
   async reindexAll() {
@@ -69,6 +71,7 @@ export class SearchController {
   @Post('index/:questionId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.MODERATOR)
+  @Department('QUESTIONS', 'PRACTICE')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Index a single question (admin)' })
   async indexOne(@Param('questionId') questionId: string) {
@@ -78,6 +81,7 @@ export class SearchController {
   @Post('delete/:questionId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.MODERATOR)
+  @Department('QUESTIONS', 'PRACTICE')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete a question from index (admin)' })
   async deleteOne(@Param('questionId') questionId: string) {

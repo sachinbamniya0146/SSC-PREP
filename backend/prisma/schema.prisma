@@ -16,6 +16,18 @@ enum Role {
   MODERATOR
 }
 
+// Department-level access for staff (role = MODERATOR). ADMIN always has all.
+//   QUESTIONS  -> PYQ / main question bank upload + manage + syllabus tools
+//   PRACTICE   -> practice-only question upload
+//   VOCABULARY -> vocabulary words + vocab questions
+//   SUPPORT    -> student support chat + question error reports
+enum StaffPermission {
+  QUESTIONS
+  PRACTICE
+  VOCABULARY
+  SUPPORT
+}
+
 enum Platform {
   WEB
   APP
@@ -104,6 +116,7 @@ model User {
   fullName         String
   passwordHash     String
   role             Role            @default(STUDENT)
+  permissions      StaffPermission[] @default([])
   isEmailVerified  Boolean         @default(false)
   avatarUrl        String?
   

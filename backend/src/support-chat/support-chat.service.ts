@@ -44,7 +44,12 @@ export class SupportChatService {
     const conversation = await this.prisma.supportConversation.findUnique({ where: { id: conversationId } });
     if (!conversation) throw new NotFoundException('Conversation not found');
     const isOwner = conversation.studentId === userId;
-    const isStaff = role === 'ADMIN' || role === 'MODERATOR';
+    // Live check (JWT role can be stale; moderators need SUPPORT department).
+    const live = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, permissions: true } });
+    const isStaff =
+      live?.role === 'ADMIN' ||
+      (live?.role === 'MODERATOR' && (live.permissions as string[]).includes('SUPPORT'));
+    void role;
     if (!isOwner && !isStaff) {
       throw new ForbiddenException('You do not have access to this conversation');
     }

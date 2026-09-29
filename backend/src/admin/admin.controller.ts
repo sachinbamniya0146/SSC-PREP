@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Patch, Delete, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Patch, Delete, BadRequestException, NotFoundException } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -204,7 +204,7 @@ export class AdminController {
 
   // ---- Audit log viewer ----
   @Get('audit-log')
-  @Roles(Role.ADMIN, Role.MODERATOR)
+  @Roles(Role.ADMIN) // audit trail contains every admin action — not for department staff
   async auditLog(
     @Query('action') action?: string,
     @Query('entity') entity?: string,
@@ -274,7 +274,7 @@ export class AdminController {
     const subscription = await this.prisma.subscription.findFirst({
       where: { userId, status: 'ACTIVE' },
     });
-    if (!subscription) throw new Error('No active subscription found');
+    if (!subscription) throw new NotFoundException('No active subscription found');
     await this.prisma.subscription.update({
       where: { id: subscription.id },
       data: { status: 'CANCELLED' },
@@ -294,7 +294,7 @@ export class AdminController {
     @Body() body: { planId: string },
   ) {
     const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
-    if (!plan || !plan.isActive) throw new Error('Plan not found or inactive');
+    if (!plan || !plan.isActive) throw new BadRequestException('Plan not found or inactive');
 
     // Cancel any existing active subscription
     await this.prisma.subscription.updateMany({
@@ -327,7 +327,7 @@ export class AdminController {
   @Post('subscriptions/bulk')
   async bulkGrantSubscription(@Body() body: { emails: string[]; planId: string }) {
     const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
-    if (!plan || !plan.isActive) throw new Error('Plan not found or inactive');
+    if (!plan || !plan.isActive) throw new BadRequestException('Plan not found or inactive');
 
     const results = [];
     for (const email of body.emails) {
@@ -428,7 +428,7 @@ export class AdminController {
 
   @Post('coupons')
   async createCoupon(@Body() body: { code: string; description?: string; discountPct?: number; discountInr?: number; maxUses?: number; expiresAt?: string }) {
-    if (body.discountPct && body.discountInr) throw new Error('Use either discountPct or discountInr, not both');
+    if (body.discountPct && body.discountInr) throw new BadRequestException('Use either discountPct or discountInr, not both');
     const coupon = await this.prisma.coupon.create({
       data: {
         code: body.code.trim().toUpperCase(),
@@ -482,7 +482,7 @@ export class AdminController {
       where: { id: paymentId },
       include: { user: { select: { email: true, fullName: true, phone: true } }, subscription: { include: { plan: true } } },
     });
-    if (!payment) throw new Error('Payment not found');
+    if (!payment) throw new NotFoundException('Payment not found');
 
     const meta = (payment.metadataJson ?? {}) as Record<string, unknown>;
     return {
@@ -604,7 +604,7 @@ export class AdminController {
   @Post('users/bulk-subscription')
   async bulkSubscription(@Body() body: { userIds: string[]; planId: string; action: 'grant' | 'cancel' | 'extend' }) {
     const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
-    if (!plan || !plan.isActive) throw new Error('Plan not found or inactive');
+    if (!plan || !plan.isActive) throw new BadRequestException('Plan not found or inactive');
 
     const results = [];
     for (const userId of body.userIds) {

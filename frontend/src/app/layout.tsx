@@ -7,6 +7,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SupportChatMount } from "@/components/SupportChatMount";
 import { PushNotificationMount } from "@/components/PushNotificationMount";
+import SessionSync from "@/components/SessionSync";
 
 // FIX (Sep 2026 — "hindi font me mistake ho rahi hai matrao ki"): the app
 // referenced 'Noto Sans Devanagari' by NAME in a CSS variable, but never
@@ -78,6 +79,7 @@ export default function RootLayout({
           {children}
           <SupportChatMount />
           <PushNotificationMount />
+          <SessionSync />
         </ThemeProvider>
       </body>
     </html>

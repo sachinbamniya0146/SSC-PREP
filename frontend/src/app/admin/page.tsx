@@ -5,6 +5,7 @@ import { ThemeContext } from "@/components/theme-provider";
 import { BackButton } from "@/components/BackButton";
 import { Logo } from "@/components/Logo";
 import { api, API_BASE, fetchAuth } from "@/lib/api";
+import { useAccess } from "@/lib/permissions";
 
 interface User {
   id: string;
@@ -67,6 +68,9 @@ interface SubscriptionPlan {
 }
 
 export default function AdminPage() {
+  // Department access: ADMIN sees everything; staff (MODERATOR) only what the
+  // admin granted (Questions / Practice / Vocabulary / Support).
+  const access = useAccess();
   const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [users, setUsers] = React.useState<User[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -634,9 +638,12 @@ export default function AdminPage() {
   }, [loadBatches]);
 
   React.useEffect(() => {
+    // /admin/users and /admin/plans are ADMIN-only — staff would just get 403s.
+    if (!access.isAdmin) return;
     loadUsers();
     loadPlans();
-  }, [page, search, roleFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, search, roleFilter, access.isAdmin]);
 
   const roleBadge = (role: string) => {
     const colors: Record<string, string> = {
@@ -659,9 +666,17 @@ export default function AdminPage() {
             </span>
           </div>
           <div className="flex items-center gap-3 text-sm">
-            <a href="/admin/notifications" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
-              🔔 Notifications
-            </a>
+            {access.isAdmin && (
+              <a href="/admin/staff" className="rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10">
+                👥 Staff Access
+              </a>
+            )}
+            {access.isAdmin && (
+              <a href="/admin/notifications" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
+                🔔 Notifications
+              </a>
+            )}
+            {access.can("SUPPORT") && (
             <a
               href="/admin/support-chat"
               className="relative rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
@@ -673,6 +688,8 @@ export default function AdminPage() {
                 </span>
               )}
             </a>
+            )}
+            {access.can("SUPPORT") && (
             <a
               href="/admin/error-reports"
               className="relative rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
@@ -684,12 +701,17 @@ export default function AdminPage() {
                 </span>
               )}
             </a>
-            <a href="/admin/referrals" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
-              Refer & Earn
-            </a>
-            <a href="/admin/api-keys" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
-              API Keys
-            </a>
+            )}
+            {access.isAdmin && (
+              <a href="/admin/referrals" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
+                Refer & Earn
+              </a>
+            )}
+            {access.isAdmin && (
+              <a href="/admin/api-keys" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
+                API Keys
+              </a>
+            )}
             <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm hover:bg-muted">
               {theme === "dark" ? "☀️" : "🌙"}
             </button>
@@ -699,17 +721,21 @@ export default function AdminPage() {
 
       <main className="mx-auto max-w-7xl px-4 py-8">
         <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-2xl font-bold tracking-tight">User Management</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{access.isAdmin ? "User Management" : "Staff Workspace"}</h1>
+          {access.isAdmin && (
           <div className="flex gap-2">
             <button onClick={() => setShowEmailModal(true)} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
               Bulk Grant Subscription
             </button>
           </div>
+          )}
         </div>
 
         {error && <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">{error}</div>}
         {info && <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-600 dark:text-emerald-400">{info}</div>}
 
+        {access.isAdmin && (
+        <>
         {/* Plan / Pricing Management — previously missing entirely: the
             admin panel could only display plans to assign to a user, with
             no way to actually change a price or add a new plan. */}
@@ -737,7 +763,26 @@ export default function AdminPage() {
             )}
           </div>
         </div>
+        </>
+        )}
 
+        {!access.loading && access.isStaff && !access.isAdmin && (
+          <div className="mb-6 rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm">
+            <p className="font-semibold">Aapka access:</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {access.permissions.length === 0 && (
+                <span className="text-muted-foreground">Abhi koi department assign nahi hua hai — admin se contact karein.</span>
+              )}
+              {access.can("QUESTIONS") && <span className="rounded-full bg-sky-500/15 px-3 py-1 text-xs font-medium text-sky-700 dark:text-sky-400">📘 Questions (PYQ)</span>}
+              {access.can("PRACTICE") && <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">📗 Practice Questions</span>}
+              {access.can("VOCABULARY") && <a href="/admin/vocab" className="rounded-full bg-purple-500/15 px-3 py-1 text-xs font-medium text-purple-700 hover:bg-purple-500/25 dark:text-purple-400">📖 Vocabulary →</a>}
+              {access.can("SUPPORT") && <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-400">💬 Support & Reports</span>}
+            </div>
+          </div>
+        )}
+
+        {(access.can("QUESTIONS") || access.can("PRACTICE")) && (
+        <>
         {/* Bulk Question Upload — was fully built on the backend but never
             wired to a controller/module and had no UI at all. Now working:
             download a template in the format you want, fill it in, upload it. */}
@@ -767,6 +812,7 @@ export default function AdminPage() {
               On a fresh subject with zero chapters there was previously no
               way to get one at all. Point admins at the new panel before
               they hit that wall. */}
+          {access.can("QUESTIONS") && (<>
           <a
             href="/admin/chapters"
             className="mb-3 inline-block rounded-lg border border-primary/40 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
@@ -785,12 +831,15 @@ export default function AdminPage() {
           >
             🗂️ Questions ko chapter/topic/sub-topic me move, publish ya delete karein — Question Manager →
           </a>
+          </>)}
+          {access.can("VOCABULARY") && (
           <a
             href="/admin/vocab"
             className="mb-3 ml-2 inline-block rounded-lg border border-purple-500/40 bg-purple-500/5 px-3 py-1.5 text-xs font-medium text-purple-600 hover:bg-purple-500/10 dark:text-purple-400"
           >
             📖 Vocabulary words + questions Excel se upload karein — Vocabulary Manage →
           </a>
+          )}
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
               <button
@@ -850,7 +899,8 @@ export default function AdminPage() {
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <button
               onClick={() => submitUpload("practice")}
-              disabled={uploading || !uploadFile}
+              disabled={uploading || !uploadFile || !access.can("PRACTICE")}
+              title={access.can("PRACTICE") ? undefined : "Aapko Practice upload ka access nahi hai"}
               className="flex flex-col items-center gap-1 rounded-xl border-2 border-emerald-500 bg-emerald-500/10 px-4 py-5 text-center font-semibold text-emerald-700 transition hover:bg-emerald-500/20 disabled:opacity-50 dark:text-emerald-400"
             >
               <span className="text-lg">📗 Upload PRACTICE Questions</span>
@@ -860,7 +910,8 @@ export default function AdminPage() {
             </button>
             <button
               onClick={() => submitUpload("pyq")}
-              disabled={uploading || !uploadFile}
+              disabled={uploading || !uploadFile || !access.can("QUESTIONS")}
+              title={access.can("QUESTIONS") ? undefined : "Aapko PYQ upload ka access nahi hai"}
               className="flex flex-col items-center gap-1 rounded-xl border-2 border-sky-500 bg-sky-500/10 px-4 py-5 text-center font-semibold text-sky-700 transition hover:bg-sky-500/20 disabled:opacity-50 dark:text-sky-400"
             >
               <span className="text-lg">📘 Upload PYQ Questions</span>
@@ -1130,7 +1181,11 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+        </>
+        )}
 
+        {access.isAdmin && (
+        <>
         {/* Filters */}
         <div className="mb-4 flex flex-wrap gap-4 rounded-xl border border-border bg-card p-4">
           <div className="flex-1 min-w-[200px]">
@@ -1225,6 +1280,8 @@ export default function AdminPage() {
             </div>
           </div>
         </div>
+        </>
+        )}
       </main>
 
       {/* Add/Edit Plan Modal */}

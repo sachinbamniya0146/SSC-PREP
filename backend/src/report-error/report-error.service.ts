@@ -253,7 +253,12 @@ export class ReportErrorService {
     const report = await this.prisma.questionErrorReport.findUnique({ where: { id: reportId } });
     if (!report) throw new NotFoundException('Report not found');
     const isOwner = report.userId === userId;
-    const isStaff = role === 'ADMIN' || role === 'MODERATOR';
+    // Live check (JWT role can be stale; moderators need SUPPORT department).
+    const live = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, permissions: true } });
+    const isStaff =
+      live?.role === 'ADMIN' ||
+      (live?.role === 'MODERATOR' && (live.permissions as string[]).includes('SUPPORT'));
+    void role;
     if (!isOwner && !isStaff) {
       throw new ForbiddenException('You do not have access to this report thread');
     }

@@ -112,8 +112,23 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const session = await this.prisma.deviceSession.findUnique({ where: { id: payload.sid } });
       if (!session || !session.isActive) throw new Error('Session inactive');
 
+      // SECURITY: resolve the LIVE role/permissions from the DB rather than
+      // trusting the JWT claim. A moderator only counts as support staff
+      // (and only joins the admin rooms) if they hold the SUPPORT
+      // permission; otherwise they're treated as a normal user here.
+      const live = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: { role: true, permissions: true },
+      });
+      if (!live) throw new Error('User no longer exists');
+      const isSupportStaff =
+        live.role === 'ADMIN' ||
+        (live.role === 'MODERATOR' && (live.permissions as string[]).includes('SUPPORT'));
+
       socket.data.userId = payload.sub;
-      socket.data.role = payload.role as 'STUDENT' | 'ADMIN' | 'MODERATOR';
+      socket.data.role = isSupportStaff
+        ? (live.role as 'ADMIN' | 'MODERATOR')
+        : 'STUDENT';
 
       // Admins auto-join a global "admin inbox" room so the admin chat list
       // can show live new-message badges without joining every conversation

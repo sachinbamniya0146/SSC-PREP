@@ -19,6 +19,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -37,6 +38,7 @@ import {
 @Controller('admin/pdf-ingestion')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN', 'MODERATOR')
+@Department('QUESTIONS')
 export class PdfIngestionController {
   constructor(
     private readonly service: PdfIngestionService,

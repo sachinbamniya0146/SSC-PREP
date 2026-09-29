@@ -11,6 +11,7 @@ import {
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { ErrorReportStatus } from '@prisma/client';
 import { ReportErrorService } from './report-error.service';
@@ -68,6 +69,7 @@ export class ReportErrorController {
   @Get()
   @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('SUPPORT')
   async list(@Query('status') status?: string, @Query('questionId') questionId?: string, @Query('issueType') issueType?: string) {
     return this.reportError.list(status, questionId, issueType);
   }
@@ -75,6 +77,7 @@ export class ReportErrorController {
   @Get('category-stats')
   @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('SUPPORT')
   async categoryStats() {
     return this.reportError.categoryStats();
   }
@@ -82,6 +85,7 @@ export class ReportErrorController {
   @Get('question/:questionId')
   @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('SUPPORT')
   async getQuestionReports(@Param('questionId') questionId: string) {
     return this.reportError.getQuestionReports(questionId);
   }
@@ -89,6 +93,7 @@ export class ReportErrorController {
   @Post(':id/resolve')
   @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('SUPPORT')
   async resolve(
     @CurrentUser() user: { userId: string },
     @Param('id') reportId: string,

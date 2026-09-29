@@ -4,6 +4,7 @@ import * as React from "react";
 import { Logo } from "@/components/Logo";
 import { ThemeContext } from "@/components/theme-provider";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { PERMISSION_INFO, StaffPermission } from "@/lib/permissions";
 
 export default function DashboardPage() {
   const { theme, toggleTheme } = React.useContext(ThemeContext);
@@ -11,6 +12,7 @@ export default function DashboardPage() {
     fullName: string;
     email: string;
     role?: string;
+    permissions?: StaffPermission[];
   } | null>(null);
   const [gami, setGami] = React.useState<{ currentStreak: number; longestStreak: number; xp: number; coins: number; hintQuota: number; rank: number } | null>(null);
   // CHANGED ("sabhi SSC exams ko bhi pattern year ke saath dikhana he, na
@@ -68,14 +70,21 @@ export default function DashboardPage() {
   }, []);
 
   React.useEffect(() => {
-    const raw = localStorage.getItem("ssc_user");
-    if (raw) {
-      try {
-        setUser(JSON.parse(raw));
-      } catch {
-        /* ignore */
+    const readUser = () => {
+      const raw = localStorage.getItem("ssc_user");
+      if (raw) {
+        try {
+          setUser(JSON.parse(raw));
+        } catch {
+          /* ignore */
+        }
       }
-    }
+    };
+    readUser();
+    // SessionSync (layout) refreshes role/permissions from the server and
+    // fires this event — so a student who was just given staff access sees
+    // their tools without having to log out and in again.
+    window.addEventListener("ssc-user-updated", readUser);
     // v1 Phase 6 — live streak/XP from the gamification service
     //
     // BUGFIX (2026-09 audit — "dashboard stops showing streak/XP/plan after
@@ -103,6 +112,7 @@ export default function DashboardPage() {
         .then((d) => d && setSubscription(d))
         .catch(() => undefined);
     }
+    return () => window.removeEventListener("ssc-user-updated", readUser);
   }, []);
 
   // BUG FIX: an ADMIN/MODERATOR account saw the exact same dashboard as a
@@ -111,7 +121,11 @@ export default function DashboardPage() {
   // and stored in localStorage ("ssc_user"). It just wasn't being read
   // here. Without this, an admin had no visible way into their own tools
   // unless they already knew the raw URLs by heart.
-  const isAdmin = user?.role === "ADMIN" || user?.role === "MODERATOR";
+  const isAdmin = user?.role === "ADMIN";
+  // Department staff (MODERATOR) get a small panel with only what the admin
+  // granted them — not the full admin grid.
+  const isStaffOnly = user?.role === "MODERATOR";
+  const staffPerms: StaffPermission[] = user?.permissions ?? [];
 
   const firstName = user?.fullName?.split(" ")[0] || "Student";
   const hour = new Date().getHours();
@@ -183,6 +197,30 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {isStaffOnly && (
+          <div className="mt-8 rounded-xl border border-primary/30 bg-primary/[0.04] p-5">
+            <h2 className="font-semibold text-primary">Staff Tools</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Aapko ye departments assign kiye gaye hain.
+            </p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {staffPerms.length === 0 && (
+                <p className="text-sm text-muted-foreground">Abhi koi department assign nahi hua — admin se contact karein.</p>
+              )}
+              {staffPerms.map((p) => (
+                <a
+                  key={p}
+                  href={PERMISSION_INFO[p].href}
+                  className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-primary/40"
+                >
+                  <div className="text-sm font-semibold">{PERMISSION_INFO[p].emoji} {PERMISSION_INFO[p].label}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{PERMISSION_INFO[p].desc}</div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
         {isAdmin && (
           <div className="mt-8 rounded-xl border border-amber-500/30 bg-amber-500/[0.04] p-5">
             <div className="flex items-center gap-2">
@@ -203,6 +241,10 @@ export default function DashboardPage() {
               <a href="/admin" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
                 <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Admin Panel</div>
                 <div className="mt-0.5 text-xs text-muted-foreground">Users, plans, bulk question upload</div>
+              </a>
+              <a href="/admin/staff" className="group rounded-lg border border-primary/40 bg-primary/5 px-4 py-3 transition hover:border-primary">
+                <div className="text-sm font-semibold text-primary">👥 Staff Access</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">Email se Questions / Practice / Vocabulary access dein</div>
               </a>
               {/* SESSION 13 FIX: backend/src/pdf-ingestion/pdf-ingestion.controller.ts
                   had 15 working endpoints (upload, batch progress, chunk retry,

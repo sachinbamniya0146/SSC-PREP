@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Param, Query, UseGuards, BadRequestExcepti
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { SupportChatService } from './support-chat.service';
 
@@ -50,6 +51,7 @@ export class SupportChatController {
   @Get('admin/inbox')
   @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('SUPPORT')
   async adminInbox(@Query('status') status?: 'OPEN' | 'RESOLVED') {
     return this.supportChat.adminInbox(status);
   }
@@ -57,6 +59,7 @@ export class SupportChatController {
   @Post(':id/resolve')
   @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('SUPPORT')
   async resolve(@CurrentUser() user: AuthenticatedUser, @Param('id') conversationId: string) {
     return this.supportChat.resolveConversation(conversationId, user.userId);
   }
@@ -64,6 +67,7 @@ export class SupportChatController {
   @Post(':id/reopen')
   @UseGuards(RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
+  @Department('SUPPORT')
   async reopen(@Param('id') conversationId: string) {
     return this.supportChat.reopenConversation(conversationId);
   }

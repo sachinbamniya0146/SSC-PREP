@@ -481,6 +481,7 @@ export class AuthService implements OnModuleInit {
           phone: true,
           fullName: true,
           role: true,
+          permissions: true,
           isEmailVerified: true,
           createdAt: true,
           _count: { select: { testAttempts: true, bookmarks: true } },

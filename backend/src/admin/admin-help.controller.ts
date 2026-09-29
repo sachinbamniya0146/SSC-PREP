@@ -2,6 +2,7 @@ import { Controller, Get, Res } from '@nestjs/common';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
+import { Department } from '../common/decorators/department.decorator';
 import { AdminService } from './admin.service';
 import { BankUploadService } from '../bank/bank-upload.service';
 
@@ -14,12 +15,14 @@ export class AdminHelpController {
 
   @Get('formats')
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async getFormatExamples(@CurrentUser() _user: { userId: string }) {
     return this.adminService.getFormatExamples();
   }
 
   @Get('prompts')
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async getAIPrompts(@CurrentUser() _user: { userId: string }) {
     return this.adminService.getAIPrompts();
   }
@@ -31,6 +34,7 @@ export class AdminHelpController {
   // prompts payload.
   @Get('diagram-types')
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async getDiagramTypes(@CurrentUser() _user: { userId: string }) {
     return this.uploadService.getDiagramTypesHelp();
   }
@@ -49,6 +53,7 @@ export class AdminHelpController {
   // guaranteed to match the parser that actually receives the upload.
   @Get('templates/excel')
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async downloadExcelTemplate(@Res() res: Response) {
     // generateExcelTemplate() is now async (this session) — it queries the
     // DB to fill the "Reference IDs" sheet with real exam/subject/chapter/
@@ -61,6 +66,7 @@ export class AdminHelpController {
 
   @Get('templates/csv')
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async downloadCSVTemplate(@Res() res: Response) {
     const buffer = this.uploadService.generateCSVTemplate();
     res.setHeader('Content-Type', 'text/csv');
@@ -70,6 +76,7 @@ export class AdminHelpController {
 
   @Get('templates/json')
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async downloadJSONTemplate(@Res() res: Response) {
     const buffer = this.uploadService.generateJSONTemplate();
     res.setHeader('Content-Type', 'application/json');
@@ -79,6 +86,7 @@ export class AdminHelpController {
 
   @Get('templates/text')
   @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'PRACTICE')
   async downloadTextTemplate(@Res() res: Response) {
     const buffer = this.uploadService.generateTextTemplate();
     res.setHeader('Content-Type', 'text/plain');
