@@ -171,10 +171,10 @@ export default function MocksPage() {
     if (!pyqByYear.has(y)) pyqByYear.set(y, []);
     pyqByYear.get(y)!.push(m);
   }
-  for (const list of pyqByYear.values()) {
+  for (const list of Array.from(pyqByYear.values())) {
     list.sort((a, b) => String(b.examDate ?? "").localeCompare(String(a.examDate ?? "")) || String(a.shift ?? "").localeCompare(String(b.shift ?? "")));
   }
-  const pyqYears = [...pyqByYear.keys()].sort((a, b) => b - a);
+  const pyqYears = Array.from(pyqByYear.keys()).sort((a, b) => b - a);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
