@@ -251,7 +251,7 @@ export default function StudyPlanBoardPage() {
             {/* ---------------------------------------------------- Test */}
             {tab === "test" && (
               <div className="mt-4 space-y-4">
-                {!upcoming ? (
+                {!upcoming && (
                   <div className="rounded-xl border border-border bg-card p-5 text-center text-sm">
                     <p>Koi test scheduled nahi hai. Chapters tab me complete chapters mark karein.</p>
                     <p className="mt-1 text-muted-foreground">No test scheduled. Mark finished chapters in the Chapters tab.</p>
