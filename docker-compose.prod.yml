@@ -92,6 +92,9 @@ services:
       # Only Docker-internal hostnames stay here — these are NOT secrets
       REDIS_HOST: redis
       MEILISEARCH_HOST: http://meilisearch:7700
+      # Image-question fallback when R2/S3 is not configured: keep uploads on the
+      # persistent ./files host mount so they survive container rebuilds.
+      UPLOADS_DIR: /app/files/uploads
     ports:
       - "127.0.0.1:4000:4000"
     volumes:

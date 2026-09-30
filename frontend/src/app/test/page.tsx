@@ -297,6 +297,29 @@ export default function TestPage() {
         const tplId = sp.get("template");
         const chapId = sp.get("chapter");
 
+        // NEW (Sep 29 2026): /test?plantest=<id> — the 9 AM Study-Plan test.
+        const planTestParam = sp.get("plantest");
+        if (planTestParam) {
+          const r = await fetchAuth(`${apiBase()}/study-plan/test/upcoming`, { headers: getAuthHeaders() });
+          const d = await r.json().catch(() => ({}));
+          const t = d?.test;
+          if (!r.ok || !t || t.id !== planTestParam) {
+            setDailyGate("Ye test ab available nahi hai / This test is no longer available.");
+            return;
+          }
+          if (!t.canStart) {
+            setDailyGate(`${t.message?.en || "Test opens at 9:00 AM."}\n${t.message?.hi || ""}`);
+            return;
+          }
+          setPreMeta({
+            title: `Study Plan Test — ${t.examName || "Your Exam"}`,
+            durationMinutes: t.pattern?.durationMinutes || 60,
+            totalQuestions: t.pattern?.totalQuestions || 100,
+            totalMarks: t.pattern?.totalMarks || 200,
+          });
+          return;
+        }
+
         if (isDaily) {
           const r = await fetchAuth(`${apiBase()}/tests/daily-test/status`, {
             headers: getAuthHeaders(),
@@ -378,9 +401,28 @@ export default function TestPage() {
       // v3 §6.4 — Daily Test (Live mode): /test?daily=1 → server composes the
       // plan-based paper, snapshots it and opens a server-authoritative timed attempt
       const isDaily = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("daily") === "1" : false;
+      const planTestId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("plantest") : null;
       let qs: UgQ[] = [];
       let durationSec = 0;
       let attemptId: string | null = null;
+      if (planTestId) {
+        const pr = await fetchAuth(`${apiBase()}/study-plan/test/${encodeURIComponent(planTestId)}/start`, {
+          method: "POST",
+          headers: getAuthHeaders(),
+        });
+        const pd = await pr.json().catch(() => ({}));
+        if (!pr.ok) {
+          alert(`⚠️ ${pd?.messages ? `${pd.messages.en}\n${pd.messages.hi}` : pd?.message || "Study Plan Test start nahi hua."}`);
+          setLoading(false);
+          setStarting(false);
+          return;
+        }
+        qs = Array.isArray(pd?.questions) ? pd.questions : [];
+        durationSec = pd?.durationSec || 0;
+        attemptId = pd?.attemptId ?? null;
+        setAttemptId(attemptId);
+        if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
+      }
       if (isDaily) {
         const dr = await fetchAuth(`${apiBase()}/tests/daily-test/start`, {
           method: "POST",
@@ -1062,8 +1104,8 @@ export default function TestPage() {
             // they clicked Start. Now we check status up front and show this
             // instead of the (misleading) instructions form.
             <div className="card mt-8 border-warning/40 bg-warning/5 p-6">
-              <p className="font-semibold text-warning">⚠️ Daily Test locked</p>
-              <p className="mt-2 text-sm text-muted-foreground">{dailyGate}</p>
+              <p className="font-semibold text-warning">⚠️ Test abhi locked hai / locked</p>
+              <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">{dailyGate}</p>
               <a
                 href="/study-plan"
                 className="mt-4 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"

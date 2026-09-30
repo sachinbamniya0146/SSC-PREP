@@ -26,6 +26,9 @@ import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef,
 import { PrismaService } from '../prisma/prisma.service';
 import { ReferralService } from '../referral/referral.service';
 import * as crypto from 'crypto';
+import { istDateKey } from '../gamification/gamification.service';
+import { computeRevisionState } from '../vocab/vocab-revision.util';
+import { VOCAB_UNLOCK_ALL_PRICE_INR, VOCAB_WORD_UNLOCK_PRICE_INR, skipFeeForStreak } from '../vocab/vocab-messages';
 
 interface CashfreeConfig {
   appId: string;
@@ -185,7 +188,7 @@ export class MonetizationService {
   }
 
   // ---- Cashfree order creation ----
-  async createOrder(userId: string, input: { planId?: string; mockTemplateId?: string; chapterId?: string; vocabWordId?: string; vocabSubscription?: boolean; couponCode?: string }) {
+  async createOrder(userId: string, input: { planId?: string; mockTemplateId?: string; chapterId?: string; vocabWordId?: string; vocabSubscription?: boolean; vocabUnlockAll?: boolean; vocabRevisionSkip?: boolean; couponCode?: string }) {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, fullName: true, phone: true } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -245,7 +248,8 @@ export class MonetizationService {
       if (existing?.masteredAt || existing?.forceUnlocked) {
         throw new BadRequestException('Ye word already unlocked hai');
       }
-      amountInr = 10;
+      // Sep 29 2026: force-unlock is now Rs 2 per word (was Rs 10).
+      amountInr = VOCAB_WORD_UNLOCK_PRICE_INR;
       productInfo = `SSC Prep Hub - Unlock Word: ${word.word}`;
       metadata = { kind: 'VOCAB_WORD', vocabWordId: word.id, vocabWord: word.word };
     } else if (input.vocabSubscription) {
@@ -258,8 +262,25 @@ export class MonetizationService {
       amountInr = 10;
       productInfo = 'SSC Prep Hub - Vocabulary Mastery Monthly Subscription';
       metadata = { kind: 'VOCAB_SUBSCRIPTION' };
+    } else if (input.vocabUnlockAll) {
+      // Rs 100 — unlock EVERY vocabulary word at once (one-time). The UI shows
+      // the bilingual "read first, don't waste money" warning before this call.
+      const state = await this.prisma.vocabUserState.findUnique({ where: { userId } });
+      if (state?.allUnlockedAt) throw new BadRequestException('Saare words pehle se unlock hain');
+      amountInr = VOCAB_UNLOCK_ALL_PRICE_INR;
+      productInfo = 'SSC Prep Hub - Vocabulary: Unlock All Words';
+      metadata = { kind: 'VOCAB_UNLOCK_ALL' };
+    } else if (input.vocabRevisionSkip) {
+      // Escalating pay-to-skip for today's daily revision. The fee is derived
+      // ONLY from the server-side skip streak — never from the client.
+      const st = await computeRevisionState(this.prisma, userId);
+      if (st.doneToday) throw new BadRequestException('Aaj ki revision already ho chuki hai / skip ho chuki hai');
+      if (!st.due) throw new BadRequestException('Abhi revision pending nahi hai — skip karne ki zaroorat nahi');
+      amountInr = skipFeeForStreak(st.skipStreak);
+      productInfo = `SSC Prep Hub - Vocabulary: skip today's revision (skip #${st.skipStreak + 1})`;
+      metadata = { kind: 'VOCAB_REVISION_SKIP', dateKey: st.dateKey, skipNumber: st.skipStreak + 1 };
     } else {
-      throw new BadRequestException('Provide planId, mockTemplateId, chapterId, vocabWordId, or vocabSubscription');
+      throw new BadRequestException('Provide planId, mockTemplateId, chapterId, vocabWordId, vocabSubscription, vocabUnlockAll or vocabRevisionSkip');
     }
 
     if (amountInr <= 0) {
@@ -537,6 +558,44 @@ export class MonetizationService {
         create: { userId, wordId: meta.vocabWordId, forceUnlocked: true },
         update: { forceUnlocked: true },
       });
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+    } else if (meta.kind === 'VOCAB_UNLOCK_ALL') {
+      await this.prisma.vocabUserState.upsert({
+        where: { userId },
+        create: { userId, allUnlockedAt: new Date() },
+        update: { allUnlockedAt: new Date() },
+      });
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+    } else if (meta.kind === 'VOCAB_REVISION_SKIP') {
+      const dateKey = meta.dateKey || istDateKey(new Date());
+      const already = await this.prisma.vocabRevisionSession.findFirst({
+        where: { userId, dateKey, status: 'SKIPPED' },
+        select: { id: true },
+      });
+      if (!already) {
+        const now = new Date();
+        await this.prisma.vocabRevisionSession.create({
+          data: {
+            userId,
+            dateKey,
+            status: 'SKIPPED',
+            wordIds: [],
+            questionIds: [],
+            skipFeeInr: payment.amountInr,
+            expiresAt: now,
+            completedAt: now,
+          },
+        });
+        await this.prisma.vocabUserState.upsert({
+          where: { userId },
+          create: { userId, skipStreak: 1, lastSkipDateKey: dateKey, totalSkipPaidInr: payment.amountInr },
+          update: {
+            skipStreak: { increment: 1 },
+            lastSkipDateKey: dateKey,
+            totalSkipPaidInr: { increment: payment.amountInr },
+          },
+        });
+      }
       await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
     } else if (meta.kind === 'VOCAB_SUBSCRIPTION') {
       const existing = await this.prisma.vocabSubscription.findUnique({ where: { userId } });

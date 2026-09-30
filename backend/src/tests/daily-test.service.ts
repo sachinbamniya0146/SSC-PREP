@@ -250,7 +250,7 @@ export class DailyTestService {
       take: 1000,
     });
     const valid = rows.filter(
-      (r) => Array.isArray(r.optionsJson) && r.optionsJson.length >= 2 && r.optionsJson.every((o: any) => o?.text),
+      (r) => Array.isArray(r.optionsJson) && r.optionsJson.length >= 2 && r.optionsJson.every((o: any) => o?.text || o?.diagramType || o?.imageUrl),
     );
     const byYear = new Map<number, string[]>();
     for (const r of valid) {
@@ -294,7 +294,13 @@ export class DailyTestService {
         id: r.id,
         questionText: r.questionText,
         questionTextHindi: r.questionTextHindi,
-        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text })),
+        // BUGFIX (Sep 29 2026 — image questions): this loader used to drop every
+        // image/diagram field, so an image-based question reached the student
+        // as a blank stem with empty options in the Daily Test.
+        questionDiagramType: r.questionDiagramType ?? null,
+        questionDiagramLabels: r.questionDiagramLabels ?? null,
+        questionImageUrl: r.questionImageUrl ?? null,
+        options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
         chapter: r.chapter?.name ?? '',
         examName: r.exam?.name ?? '',
         year: r.year,

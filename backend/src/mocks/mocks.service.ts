@@ -110,10 +110,15 @@ export class MocksService {
       };
     });
 
+    // NEW (Sep 29 2026): PYQ-mock category meta so the UI can auto-group
+    // Exam > Year > Date > Shift. Real papers only — one card per real shift.
+    const metaById = new Map(tests.map((t: any) => [t.id, { examId: t.examId ?? null, year: t.year ?? null, shift: t.shift ?? null, examDate: t.examDate ?? null, isPyq: isPyqAutoMockId(t.id) }]));
+    const mocksWithMeta = mocks.map((m: any) => ({ ...m, ...(metaById.get(m.id) ?? {}) }));
+
     return {
       freeMocksPerExam: FREE_MOCKS_PER_EXAM,
       hasActiveSubscription,
-      mockAccess: mocks,
+      mockAccess: mocksWithMeta,
       examPacks: {
         name: packs[0]?.name ?? 'Mock Access Pack',
         priceInr: packs[0]?.priceInr ?? OFFER_PRICE_INR,

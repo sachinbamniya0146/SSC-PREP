@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import BiMessage from "@/components/BiMessage";
 
 // ---------------------------------------------------------------------------
 // REWRITTEN (Sep 21 2026) — "practice vale me topic subtopic ka pura syllabus
@@ -54,6 +55,9 @@ type UserProgress = {
 
 type Selection = { subjectId?: string; chapterId?: string; topicId?: string; subTopicId?: string };
 
+// NEW (Sep 29 2026): free = 5 practice sets per day, Rs 19 plan = unlimited.
+type Quota = { premium: boolean; dailyLimit: number | null; usedToday: number; remainingToday: number | null; planPriceInr: number };
+
 export default function QuestionBankPracticePage() {
   const [taxonomy, setTaxonomy] = React.useState<TaxonomyResponse | null>(null);
   const [userProgress, setUserProgress] = React.useState<UserProgress[]>([]);
@@ -61,6 +65,9 @@ export default function QuestionBankPracticePage() {
   const [error, setError] = React.useState("");
   const [starting, setStarting] = React.useState(false);
   const [count, setCount] = React.useState(25);
+  const [quota, setQuota] = React.useState<Quota | null>(null);
+  const [paywall, setPaywall] = React.useState<{ en: string; hi: string } | null>(null);
+  const autoStarted = React.useRef(false);
 
   const [openSubject, setOpenSubject] = React.useState<string>("");
   const [openChapter, setOpenChapter] = React.useState<string>("");
@@ -84,6 +91,7 @@ export default function QuestionBankPracticePage() {
       if (!taxRes.ok || !progRes.ok) throw new Error("Failed to load data");
       setTaxonomy(await taxRes.json());
       setUserProgress(await progRes.json());
+      fetchAuth(`${apiBase()}/bank/practice/quota`, { headers: authHeaders() }).then((qr) => (qr.ok ? qr.json() : null)).then((qj) => qj && setQuota(qj)).catch(() => undefined);
     } catch {
       setError("Network error — backend unreachable");
     } finally {
@@ -121,7 +129,7 @@ export default function QuestionBankPracticePage() {
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         if (d.code === "PREMIUM_REQUIRED") {
-          setError(`Is chapter/topic me free ${taxonomy?.freeSetsPerScope ?? 3} sets ho chuke hain. Unlimited practice ke liye Premium lein.`);
+          setPaywall(d.messages || { en: d.message || "Free limit reached. Get the plan for unlimited practice.", hi: "फ्री लिमिट पूरी हो गई। अनलिमिटेड प्रैक्टिस के लिए प्लान लें।" });
         } else {
           setError(`Failed: ${d.message || r.status}`);
         }
@@ -140,6 +148,22 @@ export default function QuestionBankPracticePage() {
       setStarting(false);
     }
   };
+
+  // NEW (Sep 29 2026): deep links from the weak-topic board / results page —
+  // /question-bank-practice?chapterId=..&topicId=..&subTopicId=.. starts the
+  // 25-question level-wise set for exactly that scope, once.
+  React.useEffect(() => {
+    if (!taxonomy || autoStarted.current || typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const chapterId = sp.get("chapterId") || undefined;
+    const topicId = sp.get("topicId") || undefined;
+    const subTopicId = sp.get("subTopicId") || undefined;
+    if (!chapterId && !topicId && !subTopicId) return;
+    autoStarted.current = true;
+    const subject = taxonomy.subjects.find((sj) => sj.chapters.some((c) => c.id === chapterId));
+    start({ subjectId: subject?.id, chapterId, topicId, subTopicId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taxonomy]);
 
   const resumePractice = async (setId: string) => {
     setStarting(true);
@@ -201,6 +225,21 @@ export default function QuestionBankPracticePage() {
           Subject → Chapter → Topic → Sub-topic chunein aur seedhe usi par practice karein. 🔥 wale topics aapke liye
           weak hain — unpar unlimited free practice hai.
         </p>
+
+        {quota && !quota.premium && quota.dailyLimit != null && (
+          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-semibold">
+            🎟️ {quota.usedToday}/{quota.dailyLimit} free sets used today
+            <a href="/premium" className="text-primary underline">₹{quota.planPriceInr} unlimited</a>
+          </div>
+        )}
+        {quota?.premium && <div className="mt-3 inline-block rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400">♾️ Unlimited practice active</div>}
+
+        {paywall && (
+          <div className="mt-4">
+            <BiMessage msg={paywall} tone="warn" />
+            <a href="/premium" className="btn mt-2 inline-block bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">Get ₹{quota?.planPriceInr ?? 19} plan →</a>
+          </div>
+        )}
 
         {error && (
           <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">

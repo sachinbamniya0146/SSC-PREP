@@ -312,7 +312,7 @@ export class PdfExportService {
       take: 150,
     });
     const valid = rows.filter(
-      (r) => Array.isArray(r.optionsJson) && r.optionsJson.length === 4 && r.optionsJson.every((o: any) => o?.text),
+      (r) => Array.isArray(r.optionsJson) && r.optionsJson.length === 4 && r.optionsJson.every((o: any) => o?.text || o?.diagramType || o?.imageUrl),
     );
     if (valid.length === 0) {
       throw new BadRequestException('No bilingual 4-option questions available for this chapter yet.');

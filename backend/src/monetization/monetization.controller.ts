@@ -31,7 +31,7 @@ export class MonetizationController {
   @Post('order')
   createOrder(
     @CurrentUser() user: { userId: string },
-    @Body() body: { planId?: string; mockTemplateId?: string; chapterId?: string; vocabWordId?: string; vocabSubscription?: boolean; couponCode?: string },
+    @Body() body: { planId?: string; mockTemplateId?: string; chapterId?: string; vocabWordId?: string; vocabSubscription?: boolean; vocabUnlockAll?: boolean; vocabRevisionSkip?: boolean; couponCode?: string },
   ) {
     return this.service.createOrder(user.userId, body);
   }

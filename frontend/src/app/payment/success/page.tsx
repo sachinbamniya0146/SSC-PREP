@@ -56,7 +56,7 @@ function PaymentSuccessContent() {
         }
 
         setStatus("success");
-        setMessage(data.duplicate ? "Payment already confirmed." : "Payment successful! Your premium subscription is now active.");
+        setMessage(data.duplicate ? "Payment already confirmed." : "Payment successful! Aapka purchase activate ho gaya hai / Your purchase is now active.");
       } catch (e: any) {
         setStatus("failed");
         setMessage(e.message || "Network error while verifying payment");
@@ -92,6 +92,10 @@ function PaymentSuccessContent() {
             <Link href="/premium" className="inline-block w-full py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90">
               View Subscription
             </Link>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Link href="/vocabulary" className="rounded-lg border border-border py-2.5 text-sm font-semibold hover:border-primary">📖 Vocabulary</Link>
+              <Link href="/question-bank-practice" className="rounded-lg border border-border py-2.5 text-sm font-semibold hover:border-primary">✍️ Practice</Link>
+            </div>
           </>
         ) : (
           <>

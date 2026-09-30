@@ -74,6 +74,9 @@ export default function AttemptReviewPage() {
   const [lang, setLang] = React.useState<"en" | "both">("both");
   // v6 §6 — per-template stats (real cutoff P90 + top-5 toppers)
   const [stats, setStats] = React.useState<any>(null);
+  // NEW (Sep 29 2026): topics the student got wrong in THIS attempt + Study-Plan verdict.
+  const [weakTopics, setWeakTopics] = React.useState<any>(null);
+  const [planVerdict, setPlanVerdict] = React.useState<any>(null);
 
   React.useEffect(() => {
     if (!params?.attemptId) return;
@@ -86,6 +89,14 @@ export default function AttemptReviewPage() {
         }
         const d = await r.json();
         setDetail(d);
+        fetchAuth(`${apiBase()}/bank/practice/from-attempt/${params.attemptId}`, { headers: authHeaders() })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((w) => w && setWeakTopics(w))
+          .catch(() => null);
+        fetchAuth(`${apiBase()}/study-plan/attempt/${params.attemptId}/verdict`, { headers: authHeaders() })
+          .then((r) => (r.ok ? r.json().catch(() => null) : null))
+          .then((v) => v && v.chapters && setPlanVerdict(v))
+          .catch(() => null);
         // best-effort stats fetch (real cutoff + toppers for this template)
         if (d?.testTemplateId) {
           fetchAuth(`${apiBase()}/tests/stats/${d.testTemplateId}`, { headers: authHeaders() })
@@ -213,6 +224,50 @@ export default function AttemptReviewPage() {
           <SummaryCard label="Percentile" value={detail.percentile != null ? `${detail.percentile}%` : "—"} sub="vs all attempts" tone="rank" />
           <SummaryCard label="Accuracy" value={`${detail.accuracyPercent}%`} sub="on attempted" tone="primary" />
         </div>
+
+        {/* Study-Plan test verdict: chapters <90% are un-marked as weak (Sep 29 2026) */}
+        {planVerdict && (
+          <div className="card mt-4 border-primary/30 bg-primary/5 p-5">
+            <p className="text-sm font-bold">🗓️ Study Plan verdict</p>
+            <p className="mt-1 text-sm">{planVerdict.message?.en}</p>
+            <p className="text-sm text-muted-foreground">{planVerdict.message?.hi}</p>
+            <div className="mt-3 space-y-1 text-sm">
+              {planVerdict.chapters.map((c: any) => (
+                <div key={c.chapterId} className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate">{c.name}</span>
+                  <span className={`shrink-0 font-bold ${c.status === "COMPLETE" ? "text-emerald-600" : c.status === "WEAK" ? "text-red-600" : "text-muted-foreground"}`}>{c.pct}% {c.status === "COMPLETE" ? "✅ complete" : c.status === "WEAK" ? "⚠️ weak" : ""}</span>
+                </div>
+              ))}
+            </div>
+            <a href="/study-plan/board" className="mt-3 inline-block text-xs font-semibold text-primary underline">Open my prep board →</a>
+          </div>
+        )}
+
+        {/* Weak topics from THIS test -> 25 level-wise practice questions each (Sep 29 2026) */}
+        {weakTopics && weakTopics.topics?.length > 0 && (
+          <div className="card mt-4 border-amber-500/30 bg-amber-500/5 p-5">
+            <p className="text-sm font-bold">🎯 Is test me galat hue topics — abhi practice karein</p>
+            <p className="text-xs text-muted-foreground">Topics you got wrong here. Each button starts a 25-question, level-wise (Easy → Hard) practice set.</p>
+            <div className="mt-3 space-y-2">
+              {weakTopics.topics.map((t: any, i: number) => {
+                const q = new URLSearchParams({ ...(t.chapterId ? { chapterId: t.chapterId } : {}), ...(t.topicId ? { topicId: t.topicId } : {}), ...(t.subTopicId ? { subTopicId: t.subTopicId } : {}) }).toString();
+                return (
+                  <div key={i} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background p-3 text-sm">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{[t.chapter, t.topic, t.subTopic].filter(Boolean).join(" › ")}</p>
+                      <p className="text-xs text-muted-foreground">{t.wrongCount} galat · {t.practiceAvailable} practice Qs available</p>
+                    </div>
+                    {t.practiceAvailable > 0 ? (
+                      <a href={`/question-bank-practice?${q}`} className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground">Practice {t.practiceQuestions}</a>
+                    ) : (
+                      <span className="shrink-0 text-[11px] text-muted-foreground">coming soon</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Topper benchmark + pacing (v6 §6) */}
         {detail.topper?.score != null && (

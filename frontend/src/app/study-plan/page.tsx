@@ -116,6 +116,9 @@ export default function StudyPlanPage() {
       </header>
 
       <main className="mx-auto max-w-4xl px-4 py-10">
+        <a href="/study-plan/board" className="mb-6 block rounded-xl border border-primary/40 bg-primary/5 p-4 text-sm font-semibold text-primary hover:bg-primary/10">
+          🗓️ My Prep Board — daily target, chapter marking, 9 AM test &amp; weak topics →
+        </a>
         {step === "create" && (
           <>
             <h1 className="text-2xl font-bold">Create Your Study Plan 📋</h1>

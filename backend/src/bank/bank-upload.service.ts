@@ -74,6 +74,43 @@ function normalizeTaxonomyName(raw: string): string {
   return splitBilingualCell(raw).en.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "2025-09-12" -> "12 Sep 2025" */
+function formatExamDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${parseInt(m[3], 10)} ${MONTHS_SHORT[parseInt(m[2], 10) - 1] ?? m[2]} ${m[1]}` : iso;
+}
+
+/**
+ * Accepts the date formats admins actually type into Excel and returns
+ * YYYY-MM-DD (or undefined when the cell is blank). Excel serial numbers,
+ * 2025-09-12, 12-09-2025, 12/09/2025 (day first — Indian format) and
+ * "12 Sep 2025" are understood; anything else fails the row with a clear message.
+ */
+function normalizeExamDate(raw: string): string | undefined {
+  const v = String(raw ?? '').trim();
+  if (!v) return undefined;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const valid = (y: number, mo: number, d: number) => {
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    return y >= 2000 && y <= 2100 && dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+  };
+  let m: RegExpExecArray | null;
+  if ((m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(v))) {
+    if (valid(+m[1], +m[2], +m[3])) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
+  } else if ((m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(v))) {
+    if (valid(+m[3], +m[2], +m[1])) return `${m[3]}-${pad(+m[2])}-${pad(+m[1])}`;
+  } else if ((m = /^(\d{1,2})[\s-]([A-Za-z]{3,9})[\s-,]*(\d{4})$/.exec(v))) {
+    const mo = MONTHS_SHORT.findIndex((x) => x.toLowerCase() === m![2].slice(0, 3).toLowerCase()) + 1;
+    if (mo && valid(+m[3], mo, +m[1])) return `${m[3]}-${pad(mo)}-${pad(+m[1])}`;
+  } else if (/^\d{5}(\.\d+)?$/.test(v)) {
+    const dt = new Date(Math.round((parseFloat(v) - 25569) * 86400 * 1000)); // Excel serial -> UTC date
+    if (valid(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate())) return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+  }
+  throw new Error(`Invalid examDate "${v}": use YYYY-MM-DD or DD-MM-YYYY (e.g. 2025-09-12)`);
+}
+
 export interface BulkUploadQuestion {
   examId: string;
   subjectId: string;
@@ -126,6 +163,7 @@ export interface BulkUploadQuestion {
   year?: number;
   shift?: string;
   paperCode?: string;
+  examDate?: string; // YYYY-MM-DD (real exam date of a PYQ shift)
   marks?: number;
   negativeMarks?: number;
   difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
@@ -293,11 +331,11 @@ export class BankUploadService {
   private async autoCreatePyqMocksForBatch(batchId: string): Promise<void> {
     const rows = await this.prisma.question.findMany({
       where: { uploadBatchId: batchId },
-      select: { examId: true, year: true, shift: true, paperCode: true },
+      select: { examId: true, year: true, shift: true, paperCode: true, examDate: true },
     });
     if (rows.length === 0) return;
 
-    const groups = new Map<string, { examId: string; year: number; shift: string; paperCode: string | null; count: number }>();
+    const groups = new Map<string, { examId: string; year: number; shift: string; paperCode: string | null; examDate: string | null; count: number }>();
     for (const r of rows) {
       // BUGFIX (Sachin — "ek hee exam or ek he year me or ek he shift me
       // puche gye ho to automatic pyq bn jana chaiye"): examId/year/shift
@@ -313,12 +351,12 @@ export class BankUploadService {
       const key = `${r.examId}|${r.year}|${r.shift}|${r.paperCode ?? ''}`;
       const existing = groups.get(key);
       if (existing) existing.count++;
-      else groups.set(key, { examId: r.examId, year: r.year, shift: r.shift, paperCode: r.paperCode ?? null, count: 1 });
+      else groups.set(key, { examId: r.examId, year: r.year, shift: r.shift, paperCode: r.paperCode ?? null, examDate: r.examDate ?? null, count: 1 });
     }
 
     for (const g of groups.values()) {
       if (g.count < BankUploadService.MIN_PAPER_QUESTIONS) continue;
-      await this.upsertPyqMockForPaper(g.examId, g.year, g.shift, g.paperCode);
+      await this.upsertPyqMockForPaper(g.examId, g.year, g.shift, g.paperCode, g.examDate);
     }
   }
 
@@ -337,7 +375,7 @@ export class BankUploadService {
   // the row's REAL paperCode value (null), so this never accidentally
   // merges with a differently-coded paper that happens to share the same
   // year+shift.
-  private async upsertPyqMockForPaper(examId: string, year: number, shift: string, paperCode: string | null): Promise<void> {
+  private async upsertPyqMockForPaper(examId: string, year: number, shift: string, paperCode: string | null, examDate: string | null = null): Promise<void> {
     const effectiveCode = paperCode ?? `${year}-${shift}`;
     const [exam, candidateRows] = await Promise.all([
       this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } }),
@@ -363,7 +401,8 @@ export class BankUploadService {
 
     const templateId = `pyq-${this.slugifyPaperCode(effectiveCode)}`;
     const examName = exam?.name ?? 'SSC';
-    const title = `${examName} — ${effectiveCode}`;
+    // With a real exam date the title is human ("SSC CGL 2025 — 12 Sep 2025 · Shift 1"); otherwise the old paperCode title.
+    const title = examDate ? `${examName} ${year} — ${formatExamDate(examDate)} · ${shift}` : `${examName} — ${effectiveCode}`;
     // Sum marks over the SAME kept (deduped + capped) rows, not the raw
     // candidate set — otherwise totalMarks would still reflect the
     // dropped duplicate/overflow rows even after totalQuestions was fixed.
@@ -382,6 +421,9 @@ export class BankUploadService {
         totalMarks,
         isPremium: false, // all auto-created PYQ mocks are free — see common/pyq-mock-pricing.ts
         examId, // NEW — see schema.prisma TestTemplate.examId doc-comment; this is what makes /mocks?examId=... actually scope PYQ mocks to the right exam
+        year,
+        shift,
+        examDate,
       },
       update: {
         title,
@@ -389,6 +431,9 @@ export class BankUploadService {
         totalMarks,
         durationMinutes,
         examId, // keep in sync — a re-upload/backfill should never leave a stale/missing exam link
+        year,
+        shift,
+        examDate,
       },
     });
   }
@@ -1133,7 +1178,7 @@ export class BankUploadService {
     const workbook = XLSX.utils.book_new();
 
     // Main template sheet
-    const sheetData = [template.headers, ...template.sampleRows.map(r => JSON.parse(r))];
+    const sheetData = [[...template.headers, 'examDate'], ...template.sampleRows.map((r, i) => [...JSON.parse(r), i === 0 ? '2023-09-12' : ''])];
     const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Questions Template');
 
@@ -1150,6 +1195,8 @@ export class BankUploadService {
       ['4. difficulty must be EASY, MEDIUM, or HARD'],
       ['5. year should be a valid year (e.g., 2023, 2024) — set this to enable Year-wise PYQ tests.'],
       ['6. shift + paperCode are optional but help students filter/identify the exact paper.'],
+      ['6a. examDate (last column, YYYY-MM-DD or DD-MM-YYYY) = the real date of the shift. With exam + year + shift + examDate'],
+      ['   every date/shift becomes its OWN real-paper mock (max 100 questions) automatically — no paperCode needed.'],
       ['7. marks default to 1, negativeMarks default to 0.25'],
       ['8. examId and subjectId MUST exactly match an existing ID/slug — see the'],
       ['   "Reference IDs" sheet (next tab) for every real ID currently in the database.'],
@@ -1357,6 +1404,7 @@ export class BankUploadService {
         year: true,
         shift: true,
         paperCode: true,
+        examDate: true,
         marks: true,
         negativeMarks: true,
         difficulty: true,
@@ -1393,6 +1441,7 @@ export class BankUploadService {
         year: q.year ?? '',
         shift: q.shift ?? '',
         paperCode: q.paperCode ?? '',
+        examDate: q.examDate ?? '',
         marks: q.marks,
         negativeMarks: q.negativeMarks,
         difficulty: q.difficulty,
@@ -1434,7 +1483,7 @@ export class BankUploadService {
       ? Object.keys(rowsAsObjects[0])
       : ['id', 'examId', 'subjectId', 'chapterId', 'topicId', 'subTopicId', 'questionText', 'questionTextHindi',
          'optionA', 'optionA_Hindi', 'optionB', 'optionB_Hindi', 'optionC', 'optionC_Hindi', 'optionD', 'optionD_Hindi',
-         'correctAnswer', 'explanation', 'explanationHindi', 'year', 'shift', 'paperCode', 'marks', 'negativeMarks',
+         'correctAnswer', 'explanation', 'explanationHindi', 'year', 'shift', 'paperCode', 'examDate', 'marks', 'negativeMarks',
          'difficulty', 'isPublishedToStudents', 'reviewStatus', 'answerVerificationStatus'];
     const sheetData = [headers, ...rowsAsObjects.map((row) => headers.map((h) => (row as any)[h]))];
     const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
@@ -1488,6 +1537,7 @@ export class BankUploadService {
         year: q.year ?? '',
         shift: q.shift ?? '',
         paperCode: q.paperCode ?? '',
+        examDate: q.examDate ?? '',
         marks: q.marks,
         negativeMarks: q.negativeMarks,
         difficulty: q.difficulty,
@@ -1535,8 +1585,8 @@ export class BankUploadService {
    */
   generateCSVTemplate(): Buffer {
     const template = this.getTemplates().csv;
-    const lines = [template.headers.join(',')];
-    template.sampleRows.forEach(row => lines.push(this.escapeCSVRow(JSON.parse(row))));
+    const lines = [[...template.headers, 'examDate'].join(',')];
+    template.sampleRows.forEach((row, i) => lines.push(this.escapeCSVRow([...JSON.parse(row), i === 0 ? '2023-09-12' : ''])));
     return Buffer.from(lines.join('\n'), 'utf-8');
   }
 
@@ -1545,8 +1595,8 @@ export class BankUploadService {
    */
   generateTextTemplate(): Buffer {
     const template = this.getTemplates().text;
-    const lines = [template.headers.join('\t')];
-    template.sampleRows.forEach(row => lines.push(JSON.parse(row).join('\t')));
+    const lines = [[...template.headers, 'examDate'].join('\t')];
+    template.sampleRows.forEach((row, i) => lines.push([...JSON.parse(row), i === 0 ? '2023-09-12' : ''].join('\t')));
     return Buffer.from(lines.join('\n'), 'utf-8');
   }
 
@@ -1724,6 +1774,7 @@ export class BankUploadService {
           question.year = undefined;
           question.shift = undefined;
           question.paperCode = undefined;
+          question.examDate = undefined;
         }
         rawParsed.push({ rowNum, row, question });
       } catch (error) {
@@ -2153,6 +2204,7 @@ export class BankUploadService {
     const marks = parseFloat(get('marks')) || 1;
     const negativeMarks = parseFloat(get('negativeMarks')) || 0.25;
     const year = get('year') ? parseInt(get('year'), 10) : undefined;
+    const examDate = normalizeExamDate(get('examDate') || get('date'));
     const difficulty = get('difficulty').toUpperCase() as 'EASY' | 'MEDIUM' | 'HARD' || 'MEDIUM';
     if (!['EASY', 'MEDIUM', 'HARD'].includes(difficulty)) {
       throw new Error(`Invalid difficulty: must be EASY, MEDIUM, or HARD (got ${difficulty})`);
@@ -2175,7 +2227,11 @@ export class BankUploadService {
       explanationHindi: get('explanationHindi') || undefined,
       year,
       shift: get('shift') || undefined,
-      paperCode: get('paperCode') || undefined,
+      // A blank paperCode + a real exam date still identifies ONE paper: derive
+      // a stable code from exam + date + shift so each date/shift becomes its
+      // own 100-question mock instead of merging into a year+shift bucket.
+      paperCode: get('paperCode') || (examDate && year && get('shift') ? `${get('examId')}-${examDate}-${get('shift')}` : undefined),
+      examDate,
       marks,
       negativeMarks,
       difficulty,
@@ -2791,6 +2847,7 @@ export class BankUploadService {
       year: question.year,
       shift: question.shift,
       paperCode: question.paperCode,
+      examDate: question.examDate ?? null,
       marks: question.marks,
       negativeMarks: question.negativeMarks,
       difficulty: question.difficulty,
@@ -3022,6 +3079,7 @@ export class BankUploadService {
         year: question.year,
         shift: question.shift,
         paperCode: question.paperCode,
+        examDate: question.examDate ?? null,
         marks: question.marks,
         negativeMarks: question.negativeMarks,
         difficulty: question.difficulty,

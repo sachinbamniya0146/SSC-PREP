@@ -8,6 +8,7 @@
 // (today's new word, revision words, what's coming up next).
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import BiMessage from "@/components/BiMessage";
 
 type WordCard = {
   id: string;
@@ -19,6 +20,15 @@ type WordCard = {
   bestScorePct: number;
   attemptsCount: number;
   needsRevision: boolean;
+  needsRemaster?: boolean;
+};
+
+type RevisionStatus = {
+  due: boolean;
+  doneToday: string | null;
+  skipFeeInr: number;
+  messages: { pending: { en: string; hi: string } | null; remaster: { en: string; hi: string } | null };
+  remaster: { slug: string; word: string }[];
 };
 
 type TodaysPlan = {
@@ -40,6 +50,7 @@ export default function VocabularyHubPage() {
   const [error, setError] = React.useState("");
   const [goalDraft, setGoalDraft] = React.useState(1);
   const [savingGoal, setSavingGoal] = React.useState(false);
+  const [revision, setRevision] = React.useState<RevisionStatus | null>(null);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -57,6 +68,8 @@ export default function VocabularyHubPage() {
       setMasteredCount(wd.masteredCount || 0);
       setPlan(pd);
       setGoalDraft(pd.wordsPerDay || 1);
+      // NEW (Sep 29 2026): today's daily-revision status drives the banner below.
+      fetchAuth(`${API_BASE}/vocab/revision/status`).then((rr) => (rr.ok ? rr.json() : null)).then((rj) => rj && setRevision(rj)).catch(() => undefined);
     } catch {
       setError("Load nahi ho paya — dobara try karein.");
     } finally {
@@ -113,6 +126,24 @@ export default function VocabularyHubPage() {
         </p>
 
         {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+
+        {/* Daily revision banner (Sep 29 2026) */}
+        {revision?.due && (
+          <a href="/vocabulary/revision" className="mt-4 block">
+            <BiMessage msg={revision.messages.pending} tone="warn" />
+            <span className="btn mt-2 inline-block bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">🔁 Aaj ki revision shuru karein →</span>
+          </a>
+        )}
+        {revision && revision.remaster.length > 0 && (
+          <div className="mt-3">
+            <BiMessage msg={revision.messages.remaster} tone="warn" />
+            <div className="mt-2 flex flex-wrap gap-2">
+              {revision.remaster.map((w) => (
+                <a key={w.slug} href={`/vocabulary/${w.slug}/quiz`} className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400">{w.word} →</a>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Progress bar */}
         <div className="mt-4 rounded-xl border border-border bg-card p-4">
@@ -185,17 +216,15 @@ export default function VocabularyHubPage() {
           {words.map((w) => (
             <a
               key={w.id}
-              href={w.state === "LOCKED" ? undefined : `/vocabulary/${w.slug}`}
-              className={`rounded-xl border p-4 transition ${stateStyle(w.state)} ${w.state === "LOCKED" ? "cursor-not-allowed" : "hover:border-primary"}`}
-              onClick={(e) => {
-                if (w.state === "LOCKED") e.preventDefault();
-              }}
+              href={`/vocabulary/${w.slug}`}
+              className={`rounded-xl border p-4 transition ${stateStyle(w.state)} hover:border-primary`}
             >
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground">#{w.orderIndex}</span>
                 {w.state === "MASTERED" && <span className="text-xs">✅</span>}
                 {w.state === "LOCKED" && <span className="text-xs">🔒</span>}
                 {w.needsRevision && <span className="text-xs" title="Revision chahiye">🔥</span>}
+                {w.needsRemaster && <span className="text-xs" title="95%+ dobara score karein">⚠️</span>}
               </div>
               <h3 className="mt-1 font-bold">{w.state === "LOCKED" ? "?????" : w.word}</h3>
               {w.state !== "LOCKED" && <p className="mt-0.5 truncate text-xs text-muted-foreground">{w.meaningHindi}</p>}

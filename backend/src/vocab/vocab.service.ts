@@ -36,6 +36,14 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { istDateKey } from '../gamification/gamification.service';
+import { computeRevisionState } from './vocab-revision.util';
+import {
+  REVISION_MAX_WORDS,
+  REVISION_QUESTIONS_PER_WORD,
+  VOCAB_MSG,
+  VOCAB_WORD_UNLOCK_PRICE_INR,
+  quizTimeLimitSec,
+} from './vocab-messages';
 
 const MASTERY_THRESHOLD_PCT = 95;
 
@@ -81,11 +89,14 @@ export class VocabService {
   }
 
   private async loadWordsWithProgress(userId: string) {
-    const [words, progressRows, subscribed] = await Promise.all([
+    const [words, progressRows, subscribedMonthly, userState] = await Promise.all([
       this.prisma.vocabWord.findMany({ where: { isActive: true }, orderBy: { orderIndex: 'asc' } }),
       this.prisma.vocabWordProgress.findMany({ where: { userId } }),
       this.hasActiveSubscription(userId),
+      this.prisma.vocabUserState.findUnique({ where: { userId } }),
     ]);
+    // Legacy Rs 10/month subscription OR the new one-time Rs 100 "unlock all".
+    const subscribed = subscribedMonthly || !!userState?.allUnlockedAt;
     const progressByWord = new Map(progressRows.map((p) => [p.wordId, p]));
 
     let prevMastered = true; // the very first word is always unlocked
@@ -97,7 +108,10 @@ export class VocabService {
         : prevMastered || progress?.forceUnlocked || subscribed
           ? 'UNLOCKED'
           : 'LOCKED';
-      prevMastered = mastered; // next word's eligibility depends on THIS word's real mastery, not on it merely being unlocked
+      // NEW: a mastered word that failed today's revision (remasterRequired)
+      // does NOT count as "done" for unlocking the next word — the student
+      // must re-score 95%+ on it first.
+      prevMastered = mastered && !progress?.remasterRequired;
       return { word: w, progress, state };
     });
   }
@@ -119,8 +133,31 @@ export class VocabService {
         bestScorePct: r.progress?.bestScorePct ?? 0,
         attemptsCount: r.progress?.attemptsCount ?? 0,
         needsRevision: r.state === 'MASTERED' && (r.progress?.lastWrongCount ?? 0) > 0,
+        needsRemaster: !!r.progress?.remasterRequired,
       })),
     };
+  }
+
+  /**
+   * NEW (daily revision gate): brand-new words (anything not yet MASTERED)
+   * are blocked while today's revision is pending. Already-mastered words —
+   * including ones that must be re-mastered after a revision mistake — are
+   * never gated, otherwise the student could not fix what blocks them.
+   */
+  private async assertRevisionClear(userId: string, state: VocabWordState) {
+    if (state === 'MASTERED') return;
+    const st = await computeRevisionState(this.prisma, userId);
+    if (!st.due) return;
+    const words = Math.min(st.poolWordIds.length, REVISION_MAX_WORDS);
+    const questions = words * REVISION_QUESTIONS_PER_WORD;
+    const msg = VOCAB_MSG.revisionPending(words, questions, Math.ceil(quizTimeLimitSec(questions) / 60), st.skipFeeInr);
+    throw new ForbiddenException({
+      message: msg.en,
+      code: 'REVISION_PENDING',
+      messages: msg,
+      poolSize: st.poolWordIds.length,
+      skipFeeInr: st.skipFeeInr,
+    });
   }
 
   /**
@@ -142,13 +179,18 @@ export class VocabService {
     if (!row) throw new NotFoundException('Word not found');
     if (row.state === 'LOCKED') {
       const next = this.findActionableWord(rows);
+      const msg = VOCAB_MSG.wordLocked(next.word.word);
       throw new ForbiddenException({
-        message: `Pehle "${next.word.word}" seekhein aur uska quiz dein (${MASTERY_THRESHOLD_PCT}%+ score) — tabhi ye word khulega. Ya ₹10/month me sabhi words abhi unlock karein.`,
+        message: msg.en,
         code: 'WORD_LOCKED',
+        messages: msg,
+        unlockPriceInr: VOCAB_WORD_UNLOCK_PRICE_INR,
+        wordId: row.word.id,
         nextActionableWordSlug: next.word.slug,
         nextActionableWord: next.word.word,
       });
     }
+    await this.assertRevisionClear(userId, row.state);
     const questionCount = await this.prisma.vocabQuestion.count({ where: { wordId: row.word.id } });
     return {
       id: row.word.id,
@@ -168,6 +210,7 @@ export class VocabService {
       synonyms: row.word.synonymsJson ?? [],
       antonyms: row.word.antonymsJson ?? [],
       state: row.state,
+      needsRemaster: !!row.progress?.remasterRequired,
       bestScorePct: row.progress?.bestScorePct ?? 0,
       attemptsCount: row.progress?.attemptsCount ?? 0,
       questionCount,
@@ -183,13 +226,18 @@ export class VocabService {
     if (!row) throw new NotFoundException('Word not found');
     if (row.state === 'LOCKED') {
       const next = this.findActionableWord(rows);
+      const msg = VOCAB_MSG.wordLocked(next.word.word);
       throw new ForbiddenException({
-        message: `Pehle "${next.word.word}" seekhein aur uska quiz dein (${MASTERY_THRESHOLD_PCT}%+ score) — tabhi ye word khulega.`,
+        message: msg.en,
         code: 'WORD_LOCKED',
+        messages: msg,
+        unlockPriceInr: VOCAB_WORD_UNLOCK_PRICE_INR,
+        wordId: row.word.id,
         nextActionableWordSlug: next.word.slug,
         nextActionableWord: next.word.word,
       });
     }
+    await this.assertRevisionClear(userId, row.state);
     const questions = await this.prisma.vocabQuestion.findMany({ where: { wordId: row.word.id } });
     // Question order shuffled on every call (every retry), plus — NEW —
     // each question's OPTION order is now shuffled too, so neither the
@@ -205,6 +253,10 @@ export class VocabService {
       slug: row.word.slug,
       masteryThresholdPct: MASTERY_THRESHOLD_PCT,
       requiredCorrectCount: requiredCorrectCount(questions.length),
+      // NEW: the practice quiz is timed too (Sachin: "practice test ke
+      // dauran bhi timer run ho"). The client shows a countdown and
+      // auto-submits at 0; the number is advisory, scoring is unchanged.
+      timeLimitSec: quizTimeLimitSec(questions.length),
       questions: shuffledQuestions.map((q) => ({
         id: q.id,
         questionText: q.questionText,
@@ -227,8 +279,10 @@ export class VocabService {
     const rows = await this.loadWordsWithProgress(userId);
     const row = rows.find((r) => r.word.id === word.id);
     if (!row || row.state === 'LOCKED') {
-      throw new ForbiddenException({ message: 'Ye word abhi locked hai.', code: 'WORD_LOCKED' });
+      const msg = VOCAB_MSG.wordLocked((row ? this.findActionableWord(rows) : rows[0])?.word.word ?? '');
+      throw new ForbiddenException({ message: msg.en, code: 'WORD_LOCKED', messages: msg, unlockPriceInr: VOCAB_WORD_UNLOCK_PRICE_INR });
     }
+    await this.assertRevisionClear(userId, row.state);
 
     const questions = await this.prisma.vocabQuestion.findMany({ where: { wordId: word.id } });
     if (questions.length === 0) {
@@ -274,6 +328,8 @@ export class VocabService {
         bestScorePct: Math.max(existing?.bestScorePct ?? 0, scorePct),
         attemptsCount: { increment: 1 },
         lastWrongCount: wrong,
+        // NEW: a >=95% pass clears a "re-master after revision mistake" flag.
+        ...(justMastered ? { remasterRequired: false, lastRevisedAt: new Date() } : {}),
         // masteredAt is a one-way door — a later lower-scoring revision
         // attempt must never un-master a word the student already earned.
         masteredAt: alreadyMastered ? existing!.masteredAt : justMastered ? new Date() : null,
@@ -289,6 +345,7 @@ export class VocabService {
       requiredCorrectCount: needed,
       justMastered: justMastered && !alreadyMastered,
       alreadyMastered,
+      remasterCleared: justMastered && !!existing?.remasterRequired,
       review,
     };
   }

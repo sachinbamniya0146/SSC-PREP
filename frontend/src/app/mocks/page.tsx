@@ -16,6 +16,11 @@ type Mock = {
   reason?: string;
   offerPriceInr?: number;
   offerDays?: number;
+  // NEW (Sep 29 2026): PYQ category meta from the auto-created real-paper mocks.
+  isPyq?: boolean;
+  year?: number | null;
+  shift?: string | null;
+  examDate?: string | null;
 };
 
 // NEW (Sep 2026 — exam-scoping audit): minimal shape for the exam picker,
@@ -119,6 +124,58 @@ export default function MocksPage() {
     }
   };
 
+  const renderMock = (m: Mock) => (
+      <div
+                key={m.id}
+                className="card flex flex-wrap items-center justify-between gap-3 p-5"
+              >
+                <div>
+                  <p className="font-semibold">{m.title}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {m.totalQuestions} questions · {m.durationMinutes} min · {m.totalMarks} marks ·{" "}
+                    {m.type}
+                  </p>
+                  {m.free ? (
+                    <span className="mt-2 inline-block rounded-full bg-success/20 px-3 py-1 text-xs font-semibold text-success">
+                      FREE {m.reason?.startsWith("FREE_") ? "(2 free per mock)" : ""}
+                    </span>
+                  ) : (
+                    <span className="mt-2 inline-block rounded-full bg-primary/20 px-3 py-1 text-xs font-semibold text-primary">
+                      🔒 Locked · ₹{m.offerPriceInr}/{m.offerDays} days
+                    </span>
+                  )}
+                </div>
+                {m.free ? (
+                  <a
+                    href={`/test?template=${encodeURIComponent(m.id)}`}
+                    className="btn bg-success text-success-foreground hover:opacity-90"
+                  >
+                    Start Mock
+                  </a>
+                ) : (
+                  <button
+                    onClick={() => purchase(m)}
+                    className="btn bg-primary text-primary-foreground hover:opacity-90"
+                  >
+                    Unlock for ₹{m.offerPriceInr}
+                  </button>
+                )}
+              </div>
+  );
+
+  const pyq = mocks.filter((m) => m.isPyq);
+  const others = mocks.filter((m) => !m.isPyq);
+  const pyqByYear = new Map<number, Mock[]>();
+  for (const m of pyq) {
+    const y = m.year ?? 0;
+    if (!pyqByYear.has(y)) pyqByYear.set(y, []);
+    pyqByYear.get(y)!.push(m);
+  }
+  for (const list of pyqByYear.values()) {
+    list.sort((a, b) => String(b.examDate ?? "").localeCompare(String(a.examDate ?? "")) || String(a.shift ?? "").localeCompare(String(b.shift ?? "")));
+  }
+  const pyqYears = [...pyqByYear.keys()].sort((a, b) => b - a);
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
@@ -195,44 +252,20 @@ export default function MocksPage() {
                 quizzes in the meantime!
               </p>
             )}
-            {mocks.map((m) => (
-              <div
-                key={m.id}
-                className="card flex flex-wrap items-center justify-between gap-3 p-5"
-              >
-                <div>
-                  <p className="font-semibold">{m.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {m.totalQuestions} questions · {m.durationMinutes} min · {m.totalMarks} marks ·{" "}
-                    {m.type}
-                  </p>
-                  {m.free ? (
-                    <span className="mt-2 inline-block rounded-full bg-success/20 px-3 py-1 text-xs font-semibold text-success">
-                      FREE {m.reason?.startsWith("FREE_") ? "(2 free per mock)" : ""}
-                    </span>
-                  ) : (
-                    <span className="mt-2 inline-block rounded-full bg-primary/20 px-3 py-1 text-xs font-semibold text-primary">
-                      🔒 Locked · ₹{m.offerPriceInr}/{m.offerDays} days
-                    </span>
-                  )}
-                </div>
-                {m.free ? (
-                  <a
-                    href={`/test?template=${encodeURIComponent(m.id)}`}
-                    className="btn bg-success text-success-foreground hover:opacity-90"
-                  >
-                    Start Mock
-                  </a>
-                ) : (
-                  <button
-                    onClick={() => purchase(m)}
-                    className="btn bg-primary text-primary-foreground hover:opacity-90"
-                  >
-                    Unlock for ₹{m.offerPriceInr}
-                  </button>
-                )}
-              </div>
+            {/* NEW (Sep 29 2026): real PYQ papers auto-grouped Year > Date > Shift.
+                One card = one real shift (its own questions only, never a mixed pool). */}
+            {pyqYears.map((y) => (
+              <section key={y}>
+                <h2 className="mb-2 mt-2 text-lg font-bold">📅 {y || "Other"} — Previous Year Papers</h2>
+                <div className="space-y-3">{pyqByYear.get(y)!.map(renderMock)}</div>
+              </section>
             ))}
+            {others.length > 0 && (
+              <section>
+                {pyqYears.length > 0 && <h2 className="mb-2 mt-4 text-lg font-bold">🎯 Other Mock Tests</h2>}
+                <div className="space-y-3">{others.map(renderMock)}</div>
+              </section>
+            )}
           </div>
         )}
       </main>

@@ -160,6 +160,10 @@ model User {
   vocabDailyGoal    VocabDailyGoal?
   vocabWordPurchases VocabWordPurchase[]
   vocabSubscription  VocabSubscription?
+  vocabUserState     VocabUserState?
+  vocabRevisionSessions VocabRevisionSession[]
+  studyPlanChapters  StudyPlanChapter[]
+  studyPlanTests     StudyPlanTest[]
   pushSubscriptions  PushSubscription[]
   referralsMade     Referral[]      @relation("Referrer")
   referralsReceived Referral[]      @relation("Referee")
@@ -443,6 +447,9 @@ model Question {
   year               Int?
   shift              String?
   paperCode          String?
+  // NEW (Sep 29 2026): real exam date of a PYQ paper, "YYYY-MM-DD". Lets a
+  // shift be identified as exam + date + shift + year straight from the Excel.
+  examDate           String?
 
   questionText       String
   questionTextHindi  String?
@@ -571,6 +578,11 @@ model TestTemplate {
   // for the actual writes. onDelete: SetNull so deleting an Exam doesn't
   // cascade-delete historical mock templates/attempts tied to it.
   examId           String?
+  // NEW (Sep 29 2026): PYQ-mock category meta, filled by the auto-mock creator so
+  // /mocks can group Exam > Year > Date > Shift without parsing titles.
+  year             Int?
+  shift            String?
+  examDate         String?
   exam             Exam?         @relation(fields: [examId], references: [id], onDelete: SetNull)
 
   createdAt        DateTime      @default(now())
@@ -1466,6 +1478,12 @@ model VocabWordProgress {
   // Set true by a successful ₹10 VocabWordPurchase — lets a student jump
   // ahead to this specific word without mastering everything before it.
   forceUnlocked  Boolean   @default(false)
+  // NEW (Sep 29 2026 — Daily Revision): set true when the student answers a
+  // question of this word wrong in the daily revision test. Until they
+  // re-score >=95% on this word's own quiz, new (unmastered) words stay
+  // locked. Cleared by VocabService.submitQuiz() on a >=95% pass.
+  remasterRequired Boolean  @default(false)
+  lastRevisedAt  DateTime?
   updatedAt      DateTime  @updatedAt
 
   user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1551,4 +1569,110 @@ model PushSubscription {
 
   @@index([userId])
   @@map("push_subscriptions")
+}
+
+
+// =============================================================================
+// VOCAB v2 (Sep 29 2026) — daily revision, escalating skip fee, unlock-all
+// =============================================================================
+
+// One row per user: pay-to-skip bookkeeping + the one-time "unlock every
+// word" purchase (Rs 100). Kept separate from VocabWordProgress because these
+// facts belong to the student, not to any single word.
+model VocabUserState {
+  id                   String    @id @default(uuid())
+  userId               String    @unique
+  // Set by a successful VOCAB_UNLOCK_ALL payment -> every word UNLOCKED.
+  allUnlockedAt        DateTime?
+  // Consecutive daily-revision skips paid for. Drives the escalating fee
+  // (Rs 1, 5, 10, ...). Reset to 0 the moment a revision test is completed.
+  skipStreak           Int       @default(0)
+  lastSkipDateKey      String?   // IST YYYY-MM-DD of the last paid skip
+  totalSkipPaidInr     Float     @default(0)
+  updatedAt            DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("vocab_user_states")
+}
+
+// One row per daily-revision attempt (a student may retry a timed-out one).
+// status: IN_PROGRESS | COMPLETED | EXPIRED | SKIPPED
+model VocabRevisionSession {
+  id             String    @id @default(uuid())
+  userId         String
+  dateKey        String    // IST YYYY-MM-DD the session belongs to
+  status         String    @default("IN_PROGRESS")
+  wordIds        Json      // string[] — words covered
+  questionIds    Json      // string[] — ordered VocabQuestion ids
+  totalQuestions Int       @default(0)
+  correctCount   Int       @default(0)
+  scorePct       Int       @default(0)
+  wrongWordIds   Json?     // string[] — words that need a 95% re-master
+  timeLimitSec   Int       @default(0)
+  skipFeeInr     Float?    // only for SKIPPED sessions
+  startedAt      DateTime  @default(now())
+  expiresAt      DateTime
+  completedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, dateKey])
+  @@index([userId, status])
+  @@map("vocab_revision_sessions")
+}
+
+// =============================================================================
+// STUDY PLAN v2 (Sep 29 2026) — chapter self-marking + scheduled 9 AM test
+// =============================================================================
+
+// A student's own progress on a chapter. Keyed per user (not per plan) —
+// knowing a chapter is a fact about the student, it should survive the
+// student re-creating their plan for another exam.
+// status: PENDING | SELF_MARKED | COMPLETE | WEAK
+//   SELF_MARKED = student says "I finished this" (test scheduled to verify)
+//   COMPLETE    = verified >=90% in a test / practice
+//   WEAK        = tested below 90% -> back to practice
+model StudyPlanChapter {
+  id           String    @id @default(uuid())
+  userId       String
+  chapterId    String
+  status       String    @default("PENDING")
+  selfMarkedAt DateTime?
+  lastScorePct Int?
+  lastTestedAt DateTime?
+  completedAt  DateTime?
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, chapterId])
+  @@index([userId, status])
+  @@map("study_plan_chapters")
+}
+
+// The customised full-pattern test built from the chapters a student marked
+// complete. Scheduled for 9:00 AM IST the next day; questions are composed
+// when the student presses Start (so a late start still gets a fresh paper),
+// then snapshotted on the TestAttempt like the Daily Test does.
+// status: SCHEDULED | IN_PROGRESS | SUBMITTED | MISSED
+model StudyPlanTest {
+  id           String    @id @default(uuid())
+  userId       String
+  examId       String
+  scheduledFor DateTime
+  chapterIds   Json      // string[] — chapters this test covers
+  status       String    @default("SCHEDULED")
+  attemptId    String?   @unique
+  scorePct     Int?
+  resultJson   Json?     // [{ chapterId, name, correct, total, pct, status }]
+  createdAt    DateTime  @default(now())
+  startedAt    DateTime?
+  submittedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, scheduledFor])
+  @@map("study_plan_tests")
 }

@@ -1,11 +1,15 @@
 import { Body, Controller, Get, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { VocabService } from './vocab.service';
+import { VocabRevisionService } from './vocab-revision.service';
 
 @Controller('vocab')
 @UseGuards(JwtAuthGuard)
 export class VocabController {
-  constructor(private readonly vocab: VocabService) {}
+  constructor(
+    private readonly vocab: VocabService,
+    private readonly revision: VocabRevisionService,
+  ) {}
 
   private uid(req: any): string {
     return req.user?.userId ?? req.user?.id;
@@ -49,5 +53,27 @@ export class VocabController {
   @Get('subscription')
   getSubscriptionStatus(@Req() req: any) {
     return this.vocab.getSubscriptionStatus(this.uid(req));
+  }
+
+  // ---- Daily revision (Sep 29 2026) ----
+  @Get('revision/status')
+  revisionStatus(@Req() req: any) {
+    return this.revision.status(this.uid(req));
+  }
+
+  @Post('revision/start')
+  revisionStart(@Req() req: any) {
+    return this.revision.start(this.uid(req));
+  }
+
+  @Post('revision/:sessionId/submit')
+  revisionSubmit(@Req() req: any, @Param('sessionId') sessionId: string, @Body() body: { answers: Record<string, string> }) {
+    return this.revision.submit(this.uid(req), sessionId, body?.answers ?? {});
+  }
+
+  // Prices + bilingual warnings for the pay-to-skip / pay-to-unlock dialogs.
+  @Get('pricing')
+  pricing() {
+    return this.revision.pricing();
   }
 }

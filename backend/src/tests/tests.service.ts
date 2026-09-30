@@ -7,6 +7,7 @@ import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank } from '../common/pyq-mock-pricing';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
 import { TelegramService } from '../telegram/telegram.service';
+import { applyAttemptToChapters } from '../study-plan/study-plan-progress.util';
 import { QuestionBankPracticeService } from '../bank/question-bank-practice.service';
 
 @Injectable()
@@ -362,6 +363,11 @@ async submitAttempt(
   }
 
   this.gamification.awardTestXp(userId, totalCorrect, 'mock').catch(() => undefined);
+
+  // NEW (Sep 29 2026): chapter >=90% -> COMPLETE; the student's own scheduled
+  // Study-Plan test marks chapters <90% as WEAK. Fire-and-forget — must never
+  // fail or slow the submit response.
+  applyAttemptToChapters(this.prisma, userId, updated.id).catch(() => undefined);
 
   // Requirement 5, part (a) — auto-send the result PDF on Telegram right
   // after submit, for premium+linked users. Subscription-active + linked

@@ -126,6 +126,86 @@ export class TaxonomyImportService {
     return slug || 'item';
   }
 
+  /**
+   * NEW (Sep 29 2026) — "admin syllabus Excel download bhi kar sake".
+   * Writes the CURRENT syllabus tree in the exact layout importFromExcel()
+   * reads (one sheet per subject, "English\nHindi" cells), so the admin can
+   * download it, edit/add rows, and re-import it — a lossless round trip.
+   */
+  async exportToExcel(): Promise<Buffer> {
+    const subjects = await this.prisma.subject.findMany({
+      orderBy: { name: 'asc' },
+      include: {
+        chapters: {
+          orderBy: { name: 'asc' },
+          include: { topics: { orderBy: { name: 'asc' }, include: { subTopics: { orderBy: { name: 'asc' } } } } },
+        },
+      },
+    });
+
+    const bi = (en: string, hi?: string | null) => (hi && hi.trim() ? `${en}\n${hi.trim()}` : en);
+    const SHEET_NAME_BY_SLUG: Record<string, string> = {
+      quantitative_aptitude: 'Quant Aptitude',
+      reasoning: 'Reasoning',
+      english: 'English',
+      general_awareness: 'General Awareness',
+    };
+
+    const wb = XLSX.utils.book_new();
+    const overview: (string | number)[][] = [['Subject', 'Chapters', 'Topics', 'Sub-Topics']];
+    const usedNames = new Set<string>(['overview']);
+
+    for (const subj of subjects) {
+      const rows: (string | number)[][] = [
+        [subj.name],
+        [subj.nameHindi || ''],
+        [],
+        ['S.No.', 'Chapter No.', 'Chapter', 'Topic', 'Sub-Topic'],
+      ];
+      let sno = 0;
+      let topicCount = 0;
+      let subCount = 0;
+      subj.chapters.forEach((ch, ci) => {
+        let first = true;
+        const chapterCells = () => {
+          const cells: [string | number, string] = first ? [ci + 1, bi(ch.name, ch.nameHindi)] : ['', ''];
+          first = false;
+          return cells;
+        };
+        if (ch.topics.length === 0) {
+          const [no, name] = chapterCells();
+          rows.push([++sno, no, name, '', '']);
+          return;
+        }
+        for (const t of ch.topics) {
+          topicCount++;
+          if (t.subTopics.length === 0) {
+            const [no, name] = chapterCells();
+            rows.push([++sno, no, name, bi(t.name, t.nameHindi), '']);
+            continue;
+          }
+          for (const st of t.subTopics) {
+            subCount++;
+            const [no, name] = chapterCells();
+            rows.push([++sno, no, name, bi(t.name, t.nameHindi), bi(st.name, st.nameHindi)]);
+          }
+        }
+      });
+
+      let sheetName = SHEET_NAME_BY_SLUG[subj.slug] || subj.name.replace(/[\\/?*[\]:]/g, ' ').trim().slice(0, 31) || 'Subject';
+      let n = 2;
+      while (usedNames.has(sheetName.toLowerCase())) sheetName = `${sheetName.slice(0, 27)} ${n++}`;
+      usedNames.add(sheetName.toLowerCase());
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [{ wch: 6 }, { wch: 11 }, { wch: 42 }, { wch: 42 }, { wch: 42 }];
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      overview.push([subj.name, subj.chapters.length, topicCount, subCount]);
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(overview), 'Overview');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  }
+
   /** Parses every recognizable subject sheet in the workbook. Pure function — no DB access. */
   parseWorkbook(buffer: Buffer): ParsedSubject[] {
     let workbook: XLSX.WorkBook;

@@ -10,6 +10,8 @@
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { startCashfreeCheckout, type BiMsg } from "@/lib/vocab-pay";
+import BiMessage from "@/components/BiMessage";
 
 type SynAnt = { word: string; hindi?: string; sentence?: string };
 type Example = { en?: string; hi?: string };
@@ -39,22 +41,6 @@ type WordDetail = {
   requiredCorrectCount: number;
 };
 
-let cashfreeSdkPromise: Promise<any> | null = null;
-function loadCashfreeSdk(): Promise<any> {
-  if (typeof window === "undefined") return Promise.resolve(null);
-  if ((window as any).Cashfree) return Promise.resolve((window as any).Cashfree);
-  if (cashfreeSdkPromise) return cashfreeSdkPromise;
-  cashfreeSdkPromise = new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
-    script.async = true;
-    script.onload = () => resolve((window as any).Cashfree);
-    script.onerror = () => reject(new Error("Payment SDK load failed"));
-    document.body.appendChild(script);
-  });
-  return cashfreeSdkPromise;
-}
-
 export default function VocabWordDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -66,6 +52,13 @@ export default function VocabWordDetailPage() {
   const [nextActionableWordSlug, setNextActionableWordSlug] = React.useState("");
   const [nextActionableWord, setNextActionableWord] = React.useState("");
   const [subscribing, setSubscribing] = React.useState(false);
+  // NEW (Sep 29 2026): bilingual server messages + which lock reason we hit.
+  const [lockMsg, setLockMsg] = React.useState<BiMsg | null>(null);
+  const [lockCode, setLockCode] = React.useState("");
+  const [lockedWordId, setLockedWordId] = React.useState("");
+  const [skipFee, setSkipFee] = React.useState(0);
+  const [pricing, setPricing] = React.useState<{ wordUnlock: { priceInr: number; message: BiMsg }; unlockAll: { priceInr: number; message: BiMsg } } | null>(null);
+  const [confirm, setConfirm] = React.useState<"" | "word" | "all">("");
 
 
   const load = React.useCallback(async () => {
@@ -77,6 +70,11 @@ export default function VocabWordDetailPage() {
       if (r.status === 403) {
         const d = await r.json().catch(() => ({}));
         setLockedMessage(d?.message || "Ye word abhi locked hai.");
+        setLockMsg(d?.messages || null);
+        setLockCode(d?.code || "");
+        setLockedWordId(d?.wordId || "");
+        setSkipFee(d?.skipFeeInr || 0);
+        fetchAuth(`${API_BASE}/vocab/pricing`).then((pr) => (pr.ok ? pr.json() : null)).then((pj) => pj && setPricing(pj)).catch(() => undefined);
         setNextActionableWordSlug(d?.nextActionableWordSlug || "");
         setNextActionableWord(d?.nextActionableWord || "");
         return;
@@ -94,26 +92,11 @@ export default function VocabWordDetailPage() {
     load();
   }, [load]);
 
-  // REVISED (Sep 26 2026) — "ye vocab ka alag subscription rahe, ₹10 per
-  // month": promotes the recurring subscription (unlocks every word for
-  // 30 days) instead of a one-off single-word unlock.
-  const subscribeVocab = async () => {
+  const pay = async (product: Parameters<typeof startCashfreeCheckout>[0]) => {
     setSubscribing(true);
+    setError("");
     try {
-      const orderRes = await fetchAuth(`${API_BASE}/payments/order`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vocabSubscription: true }),
-      });
-      if (!orderRes.ok) {
-        const d = await orderRes.json().catch(() => ({}));
-        throw new Error(d?.message || "Order create nahi hua");
-      }
-      const order = await orderRes.json();
-      const Cashfree = await loadCashfreeSdk();
-      if (!Cashfree) throw new Error("Payment SDK load nahi hua");
-      const cashfree = Cashfree({ mode: order.cashfreeEnv === "PRODUCTION" ? "production" : "sandbox" });
-      await cashfree.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: "_self" });
+      await startCashfreeCheckout(product);
     } catch (e: any) {
       setError(e.message || "Payment start nahi hua");
       setSubscribing(false);
@@ -125,31 +108,63 @@ export default function VocabWordDetailPage() {
   }
 
   if (lockedMessage) {
+    const revisionPending = lockCode === "REVISION_PENDING";
     return (
       <div className="min-h-screen bg-background text-foreground">
         <main className="mx-auto max-w-md px-4 py-16 text-center">
-          <div className="text-4xl">🔒</div>
-          <h1 className="mt-3 text-lg font-bold">Ye word locked hai</h1>
-          <p className="mt-2 text-sm text-muted-foreground">{lockedMessage}</p>
+          <div className="text-4xl">{revisionPending ? "🔁" : "🔒"}</div>
+          <h1 className="mt-3 text-lg font-bold">{revisionPending ? "Pehle aaj ki revision / Revise first" : "Ye word locked hai / This word is locked"}</h1>
+          {lockMsg ? <BiMessage msg={lockMsg} tone="warn" className="mt-3 text-left" /> : <p className="mt-2 text-sm text-muted-foreground">{lockedMessage}</p>}
           {error && <p className="mt-2 text-sm text-danger">{error}</p>}
-          {nextActionableWord && (
-            <a
-              href={`/vocabulary/${nextActionableWordSlug}`}
-              className="mt-4 inline-block rounded-lg border border-primary/40 bg-primary/5 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/10"
-            >
-              👉 "{nextActionableWord}" seekhein aur test dein →
-            </a>
+
+          {revisionPending ? (
+            <div className="mt-6 flex flex-col gap-2">
+              <a href="/vocabulary/revision" className="btn bg-primary py-2.5 text-sm font-semibold text-primary-foreground">▶ Start revision (free)</a>
+              <a href="/vocabulary/revision" className="text-xs text-muted-foreground underline">Skip for ₹{skipFee || 1} — details on the revision page</a>
+            </div>
+          ) : (
+            <>
+              {nextActionableWord && (
+                <a
+                  href={`/vocabulary/${nextActionableWordSlug}`}
+                  className="mt-4 inline-block rounded-lg border border-primary/40 bg-primary/5 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/10"
+                >
+                  👉 "{nextActionableWord}" seekhein aur 95%+ score karein (free) →
+                </a>
+              )}
+              <div className="mt-6 flex flex-col gap-2">
+                {confirm === "" && (
+                  <>
+                    <button onClick={() => setConfirm("word")} className="btn btn-outline py-2.5 text-sm">
+                      Unlock this word — ₹{pricing?.wordUnlock.priceInr ?? 2}
+                    </button>
+                    <button onClick={() => setConfirm("all")} className="btn btn-outline py-2.5 text-sm">
+                      Unlock ALL words — ₹{pricing?.unlockAll.priceInr ?? 100}
+                    </button>
+                  </>
+                )}
+                {confirm === "word" && (
+                  <div className="space-y-2 text-left">
+                    <BiMessage msg={pricing?.wordUnlock.message} tone="warn" />
+                    <button onClick={() => pay({ vocabWordId: lockedWordId })} disabled={subscribing || !lockedWordId} className="btn w-full bg-primary py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50">
+                      {subscribing ? "Redirecting…" : `Pay ₹${pricing?.wordUnlock.priceInr ?? 2} & unlock this word`}
+                    </button>
+                    <button onClick={() => setConfirm("")} className="btn btn-outline w-full py-2 text-sm">Wapas / Back</button>
+                  </div>
+                )}
+                {confirm === "all" && (
+                  <div className="space-y-2 text-left">
+                    <BiMessage msg={pricing?.unlockAll.message} tone="danger" />
+                    <button onClick={() => pay({ vocabUnlockAll: true })} disabled={subscribing} className="btn w-full border border-red-500/40 bg-red-500/10 py-2.5 text-sm font-semibold text-red-600 disabled:opacity-50">
+                      {subscribing ? "Redirecting…" : `Pay ₹${pricing?.unlockAll.priceInr ?? 100} & unlock all words`}
+                    </button>
+                    <button onClick={() => setConfirm("")} className="btn btn-outline w-full py-2 text-sm">Nahi, padhunga / No, I will study</button>
+                  </div>
+                )}
+              </div>
+            </>
           )}
-          <div className="mt-6 flex flex-col gap-2">
-            <button
-              onClick={subscribeVocab}
-              disabled={subscribing}
-              className="btn bg-primary py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
-            >
-              {subscribing ? "Redirecting…" : "₹10/month me sabhi words abhi unlock karein"}
-            </button>
-            <a href="/vocabulary" className="btn btn-outline py-2.5 text-sm">← Vocabulary list par wapas jaayein</a>
-          </div>
+          <a href="/vocabulary" className="btn btn-outline mt-4 block py-2.5 text-sm">← Vocabulary list par wapas jaayein</a>
         </main>
       </div>
     );

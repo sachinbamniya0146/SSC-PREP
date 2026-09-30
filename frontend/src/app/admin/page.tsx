@@ -6,6 +6,7 @@ import { BackButton } from "@/components/BackButton";
 import { Logo } from "@/components/Logo";
 import { api, API_BASE, fetchAuth } from "@/lib/api";
 import { useAccess } from "@/lib/permissions";
+import AdminImageTools from "@/components/AdminImageTools";
 
 interface User {
   id: string;
@@ -840,6 +841,7 @@ export default function AdminPage() {
             📖 Vocabulary words + questions Excel se upload karein — Vocabulary Manage →
           </a>
           )}
+          <AdminImageTools />
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
               <button

@@ -287,6 +287,27 @@ export default function TopicManagementPage() {
     }
   }
 
+  // NEW (Sep 29 2026): download the live syllabus tree as Excel — edit it and
+  // re-import through "Import Syllabus" (same layout, lossless round trip).
+  async function downloadSyllabus() {
+    setSyllabusErr("");
+    try {
+      const res = await fetchAuth(`${API_BASE}/bank/admin/upload/syllabus-export`);
+      if (!res.ok) throw new Error(`Syllabus download failed (HTTP ${res.status})`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "ssc-syllabus.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setSyllabusErr(e instanceof Error ? e.message : "Syllabus download nahi hua");
+    }
+  }
+
   async function copyId(id: string) {
     try {
       await navigator.clipboard.writeText(id);
@@ -421,6 +442,13 @@ export default function TopicManagementPage() {
               className="rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
             >
               {syllabusUploading ? "Importing..." : "Import Syllabus"}
+            </button>
+            <button
+              type="button"
+              onClick={downloadSyllabus}
+              className="rounded-lg border border-border px-4 py-2.5 text-sm font-semibold hover:border-primary"
+            >
+              ⬇️ Download current syllabus (Excel)
             </button>
           </div>
 

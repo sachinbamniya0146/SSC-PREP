@@ -514,6 +514,19 @@ export class BankController {
     return this.practiceService.completeSet(userId, setId, body?.answers);
   }
 
+  // NEW (Sep 29 2026) — "3 of 5 free sets used today" chip + paywall data.
+  @Get('practice/from-attempt/:attemptId')
+  async getWeakFromAttempt(@Req() req: any, @Param('attemptId') attemptId: string) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.weakFromAttempt(userId, attemptId);
+  }
+
+  @Get('practice/quota')
+  async getPracticeQuota(@Req() req: any) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.getDailyQuota(userId);
+  }
+
   @Get('practice/progress')
   async getUserProgress(@Req() req: any) {
     const userId = req.user?.userId ?? req.user?.id;

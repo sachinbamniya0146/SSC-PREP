@@ -12,7 +12,7 @@ import { useParams, useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 
 type QuizQuestion = { id: string; questionText: string; options: { key: string; text: string }[] };
-type QuizData = { wordId: string; word: string; slug: string; masteryThresholdPct: number; requiredCorrectCount: number; questions: QuizQuestion[] };
+type QuizData = { wordId: string; word: string; slug: string; masteryThresholdPct: number; requiredCorrectCount: number; timeLimitSec?: number; questions: QuizQuestion[] };
 type ReviewItem = {
   id: string;
   questionText: string;
@@ -103,6 +103,18 @@ export default function VocabWordQuizPage() {
     }
   };
 
+  // NEW (Sep 29 2026): the practice quiz is timed — countdown from the server's
+  // timeLimitSec, auto-submits at 0 (unanswered questions count as wrong).
+  const autoSubmitted = React.useRef(false);
+  React.useEffect(() => {
+    if (!quiz?.timeLimitSec || result || submitting || autoSubmitted.current) return;
+    if (elapsedSec >= quiz.timeLimitSec) {
+      autoSubmitted.current = true;
+      submit();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elapsedSec, quiz, result, submitting]);
+
   if (loading) return <div className="min-h-screen bg-background text-foreground"><main className="mx-auto max-w-xl px-4 py-10 text-center text-muted-foreground">Loading…</main></div>;
 
   if (error && !quiz) {
@@ -178,7 +190,11 @@ export default function VocabWordQuizPage() {
         <div className="mx-auto flex max-w-xl items-center justify-between">
           <span className="text-sm font-semibold">{quiz.word} — Quiz</span>
           <div className="flex items-center gap-3">
-            <span className="font-mono text-xs text-muted-foreground">⏱ {formatTime(elapsedSec)}</span>
+            {quiz?.timeLimitSec ? (
+              <span className={`font-mono text-xs font-bold ${quiz.timeLimitSec - elapsedSec <= 30 ? "text-red-600" : "text-muted-foreground"}`}>⏳ {formatTime(Math.max(0, quiz.timeLimitSec - elapsedSec))}</span>
+            ) : (
+              <span className="font-mono text-xs text-muted-foreground">⏱ {formatTime(elapsedSec)}</span>
+            )}
             <span className="text-xs text-muted-foreground">{answeredCount}/{quiz.questions.length} answered</span>
           </div>
         </div>

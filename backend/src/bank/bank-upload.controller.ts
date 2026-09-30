@@ -18,13 +18,14 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   Body,
   Req,
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -33,6 +34,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BankUploadService } from './bank-upload.service';
 import { TaxonomyImportService } from './taxonomy-import.service';
 import { parseQuestionKind } from '../common/question-visibility';
+import { S3Service } from '../s3/s3.service';
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB — question files are text/spreadsheets, not media
 
@@ -45,6 +47,7 @@ export class BankUploadController {
     private readonly uploadService: BankUploadService,
     private readonly taxonomyImportService: TaxonomyImportService,
     private readonly prisma: PrismaService,
+    private readonly s3: S3Service,
   ) {}
 
   private adminId(req: any): string {
@@ -200,6 +203,46 @@ export class BankUploadController {
   async uploadQuestionImage(@UploadedFile() file: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (png/jpg/webp/svg) is required');
     return this.uploadService.uploadQuestionImage(file);
+  }
+
+  // NEW (Sep 29 2026) — upload MANY images in one request (up to 40) and get a
+  // {originalName -> url} table back, so an admin can paste the URLs straight
+  // into the questionImageUrl / optionImageUrls columns of the Excel. One bad
+  // file never fails the rest: every file gets its own ok/error entry.
+  @Post('question-images')
+  @UseInterceptors(FilesInterceptor('files', 40, { limits: { fileSize: 5 * 1024 * 1024 } }))
+  async uploadQuestionImages(@UploadedFiles() files: any[]) {
+    if (!files?.length) throw new BadRequestException('Multipart field "files" (one or more png/jpg/webp/svg) is required');
+    const results: { name: string; ok: boolean; url?: string; key?: string; error?: string }[] = [];
+    for (const f of files) {
+      try {
+        const r = await this.uploadService.uploadQuestionImage(f);
+        results.push({ name: f.originalname, ok: true, url: r.url, key: r.key });
+      } catch (e: any) {
+        results.push({ name: f.originalname, ok: false, error: e?.response?.message || e?.message || 'Upload failed' });
+      }
+    }
+    return { total: results.length, uploaded: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results };
+  }
+
+  // NEW (Sep 29 2026) — one-click diagnosis of image storage. Does a real
+  // write -> read -> delete round trip against R2/S3 (or local disk when S3 is
+  // not configured) and returns plain-language hints for whatever is missing.
+  @Get('storage-health')
+  storageHealth() {
+    return this.s3.healthCheck();
+  }
+
+  // NEW (Sep 29 2026) — the whole syllabus (Subject > Chapter > Topic >
+  // Sub-topic) as an Excel the admin can download, edit and re-import via
+  // /syllabus-excel. Same "English\nHindi" layout the importer reads.
+  @Get('syllabus-export')
+  @Department('QUESTIONS', 'PRACTICE')
+  async syllabusExport(@Res() res: Response) {
+    const buffer = await this.taxonomyImportService.exportToExcel();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="ssc-syllabus.xlsx"');
+    res.send(buffer);
   }
 
   // NEW (this session) — "admin ek click me poora question bank download kar
