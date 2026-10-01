@@ -50,7 +50,31 @@ interface UploadResult {
   failed: number;
   errors: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string }[];
   warnings: { row: number; message: string; questionPreview?: string }[];
+  // Oct 1 2026 (huge uploads): only the first ~1000 failed rows are listed.
+  errorsTruncated?: boolean;
+  errorSummary?: Record<string, number>;
+  warningsTotal?: number;
 }
+
+interface UploadJobState {
+  status: "RUNNING" | "DONE" | "FAILED";
+  phase: string;
+  processed: number;
+  total: number;
+  created: number;
+  failed: number;
+  result?: UploadResult;
+  error?: string;
+}
+
+const PHASE_LABEL: Record<string, string> = {
+  QUEUED: "Queue me",
+  PARSING: "File padh rahe hain (reading file)",
+  CHECKING: "Rows check ho rahe hain (validating)",
+  DUPLICATES: "Duplicate check",
+  SAVING: "Database me save ho rahe hain (saving)",
+  FINALIZING: "Final steps",
+};
 
 interface SubscriptionPlan {
   id: string;
@@ -158,6 +182,7 @@ export default function AdminPage() {
   const [uploadFile, setUploadFile] = React.useState<File | null>(null);
   const [uploading, setUploading] = React.useState(false);
   const [uploadResult, setUploadResult] = React.useState<UploadResult | null>(null);
+  const [uploadJob, setUploadJob] = React.useState<UploadJobState | null>(null);
 
   // Phase 3 (Sep 2026) — upload history (past QuestionUploadBatch rows).
   type UploadBatchSummary = {
@@ -425,11 +450,17 @@ export default function AdminPage() {
     setUploading(true);
     setError("");
     setUploadResult(null);
+    setUploadJob(null);
     try {
       const formData = new FormData();
       formData.append("file", uploadFile);
       formData.append("kind", kind);
       if (kind === "practice") formData.append("isPracticeOnly", "true");
+      // Oct 1 2026: Excel/CSV run as a BACKGROUND job (any size, even 1 lakh
+      // rows) — the request returns at once and we poll for progress, so
+      // the browser/Cloudflare never time out on a long import.
+      const useAsync = uploadFormat === "excel" || uploadFormat === "csv";
+      if (useAsync) formData.append("async", "true");
       const res = await fetchAuth(`${API_BASE}/bank/admin/upload/${uploadFormat}`, {
         method: "POST",
         body: formData,
@@ -438,15 +469,52 @@ export default function AdminPage() {
       if (!res.ok) {
         throw new Error((data as { message?: string } | null)?.message || `Upload failed (HTTP ${res.status})`);
       }
-      setUploadResult(data as UploadResult);
+
+      let finalResult: UploadResult;
+      if (useAsync && (data as { async?: boolean } | null)?.async) {
+        const jobId = (data as { jobId: string }).jobId;
+        setUploadJob({ status: "RUNNING", phase: "QUEUED", processed: 0, total: 0, created: 0, failed: 0 });
+        finalResult = await pollUploadJob(jobId);
+      } else {
+        finalResult = data as UploadResult;
+      }
+
+      setUploadResult(finalResult);
       loadBatches(); // Phase 3 — refresh history so this upload shows up immediately
-      if ((data as UploadResult).created > 0) {
-        setInfo(`${(data as UploadResult).created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye`);
+      if (finalResult.created > 0) {
+        setInfo(`${finalResult.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
+      setUploadJob(null);
+    }
+  }
+
+  // Polls the background import every 2 s until it is DONE / FAILED. Network
+  // blips are tolerated (up to 30 failed polls in a row) because the import
+  // keeps running on the server regardless of this browser tab.
+  async function pollUploadJob(jobId: string): Promise<UploadResult> {
+    let misses = 0;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const r = await fetchAuth(`${API_BASE}/bank/admin/upload/jobs/${jobId}`);
+        const j = (await r.json().catch(() => null)) as (UploadJobState & { message?: string }) | null;
+        if (!r.ok) {
+          if (r.status === 404 || r.status === 403) throw new Error(j?.message || "Upload job nahi mila — Upload history dekhein.");
+          throw new Error(j?.message || `HTTP ${r.status}`);
+        }
+        misses = 0;
+        if (!j) continue;
+        setUploadJob(j);
+        if (j.status === "DONE" && j.result) return j.result;
+        if (j.status === "FAILED") throw new Error(j.error || "Upload fail ho gaya");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "";
+        if (/job nahi mila|Upload fail|Excel|CSV|column|Missing/i.test(msg) || ++misses > 30) throw e;
+      }
     }
   }
 
@@ -922,7 +990,24 @@ export default function AdminPage() {
               </span>
             </button>
           </div>
-          {uploading && <p className="mt-2 text-sm text-muted-foreground">Uploading...</p>}
+          {uploading && !uploadJob && <p className="mt-2 text-sm text-muted-foreground">Uploading file...</p>}
+          {uploadJob && (
+            <div className="mt-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+              <p className="font-semibold">⏳ {PHASE_LABEL[uploadJob.phase] ?? uploadJob.phase}</p>
+              {uploadJob.total > 0 && (
+                <>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full bg-primary transition-all" style={{ width: `${Math.min(100, Math.round((uploadJob.processed / uploadJob.total) * 100))}%` }} />
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {uploadJob.processed.toLocaleString()} / {uploadJob.total.toLocaleString()} rows
+                    {uploadJob.phase === "SAVING" ? ` · saved ${uploadJob.created.toLocaleString()} · failed ${uploadJob.failed.toLocaleString()}` : ""}
+                  </p>
+                </>
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">Badi file me kuch minute lag sakte hain — ye page khula rakhein. Server par import chalta rahega. / Large files take a few minutes; keep this page open.</p>
+            </div>
+          )}
 
           {uploadResult && (
             <div className="mt-4 rounded-lg border border-border bg-background p-3 text-sm">
@@ -930,6 +1015,11 @@ export default function AdminPage() {
                 <span>Total: <strong>{uploadResult.total}</strong></span>
                 <span className="text-emerald-600 dark:text-emerald-400">Created: <strong>{uploadResult.created}</strong></span>
                 <span className="text-red-600 dark:text-red-400">Failed: <strong>{uploadResult.failed}</strong></span>
+                {uploadResult.errorsTruncated && (
+                  <span className="w-full text-xs text-amber-600">
+                    ⚠️ Total {uploadResult.failed.toLocaleString()} rows fail hui — yahan sirf pehli {uploadResult.errors.length.toLocaleString()} dikh rahi hain. Pehle inhe theek karke dobara upload karein. / Only the first {uploadResult.errors.length.toLocaleString()} failures are listed.
+                  </span>
+                )}
                 {/* NEW: one-click download of the full error report as CSV
                     — row, category, question preview, exact error message
                     — so the admin can open it next to their spreadsheet
@@ -950,10 +1040,13 @@ export default function AdminPage() {
               {uploadResult.errors.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-2">
                   {(Object.entries(
-                    uploadResult.errors.reduce((acc: Record<string, number>, e) => {
-                      acc[e.category] = (acc[e.category] || 0) + 1;
-                      return acc;
-                    }, {}),
+                    // Oct 1 2026: prefer the server's exact per-category totals — the
+                    // errors list itself is capped at the first ~1000 rows.
+                    uploadResult.errorSummary ??
+                      uploadResult.errors.reduce((acc: Record<string, number>, e) => {
+                        acc[e.category] = (acc[e.category] || 0) + 1;
+                        return acc;
+                      }, {}),
                   ) as [UploadErrorCategory, number][]).map(([cat, count]) => (
                     <span key={cat} className="rounded-full bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400">
                       {CATEGORY_LABEL[cat] ?? cat}: {count}

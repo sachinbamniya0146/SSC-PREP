@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { BankService } from './bank.service';
@@ -11,6 +11,18 @@ import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagr
 import { cacheClearPrefix } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, QuestionKind } from '../common/question-visibility';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
+import {
+  DB_IN_CHUNK,
+  INSERT_CHUNK,
+  MAX_CONCURRENT_UPLOAD_JOBS,
+  MAX_REPORTED_ERRORS,
+  MAX_REPORTED_WARNINGS,
+  UploadJob,
+  UploadJobStore,
+  chunk,
+  parseExcelOffThread,
+  yieldToEventLoop,
+} from './upload-support';
 
 // Used by resolveReferenceIds() — a v4 UUID (Prisma's `@default(uuid())`
 // format) is the one case where a topicId/subTopicId that doesn't resolve
@@ -199,6 +211,13 @@ export interface UploadResult {
   // the just-finished result into "view in upload history" / "delete this
   // batch" without a second lookup.
   uploadBatchId?: string;
+  // Oct 1 2026 (huge uploads): only the first MAX_REPORTED_ERRORS failed rows are
+  // returned/stored WITH their row data; the true totals are in `failed` and
+  // `errorSummary` (count per category), so a 1-lakh-row upload that mostly
+  // fails can never produce a 100 MB response.
+  errorsTruncated?: boolean;
+  errorSummary?: Record<string, number>;
+  warningsTotal?: number;
 }
 
 export interface QuestionTemplate {
@@ -262,6 +281,138 @@ export class BankUploadService {
   // a batch row at all), so it uses the one-shot saveUploadBatchAfterTheFact()
   // instead — its questions just won't carry an uploadBatchId tag, which
   // only affects the "delete this whole batch" convenience action.
+  // ------------------------------------------------------------------
+  // Huge-upload support (Oct 1 2026)
+  // ------------------------------------------------------------------
+  private readonly uploadJobs = new UploadJobStore();
+
+  private pushUploadError(result: UploadResult, entry: UploadResult['errors'][number]): void {
+    result.errorSummary = result.errorSummary ?? {};
+    result.errorSummary[entry.category] = (result.errorSummary[entry.category] ?? 0) + 1;
+    if (result.errors.length < MAX_REPORTED_ERRORS) result.errors.push(entry);
+    else result.errorsTruncated = true;
+  }
+
+  private pushUploadWarning(result: UploadResult, entry: UploadResult['warnings'][number]): void {
+    result.warningsTotal = (result.warningsTotal ?? 0) + 1;
+    if (result.warnings.length < MAX_REPORTED_WARNINGS) result.warnings.push(entry);
+  }
+
+  /** First sheet of an Excel file as array-of-arrays — parsed in a worker thread so a 100k-row file cannot freeze the API. */
+  private async readExcelRows(fileBuffer: Buffer): Promise<any[][]> {
+    try {
+      return await parseExcelOffThread(fileBuffer);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/memory|heap|stopped unexpectedly/i.test(msg)) {
+        throw new BadRequestException(
+          'Excel file itni badi hai ki server ki memory kam pad gayi. File ko 25,000-30,000 rows ke tukdon me baant kar upload karein, ya CSV format use karein (CSV bahut halka hota hai). / The Excel file is too large for the server memory: split it into files of ~25-30k rows, or upload a CSV instead.',
+        );
+      }
+      if (/xlsx module not found|ERR_WORKER_UNSUPPORTED/i.test(msg)) {
+        // worker threads unavailable in this runtime -> original in-process parse
+        const wb = XLSX.read(fileBuffer, { type: 'buffer' });
+        return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 }) as any[][];
+      }
+      throw new BadRequestException(
+        `Failed to parse Excel file: ${msg} — check the file is a real, unpasswordprotected .xlsx/.xls (an .xls saved from Google Sheets or a corrupted download are the usual causes here).`,
+      );
+    }
+  }
+
+  /**
+   * Starts an Excel/CSV import IN THE BACKGROUND and returns immediately
+   * (HTTP stays well under Cloudflare's 100 s limit, which is what produced
+   * 524 / "Internal error" on big files). The admin UI polls getUploadJob().
+   */
+  async startBackgroundUpload(
+    kind: 'EXCEL' | 'CSV',
+    fileBuffer: Buffer,
+    adminId: string,
+    filename: string | undefined,
+    isPracticeOnly: boolean,
+    afterDone?: (r: UploadResult) => Promise<UploadResult>,
+  ): Promise<{ async: true; jobId: string; uploadBatchId: string; status: 'RUNNING' }> {
+    if (this.uploadJobs.runningCount() >= MAX_CONCURRENT_UPLOAD_JOBS) {
+      throw new BadRequestException(
+        `Server par abhi ${MAX_CONCURRENT_UPLOAD_JOBS} bade uploads chal rahe hain — ek khatam hone ka wait karke phir upload karein. / Two big uploads are already running; try again when one finishes.`,
+      );
+    }
+    const batchId = await this.createUploadBatchPlaceholder(adminId, kind, filename);
+    this.uploadJobs.create({ id: batchId, adminId, kind, filename });
+    void this.runBackgroundUpload(batchId, kind, fileBuffer, adminId, isPracticeOnly, afterDone);
+    return { async: true, jobId: batchId, uploadBatchId: batchId, status: 'RUNNING' };
+  }
+
+  getUploadJob(jobId: string, adminId?: string): UploadJob {
+    const job = this.uploadJobs.get(jobId);
+    if (!job) {
+      throw new NotFoundException(
+        'Upload job nahi mila — server restart hua ho sakta hai. "Upload history" me is file ka batch dekhein: jitne questions save ho chuke the wo wahan dikhenge. / Job not found (server may have restarted) — check Upload history.',
+      );
+    }
+    if (adminId && job.adminId !== adminId) throw new ForbiddenException('Ye upload kisi aur admin ne shuru kiya hai.');
+    return job;
+  }
+
+  private async runBackgroundUpload(
+    jobId: string,
+    kind: 'EXCEL' | 'CSV',
+    fileBuffer: Buffer,
+    adminId: string,
+    isPracticeOnly: boolean,
+    afterDone?: (r: UploadResult) => Promise<UploadResult>,
+  ): Promise<void> {
+    const progress = (p: Partial<UploadJob>) => this.uploadJobs.patch(jobId, p);
+    try {
+      progress({ phase: 'PARSING' });
+      let headers: string[];
+      let rows: any[][];
+      if (kind === 'EXCEL') {
+        const jsonData = await this.readExcelRows(fileBuffer);
+        if (jsonData.length < 2) throw new BadRequestException('Excel file must have at least a header row and one data row');
+        headers = jsonData[0] as string[];
+        rows = jsonData.slice(1);
+      } else {
+        const lines = fileBuffer.toString('utf-8').split('\n').map((l) => l.trim()).filter((l) => l);
+        if (lines.length < 2) throw new BadRequestException('CSV file must have at least a header row and one data row');
+        headers = this.parseCSVLine(lines[0]);
+        rows = [];
+        for (let i = 1; i < lines.length; i++) {
+          rows.push(this.parseCSVLine(lines[i]));
+          if (i % 5000 === 0) await yieldToEventLoop();
+        }
+      }
+      progress({ phase: 'CHECKING', total: rows.length, processed: 0 });
+      let result = await this.processBulkQuestions(headers, rows, adminId, jobId, isPracticeOnly, progress);
+      progress({ phase: 'FINALIZING', processed: rows.length, created: result.created, failed: result.failed });
+      await this.finalizeUploadBatch(jobId, result);
+      if (afterDone) result = await afterDone(result);
+      this.uploadJobs.patch(jobId, {
+        status: 'DONE',
+        phase: 'DONE',
+        result,
+        total: result.total,
+        processed: result.total,
+        created: result.created,
+        failed: result.failed,
+        finishedAt: Date.now(),
+      });
+    } catch (e: any) {
+      const raw = e?.response?.message ?? e?.message ?? String(e);
+      const message = Array.isArray(raw) ? raw.join('; ') : String(raw);
+      this.uploadJobs.patch(jobId, { status: 'FAILED', phase: 'FAILED', error: message, finishedAt: Date.now() });
+      try {
+        await this.prisma.questionUploadBatch.update({
+          where: { id: jobId },
+          data: { errorsJson: [{ row: 0, error: message, category: 'OTHER' }] as any },
+        });
+      } catch {
+        /* history note is best-effort */
+      }
+    }
+  }
+
   private async createUploadBatchPlaceholder(
     adminId: string,
     sourceType: 'EXCEL' | 'CSV' | 'TEXT' | 'JSON' | 'WORD',
@@ -477,10 +628,7 @@ export class BankUploadService {
     let headers: string[];
     let rows: any[][];
     try {
-      const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+      const jsonData = await this.readExcelRows(fileBuffer);
 
       if (jsonData.length < 2) {
         throw new BadRequestException('Excel file must have at least a header row and one data row');
@@ -782,7 +930,7 @@ export class BankUploadService {
     if (!result.uploadBatchId) return;
     const n = await this.prisma.question.count({ where: { uploadBatchId: result.uploadBatchId, year: null } });
     if (n > 0) {
-      result.warnings.push({
+      this.pushUploadWarning(result, {
         row: 0,
         message: `${n} question(s) me 'year' column khali tha — ye PYQ nahi ban sakte, Practice questions ki tarah save hue hain. Agar ye PYQ the to year bharkar dobara upload karein.`,
       });
@@ -1612,7 +1760,7 @@ export class BankUploadService {
   /**
    * Process bulk questions from parsed headers and rows
    */
-  private async processBulkQuestions(headers: string[], rows: any[][], adminId: string, uploadBatchId?: string | null, isPracticeOnly?: boolean): Promise<UploadResult> {
+  private async processBulkQuestions(headers: string[], rows: any[][], adminId: string, uploadBatchId?: string | null, isPracticeOnly?: boolean, onProgress?: (p: Partial<UploadJob>) => void): Promise<UploadResult> {
     const requiredHeaders = ['examId', 'subjectId', 'chapterId', 'questionText', 'correctAnswer'];
     const optionHeaders = ['optionA', 'optionB', 'optionC', 'optionD'];
     const hindiExempt = await this.loadHindiExemptSubjectIds();
@@ -1755,6 +1903,10 @@ export class BankUploadService {
     // resolve + validate together like before.
     const rawParsed: { rowNum: number; row: any[]; question: BulkUploadQuestion }[] = [];
     for (let i = 0; i < rows.length; i++) {
+      if (i > 0 && i % 2000 === 0) {
+        await yieldToEventLoop(); // keep the API responsive on huge sheets
+        onProgress?.({ phase: 'CHECKING', processed: i, total: rows.length });
+      }
       const row = rows[i];
       const rowNum = i + 2; // 1-indexed + header
       try {
@@ -1780,7 +1932,7 @@ export class BankUploadService {
       } catch (error) {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({
+        this.pushUploadError(result, {
           row: rowNum,
           error: message,
           category: this.categorizeUploadError(message),
@@ -1799,7 +1951,9 @@ export class BankUploadService {
     );
 
     const parsedRows: { rowNum: number; row: any[]; question: BulkUploadQuestion }[] = [];
+    let resolvedCount = 0;
     for (const { rowNum, row, question } of rawParsed) {
+      if (++resolvedCount % 2000 === 0) await yieldToEventLoop();
       try {
         await this.resolveReferenceIds(
           question,
@@ -1814,7 +1968,7 @@ export class BankUploadService {
       } catch (error) {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({
+        this.pushUploadError(result, {
           row: rowNum,
           error: message,
           category: this.categorizeUploadError(message),
@@ -1837,6 +1991,7 @@ export class BankUploadService {
     // matching in-memory (see buildDuplicateIndex()/matchDuplicate()) —
     // cuts duplicate-check DB round trips from ~2/row to a small constant
     // number for the entire upload.
+    onProgress?.({ phase: 'DUPLICATES', processed: 0 });
     const duplicateIndex = await this.buildDuplicateIndex(parsedRows.map((p) => p.question));
 
     // ENHANCEMENT (this session — "Excel upload turant/fast hona chahiye"):
@@ -1848,7 +2003,9 @@ export class BankUploadService {
     // the actual DB writes now run in concurrent chunks of 10, which is
     // where nearly all the wall-clock time was going.
     const toCommit: { rowNum: number; row: any[]; question: BulkUploadQuestion; data: any; published: boolean }[] = [];
+    let preparedCount = 0;
     for (const { rowNum, row, question } of parsedRows) {
+      if (++preparedCount % 2000 === 0) await yieldToEventLoop();
       try {
         if (question.questionImageBase64 || question.options.some((o) => o.imageBase64)) {
           // Rare path: a row with an inline base64 image needs its own S3
@@ -1859,7 +2016,7 @@ export class BankUploadService {
           const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId, hindiExempt);
           result.created++;
           if (!published) {
-            result.warnings.push({
+            this.pushUploadWarning(result, {
               row: rowNum,
               message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
               questionPreview: this.extractQuestionPreview(row, headerMap),
@@ -1872,7 +2029,7 @@ export class BankUploadService {
       } catch (error) {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({
+        this.pushUploadError(result, {
           row: rowNum,
           error: message,
           category: this.categorizeUploadError(message),
@@ -1882,13 +2039,14 @@ export class BankUploadService {
       }
     }
 
+    onProgress?.({ phase: 'SAVING', processed: 0, total: toCommit.length });
     await this.commitQuestionsBatch(
       toCommit,
       adminId,
       (rowNum, row, published) => {
         result.created++;
         if (!published) {
-          result.warnings.push({
+          this.pushUploadWarning(result, {
             row: rowNum,
             message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
             questionPreview: this.extractQuestionPreview(row, headerMap),
@@ -1898,7 +2056,7 @@ export class BankUploadService {
       (rowNum, row, _question, error) => {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({
+        this.pushUploadError(result, {
           row: rowNum,
           error: message,
           category: this.categorizeUploadError(message),
@@ -1906,6 +2064,7 @@ export class BankUploadService {
           data: row,
         });
       },
+      (done, total) => onProgress?.({ phase: 'SAVING', processed: done, total, created: result.created, failed: result.failed }),
     );
 
     result.success = result.failed === 0;
@@ -2026,7 +2185,7 @@ export class BankUploadService {
       } catch (error) {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({
+        this.pushUploadError(result, {
           row: rowNum,
           error: message,
           category: this.categorizeUploadError(message),
@@ -2048,7 +2207,7 @@ export class BankUploadService {
           const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId, hindiExempt);
           result.created++;
           if (!published) {
-            result.warnings.push({
+            this.pushUploadWarning(result, {
               row: rowNum,
               message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
               questionPreview: this.previewFromQuestion(question),
@@ -2061,7 +2220,7 @@ export class BankUploadService {
       } catch (error) {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({
+        this.pushUploadError(result, {
           row: rowNum,
           error: message,
           category: this.categorizeUploadError(message),
@@ -2077,7 +2236,7 @@ export class BankUploadService {
       (rowNum, row, published) => {
         result.created++;
         if (!published) {
-          result.warnings.push({
+          this.pushUploadWarning(result, {
             row: rowNum,
             message: 'Created but NOT published (no Hindi translation) — add questionTextHindi and re-review to make it live.',
             questionPreview: this.previewFromQuestion(row),
@@ -2087,7 +2246,7 @@ export class BankUploadService {
       (rowNum, row, _question, error) => {
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({
+        this.pushUploadError(result, {
           row: rowNum,
           error: message,
           category: this.categorizeUploadError(message),
@@ -2624,16 +2783,19 @@ export class BankUploadService {
       subjectId: true, chapterId: true, examId: true, createdAt: true, searchHash: true,
     } as const;
 
-    const [byHashRows, byTextRows] = hashes.length || texts.length
-      ? await Promise.all([
-          hashes.length
-            ? this.prisma.question.findMany({ where: { searchHash: { in: hashes }, isActive: true }, select })
-            : Promise.resolve([]),
-          texts.length
-            ? this.prisma.question.findMany({ where: { questionText: { in: texts }, isActive: true }, select })
-            : Promise.resolve([]),
-        ])
-      : [[], []];
+    // Oct 1 2026: a 100k-row upload put 100k values into ONE `IN (...)` list,
+    // which blows Postgres' 32 767 bind-variable limit -> the "Internal Error".
+    // Query in slices of DB_IN_CHUNK instead.
+    const byHashRows: any[] = [];
+    for (const part of chunk(hashes, DB_IN_CHUNK)) {
+      const rows = await this.prisma.question.findMany({ where: { searchHash: { in: part }, isActive: true }, select });
+      for (const r of rows) byHashRows.push(r);
+    }
+    const byTextRows: any[] = [];
+    for (const part of chunk(texts, DB_IN_CHUNK)) {
+      const rows = await this.prisma.question.findMany({ where: { questionText: { in: part }, isActive: true }, select });
+      for (const r of rows) byTextRows.push(r);
+    }
 
     const byHash = new Map<string, any>();
     for (const row of byHashRows) {
@@ -2914,23 +3076,47 @@ export class BankUploadService {
     adminId: string,
     onSuccess: (rowNum: number, row: TRow, published: boolean) => void,
     onError: (rowNum: number, row: TRow, question: BulkUploadQuestion, error: unknown) => void,
+    onProgress?: (done: number, total: number) => void,
   ): Promise<void> {
-    const CHUNK_SIZE = 10;
+    // Oct 1 2026: rows are now inserted with ONE createMany per slice of
+    // INSERT_CHUNK rows (a single atomic INSERT) instead of one INSERT per row.
+    // If a slice fails (one bad row spoils a bulk insert) NOTHING of it was
+    // saved, so that slice is retried row by row (10 at a time) — every row
+    // keeps its own independent success/failure exactly as before.
+    const ROW_CONCURRENCY = 10;
     let successCount = 0;
-    for (let i = 0; i < prepared.length; i += CHUNK_SIZE) {
-      const chunk = prepared.slice(i, i + CHUNK_SIZE);
-      const outcomes = await Promise.allSettled(
-        chunk.map((p) => this.commitPreparedQuestion(p, adminId)),
-      );
-      outcomes.forEach((outcome, idx) => {
-        const p = chunk[idx];
-        if (outcome.status === 'fulfilled') {
+    let done = 0;
+    for (const part of chunk(prepared, INSERT_CHUNK)) {
+      let bulkOk = false;
+      try {
+        await this.prisma.question.createMany({ data: part.map((p) => p.data) });
+        bulkOk = true;
+      } catch {
+        bulkOk = false;
+      }
+      if (bulkOk) {
+        for (const p of part) {
           successCount++;
           onSuccess(p.rowNum, p.row, p.published);
-        } else {
-          onError(p.rowNum, p.row, p.question, outcome.reason);
         }
-      });
+      } else {
+        for (let i = 0; i < part.length; i += ROW_CONCURRENCY) {
+          const slice = part.slice(i, i + ROW_CONCURRENCY);
+          const outcomes = await Promise.allSettled(slice.map((p) => this.commitPreparedQuestion(p, adminId)));
+          outcomes.forEach((outcome, idx) => {
+            const p = slice[idx];
+            if (outcome.status === 'fulfilled') {
+              successCount++;
+              onSuccess(p.rowNum, p.row, p.published);
+            } else {
+              onError(p.rowNum, p.row, p.question, outcome.reason);
+            }
+          });
+        }
+      }
+      done += part.length;
+      onProgress?.(done, prepared.length);
+      await yieldToEventLoop();
     }
     // One summary row instead of one-per-question (see commitPreparedQuestion() doc-comment).
     if (successCount > 0) {

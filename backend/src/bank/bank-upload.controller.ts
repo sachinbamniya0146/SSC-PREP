@@ -23,6 +23,8 @@ import {
   Req,
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
@@ -36,7 +38,8 @@ import { TaxonomyImportService } from './taxonomy-import.service';
 import { parseQuestionKind } from '../common/question-visibility';
 import { S3Service } from '../s3/s3.service';
 
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20MB — question files are text/spreadsheets, not media
+// Oct 1 2026: 20MB -> 100MB so a 1-lakh-question Excel fits (100MB is also the Cloudflare free-plan request cap; nginx allows 300m).
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 @Controller('bank/admin/upload')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -116,14 +119,44 @@ export class BankUploadController {
     return result;
   }
 
+  // Oct 1 2026: any unexpected (non-HTTP) failure used to surface as a blank
+  // "Internal server error". Now the real cause is returned so the admin (and
+  // I) can see what went wrong.
+  private async guard<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof HttpException) throw e;
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new InternalServerErrorException(`Upload failed unexpectedly: ${msg}`);
+    }
+  }
+
+  private isAsyncFlag(body: any): boolean {
+    return body?.async === 'true' || body?.async === true;
+  }
+
+  // Progress / result of a background (async) import — poll every ~2 s.
+  @Get('jobs/:id')
+  getUploadJob(@Param('id') id: string, @Req() req: any) {
+    return this.uploadService.getUploadJob(id, this.adminId(req));
+  }
+
   @Post('excel')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadExcel(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
-    return this.afterUpload(
-      await this.uploadService.uploadFromExcel(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
-      body,
+    if (this.isAsyncFlag(body)) {
+      return this.guard(() =>
+        this.uploadService.startBackgroundUpload('EXCEL', file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body), (r) => this.afterUpload(r, body)),
+      );
+    }
+    return this.guard(async () =>
+      this.afterUpload(
+        await this.uploadService.uploadFromExcel(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
+        body,
+      ),
     );
   }
 
@@ -132,9 +165,16 @@ export class BankUploadController {
   async uploadCsv(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.csv) is required');
-    return this.afterUpload(
-      await this.uploadService.uploadFromCSV(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
-      body,
+    if (this.isAsyncFlag(body)) {
+      return this.guard(() =>
+        this.uploadService.startBackgroundUpload('CSV', file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body), (r) => this.afterUpload(r, body)),
+      );
+    }
+    return this.guard(async () =>
+      this.afterUpload(
+        await this.uploadService.uploadFromCSV(file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body)),
+        body,
+      ),
     );
   }
 
