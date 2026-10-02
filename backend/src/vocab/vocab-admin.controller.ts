@@ -22,6 +22,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { Department } from '../common/decorators/department.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { VocabUploadService } from './vocab-upload.service';
+import { archiveWordProgress } from './vocab-unlock-memory';
 import { AuditLogService } from '../audit-log/audit-log.service';
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -51,20 +52,21 @@ export class VocabAdminController {
   // exact two-sheet (Words + Questions) format this expects.
   @Post('upload')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  async uploadExcel(@UploadedFile() file: any, @Req() req: any) {
+  async uploadExcel(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx) is required');
-    const result = await this.upload.uploadFromExcel(file.buffer);
+    const dryRun = body?.dryRun === 'true' || body?.dryRun === true;
+    const result = await this.upload.uploadFromExcel(file.buffer, dryRun);
     // who uploaded what — visible to the admin in the audit log
-    await this.audit.log({
+    if (!dryRun) await this.audit.log({
       userId: req.user?.userId,
       action: 'VOCAB_UPLOAD',
       targetEntity: 'VocabWord',
       metadataJson: {
         filename: file.originalname,
         wordsCreated: result.wordsCreated,
-        wordsUpdated: result.wordsUpdated,
+        wordsSkipped: result.wordsSkipped,
         questionsCreated: result.questionsCreated,
-        questionsUpdated: result.questionsUpdated,
+        questionsSkipped: result.questionsSkipped,
         errorCount: result.errors.length,
       },
     }).catch(() => undefined);
@@ -99,14 +101,21 @@ export class VocabAdminController {
     return this.prisma.vocabWord.update({ where: { id }, data });
   }
 
-  // Deleting a word cascades its questions AND every student's progress row
-  // for it (onDelete: Cascade in schema.prisma) — used for cleaning up a
-  // mis-imported word, not for routine editing (use PUT to just deactivate).
+  // Oct 2026: delete is now SOFT by default (word hidden from students, everything kept) because a hard
+  // delete wipes every student's progress and used to push them backwards / re-lock words. Re-uploading the
+  // same word later simply re-activates it with all progress intact. Pass ?hard=true only for a mis-import
+  // that no student has touched — a hard delete still cascades questions AND progress.
   @Delete('words/:id')
-  async deleteWord(@Param('id') id: string) {
+  async deleteWord(@Param('id') id: string, @Query('hard') hard?: string) {
     const existing = await this.prisma.vocabWord.findUnique({ where: { id } });
     if (!existing) throw new BadRequestException('Word not found');
-    await this.prisma.vocabWord.delete({ where: { id } });
-    return { deleted: true };
+    if (hard === 'true') {
+      // keep every student's unlock/mastery of this word so a later re-upload of the same word restores it
+      const kept = await archiveWordProgress(this.prisma, id);
+      await this.prisma.vocabWord.delete({ where: { id } });
+      return { deleted: true, hard: true, studentsKept: kept };
+    }
+    await this.prisma.vocabWord.update({ where: { id }, data: { isActive: false } });
+    return { deleted: true, hard: false, note: 'Word hide ho gaya; students ka progress safe hai. Dobara upload karne par wapas active ho jayega.' };
   }
 }

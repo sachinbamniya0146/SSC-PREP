@@ -28,6 +28,26 @@ type Mock = {
 // same endpoint for its own exam dropdown).
 type ExamOption = { id: string; name: string; count: number };
 
+// Cashfree JS SDK (v3), loaded only when the student is about to pay (same as /premium).
+let cashfreeSdkPromise: Promise<any> | null = null;
+function loadCashfreeSdk(): Promise<any> {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  if ((window as any).Cashfree) return Promise.resolve((window as any).Cashfree);
+  if (cashfreeSdkPromise) return cashfreeSdkPromise;
+  cashfreeSdkPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
+    script.async = true;
+    script.onload = () => resolve((window as any).Cashfree);
+    script.onerror = () => {
+      cashfreeSdkPromise = null;
+      reject(new Error("Payment SDK load nahi hua — internet check karke dobara try karein"));
+    };
+    document.body.appendChild(script);
+  });
+  return cashfreeSdkPromise;
+}
+
 export default function MocksPage() {
   const [mocks, setMocks] = React.useState<Mock[]>([]);
   const [offer, setOffer] = React.useState<{ active: boolean; priceInr: number; days: number; message: string } | null>(null);
@@ -105,22 +125,15 @@ export default function MocksPage() {
         alert(err.message || "⚠️ Could not start payment. Try again.");
         return;
       }
-      const payuForm = await res.json();
-
-      const form = document.createElement("form");
-      form.method = "POST";
-      form.action = payuForm.payuUrl;
-      Object.entries(payuForm.formData || {}).forEach(([key, value]) => {
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = key;
-        input.value = String(value);
-        form.appendChild(input);
-      });
-      document.body.appendChild(form);
-      form.submit();
-    } catch (e) {
-      alert("⚠️ Could not start payment. Try again.");
+      // Oct 2026: the backend moved to Cashfree. This page still built a PayU form
+      // (payuForm.payuUrl is undefined now), so "Unlock" never opened a payment page.
+      const order = await res.json();
+      const Cashfree = await loadCashfreeSdk();
+      if (!Cashfree) throw new Error("Payment SDK failed to load");
+      const cashfree = Cashfree({ mode: order.cashfreeEnv === "PRODUCTION" ? "production" : "sandbox" });
+      await cashfree.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: "_self" });
+    } catch (e: any) {
+      alert(e?.message ? `⚠️ ${e.message}` : "⚠️ Could not start payment. Try again.");
     }
   };
 

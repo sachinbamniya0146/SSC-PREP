@@ -27,6 +27,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { Response } from 'express';
+import * as XLSX from 'xlsx';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -139,21 +140,23 @@ export class BankUploadController {
   // Progress / result of a background (async) import — poll every ~2 s.
   @Get('jobs/:id')
   getUploadJob(@Param('id') id: string, @Req() req: any) {
-    return this.uploadService.getUploadJob(id, this.adminId(req));
+    const { headers: _h, ...rest } = this.uploadService.getUploadJob(id, this.adminId(req));
+    return { ...rest, hasRejected: (rest.result?.errors?.length ?? 0) > 0 };
   }
 
-  // Oct 1 2026 — add ONE question from the admin form (PYQ or practice, with
-  // optional question/option images + Hindi text). Same rules as an Excel row.
-  @Post('single')
-  async addSingle(@Body() body: any, @Req() req: any) {
-    this.assertUploadDepartment(req, body?.kind !== 'pyq');
-    return this.guard(() => this.uploadService.addSingleQuestion(body, this.adminId(req)));
-  }
-
-  @Post('single/check-duplicate')
-  async checkSingleDuplicate(@Body() body: any, @Req() req: any) {
-    this.assertUploadDepartment(req, body?.kind !== 'pyq');
-    return this.guard(() => this.uploadService.checkSingleDuplicate(body));
+  // Oct 2026: Excel with ONLY the rejected rows (+ reason) — fix it and upload it again.
+  @Get('jobs/:id/rejected')
+  rejectedRows(@Param('id') id: string, @Req() req: any, @Res() res: Response) {
+    const job = this.uploadService.getUploadJob(id, this.adminId(req));
+    const errs: any[] = job.result?.errors ?? [];
+    if (!job.headers || !errs.some((e) => Array.isArray(e.data))) throw new BadRequestException('Koi rejected row nahi hai.');
+    const wb = XLSX.utils.book_new();
+    const aoa: any[][] = [[...job.headers, 'rejectReason', 'originalRow']];
+    for (const e of errs) if (Array.isArray(e.data)) aoa.push([...job.headers.map((_, i) => e.data[i] ?? ''), e.error, e.row]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Rejected');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="rejected_${id}.xlsx"`);
+    res.send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   }
 
   @Post('excel')
@@ -163,7 +166,7 @@ export class BankUploadController {
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
     if (this.isAsyncFlag(body)) {
       return this.guard(() =>
-        this.uploadService.startBackgroundUpload('EXCEL', file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body), (r) => this.afterUpload(r, body)),
+        this.uploadService.startBackgroundUpload('EXCEL', file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body), (r) => this.afterUpload(r, body), body?.requireSolution !== 'false'),
       );
     }
     return this.guard(async () =>
@@ -181,7 +184,7 @@ export class BankUploadController {
     if (!file) throw new BadRequestException('Multipart field "file" (.csv) is required');
     if (this.isAsyncFlag(body)) {
       return this.guard(() =>
-        this.uploadService.startBackgroundUpload('CSV', file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body), (r) => this.afterUpload(r, body)),
+        this.uploadService.startBackgroundUpload('CSV', file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body), (r) => this.afterUpload(r, body), body?.requireSolution !== 'false'),
       );
     }
     return this.guard(async () =>

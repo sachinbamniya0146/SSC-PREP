@@ -5,6 +5,7 @@ import * as React from "react";
 import { useParams } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import DiagramVenn from "@/components/DiagramVenn";
+import { StemMedia, QFigure, RichText } from "@/components/QuestionMedia";
 
 type ReviewQuestion = {
   questionId: string;
@@ -625,17 +626,7 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
 
       <h3 className="mt-3 text-sm font-medium leading-relaxed">{stem}</h3>
       {/* Session 22 — question-stem diagram (rare case) */}
-      {q.questionDiagramType && (
-        <div className="mt-2 flex justify-center rounded-xl border border-border bg-muted/30 p-3">
-          <DiagramVenn type={q.questionDiagramType} labels={q.questionDiagramLabels} size={170} />
-        </div>
-      )}
-      {q.questionImageUrl && (
-        <div className="mt-2 flex justify-center rounded-xl border border-border bg-muted/30 p-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={q.questionImageUrl} alt="Question figure" className="max-h-64 max-w-full object-contain" />
-        </div>
-      )}
+      <StemMedia diagramType={q.questionDiagramType} diagramLabels={q.questionDiagramLabels} imageUrl={q.questionImageUrl} />
 
       <div className="mt-3 space-y-2">
         {q.options.map((o) => {
@@ -655,8 +646,7 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
               {o.diagramType ? (
                 <DiagramVenn type={o.diagramType} labels={o.diagramLabels} size={120} />
               ) : o.imageUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={o.imageUrl} alt={`Option ${o.key}`} className="max-h-32 max-w-full object-contain" />
+                <QFigure src={o.imageUrl} alt={`Option ${o.key}`} className="max-h-32" />
               ) : (
                 <span className="leading-relaxed">{optText(o)}</span>
               )}
@@ -675,7 +665,7 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
               {srcLabel.text}
             </span>
           )}
-          <span className="block whitespace-pre-line pt-1">{explanation}</span>
+          <RichText text={explanation} className="pt-1" />
         </div>
       )}
 

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { BackButton } from "@/components/BackButton";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { StemMedia, OptionBody, RichText } from "@/components/QuestionMedia";
 
 interface Subject {
   id: string;
@@ -28,7 +29,10 @@ interface Q {
   id: string;
   questionText: string;
   questionTextHindi?: string | null;
-  options: { key: string; text: string }[];
+  questionDiagramType?: string | null;
+  questionDiagramLabels?: (string | null)[] | null;
+  questionImageUrl?: string | null;
+  options: { key: string; text: string; textHi?: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null; imageUrl?: string | null }[];
   chapter: string;
   // FIX ("year mention hoga kya, shift bhi hona tha, kis exam mein aaya
   // esa dikhega ya nahi"): bank.service.ts's browse() has always returned
@@ -348,6 +352,9 @@ export default function QuestionBankPage() {
             id: h.id,
             questionText: h.questionText || "",
             questionTextHindi: h.questionTextHindi || null,
+            questionDiagramType: h.questionDiagramType ?? null,
+            questionDiagramLabels: h.questionDiagramLabels ?? null,
+            questionImageUrl: h.questionImageUrl ?? null,
             options: Array.isArray(h.optionsJson) ? h.optionsJson : [],
             chapter: h.chapter?.name || "",
             examName: h.exam?.name || null,
@@ -593,6 +600,7 @@ export default function QuestionBankPage() {
                   {bookmarked[q.id] ? "Saved" : "Save"}
                 </button>
               </div>
+              <StemMedia diagramType={q.questionDiagramType} diagramLabels={q.questionDiagramLabels} imageUrl={q.questionImageUrl} />
               {sscRefs[q.id] && (
                 <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
                   <p className="font-semibold text-primary">
@@ -629,7 +637,7 @@ export default function QuestionBankPage() {
                     <button key={o.key} onClick={() => pickOption(q.id, o.key)} disabled={Boolean(a)}
                       className={`rounded-lg border px-3 py-2 text-left text-sm transition ${cls} disabled:cursor-default`}>
                       <span className="font-semibold">{o.key})</span>{" "}
-                      {showHi && (o as any).textHi ? (o as any).textHi : o.text}
+                      <OptionBody diagramType={o.diagramType} diagramLabels={o.diagramLabels} imageUrl={o.imageUrl} text={o.text} textHi={o.textHi} showHi={showHi} label={o.key} />
                     </button>
                   );
                 })}
@@ -642,11 +650,9 @@ export default function QuestionBankPage() {
                   {a.videoUrl && <VideoPlayer url={a.videoUrl} title={a.videoTitle} />}
                   {(a.explanation || a.explanationHindi) && (
                     <div className="mt-2 space-y-1">
-                      {a.explanation && <p className="whitespace-pre-line">{a.explanation}</p>}
+                      {a.explanation && <RichText text={a.explanation} />}
                       {a.explanationHindi && (
-                        <p className="whitespace-pre-line border-t border-border pt-1">
-                          {a.explanationHindi}
-                        </p>
+                        <RichText text={a.explanationHindi} className="border-t border-border pt-1" />
                       )}
                     </div>
                   )}

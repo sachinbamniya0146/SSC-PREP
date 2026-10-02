@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { StemMedia, OptionBody, RichText } from "@/components/QuestionMedia";
 
 type Bm = {
   bookmarkedAt: string;
@@ -8,7 +9,10 @@ type Bm = {
     id: string;
     questionText: string;
     questionTextHindi: string | null;
-    options: { key: string; text: string }[];
+    questionDiagramType?: string | null;
+    questionDiagramLabels?: (string | null)[] | null;
+    questionImageUrl?: string | null;
+    options: { key: string; text: string; diagramType?: string | null; diagramLabels?: (string | null)[] | null; imageUrl?: string | null }[];
     // Backend only fills these in once you've actually attempted the
     // question elsewhere (mock/sectional/daily-test/practice) — null until
     // then, so bookmarking alone can never reveal the answer key.
@@ -172,6 +176,7 @@ export default function BookmarksPage() {
                   {b.question.questionText}
                   {b.question.questionTextHindi ? ` / ${b.question.questionTextHindi}` : ""}
                 </p>
+                <StemMedia diagramType={b.question.questionDiagramType} diagramLabels={b.question.questionDiagramLabels} imageUrl={b.question.questionImageUrl} />
                 <div className="mt-3 space-y-1.5">
                   {b.question.options.map((o) => (
                     <div
@@ -183,7 +188,7 @@ export default function BookmarksPage() {
                       }`}
                     >
                       <span className="font-bold">{o.key}.</span>
-                      <span>{o.text}</span>
+                      <span><OptionBody diagramType={o.diagramType} diagramLabels={o.diagramLabels} imageUrl={o.imageUrl} text={o.text} label={o.key} /></span>
                       {b.question.attempted && o.key === b.question.correctAnswer && (
                         <span className="ml-auto text-xs font-bold text-success">✓ Answer</span>
                       )}
@@ -193,7 +198,7 @@ export default function BookmarksPage() {
                 {b.question.attempted ? (
                   b.question.explanation && (
                     <p className="mt-3 rounded-lg bg-muted/30 p-3 text-xs text-muted-foreground">
-                      💡 {b.question.explanation}
+                      💡 <RichText text={b.question.explanation} className="inline" />
                     </p>
                   )
                 ) : (

@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { StemMedia, OptionBody } from "@/components/QuestionMedia";
 import {
   CglExam,
   INSTRUCTIONS,
@@ -467,6 +468,7 @@ export default function CglTestPage() {
 
               <h2 className="mt-3 text-base font-medium leading-relaxed">{stem}</h2>
               {stemExtra && <h3 className="mt-1 text-base leading-relaxed text-muted-foreground">{stemExtra}</h3>}
+              <StemMedia diagramType={(q as any).questionDiagramType} diagramLabels={(q as any).questionDiagramLabels} imageUrl={(q as any).questionImageUrl} />
 
               <div className="mt-5 space-y-3">
                 {q.options.map((o) => {
@@ -484,7 +486,15 @@ export default function CglTestPage() {
                       }`}>
                         {o.key}
                       </span>
-                      <span className="leading-relaxed">{optText(o)}</span>
+                      <span className="leading-relaxed">
+                        <OptionBody
+                          diagramType={(o as any).diagramType}
+                          diagramLabels={(o as any).diagramLabels}
+                          imageUrl={(o as any).imageUrl}
+                          text={optText(o)}
+                          label={o.key}
+                        />
+                      </span>
                     </button>
                   );
                 })}

@@ -6,6 +6,7 @@ import * as React from "react";
 import { motion } from "framer-motion";
 import { API_BASE } from "@/lib/api";
 import DiagramVenn from "@/components/DiagramVenn";
+import { StemMedia, QFigure } from "@/components/QuestionMedia";
 import { ReportQuestion } from "@/components/ReportQuestion";
 
 type UgQ = {
@@ -1563,19 +1564,7 @@ export default function TestPage() {
               )}
               {/* Session 22 — question-stem diagram (rare: most diagram
                   questions put the figure in the OPTIONS instead, below). */}
-              {q.questionDiagramType && (
-                <div className="mt-3 flex justify-center rounded-xl border border-border bg-muted/30 p-3">
-                  <DiagramVenn type={q.questionDiagramType} labels={q.questionDiagramLabels} size={180} />
-                </div>
-              )}
-              {/* Session 24 — non-Venn diagram stem (mirror image / figure
-                  series / embedded figure / paper folding / dice-clock). */}
-              {q.questionImageUrl && (
-                <div className="mt-3 flex justify-center rounded-xl border border-border bg-muted/30 p-3">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={q.questionImageUrl} alt="Question figure" className="max-h-64 max-w-full object-contain" />
-                </div>
-              )}
+              <StemMedia diagramType={q.questionDiagramType} diagramLabels={q.questionDiagramLabels} imageUrl={q.questionImageUrl} />
               <div className="mt-5 space-y-2.5">
                 {q.options.map((o) => {
                   const active = answers[q.id] === o.key;
@@ -1599,8 +1588,7 @@ export default function TestPage() {
                           </span>
                         ) : o.imageUrl ? (
                           <span className="flex justify-center rounded-lg p-1">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={o.imageUrl} alt={`Option ${o.key}`} className="max-h-40 max-w-full object-contain" />
+                            <QFigure src={o.imageUrl} alt={`Option ${o.key}`} className="max-h-40" />
                           </span>
                         ) : (
                           <>

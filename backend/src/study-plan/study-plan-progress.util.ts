@@ -62,6 +62,14 @@ export async function applyAttemptToChapters(prisma: PrismaService, userId: stri
   for (const [chapterId, e] of per) {
     const pct = e.total ? Math.round((e.correct / e.total) * 100) : 0;
     if (e.total < minQ) {
+      // Oct 2026: too few questions to judge. Previously the chapter stayed SELF_MARKED forever
+      // (never verified, never re-tested). Put it back to PENDING so the student can mark/test it again.
+      if (planTest) {
+        await prisma.studyPlanChapter.updateMany({
+          where: { userId, chapterId, status: 'SELF_MARKED' },
+          data: { status: 'PENDING', lastTestedAt: now },
+        });
+      }
       verdicts.push({ chapterId, name: e.name, correct: e.correct, total: e.total, pct, status: 'UNVERIFIED' });
       continue;
     }

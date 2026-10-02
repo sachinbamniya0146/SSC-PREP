@@ -1,12 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { BankService } from './bank.service';
 import { BankAdminService } from './bank-admin.service';
 import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
-import { createHash } from 'crypto';
+import { randomUUID } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 import { cacheClearPrefix } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, QuestionKind } from '../common/question-visibility';
@@ -20,8 +20,6 @@ import {
   UploadJob,
   UploadJobStore,
   chunk,
-  decodeCsvBuffer,
-  parseCsvText,
   parseExcelOffThread,
   yieldToEventLoop,
 } from './upload-support';
@@ -125,6 +123,8 @@ function normalizeExamDate(raw: string): string | undefined {
   throw new Error(`Invalid examDate "${v}": use YYYY-MM-DD or DD-MM-YYYY (e.g. 2025-09-12)`);
 }
 
+import { hasSolution, applyInlineMedia, hasBase64Media, parseJsonQuestions, buildJsonTemplate, mediaKey, shortDigest, questionMediaSignature, hasAnyMedia } from './question-media.util';
+
 export interface BulkUploadQuestion {
   examId: string;
   subjectId: string;
@@ -153,6 +153,13 @@ export interface BulkUploadQuestion {
   // cell) — use questionImageUrl there instead.
   questionImageBase64?: string;
   questionImageMimeType?: string; // e.g. "image/png" — defaults to image/png if omitted
+  // Oct 2026 — diagram as CODE: raw <svg>…</svg> for the stem (sanitised, stored as a data URI in questionImageUrl).
+  questionSvg?: string;
+  // Oct 2026 — picture/diagram for the SOLUTION (appended to the explanation as a markdown image).
+  explanationImageUrl?: string;
+  explanationImageBase64?: string;
+  explanationImageMimeType?: string;
+  explanationSvg?: string;
   options: {
     key: string;
     text: string;
@@ -170,6 +177,8 @@ export interface BulkUploadQuestion {
     // questionImageBase64 above for the full explanation.
     imageBase64?: string;
     imageMimeType?: string;
+    // Oct 2026 — option drawn as inline SVG code.
+    svg?: string;
   }[];
   correctAnswer: string;
   explanation?: string;
@@ -199,6 +208,8 @@ export type UploadErrorCategory =
   | 'INVALID_REFERENCE'
   | 'DUPLICATE'
   | 'FORMAT'
+  | 'MISSING_ANSWER'
+  | 'MISSING_SOLUTION'
   | 'OTHER';
 
 export interface UploadResult {
@@ -220,15 +231,6 @@ export interface UploadResult {
   errorsTruncated?: boolean;
   errorSummary?: Record<string, number>;
   warningsTotal?: number;
-}
-
-export interface ExistingQuestionSummary {
-  id: string;
-  questionText: string;
-  year: number | null;
-  shift: string | null;
-  createdAt: Date;
-  hasImage: boolean;
 }
 
 export interface QuestionTemplate {
@@ -343,6 +345,7 @@ export class BankUploadService {
     filename: string | undefined,
     isPracticeOnly: boolean,
     afterDone?: (r: UploadResult) => Promise<UploadResult>,
+    requireSolution = true,
   ): Promise<{ async: true; jobId: string; uploadBatchId: string; status: 'RUNNING' }> {
     if (this.uploadJobs.runningCount() >= MAX_CONCURRENT_UPLOAD_JOBS) {
       throw new BadRequestException(
@@ -351,7 +354,7 @@ export class BankUploadService {
     }
     const batchId = await this.createUploadBatchPlaceholder(adminId, kind, filename);
     this.uploadJobs.create({ id: batchId, adminId, kind, filename });
-    void this.runBackgroundUpload(batchId, kind, fileBuffer, adminId, isPracticeOnly, afterDone);
+    void this.runBackgroundUpload(batchId, kind, fileBuffer, adminId, isPracticeOnly, afterDone, requireSolution);
     return { async: true, jobId: batchId, uploadBatchId: batchId, status: 'RUNNING' };
   }
 
@@ -373,6 +376,7 @@ export class BankUploadService {
     adminId: string,
     isPracticeOnly: boolean,
     afterDone?: (r: UploadResult) => Promise<UploadResult>,
+    requireSolution = true,
   ): Promise<void> {
     const progress = (p: Partial<UploadJob>) => this.uploadJobs.patch(jobId, p);
     try {
@@ -385,15 +389,17 @@ export class BankUploadService {
         headers = jsonData[0] as string[];
         rows = jsonData.slice(1);
       } else {
-        // Oct 1 2026: real CSV parser (quoted multi-line cells, BOM / UTF-16 from
-        // Excel, comma/semicolon/tab) — ~0.5 s for 100k rows.
-        const table = parseCsvText(decodeCsvBuffer(fileBuffer));
-        if (table.length < 2) throw new BadRequestException('CSV file must have at least a header row and one data row');
-        headers = table[0];
-        rows = table.slice(1);
+        const lines = fileBuffer.toString('utf-8').split('\n').map((l) => l.trim()).filter((l) => l);
+        if (lines.length < 2) throw new BadRequestException('CSV file must have at least a header row and one data row');
+        headers = this.parseCSVLine(lines[0]);
+        rows = [];
+        for (let i = 1; i < lines.length; i++) {
+          rows.push(this.parseCSVLine(lines[i]));
+          if (i % 5000 === 0) await yieldToEventLoop();
+        }
       }
-      progress({ phase: 'CHECKING', total: rows.length, processed: 0 });
-      let result = await this.processBulkQuestions(headers, rows, adminId, jobId, isPracticeOnly, progress);
+      progress({ phase: 'CHECKING', total: rows.length, processed: 0, headers: headers.map((h) => String(h ?? '')) });
+      let result = await this.processBulkQuestions(headers, rows, adminId, jobId, isPracticeOnly, progress, requireSolution);
       progress({ phase: 'FINALIZING', processed: rows.length, created: result.created, failed: result.failed });
       await this.finalizeUploadBatch(jobId, result);
       if (afterDone) result = await afterDone(result);
@@ -420,171 +426,6 @@ export class BankUploadService {
         /* history note is best-effort */
       }
     }
-  }
-
-
-  // ------------------------------------------------------------------
-  // Single-question entry from the admin form (Oct 1 2026)
-  // ------------------------------------------------------------------
-  private static readonly IMAGE_URL_RE = /^(https?:\/\/[^\s"'<>]{4,1900}|\/api\/v1\/media\/[A-Za-z0-9._\/-]{4,300})$/;
-
-  /** Validates the form payload strictly and maps it onto the same shape Excel rows use. */
-  buildSingleQuestion(input: any): { question: BulkUploadQuestion; kind: 'pyq' | 'practice' } {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Question data missing.');
-    const str = (v: unknown, max: number, label: string): string => {
-      const t = v == null ? '' : String(v).trim();
-      if (t.length > max) throw new BadRequestException(`${label} bahut lamba hai (max ${max} characters). / ${label} is too long.`);
-      return t;
-    };
-    const url = (v: unknown, label: string): string | undefined => {
-      const t = v == null ? '' : String(v).trim();
-      if (!t) return undefined;
-      if (!BankUploadService.IMAGE_URL_RE.test(t)) throw new BadRequestException(`${label}: image link sahi nahi hai — image ko form se upload karein. / Invalid image URL.`);
-      return t;
-    };
-
-    const kind: 'pyq' | 'practice' = input.kind === 'pyq' ? 'pyq' : 'practice';
-    const examId = str(input.examId, 100, 'Exam');
-    const subjectId = str(input.subjectId, 100, 'Subject');
-    const chapterId = str(input.chapterId, 100, 'Chapter');
-    if (!examId) throw new BadRequestException('Exam select karein. / Select an exam.');
-    if (!subjectId) throw new BadRequestException('Subject select karein. / Select a subject.');
-    if (!chapterId) throw new BadRequestException('Chapter select karein. / Select a chapter.');
-
-    const rawOptions: any[] = Array.isArray(input.options) ? input.options : [];
-    if (rawOptions.length !== 4) throw new BadRequestException('Exactly 4 options (A, B, C, D) chahiye. / Exactly 4 options are required.');
-    const options = ['A', 'B', 'C', 'D'].map((key, i) => {
-      const o = rawOptions.find((x) => x && String(x.key).toUpperCase() === key) ?? rawOptions[i] ?? {};
-      return {
-        key,
-        text: str(o.text, 1000, `Option ${key}`),
-        textHi: str(o.textHi, 1000, `Option ${key} (Hindi)`),
-        imageUrl: url(o.imageUrl, `Option ${key} image`),
-      };
-    });
-
-    const correctAnswer = String(input.correctAnswer ?? '').trim().toUpperCase();
-    if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) throw new BadRequestException('Sahi answer (A/B/C/D) chunein. / Choose the correct answer.');
-
-    const questionImageUrl = url(input.questionImageUrl, 'Question image');
-    const questionText = str(input.questionText, 5000, 'Question');
-    if (!questionText && !questionImageUrl) throw new BadRequestException('Question text likhein ya question image upload karein. / Add question text or an image.');
-
-    const marks = input.marks === '' || input.marks == null ? 1 : Number(input.marks);
-    const negativeMarks = input.negativeMarks === '' || input.negativeMarks == null ? 0.25 : Number(input.negativeMarks);
-    if (!Number.isFinite(marks) || marks <= 0 || marks > 100) throw new BadRequestException('Marks 0 se bade hone chahiye. / Invalid marks.');
-    if (!Number.isFinite(negativeMarks) || negativeMarks < 0 || negativeMarks > 100) throw new BadRequestException('Negative marks galat hain. / Invalid negative marks.');
-    const difficulty = String(input.difficulty || 'MEDIUM').toUpperCase();
-    if (!['EASY', 'MEDIUM', 'HARD'].includes(difficulty)) throw new BadRequestException('Difficulty EASY, MEDIUM ya HARD honi chahiye.');
-
-    let year: number | undefined;
-    let shift: string | undefined;
-    let paperCode: string | undefined;
-    let examDate: string | undefined;
-    if (kind === 'pyq') {
-      year = Number(input.year);
-      if (!Number.isInteger(year) || year < 1990 || year > 2100) throw new BadRequestException('PYQ ke liye sahi year likhein (jaise 2024). / A valid year is required for a PYQ.');
-      shift = str(input.shift, 60, 'Shift') || undefined;
-      paperCode = str(input.paperCode, 120, 'Paper code') || undefined;
-      try {
-        examDate = normalizeExamDate(str(input.examDate, 40, 'Exam date'));
-      } catch (e) {
-        throw new BadRequestException(e instanceof Error ? e.message : 'Invalid examDate');
-      }
-    }
-
-    const question: BulkUploadQuestion = {
-      examId,
-      subjectId,
-      chapterId,
-      topicId: str(input.topicId, 100, 'Topic') || undefined,
-      subTopicId: str(input.subTopicId, 100, 'Sub-topic') || undefined,
-      questionText,
-      questionTextHindi: str(input.questionTextHindi, 5000, 'Question (Hindi)'),
-      questionImageUrl,
-      options,
-      correctAnswer,
-      explanation: str(input.explanation, 8000, 'Explanation'),
-      explanationHindi: str(input.explanationHindi, 8000, 'Explanation (Hindi)'),
-      year,
-      shift,
-      paperCode,
-      examDate,
-      marks,
-      negativeMarks,
-      difficulty: difficulty as 'EASY' | 'MEDIUM' | 'HARD',
-    } as BulkUploadQuestion;
-    return { question, kind };
-  }
-
-  private summarizeExisting(e: any): ExistingQuestionSummary {
-    return {
-      id: e.id as string,
-      questionText: String(e.questionText ?? '').slice(0, 200),
-      year: e.year ?? null,
-      shift: e.shift ?? null,
-      createdAt: e.createdAt,
-      hasImage: !!e.questionImageUrl,
-    };
-  }
-
-  /** Live "is this question already in the bank?" check for the admin form. */
-  async checkSingleDuplicate(input: any): Promise<{ isDuplicate: boolean; existing?: ExistingQuestionSummary }> {
-    const { question } = this.buildSingleQuestion(input);
-    const dup = await this.checkDuplicateDirect(question);
-    return dup.isDuplicate ? { isDuplicate: true, existing: this.summarizeExisting(dup.existingQuestion) } : { isDuplicate: false };
-  }
-
-  /** Saves ONE question (PYQ or practice) exactly like an Excel row: same validation, duplicate rule, Hindi gate and PYQ-mock refresh. */
-  async addSingleQuestion(input: any, adminId: string): Promise<{ id: string | null; published: boolean; kind: 'pyq' | 'practice'; warnings: string[] }> {
-    const { question, kind } = this.buildSingleQuestion(input);
-
-    if (kind === 'pyq' && !question.paperCode && question.examDate && question.year && question.shift) {
-      // same derived code the Excel importer builds, so a paper entered by hand and by sheet lands in ONE mock
-      const exam = await this.prisma.exam.findUnique({ where: { id: question.examId }, select: { slug: true } });
-      question.paperCode = `${exam?.slug ?? question.examId}-${question.examDate}-${question.shift}`;
-    }
-
-    const dup = await this.checkDuplicateDirect(question);
-    if (dup.isDuplicate) {
-      const ex = this.summarizeExisting(dup.existingQuestion);
-      throw new ConflictException({
-        message: `Ye question pehle se maujood hai (ID ${ex.id}). Duplicate save nahi hoga. / This question already exists.`,
-        code: 'DUPLICATE',
-        existing: ex,
-      });
-    }
-
-    const result = await this.processStructuredQuestions([question], adminId, null, kind === 'practice');
-    if (result.created !== 1) {
-      const msg = result.errors[0]?.error ?? 'Question save nahi hua.';
-      throw new BadRequestException(msg);
-    }
-
-    const created = await this.prisma.question.findFirst({
-      where: { searchHash: this.computeSearchHash(question), isActive: true },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, isApproved: true },
-    });
-
-    cacheClearPrefix('bank:subjects');
-    cacheClearPrefix('bank:chapters');
-    cacheClearPrefix('bank:meta');
-    cacheClearPrefix('bank:years');
-    cacheClearPrefix('bank:shifts');
-    if (kind === 'pyq' && question.year && question.shift) {
-      try {
-        await this.upsertPyqMockForPaper(question.examId, question.year, question.shift, question.paperCode ?? null, question.examDate ?? null);
-      } catch {
-        /* the question is saved; the mock refreshes on the next upload */
-      }
-    }
-
-    const warnings: string[] = [];
-    const published = created?.isApproved ?? result.warnings.length === 0;
-    if (!published) warnings.push('Saved, lekin students ko abhi nahi dikhega — Hindi question text add karein. / Saved but NOT live: add the Hindi text to publish it.');
-    if (kind === 'pyq' && !question.shift) warnings.push('Shift nahi di — ye question shift-wise mock me nahi judega. / No shift given: it will not join a shift-wise mock.');
-    return { id: created?.id ?? null, published, kind, warnings };
   }
 
   private async createUploadBatchPlaceholder(
@@ -798,6 +639,20 @@ export class BankUploadService {
     return batch.id;
   }
 
+  // ---- Background-job hooks (bank-upload-job.service.ts) ----
+  async beginBatch(adminId: string, filename?: string): Promise<string> {
+    return this.createUploadBatchPlaceholder(adminId, 'EXCEL', filename);
+  }
+  async processRowsChunk(headers: string[], rows: any[][], adminId: string, batchId: string, isPracticeOnly?: boolean): Promise<UploadResult> {
+    return this.processBulkQuestions(headers, rows, adminId, batchId, isPracticeOnly, undefined, false); // my job service already applied its own quality gate
+  }
+  async processStructuredChunk(questions: any[], adminId: string, batchId: string, isPracticeOnly?: boolean): Promise<UploadResult> {
+    return this.processStructuredQuestions(questions, adminId, batchId, isPracticeOnly);
+  }
+  async endBatch(batchId: string, result: UploadResult): Promise<void> {
+    await this.finalizeUploadBatch(batchId, result);
+  }
+
   async uploadFromExcel(fileBuffer: Buffer, adminId: string, filename?: string, isPracticeOnly?: boolean): Promise<UploadResult> {
     let headers: string[];
     let rows: any[][];
@@ -826,12 +681,15 @@ export class BankUploadService {
    * Validate and parse CSV file for bulk question upload
    */
   async uploadFromCSV(fileBuffer: Buffer, adminId: string, filename?: string, isPracticeOnly?: boolean): Promise<UploadResult> {
-    const table = parseCsvText(decodeCsvBuffer(fileBuffer));
-    if (table.length < 2) {
+    const text = fileBuffer.toString('utf-8');
+    const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+    
+    if (lines.length < 2) {
       throw new BadRequestException('CSV file must have at least a header row and one data row');
     }
-    const headers = table[0];
-    const rows = table.slice(1);
+
+    const headers = this.parseCSVLine(lines[0]);
+    const rows = lines.slice(1).map(line => this.parseCSVLine(line));
 
     const batchId = await this.createUploadBatchPlaceholder(adminId, 'CSV', filename);
     const result = await this.processBulkQuestions(headers, rows, adminId, batchId, isPracticeOnly);
@@ -869,15 +727,11 @@ export class BankUploadService {
     // succeeds, processStructuredQuestions() runs OUTSIDE this catch, so
     // any error it throws propagates to the controller with its real,
     // specific message intact.
-    const trimmed = text.trim();
-    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-      let questions: any;
-      let isJson = true;
-      try {
-        questions = JSON.parse(text);
-      } catch {
-        isJson = false; // genuinely not valid JSON — fall through to tab-separated below
-      }
+    {
+      // Oct 2026: also accepts { "questions": [...] }, a single object and JSON-Lines
+      // (the OLD downloadable template was JSON-Lines, which this used to reject).
+      const questions = parseJsonQuestions(text);
+      const isJson = questions !== null;
       if (isJson) {
         const batchId = await this.createUploadBatchPlaceholder(adminId, 'JSON', filename);
         const result = await this.processStructuredQuestions(questions, adminId, batchId, isPracticeOnly);
@@ -1320,7 +1174,7 @@ export class BankUploadService {
             difficulty: 'MEDIUM'
           })
         ],
-        description: 'JSON Lines format - one JSON object per line. Each object contains all question fields including options array. Diagram options carry diagramType/diagramLabels instead of text — see "Diagram question types" for valid codes (V1-V8).'
+        description: 'JSON ARRAY [ {...}, {...} ] (also accepts { "questions": [...] }, a single object, or one object per line). Each object has the question fields + options array. Pictures: Venn options use diagramType/diagramLabels (V1-V8); ANY other diagram can be CODE — questionSvg / options[].svg / explanationSvg (full <svg>…</svg>); or imageUrl / imageBase64; solution picture via explanationImageUrl / explanationImageBase64 / explanationSvg. The downloaded template has 5 working examples (text, Venn, SVG code, image URL, base64).'
       }
     };
   }
@@ -1347,6 +1201,11 @@ export class BankUploadService {
       // Session 24 — mirror image / figure series / embedded figures /
       // paper folding / dice-clock etc. can't be reduced to a type-code
       // taxonomy like Venn diagrams — they need a real picture instead.
+      inlineCodeDiagrams: {
+        description:
+          'ANY diagram can be given as CODE — no image upload needed, always loads. JSON: questionSvg (stem), options[].svg, explanationSvg (solution). ' +
+          'Value is a full <svg viewBox="0 0 200 150" xmlns="http://www.w3.org/2000/svg">…</svg> string (scripts/external links are stripped). Solution pictures: explanationImageUrl / explanationImageBase64 / explanationSvg.',
+      },
       nonVennDiagramTypes: {
         description:
           'For diagram types that are NOT simple Venn circles (mirror image, figure series, embedded figures, paper ' +
@@ -1395,19 +1254,6 @@ export class BankUploadService {
    * paths (separate upload-then-reference, and embed-directly-in-JSON)
    * go through the same size/type validation and S3 key scheme.
    */
-  /**
-   * Oct 1 2026 — CONTENT-ADDRESSED image keys. The key is the SHA-256 of the
-   * image bytes, so the very same picture always gets the very same URL. That
-   * is what lets duplicate detection work for image-based questions (two
-   * uploads of one figure used to get two random UUID URLs and never matched),
-   * and it stops the bucket filling with copies. The extension comes from the
-   * verified MIME type (not the file name), so the /media route always serves it.
-   */
-  private imageKeyFor(buffer: Buffer, mime: string): string {
-    const ext = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp', 'image/svg+xml': 'svg' } as Record<string, string>)[mime] || 'png';
-    return `question-images/${createHash('sha256').update(buffer).digest('hex').slice(0, 40)}.${ext}`;
-  }
-
   private async uploadBase64Image(base64: string, mimeType?: string): Promise<string> {
     const mt = mimeType || 'image/png';
     const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml'];
@@ -1429,7 +1275,9 @@ export class BankUploadService {
     if (buffer.length > MAX_IMAGE_BYTES) {
       throw new Error(`Base64 image too large (${Math.round(buffer.length / 1024)} KB) — max 5 MB.`);
     }
-    return this.s3.uploadQuestionImage(this.imageKeyFor(buffer, mt), buffer, mt);
+    const ext = mt.split('/')[1]?.replace('svg+xml', 'svg') || 'png';
+    const key = `question-images/${randomUUID()}.${ext}`;
+    return this.s3.uploadQuestionImage(key, buffer, mt);
   }
 
   /**
@@ -1465,7 +1313,8 @@ export class BankUploadService {
     if (file.buffer.length > MAX_IMAGE_BYTES) {
       throw new BadRequestException(`Image too large (${Math.round(file.buffer.length / 1024)} KB) — max 5 MB.`);
     }
-    const key = this.imageKeyFor(file.buffer, file.mimetype);
+    const ext = (file.originalname.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+    const key = `question-images/${randomUUID()}.${ext}`;
     const url = await this.s3.uploadQuestionImage(key, file.buffer, file.mimetype);
     return { url, key };
   }
@@ -1507,7 +1356,7 @@ export class BankUploadService {
     const workbook = XLSX.utils.book_new();
 
     // Main template sheet
-    const sheetData = [[...template.headers, 'examDate'], ...template.sampleRows.map((r, i) => [...JSON.parse(r), i === 0 ? '2023-09-12' : ''])];
+    const sheetData = [[...template.headers, 'examDate', 'explanationImageUrl', 'questionSvg'], ...template.sampleRows.map((r, i) => [...JSON.parse(r), i === 0 ? '2023-09-12' : '', '', ''])];
     const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Questions Template');
 
@@ -1914,8 +1763,8 @@ export class BankUploadService {
    */
   generateCSVTemplate(): Buffer {
     const template = this.getTemplates().csv;
-    const lines = [[...template.headers, 'examDate'].join(',')];
-    template.sampleRows.forEach((row, i) => lines.push(this.escapeCSVRow([...JSON.parse(row), i === 0 ? '2023-09-12' : ''])));
+    const lines = [[...template.headers, 'examDate', 'explanationImageUrl', 'questionSvg'].join(',')];
+    template.sampleRows.forEach((row, i) => lines.push(this.escapeCSVRow([...JSON.parse(row), i === 0 ? '2023-09-12' : '', '', ''])));
     return Buffer.from(lines.join('\n'), 'utf-8');
   }
 
@@ -1924,8 +1773,8 @@ export class BankUploadService {
    */
   generateTextTemplate(): Buffer {
     const template = this.getTemplates().text;
-    const lines = [[...template.headers, 'examDate'].join('\t')];
-    template.sampleRows.forEach((row, i) => lines.push([...JSON.parse(row), i === 0 ? '2023-09-12' : ''].join('\t')));
+    const lines = [[...template.headers, 'examDate', 'explanationImageUrl', 'questionSvg'].join('\t')];
+    template.sampleRows.forEach((row, i) => lines.push([...JSON.parse(row), i === 0 ? '2023-09-12' : '', '', ''].join('\t')));
     return Buffer.from(lines.join('\n'), 'utf-8');
   }
 
@@ -1933,15 +1782,15 @@ export class BankUploadService {
    * Generate JSON template file for download
    */
   generateJSONTemplate(): Buffer {
-    const template = this.getTemplates().json;
-    const lines = template.sampleRows;
-    return Buffer.from(lines.join('\n'), 'utf-8');
+    // Oct 2026: a real JSON ARRAY (uploadable as-is) covering text, Venn, SVG-code,
+    // image-URL and base64 questions, each with solution media — see question-media.util.ts.
+    return Buffer.from(buildJsonTemplate(), 'utf-8');
   }
 
   /**
    * Process bulk questions from parsed headers and rows
    */
-  private async processBulkQuestions(headers: string[], rows: any[][], adminId: string, uploadBatchId?: string | null, isPracticeOnly?: boolean, onProgress?: (p: Partial<UploadJob>) => void): Promise<UploadResult> {
+  private async processBulkQuestions(headers: string[], rows: any[][], adminId: string, uploadBatchId?: string | null, isPracticeOnly?: boolean, onProgress?: (p: Partial<UploadJob>) => void, requireSolution = true): Promise<UploadResult> {
     const requiredHeaders = ['examId', 'subjectId', 'chapterId', 'questionText', 'correctAnswer'];
     const optionHeaders = ['optionA', 'optionB', 'optionC', 'optionD'];
     const hindiExempt = await this.loadHindiExemptSubjectIds();
@@ -2109,6 +1958,18 @@ export class BankUploadService {
           question.paperCode = undefined;
           question.examDate = undefined;
         }
+        // Oct 2026: a question WITHOUT a solution is not uploaded — it is reported so the admin can add it.
+        if (requireSolution && !hasSolution(question)) {
+          result.failed++;
+          this.pushUploadError(result, {
+            row: rowNum,
+            error: 'Solution/explanation missing hai — question upload nahi hua',
+            category: 'MISSING_SOLUTION',
+            questionPreview: this.extractQuestionPreview(row, headerMap),
+            data: row,
+          });
+          continue;
+        }
         rawParsed.push({ rowNum, row, question });
       } catch (error) {
         result.failed++;
@@ -2188,7 +2049,7 @@ export class BankUploadService {
     for (const { rowNum, row, question } of parsedRows) {
       if (++preparedCount % 2000 === 0) await yieldToEventLoop();
       try {
-        if (question.questionImageBase64 || question.options.some((o) => o.imageBase64)) {
+        if (hasBase64Media(question)) {
           // Rare path: a row with an inline base64 image needs its own S3
           // upload round trip before we can even build the Prisma `data`
           // object, so it can't be prepared synchronously. Fall back to
@@ -2352,7 +2213,6 @@ export class BankUploadService {
           question.year = undefined;
           question.shift = undefined;
           question.paperCode = undefined;
-          question.examDate = undefined;
         }
         await this.resolveReferenceIds(
           question,
@@ -2385,7 +2245,7 @@ export class BankUploadService {
     const toCommit: { rowNum: number; row: BulkUploadQuestion; question: BulkUploadQuestion; data: any; published: boolean }[] = [];
     for (const { rowNum, question } of validRows) {
       try {
-        if (question.questionImageBase64 || question.options.some((o) => o.imageBase64)) {
+        if (hasBase64Media(question)) {
           const { published } = await this.createQuestion(question, adminId, duplicateIndex, uploadBatchId, hindiExempt);
           result.created++;
           if (!published) {
@@ -2482,6 +2342,7 @@ export class BankUploadService {
   private categorizeUploadError(message: string): UploadErrorCategory {
     const m = message.toLowerCase();
     if (m.includes('duplicate')) return 'DUPLICATE';
+    if (m.includes('correctanswer')) return 'MISSING_ANSWER';
     if (m.includes('not found in database') || m.includes('does not belong to') || m.includes('mismatch')) {
       return 'INVALID_REFERENCE';
     }
@@ -2564,6 +2425,9 @@ export class BankUploadService {
       questionImageUrl,
       options,
       correctAnswer,
+      questionSvg: get('questionSvg') || undefined,
+      explanationImageUrl: get('explanationImageUrl') || undefined,
+      explanationSvg: get('explanationSvg') || undefined,
       explanation: get('explanation') || undefined,
       explanationHindi: get('explanationHindi') || undefined,
       year,
@@ -2933,9 +2797,11 @@ export class BankUploadService {
       // Session 22: fold diagramType into the signature too, so two
       // different diagram-only options (empty text, different diagram)
       // don't hash-collide as "duplicates" of each other.
-      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType : ''}${o.imageUrl ? ':' + o.imageUrl : ''}`)
+      .map(o => `${o.key}:${o.text.trim().toLowerCase()}${o.diagramType ? ':' + o.diagramType + ':' + (o.diagramLabels ?? []).join(',') : ''}${o.imageUrl ? ':' + mediaKey(o.imageUrl) : ''}${o.svg ? ':s' + shortDigest(o.svg) : ''}${o.imageBase64 ? ':b' + shortDigest(o.imageBase64) : ''}`)
       .join('|');
-    return `${normalizedText}|${optionsSignature}|${question.correctAnswer}${question.questionImageUrl ? `|img:${question.questionImageUrl}` : ''}`;
+    // Oct 2026: the STEM picture is part of the identity too (unchanged for text-only questions, so old hashes still match).
+    const stem = questionMediaSignature(question);
+    return `${normalizedText}|${optionsSignature}|${question.correctAnswer}${stem ? '|' + stem : ''}`;
   }
 
   /**
@@ -2956,13 +2822,15 @@ export class BankUploadService {
    * the batched version has to do this explicitly in memory instead.
    */
   private async buildDuplicateIndex(questions: BulkUploadQuestion[]): Promise<DuplicateIndex> {
+    // SVG-code / solution-picture fields become their stored form first so the hashes below match what gets saved.
+    for (const q of questions) { try { applyInlineMedia(q); } catch { /* the row reports this error when it is prepared */ } }
     const hashes = Array.from(new Set(questions.map((q) => this.computeSearchHash(q))));
     const texts = Array.from(new Set(questions.map((q) => q.questionText)));
 
     const select = {
       id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true,
       explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true,
-      subjectId: true, chapterId: true, examId: true, createdAt: true, searchHash: true, questionImageUrl: true,
+      subjectId: true, chapterId: true, examId: true, createdAt: true, searchHash: true,
     } as const;
 
     // Oct 1 2026: a 100k-row upload put 100k values into ONE `IN (...)` list,
@@ -3034,10 +2902,11 @@ export class BankUploadService {
       return { isDuplicate: true, existingQuestion: existingByHash };
     }
 
-    const candidates = index.byText.get(question.questionText) ?? [];
+    // Picture questions are identified by the hash above (it includes the pictures); the text-only
+    // fallback below would wrongly merge e.g. 50 "select the mirror image" questions with equal text.
+    const candidates = hasAnyMedia(question) ? [] : (index.byText.get(question.questionText) ?? []);
     for (const existingByContent of candidates) {
       if (existingByContent.correctAnswer !== question.correctAnswer) continue;
-      if ((existingByContent.questionImageUrl ?? '') !== (question.questionImageUrl ?? '')) continue;
       const existingOptions = existingByContent.optionsJson as any[];
       const newOptionsSorted = question.options
         .slice()
@@ -3122,8 +2991,9 @@ export class BankUploadService {
     // `question.questionImageBase64 || options.some(imageBase64)` check at
     // each call site — so this method only ever sees rows with either no
     // image or an already-resolved questionImageUrl/option.imageUrl.
+    applyInlineMedia(question); // SVG code -> stored image, solution image -> explanation markdown
     if (!question.questionText || !question.questionText.trim()) {
-      if (!question.questionDiagramType && !question.questionImageUrl) {
+      if (!question.questionDiagramType && !question.questionImageUrl && !question.questionSvg) {
         throw new Error('questionText is empty — question text cannot be blank.');
       }
     }
@@ -3336,6 +3206,10 @@ export class BankUploadService {
         o.imageUrl = await this.uploadBase64Image(o.imageBase64, o.imageMimeType);
       }
     }
+    if (question.explanationImageBase64 && !question.explanationImageUrl) {
+      question.explanationImageUrl = await this.uploadBase64Image(question.explanationImageBase64, question.explanationImageMimeType);
+    }
+    applyInlineMedia(question); // SVG code -> stored image, solution image -> explanation markdown
 
     // BUGFIX (this session — "student ko question dikhta hai par answer nahi
     // de pa raha" root cause #1): NOTHING anywhere in the 5 upload paths
@@ -3358,7 +3232,7 @@ export class BankUploadService {
       // Session 22/24: a diagram-stem or image-stem question can still
       // have short/empty link text, so this only blocks a TRULY blank
       // stem with no text AND no stem diagram AND no stem image either.
-      if (!question.questionDiagramType && !question.questionImageUrl) {
+      if (!question.questionDiagramType && !question.questionImageUrl && !question.questionSvg) {
         throw new Error('questionText is empty — question text cannot be blank.');
       }
     }
@@ -3493,7 +3367,7 @@ export class BankUploadService {
     const select = {
       id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true,
       explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true,
-      subjectId: true, chapterId: true, examId: true, createdAt: true, questionImageUrl: true,
+      subjectId: true, chapterId: true, examId: true, createdAt: true,
     } as const;
 
     const existingByHash = await this.prisma.question.findFirst({ where: { searchHash, isActive: true }, select });
@@ -3501,13 +3375,11 @@ export class BankUploadService {
       return { isDuplicate: true, existingQuestion: existingByHash };
     }
 
-    const existingByContent = await this.prisma.question.findFirst({
+    const existingByContent = hasAnyMedia(question) ? null : await this.prisma.question.findFirst({
       where: { questionText: question.questionText, correctAnswer: question.correctAnswer, isActive: true },
       select,
     });
-    // Image-stem questions often have EMPTY text — same (empty) text + same
-    // options must NOT make two different figures "duplicates".
-    if (existingByContent && (existingByContent.questionImageUrl ?? '') === (question.questionImageUrl ?? '')) {
+    if (existingByContent) {
       const existingOptions = existingByContent.optionsJson as any[];
       const newOptionsSorted = question.options
         .slice()

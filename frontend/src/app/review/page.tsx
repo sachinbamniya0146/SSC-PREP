@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { StemMedia, OptionBody, RichText } from "@/components/QuestionMedia";
 
 type ReviewCardData = {
   id: string;
@@ -15,7 +16,10 @@ type ReviewCardData = {
     id: string;
     questionText: string;
     questionTextHindi?: string | null;
-    optionsJson: { key: string; text: string }[];
+    questionDiagramType?: string | null;
+    questionDiagramLabels?: (string | null)[] | null;
+    questionImageUrl?: string | null;
+    optionsJson: { key: string; text: string; diagramType?: string | null; diagramLabels?: (string | null)[] | null; imageUrl?: string | null }[];
     correctAnswer: string;
     explanation?: string | null;
     explanationHindi?: string | null;
@@ -213,6 +217,7 @@ export default function ReviewPage() {
             {card.question.questionTextHindi && (
               <p className="mt-1 text-sm text-muted-foreground">🇮🇳 {card.question.questionTextHindi}</p>
             )}
+            <StemMedia diagramType={card.question.questionDiagramType} diagramLabels={card.question.questionDiagramLabels} imageUrl={card.question.questionImageUrl} />
 
             <div className="mt-4 space-y-2">
               {card.question.optionsJson.map((o) => (
@@ -227,7 +232,7 @@ export default function ReviewPage() {
                   }`}
                 >
                   <span className="mr-2 font-semibold">{o.key}.</span>
-                  {o.text}
+                  <OptionBody diagramType={o.diagramType} diagramLabels={o.diagramLabels} imageUrl={o.imageUrl} text={o.text} label={o.key} />
                   {revealed && o.key === card.question.correctAnswer && (
                     <span className="ml-2 text-xs">✅ Sahi Answer</span>
                   )}
@@ -238,12 +243,10 @@ export default function ReviewPage() {
             {revealed && (card.question.explanation || card.question.explanationHindi) && (
               <div className="mt-4 rounded-lg bg-primary/10 p-3 text-sm leading-relaxed">
                 {card.question.explanation && (
-                  <p className="whitespace-pre-line">{card.question.explanation}</p>
+                  <RichText text={card.question.explanation} />
                 )}
                 {card.question.explanationHindi && (
-                  <p className="mt-2 whitespace-pre-line text-muted-foreground">
-                    🇮🇳 {card.question.explanationHindi}
-                  </p>
+                  <RichText text={card.question.explanationHindi} className="mt-2 text-muted-foreground" />
                 )}
               </div>
             )}

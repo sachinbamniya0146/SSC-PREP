@@ -33,7 +33,7 @@ interface UsersResponse {
 // (backend/src/bank/bank-upload.service.ts) — every error/warning now also
 // carries a question-text preview, and errors carry a coarse category so
 // they can be grouped/summarized instead of shown as one flat list.
-type UploadErrorCategory = "MISSING_FIELD" | "INVALID_REFERENCE" | "DUPLICATE" | "FORMAT" | "OTHER";
+type UploadErrorCategory = "MISSING_FIELD" | "INVALID_REFERENCE" | "DUPLICATE" | "FORMAT" | "OTHER" | "MISSING_ANSWER" | "MISSING_SOLUTION";
 
 const CATEGORY_LABEL: Record<UploadErrorCategory, string> = {
   MISSING_FIELD: "❗ Missing Field",
@@ -41,6 +41,8 @@ const CATEGORY_LABEL: Record<UploadErrorCategory, string> = {
   DUPLICATE: "♻️ Duplicate",
   FORMAT: "✏️ Format",
   OTHER: "❓ Other",
+  MISSING_ANSWER: "🔑 Answer Missing",
+  MISSING_SOLUTION: "📝 Solution Missing",
 };
 
 interface UploadResult {
@@ -183,6 +185,10 @@ export default function AdminPage() {
   const [uploading, setUploading] = React.useState(false);
   const [uploadResult, setUploadResult] = React.useState<UploadResult | null>(null);
   const [uploadJob, setUploadJob] = React.useState<UploadJobState | null>(null);
+  // Oct 2026: reject rows that have no solution (default ON) + "rejected rows" Excel/JSON download
+  const [requireSolution, setRequireSolution] = React.useState(true);
+  const [rejectedUrl, setRejectedUrl] = React.useState<string | null>(null);
+  const [checkOnly, setCheckOnly] = React.useState(false); // dry run: report only, nothing is saved
 
   // Phase 3 (Sep 2026) — upload history (past QuestionUploadBatch rows).
   type UploadBatchSummary = {
@@ -451,10 +457,17 @@ export default function AdminPage() {
     setError("");
     setUploadResult(null);
     setUploadJob(null);
+    setRejectedUrl(null);
     try {
+      // JSON (text / SVG-code / image questions) runs as a background job too.
+      if (uploadFormat === "json" || (checkOnly && (uploadFormat === "excel" || uploadFormat === "csv"))) {
+        await submitJsonJob(kind);
+        return;
+      }
       const formData = new FormData();
       formData.append("file", uploadFile);
       formData.append("kind", kind);
+      formData.append("requireSolution", String(requireSolution));
       if (kind === "practice") formData.append("isPracticeOnly", "true");
       // Oct 1 2026: Excel/CSV run as a BACKGROUND job (any size, even 1 lakh
       // rows) — the request returns at once and we poll for progress, so
@@ -473,6 +486,7 @@ export default function AdminPage() {
       let finalResult: UploadResult;
       if (useAsync && (data as { async?: boolean } | null)?.async) {
         const jobId = (data as { jobId: string }).jobId;
+        setRejectedUrl(`${API_BASE}/bank/admin/upload/jobs/${jobId}/rejected`);
         setUploadJob({ status: "RUNNING", phase: "QUEUED", processed: 0, total: 0, created: 0, failed: 0 });
         finalResult = await pollUploadJob(jobId);
       } else {
@@ -489,6 +503,63 @@ export default function AdminPage() {
     } finally {
       setUploading(false);
       setUploadJob(null);
+    }
+  }
+
+  // JSON upload as a background job (images/SVG inside the JSON make it slow, so never one long request).
+  async function submitJsonJob(kind: "practice" | "pyq") {
+    if (!uploadFile) return;
+    const fd = new FormData();
+    fd.append("file", uploadFile);
+    fd.append("kind", kind);
+    fd.append("requireSolution", String(requireSolution));
+    fd.append("dryRun", String(checkOnly));
+    const res = await fetchAuth(`${API_BASE}/bank/admin/upload/job/start`, { method: "POST", body: fd });
+    const started = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(started?.message || `Upload failed (HTTP ${res.status})`);
+    setUploadJob({ status: "RUNNING", phase: "CHECKING", processed: 0, total: started.total, created: 0, failed: 0 });
+    let netFails = 0;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500));
+      let j: any = null;
+      try {
+        const r = await fetchAuth(`${API_BASE}/bank/admin/upload/job/${started.id}`);
+        j = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(j?.message || `HTTP ${r.status}`);
+        netFails = 0;
+      } catch {
+        if (++netFails >= 20) throw new Error("Progress check fail ho raha hai. Upload server par chal raha hoga — thodi der baad Upload History dekhein.");
+        continue;
+      }
+      setUploadJob({ status: j.status, phase: j.status === "DONE" ? "FINALIZING" : "SAVING", processed: j.processed, total: j.total, created: j.created, failed: j.failed });
+      if (j.status === "FAILED") throw new Error(j.fatalError || "Upload fail ho gaya");
+      if (j.status === "DONE") {
+        if (j.hasRejected) setRejectedUrl(`${API_BASE}/bank/admin/upload/job/${started.id}/rejected`);
+        setUploadResult({ success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors, warnings: j.warnings } as UploadResult);
+        loadBatches();
+        if (checkOnly) setInfo(`Sirf check hua (kuch save nahi hua): ${j.created} question upload ke liye tayyar, ${j.failed} reject.`);
+        else if (j.created > 0) setInfo(`${j.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye`);
+        return;
+      }
+    }
+  }
+
+  async function downloadRejectedRows() {
+    if (!rejectedUrl) return;
+    try {
+      const r = await fetchAuth(rejectedUrl);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `rejected_rows_${new Date().toISOString().slice(0, 10)}.${blob.type.includes("json") ? "json" : "xlsx"}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rejected file download nahi hui");
     }
   }
 
@@ -909,12 +980,6 @@ export default function AdminPage() {
             📖 Vocabulary words + questions Excel se upload karein — Vocabulary Manage →
           </a>
           )}
-          <a
-            href="/admin/questions/add"
-            className="mb-4 block rounded-xl border-2 border-primary/50 bg-primary/5 p-4 text-center text-sm font-semibold text-primary hover:bg-primary/10"
-          >
-            ➕ Ek-ek question daalein (PYQ ya Practice) — Hindi box + question/option image + duplicate check →
-          </a>
           <AdminImageTools />
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
@@ -944,9 +1009,6 @@ export default function AdminPage() {
               {gapsExportDownloading ? "Exporting..." : "⬇️ Download Gaps (Missing Hindi/Solution/Answer)"}
             </button>
           </div>
-          <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-            💡 Bahut saare questions (10,000 se 1 lakh) ke liye <b>CSV</b> sabse tez hai (UTF-8 me save karein). Excel bhi chalega — 25-30 hazaar rows tak.
-          </p>
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <label className="mb-1.5 block text-sm font-medium">File Format</label>
@@ -975,6 +1037,17 @@ export default function AdminPage() {
 
           {/* NEW (Sep 21 2026) — two large, unmistakably separate upload buttons
               instead of one button + a checkbox that was easy to forget. */}
+          <label className="mt-4 flex items-start gap-2 rounded-lg border border-border bg-muted/20 p-3 text-sm">
+            <input type="checkbox" className="mt-1" checked={requireSolution} onChange={(e) => setRequireSolution(e.target.checked)} />
+            <span>
+              Solution ke bina question upload na ho (missing solution report me aayega)
+              <span className="block text-xs text-muted-foreground">Answer key missing, khali option aur duplicate questions hamesha reject hote hain aur report me dikhte hain.</span>
+            </span>
+          </label>
+          <label className="mt-2 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={checkOnly} onChange={(e) => setCheckOnly(e.target.checked)} />
+            Sirf check karo — kuch save mat karo (pehle report dekhne ke liye)
+          </label>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <button
               onClick={() => submitUpload("practice")}
@@ -1033,6 +1106,14 @@ export default function AdminPage() {
                     — row, category, question preview, exact error message
                     — so the admin can open it next to their spreadsheet
                     and fix every failed row without scrolling this panel. */}
+                {rejectedUrl && uploadResult.errors.length > 0 && (
+                  <button
+                    onClick={downloadRejectedRows}
+                    className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400"
+                  >
+                    📄 Rejected rows file (fix karke dobara upload)
+                  </button>
+                )}
                 {uploadResult.errors.length > 0 && (
                   <button
                     onClick={() => downloadErrorReport(uploadResult)}

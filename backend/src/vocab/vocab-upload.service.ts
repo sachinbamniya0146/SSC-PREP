@@ -12,15 +12,37 @@
 // column contract this parser expects.
 import { BadRequestException, Injectable } from '@nestjs/common';
 import * as XLSX from 'xlsx';
+import { restoreArchivedProgress } from './vocab-unlock-memory';
 import { PrismaService } from '../prisma/prisma.service';
+
+export type VocabSkipCode =
+  | 'DUPLICATE_WORD' | 'MISSING_MEANING' | 'DUPLICATE_QUESTION' | 'MISSING_ANSWER'
+  | 'MISSING_SOLUTION' | 'MISSING_OPTIONS' | 'MISSING_FIELD' | 'UNKNOWN_WORD';
+
+export interface VocabWordReport {
+  word: string;
+  wordStatus: 'OK' | 'DUPLICATE' | 'MISSING_MEANING';
+  questionsCreated: number;
+  rejected: Partial<Record<VocabSkipCode, number>>;
+}
 
 export interface VocabUploadResult {
   success: boolean;
+  dryRun: boolean;
   wordsCreated: number;
-  wordsUpdated: number;
+  wordsUpdated: number; // always 0 now — existing words are skipped, not overwritten (kept for API compatibility)
+  wordsSkipped: number;
   questionsCreated: number;
-  questionsUpdated: number;
+  questionsUpdated: number; // always 0 now (kept for API compatibility)
+  questionsSkipped: number;
   errors: { sheet: string; row: number; error: string }[];
+  skipped: { sheet: string; row: number; word: string; code: VocabSkipCode; message: string }[];
+  wordReport: VocabWordReport[];
+}
+
+// case/space/punctuation-insensitive key used for duplicate detection
+function normText(s: string): string {
+  return String(s ?? '').toLowerCase().replace(/[\s\u00a0]+/g, ' ').replace(/[^\p{L}\p{N} ]/gu, '').trim();
 }
 
 function slugify(s: string): string {
@@ -93,7 +115,7 @@ export class VocabUploadService {
       ['2. Sheet "Questions": one row per quiz question. wordSlug must match a word\'s slug (slug defaults to the lower-case word).'],
       ['3. correctAnswer must be A, B, C or D.'],
       ['4. synonymsJson / antonymsJson must be a JSON list, e.g. ["a","b"] — or leave empty.'],
-      ['5. Re-uploading the same file is safe: words are matched by slug and questions by (word + question text) and updated, not duplicated.'],
+      ['5. Duplicate word / duplicate question skip ho jate hain (update nahi hote). Answer key ya solution missing ho to question upload nahi hota — report me dikhta hai.'],
       ['6. You can upload only the Questions sheet to add questions to words that already exist.'],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(notes), 'Instructions');
@@ -101,7 +123,18 @@ export class VocabUploadService {
     return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 
-  async uploadFromExcel(buffer: Buffer): Promise<VocabUploadResult> {
+  /**
+   * Import rules (Oct 2026):
+   *  - A word that already exists (same slug OR same word text, case-insensitive)
+   *    or appears twice in the file is SKIPPED and reported — never overwritten.
+   *  - A question is SKIPPED and reported when: answer key missing/invalid,
+   *    solution (explanation) missing, any option missing, or it duplicates an
+   *    existing / earlier question (same word + same text, or same text anywhere).
+   *  - dryRun=true validates everything and writes nothing.
+   * Every skip lands in `skipped` (with a reason code) and in `wordReport`
+   * (per-word summary: "word X: 3 questions rejected: 2 solution missing ...").
+   */
+  async uploadFromExcel(buffer: Buffer, dryRun = false): Promise<VocabUploadResult> {
     let workbook: XLSX.WorkBook;
     try {
       workbook = XLSX.read(buffer, { type: 'buffer' });
@@ -119,29 +152,79 @@ export class VocabUploadService {
 
     const result: VocabUploadResult = {
       success: true,
+      dryRun,
       wordsCreated: 0,
       wordsUpdated: 0,
+      wordsSkipped: 0,
       questionsCreated: 0,
       questionsUpdated: 0,
+      questionsSkipped: 0,
       errors: [],
+      skipped: [],
+      wordReport: [],
+    };
+    const report = new Map<string, VocabWordReport>();
+    const rep = (word: string): VocabWordReport => {
+      let r = report.get(word);
+      if (!r) { r = { word, wordStatus: 'OK', questionsCreated: 0, rejected: {} }; report.set(word, r); }
+      return r;
+    };
+    const skipQ = (row: number, word: string, code: VocabSkipCode, message: string) => {
+      result.questionsSkipped++;
+      result.skipped.push({ sheet: 'Questions', row, word, code, message });
+      const r = rep(word);
+      r.rejected[code] = (r.rejected[code] ?? 0) + 1;
     };
 
-    // ---- Words sheet: upsert by slug ----
-    const slugToId = new Map<string, string>();
+    // ---- Words sheet ----
+    const existingWords = await this.prisma.vocabWord.findMany({ select: { id: true, slug: true, word: true, isActive: true, orderIndex: true } });
+    const slugToId = new Map<string, string>(existingWords.map((w) => [w.slug, w.id]));
+    const knownWordText = new Set(existingWords.map((w) => normText(w.word)));
+    const existingSlugs = new Set(existingWords.map((w) => w.slug));
+    const wordSlugsThisFile = new Set<string>();
+
     if (wordsSheet) {
       const rows: any[] = XLSX.utils.sheet_to_json(wordsSheet, { defval: '' });
+      const toCreate: any[] = [];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const rowNum = i + 2;
+        const wordText = cell(row, 'word');
         try {
-          const wordText = cell(row, 'word');
           if (!wordText) throw new Error("'word' column is required");
           const slug = cell(row, 'slug') || slugify(wordText);
+          if (!slug) throw new Error("word se valid slug nahi ban paya");
+          // A word hidden (soft-deleted) earlier comes back with ALL student progress intact — never a new copy.
+          const hidden = existingWords.find((w) => !w.isActive && (w.slug === slug || normText(w.word) === normText(wordText)));
+          if (hidden && !wordSlugsThisFile.has(slug)) {
+            if (!dryRun) await this.prisma.vocabWord.update({ where: { id: hidden.id }, data: { isActive: true } });
+            hidden.isActive = true;
+            wordSlugsThisFile.add(hidden.slug);
+            result.wordsUpdated++;
+            rep(wordText).wordStatus = 'OK';
+            continue;
+          }
+          const dupInDb = existingSlugs.has(slug) || knownWordText.has(normText(wordText));
+          const dupInFile = wordSlugsThisFile.has(slug);
+          if (dupInDb || dupInFile) {
+            result.wordsSkipped++;
+            result.skipped.push({
+              sheet: 'Words', row: rowNum, word: wordText, code: 'DUPLICATE_WORD',
+              message: dupInFile ? 'Ye word isi file me pehle bhi aa chuka hai — skip kiya' : 'Ye word database me pehle se maujood hai — skip kiya (update nahi kiya)',
+            });
+            rep(wordText).wordStatus = 'DUPLICATE';
+            continue;
+          }
           const meaningHindi = cell(row, 'meaningHindi');
           const meaningEnglish = cell(row, 'meaningEnglish');
-          if (!meaningHindi || !meaningEnglish) throw new Error("'meaningHindi' and 'meaningEnglish' are required");
+          if (!meaningHindi || !meaningEnglish) {
+            result.wordsSkipped++;
+            result.skipped.push({ sheet: 'Words', row: rowNum, word: wordText, code: 'MISSING_MEANING', message: "'meaningHindi' aur 'meaningEnglish' dono zaroori hain — word skip hua" });
+            rep(wordText).wordStatus = 'MISSING_MEANING';
+            continue;
+          }
           const orderIndexRaw = cell(row, 'orderIndex');
-          const orderIndex = orderIndexRaw ? parseInt(orderIndexRaw, 10) : 999999;
+          const orderIndex = orderIndexRaw ? parseInt(orderIndexRaw, 10) : Number.MAX_SAFE_INTEGER;
           if (Number.isNaN(orderIndex)) throw new Error("'orderIndex' must be a number");
 
           const examples: { en: string; hi: string }[] = [];
@@ -154,18 +237,11 @@ export class VocabUploadService {
           let antonyms: unknown = [];
           const synRaw = cell(row, 'synonymsJson');
           const antRaw = cell(row, 'antonymsJson');
-          try {
-            synonyms = synRaw ? JSON.parse(synRaw) : [];
-          } catch {
-            throw new Error("'synonymsJson' is not valid JSON");
-          }
-          try {
-            antonyms = antRaw ? JSON.parse(antRaw) : [];
-          } catch {
-            throw new Error("'antonymsJson' is not valid JSON");
-          }
+          try { synonyms = synRaw ? JSON.parse(synRaw) : []; } catch { throw new Error("'synonymsJson' is not valid JSON"); }
+          try { antonyms = antRaw ? JSON.parse(antRaw) : []; } catch { throw new Error("'antonymsJson' is not valid JSON"); }
 
-          const data = {
+          toCreate.push({
+            slug,
             word: wordText,
             orderIndex,
             partOfSpeech: optionalCell(row, 'partOfSpeech'),
@@ -180,95 +256,110 @@ export class VocabUploadService {
             examplesJson: examples as any,
             synonymsJson: synonyms as any,
             antonymsJson: antonyms as any,
-          };
-
-          const existing = await this.prisma.vocabWord.findUnique({ where: { slug } });
-          if (existing) {
-            await this.prisma.vocabWord.update({ where: { id: existing.id }, data });
-            slugToId.set(slug, existing.id);
-            result.wordsUpdated++;
-          } else {
-            const created = await this.prisma.vocabWord.create({ data: { slug, ...data } });
-            slugToId.set(slug, created.id);
-            result.wordsCreated++;
-          }
+          });
+          wordSlugsThisFile.add(slug);
+          knownWordText.add(normText(wordText));
+          rep(wordText);
         } catch (e) {
           result.errors.push({ sheet: 'Words', row: rowNum, error: e instanceof Error ? e.message : String(e) });
         }
       }
+      // New words ALWAYS go to the END of the list (after the highest existing orderIndex), in the order the sheet
+      // asks for. The sheet's orderIndex only orders the new words among themselves — it can never slot a word
+      // in front of ones students already unlocked or reuse an existing number.
+      if (toCreate.length) {
+        const maxOrder = existingWords.reduce((m, w) => Math.max(m, w.orderIndex ?? 0), 0);
+        const sorted = toCreate.map((w, i) => ({ w, i })).sort((a, b) => (a.w.orderIndex - b.w.orderIndex) || (a.i - b.i));
+        sorted.forEach((x, n) => { x.w.orderIndex = maxOrder + 1 + n; });
+      }
+      // one round trip instead of one-per-word
+      if (toCreate.length) {
+        if (!dryRun) {
+          for (let i = 0; i < toCreate.length; i += 200) {
+            await this.prisma.vocabWord.createMany({ data: toCreate.slice(i, i + 200), skipDuplicates: true });
+          }
+          const fresh = await this.prisma.vocabWord.findMany({ where: { slug: { in: toCreate.map((w) => w.slug) } }, select: { id: true, slug: true } });
+          for (const w of fresh) slugToId.set(w.slug, w.id);
+          // A word that was hard-deleted earlier comes back with every student's unlock/mastery restored.
+          const textBySlug = new Map(toCreate.map((w) => [w.slug, w.word as string]));
+          for (const w of fresh) await restoreArchivedProgress(this.prisma, w.id, textBySlug.get(w.slug) ?? '');
+        } else {
+          for (const w of toCreate) slugToId.set(w.slug, `dry:${w.slug}`);
+        }
+        result.wordsCreated = toCreate.length;
+      }
     }
 
-    // Words not in this upload but already in the DB still need to be
-    // resolvable, so the Questions sheet can reference a word that wasn't
-    // re-uploaded this time (e.g. adding more questions to an existing word).
-    if (questionsSheet) {
-      const existingWords = await this.prisma.vocabWord.findMany({ select: { id: true, slug: true } });
-      for (const w of existingWords) if (!slugToId.has(w.slug)) slugToId.set(w.slug, w.id);
-    }
-
-    // ---- Questions sheet: match by (wordId, questionText), update or create ----
+    // ---- Questions sheet ----
     if (questionsSheet) {
       const rows: any[] = XLSX.utils.sheet_to_json(questionsSheet, { defval: '' });
-      // Prefetch existing questions per word so each row is an in-memory
-      // lookup, not a query — same N+1 avoidance as the main bank importer.
-      const neededWordIds = [...new Set(rows.map((r) => slugToId.get(cell(r, 'wordSlug'))).filter(Boolean))] as string[];
-      const existingQuestions = neededWordIds.length
-        ? await this.prisma.vocabQuestion.findMany({ where: { wordId: { in: neededWordIds } } })
+      const realWordIds = [...new Set(rows.map((r) => slugToId.get(cell(r, 'wordSlug'))).filter((x): x is string => !!x && !x.startsWith('dry:')))];
+      const existingQ = realWordIds.length
+        ? await this.prisma.vocabQuestion.findMany({ where: { wordId: { in: realWordIds } }, select: { wordId: true, questionText: true } })
         : [];
-      const existingByKey = new Map(existingQuestions.map((q) => [`${q.wordId}::${q.questionText}`, q]));
+      const seenKey = new Set(existingQ.map((q) => `${q.wordId}::${normText(q.questionText)}`));
+      const slugToWord = new Map<string, string>();
+      const toCreateQ: any[] = [];
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const rowNum = i + 2;
+        const wordSlug = cell(row, 'wordSlug');
+        const wordLabel = wordSlug || '(wordSlug khali)';
         try {
-          const wordSlug = cell(row, 'wordSlug');
-          if (!wordSlug) throw new Error("'wordSlug' is required");
+          if (!wordSlug) { skipQ(rowNum, wordLabel, 'MISSING_FIELD', "'wordSlug' khali hai"); continue; }
           const wordId = slugToId.get(wordSlug);
-          if (!wordId) throw new Error(`wordSlug '${wordSlug}' does not match any word (check spelling / upload the Words sheet first)`);
+          if (!wordId) { skipQ(rowNum, wordLabel, 'UNKNOWN_WORD', `wordSlug '${wordSlug}' kisi word se match nahi hua (spelling check karein, ya Words sheet me pehle add karein)`); continue; }
 
           const questionText = cell(row, 'questionText');
-          if (!questionText) throw new Error("'questionText' is required");
-          const optA = cell(row, 'optionA');
-          const optB = cell(row, 'optionB');
-          const optC = cell(row, 'optionC');
-          const optD = cell(row, 'optionD');
-          if (!optA || !optB || !optC || !optD) throw new Error('All four options (optionA-D) are required');
+          if (!questionText) { skipQ(rowNum, wordLabel, 'MISSING_FIELD', 'questionText khali hai'); continue; }
+          const optA = cell(row, 'optionA'), optB = cell(row, 'optionB'), optC = cell(row, 'optionC'), optD = cell(row, 'optionD');
+          if (!optA || !optB || !optC || !optD) { skipQ(rowNum, wordLabel, 'MISSING_OPTIONS', 'Char options (A-D) me se koi khali hai'); continue; }
           const correctAnswer = cell(row, 'correctAnswer').toUpperCase();
-          if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) throw new Error("'correctAnswer' must be A, B, C or D");
+          if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) {
+            skipQ(rowNum, wordLabel, 'MISSING_ANSWER', correctAnswer ? `Answer key galat hai ("${correctAnswer}")` : 'Answer key (correctAnswer) missing hai');
+            continue;
+          }
+          const explanation = optionalCell(row, 'explanation');
+          if (!explanation) { skipQ(rowNum, wordLabel, 'MISSING_SOLUTION', 'Solution/explanation missing hai'); continue; }
 
-          const data = {
+          const key = `${wordId}::${normText(questionText)}`;
+          if (seenKey.has(key)) { skipQ(rowNum, wordLabel, 'DUPLICATE_QUESTION', 'Is word ka ye question pehle se hai — skip kiya'); continue; }
+          seenKey.add(key);
+          slugToWord.set(wordSlug, wordLabel);
+
+          toCreateQ.push({
             wordId,
             questionText,
             optionsJson: [
-              { key: 'A', text: optA },
-              { key: 'B', text: optB },
-              { key: 'C', text: optC },
-              { key: 'D', text: optD },
+              { key: 'A', text: optA }, { key: 'B', text: optB }, { key: 'C', text: optC }, { key: 'D', text: optD },
             ] as any,
             correctAnswer,
-            explanation: optionalCell(row, 'explanation'),
+            explanation,
             questionType: optionalCell(row, 'questionType'),
-          };
-
-          const key = `${wordId}::${questionText}`;
-          const existing = existingByKey.get(key);
-          if (existing) {
-            await this.prisma.vocabQuestion.update({ where: { id: existing.id }, data });
-            result.questionsUpdated++;
-          } else {
-            const created = await this.prisma.vocabQuestion.create({ data });
-            // remember it, so the same question repeated later in THIS file
-            // updates the row instead of creating a duplicate
-            existingByKey.set(key, created);
-            result.questionsCreated++;
-          }
+            _label: wordLabel,
+          });
         } catch (e) {
           result.errors.push({ sheet: 'Questions', row: rowNum, error: e instanceof Error ? e.message : String(e) });
         }
       }
+
+      if (toCreateQ.length) {
+        if (!dryRun) {
+          const data = toCreateQ.map(({ _label, ...rest }) => rest);
+          for (let i = 0; i < data.length; i += 300) {
+            await this.prisma.vocabQuestion.createMany({ data: data.slice(i, i + 300) });
+          }
+        }
+        for (const q of toCreateQ) rep(q._label).questionsCreated++;
+        result.questionsCreated = toCreateQ.length;
+      }
     }
 
-    result.success = result.errors.length === 0;
+    result.wordReport = [...report.values()].filter(
+      (r) => r.wordStatus !== 'OK' || Object.keys(r.rejected).length > 0,
+    );
+    result.success = result.errors.length === 0 && result.skipped.length === 0;
     return result;
   }
 }

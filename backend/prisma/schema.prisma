@@ -1579,6 +1579,25 @@ model PushSubscription {
 // One row per user: pay-to-skip bookkeeping + the one-time "unlock every
 // word" purchase (Rs 100). Kept separate from VocabWordProgress because these
 // facts belong to the student, not to any single word.
+// Oct 2026 — remembers each student's unlock/mastery of a word that was HARD-deleted, keyed by the word text,
+// so re-uploading the same word gives it back unlocked (see src/vocab/vocab-unlock-memory.ts).
+model VocabProgressArchive {
+  id               String    @id @default(uuid())
+  userId           String
+  wordKey          String
+  bestScorePct     Int       @default(0)
+  attemptsCount    Int       @default(0)
+  lastWrongCount   Int       @default(0)
+  masteredAt       DateTime?
+  forceUnlocked    Boolean   @default(true)
+  remasterRequired Boolean   @default(false)
+  archivedAt       DateTime  @default(now())
+
+  @@unique([userId, wordKey])
+  @@index([wordKey])
+  @@map("vocab_progress_archive")
+}
+
 model VocabUserState {
   id                   String    @id @default(uuid())
   userId               String    @unique

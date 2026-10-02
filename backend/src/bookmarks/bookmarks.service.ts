@@ -109,6 +109,9 @@ export class BookmarksService {
             id: true,
             questionText: true,
             questionTextHindi: true,
+            questionDiagramType: true,
+            questionDiagramLabels: true,
+            questionImageUrl: true,
             optionsJson: true,
             correctAnswer: true,
             explanation: true,
@@ -176,8 +179,17 @@ export class BookmarksService {
             id: r.question.id,
             questionText: r.question.questionText,
             questionTextHindi: r.question.questionTextHindi,
+            questionDiagramType: (r.question as any).questionDiagramType ?? null,
+            questionDiagramLabels: (r.question as any).questionDiagramLabels ?? null,
+            questionImageUrl: (r.question as any).questionImageUrl ?? null,
             options: Array.isArray(r.question.optionsJson)
-              ? (r.question.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text }))
+              ? (r.question.optionsJson as any[]).map((o: any) => ({
+                  key: o.key,
+                  text: o.text,
+                  diagramType: o.diagramType ?? null,
+                  diagramLabels: o.diagramLabels ?? null,
+                  imageUrl: o.imageUrl ?? null,
+                }))
               : [],
             // Only present once the student has actually attempted this
             // question elsewhere — null otherwise, never sent early.

@@ -89,8 +89,15 @@ export class VocabService {
   }
 
   private async loadWordsWithProgress(userId: string) {
-    const [words, progressRows, subscribedMonthly, userState] = await Promise.all([
-      this.prisma.vocabWord.findMany({ where: { isActive: true }, orderBy: { orderIndex: 'asc' } }),
+    // Oct 2026 — "ek baar unlock hua word dobara lock nahi hona chahiye".
+    // The old rule was a strict CHAIN (word N unlocks only if word N-1 is mastered), so any change to the
+    // list re-locked students: a word inserted/re-ordered in the middle, a word deleted (its progress rows
+    // cascade away) or a re-upload that shuffled orderIndex. Now the unlock state is a FRONTIER:
+    // everything up to one word past the furthest word the student has MASTERED stays unlocked, whatever
+    // happens to the words around it. Inactive (soft-deleted) words still count for the frontier, so
+    // removing a word from the list can never push a student backwards.
+    const [allWords, progressRows, subscribedMonthly, userState] = await Promise.all([
+      this.prisma.vocabWord.findMany({ orderBy: [{ orderIndex: 'asc' }, { createdAt: 'asc' }] }),
       this.prisma.vocabWordProgress.findMany({ where: { userId } }),
       this.hasActiveSubscription(userId),
       this.prisma.vocabUserState.findUnique({ where: { userId } }),
@@ -99,21 +106,30 @@ export class VocabService {
     const subscribed = subscribedMonthly || !!userState?.allUnlockedAt;
     const progressByWord = new Map(progressRows.map((p) => [p.wordId, p]));
 
-    let prevMastered = true; // the very first word is always unlocked
-    return words.map((w) => {
+    let frontier = -1; // index (in allWords) of the furthest cleanly-mastered word
+    let firstRemaster = Number.POSITIVE_INFINITY; // first mastered word that failed a revision (blocks later NEW words)
+    allWords.forEach((w, i) => {
+      const pr = progressByWord.get(w.id);
+      if (pr?.masteredAt) {
+        if (pr.remasterRequired) firstRemaster = Math.min(firstRemaster, i);
+        else frontier = i;
+      }
+    });
+
+    const out: { word: (typeof allWords)[number]; progress: (typeof progressRows)[number] | undefined; state: VocabWordState }[] = [];
+    allWords.forEach((w, i) => {
+      if (!w.isActive) return;
       const progress = progressByWord.get(w.id);
       const mastered = !!progress?.masteredAt;
+      const reachable = i <= Math.min(frontier + 1, firstRemaster);
       const state: VocabWordState = mastered
         ? 'MASTERED'
-        : prevMastered || progress?.forceUnlocked || subscribed
+        : reachable || progress?.forceUnlocked || subscribed
           ? 'UNLOCKED'
           : 'LOCKED';
-      // NEW: a mastered word that failed today's revision (remasterRequired)
-      // does NOT count as "done" for unlocking the next word — the student
-      // must re-score 95%+ on it first.
-      prevMastered = mastered && !progress?.remasterRequired;
-      return { word: w, progress, state };
+      out.push({ word: w, progress, state });
     });
+    return out;
   }
 
   /** Word list for the vocabulary hub — grid of locked/unlocked/mastered cards. */

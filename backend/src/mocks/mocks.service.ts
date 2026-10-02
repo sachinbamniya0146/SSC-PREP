@@ -27,7 +27,8 @@ export class MocksService {
         ...(examId ? { OR: [{ examId }, { examId: null }] } : {}),
       },
       orderBy: { createdAt: 'desc' },
-      take: 100,
+      // Oct 2026: was 100 — older PYQ mocks silently vanished AND the "top-10 free" ranking below was computed on a truncated list.
+      take: 1000,
     });
 
     const accessRows = await this.prisma.mockAccess.findMany({ where: { userId } });

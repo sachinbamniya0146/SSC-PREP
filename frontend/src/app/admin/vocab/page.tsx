@@ -19,11 +19,25 @@ type AdminWord = {
 
 type UploadResult = {
   success: boolean;
+  dryRun?: boolean;
   wordsCreated: number;
-  wordsUpdated: number;
+  wordsSkipped?: number;
   questionsCreated: number;
-  questionsUpdated: number;
+  questionsSkipped?: number;
   errors: { sheet: string; row: number; error: string }[];
+  skipped?: { sheet: string; row: number; word: string; code: string; message: string }[];
+  wordReport?: { word: string; wordStatus: string; questionsCreated: number; rejected: Record<string, number> }[];
+};
+
+const CODE_LABEL: Record<string, string> = {
+  DUPLICATE_WORD: "♻️ Duplicate word",
+  DUPLICATE_QUESTION: "♻️ Duplicate question",
+  MISSING_ANSWER: "🔑 Answer missing",
+  MISSING_SOLUTION: "📝 Solution missing",
+  MISSING_OPTIONS: "❗ Option missing",
+  MISSING_MEANING: "❗ Meaning missing",
+  MISSING_FIELD: "❗ Field missing",
+  UNKNOWN_WORD: "🔗 Word not found",
 };
 
 export default function AdminVocabPage() {
@@ -35,6 +49,7 @@ export default function AdminVocabPage() {
   const [uploading, setUploading] = React.useState(false);
   const [uploadResult, setUploadResult] = React.useState<UploadResult | null>(null);
   const [error, setError] = React.useState("");
+  const [dryRun, setDryRun] = React.useState(false);
 
   React.useEffect(() => {
     try {
@@ -65,11 +80,12 @@ export default function AdminVocabPage() {
     try {
       const fd = new FormData();
       fd.append("file", file);
+      fd.append("dryRun", String(dryRun));
       const r = await fetchAuth(`${API_BASE}/vocab/admin/upload`, { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setError(d?.message || `HTTP ${r.status}`); return; }
       setUploadResult(d);
-      await loadWords();
+      if (!dryRun) await loadWords();
     } catch (e: any) {
       setError(e.message || "Upload failed");
     } finally {
@@ -87,7 +103,7 @@ export default function AdminVocabPage() {
   };
 
   const deleteWord = async (w: AdminWord) => {
-    if (!confirm(`"${w.word}" delete karein? Iske sabhi questions aur students ka progress bhi delete ho jayega.`)) return;
+    if (!confirm(`"${w.word}" ko list se hata dein? Word students se chhup jayega, lekin unka unlock/progress safe rahega. Wahi word dobara upload karenge to wo unlock hi dikhega.`)) return;
     await fetchAuth(`${API_BASE}/vocab/admin/words/${w.id}`, { method: "DELETE" });
     await loadWords();
   };
@@ -107,8 +123,9 @@ export default function AdminVocabPage() {
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-semibold">📤 Bulk Import (Excel)</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Do sheets: <b>Words</b> (poora learning content) + <b>Questions</b> (wordSlug se link). Dobara upload karna safe hai —
-            slug/questionText se match karke update hota hai, duplicate nahi banta.
+            Do sheets: <b>Words</b> (poora learning content) + <b>Questions</b> (wordSlug se link). Duplicate word ya duplicate question
+            upload nahi hota (skip hokar report me aata hai). Jis question ka <b>answer</b> ya <b>solution</b> missing hai wo bhi upload nahi hota — report me
+            word-wise dikhta hai.
           </p>
           <div className="mt-3">
             <button
@@ -143,14 +160,45 @@ export default function AdminVocabPage() {
               disabled={uploading || !file}
               className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
             >
-              {uploading ? "Uploading…" : "Upload"}
+              {uploading ? "Uploading…" : dryRun ? "Check only" : "Upload"}
             </button>
           </div>
+          <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
+            Sirf check karo (kuch save mat karo)
+          </label>
           {error && <p className="mt-2 text-sm text-danger">{error}</p>}
           {uploadResult && (
             <div className="mt-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
-              <p>Words: {uploadResult.wordsCreated} created, {uploadResult.wordsUpdated} updated</p>
-              <p>Questions: {uploadResult.questionsCreated} created, {uploadResult.questionsUpdated} updated</p>
+              {uploadResult.dryRun && <p className="mb-1 font-semibold text-amber-600">Sirf check hua — kuch save nahi hua</p>}
+              <p>Words: <b className="text-emerald-600">{uploadResult.wordsCreated}</b> {uploadResult.dryRun ? "upload honge" : "upload hue"}, <b className="text-amber-600">{uploadResult.wordsSkipped ?? 0}</b> skip</p>
+              <p>Questions: <b className="text-emerald-600">{uploadResult.questionsCreated}</b> {uploadResult.dryRun ? "upload honge" : "upload hue"}, <b className="text-amber-600">{uploadResult.questionsSkipped ?? 0}</b> skip</p>
+              {(uploadResult.wordReport?.length ?? 0) > 0 && (
+                <div className="mt-2">
+                  <p className="font-semibold text-amber-600">Word-wise report (kya missing / duplicate hai):</p>
+                  <ul className="mt-1 max-h-48 space-y-1 overflow-y-auto text-xs">
+                    {uploadResult.wordReport!.map((w, i) => (
+                      <li key={i} className="rounded border border-amber-500/20 bg-amber-500/5 p-1.5">
+                        <b>{w.word}</b>
+                        {w.wordStatus !== "OK" && <span className="ml-1 text-danger">— {CODE_LABEL[w.wordStatus === "DUPLICATE" ? "DUPLICATE_WORD" : w.wordStatus] ?? w.wordStatus}</span>}
+                        {Object.entries(w.rejected).map(([code, n]) => (
+                          <span key={code} className="ml-2 rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-600">{CODE_LABEL[code] ?? code}: {n}</span>
+                        ))}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(uploadResult.skipped?.length ?? 0) > 0 && (
+                <div className="mt-2">
+                  <p className="font-semibold text-amber-600">{uploadResult.skipped!.length} row(s) skip hui:</p>
+                  <ul className="mt-1 max-h-40 overflow-y-auto text-xs text-muted-foreground">
+                    {uploadResult.skipped!.map((e, i) => (
+                      <li key={i}>{e.sheet} row {e.row} · <b>{e.word}</b> · {CODE_LABEL[e.code] ?? e.code}: {e.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {uploadResult.errors.length > 0 && (
                 <div className="mt-2">
                   <p className="font-semibold text-danger">{uploadResult.errors.length} error(s):</p>
