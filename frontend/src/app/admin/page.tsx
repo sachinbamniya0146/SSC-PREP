@@ -980,6 +980,12 @@ export default function AdminPage() {
             📖 Vocabulary words + questions Excel se upload karein — Vocabulary Manage →
           </a>
           )}
+          <a
+            href="/admin/questions/add"
+            className="mb-4 block rounded-xl border-2 border-primary/50 bg-primary/5 p-4 text-center text-sm font-semibold text-primary hover:bg-primary/10"
+          >
+            ➕ Ek-ek question daalein (PYQ ya Practice) — Hindi box + question/option image + duplicate check →
+          </a>
           <AdminImageTools />
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
@@ -1009,6 +1015,9 @@ export default function AdminPage() {
               {gapsExportDownloading ? "Exporting..." : "⬇️ Download Gaps (Missing Hindi/Solution/Answer)"}
             </button>
           </div>
+          <p className="mb-3 -mt-1 text-xs text-muted-foreground">
+            💡 Bahut saare questions (10,000 se 1 lakh) ke liye <b>CSV</b> sabse tez hai (UTF-8 me save karein). Excel bhi chalega — 25-30 hazaar rows tak.
+          </p>
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <label className="mb-1.5 block text-sm font-medium">File Format</label>

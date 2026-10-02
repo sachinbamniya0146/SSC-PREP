@@ -159,6 +159,20 @@ export class BankUploadController {
     res.send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   }
 
+  // Oct 1 2026 — add ONE question from the admin form (PYQ or practice, with
+  // optional question/option images + Hindi text). Same rules as an Excel row.
+  @Post('single')
+  async addSingle(@Body() body: any, @Req() req: any) {
+    this.assertUploadDepartment(req, body?.kind !== 'pyq');
+    return this.guard(() => this.uploadService.addSingleQuestion(body, this.adminId(req)));
+  }
+
+  @Post('single/check-duplicate')
+  async checkSingleDuplicate(@Body() body: any, @Req() req: any) {
+    this.assertUploadDepartment(req, body?.kind !== 'pyq');
+    return this.guard(() => this.uploadService.checkSingleDuplicate(body));
+  }
+
   @Post('excel')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async uploadExcel(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {

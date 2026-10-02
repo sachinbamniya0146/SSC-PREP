@@ -30,7 +30,7 @@ export function mediaKey(v?: string | null): string {
 export function questionMediaSignature(q: any): string {
   const parts: string[] = [];
   if (q.questionDiagramType) parts.push(`dg:${q.questionDiagramType}:${(q.questionDiagramLabels ?? []).join(',')}`);
-  if (q.questionImageUrl) parts.push(`im:${mediaKey(q.questionImageUrl)}`);
+  if (q.questionImageUrl) parts.push(`img:${mediaKey(q.questionImageUrl)}`);
   if (q.questionSvg) parts.push(`sv:${shortDigest(q.questionSvg)}`);
   if (q.questionImageBase64) parts.push(`b6:${shortDigest(q.questionImageBase64)}`);
   return parts.join(';');
