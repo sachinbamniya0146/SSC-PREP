@@ -20,6 +20,7 @@ export default function PlanTestBanner() {
   const [up, setUp] = React.useState<Upcoming | null>(null);
   const [rev, setRev] = React.useState<Revision | null>(null);
   const [loadedAt, setLoadedAt] = React.useState(Date.now());
+  const [hasPlan, setHasPlan] = React.useState<boolean | null>(null);
   const [now, setNow] = React.useState(Date.now());
 
   React.useEffect(() => {
@@ -28,6 +29,7 @@ export default function PlanTestBanner() {
         const [u, r] = await Promise.all([fetchAuth(`${API_BASE}/study-plan/test/upcoming`), fetchAuth(`${API_BASE}/study-plan/revision/today`)]);
         if (u.ok) setUp(await u.json());
         if (r.ok) setRev(await r.json());
+        setHasPlan(u.ok || r.ok); // both answer 400 NO_PLAN until the student sets a target
         setLoadedAt(Date.now());
       } catch {
         /* the banner is optional */
@@ -41,10 +43,23 @@ export default function PlanTestBanner() {
   const left = test ? Math.max(0, test.msLeft - (now - loadedAt)) : 0;
   const open = !!test && left === 0;
   const showRev = !!rev?.available && !rev.doneToday && !!rev.testId;
-  if (!test && !showRev) return null;
+  if (hasPlan === null) return null;
 
   return (
     <div className="mb-6 space-y-3">
+      {!test && !showRev && (
+        <a href={hasPlan ? "/study-plan/board" : "/study-plan"} className="flex items-center justify-between gap-3 rounded-2xl border border-primary/40 bg-primary/5 p-4">
+          <div>
+            <p className="text-sm font-bold">{hasPlan ? "🗓️ Aapka Study Planner" : "🎯 Apna Study Planner banayein"}</p>
+            <p className="text-xs text-muted-foreground">
+              {hasPlan
+                ? "Complete kiye chapters mark karein — kal 9 AM ka test aur roz ka revision yahin se milega."
+                : "Target exam aur date chunein, phir chapters mark karein — hum roz ka plan, test aur revision bana denge."}
+            </p>
+          </div>
+          <span className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground">{hasPlan ? "Kholein →" : "Shuru →"}</span>
+        </a>
+      )}
       {test && (
         <div className={`rounded-2xl border p-4 ${open ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
           <div className="flex flex-wrap items-center justify-between gap-3">

@@ -487,6 +487,14 @@ export default function DashboardPage() {
             of each other, not competing for hierarchy the way the exam
             picker above does. */}
         <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <a href="/study-plan/board" className="rounded-xl border-2 border-primary/50 bg-primary/5 p-5 transition hover:border-primary">
+            <h3 className="font-semibold">🗓️ My Study Planner</h3>
+            <p className="mt-1.5 text-sm text-muted-foreground">Target exam + date, chapters mark karein, kal 9 AM ka test, roz ka revision.</p>
+          </a>
+          <a href="/weak-topics" className="rounded-xl border-2 border-red-500/40 bg-red-500/5 p-5 transition hover:border-red-500">
+            <h3 className="font-semibold">🎯 Meri Weak List</h3>
+            <p className="mt-1.5 text-sm text-muted-foreground">Galat hue chapter / topic / sub-topic — ek-ek ko strong karein.</p>
+          </a>
           <a href="/mocks" className="rounded-xl border border-border bg-card p-5 transition hover:border-primary/40">
             <h3 className="font-semibold">Mock Tests</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Full-length timed mocks, a few free per exam.</p>

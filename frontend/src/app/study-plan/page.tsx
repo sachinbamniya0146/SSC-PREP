@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import DateField from "@/components/DateField";
 
 type PlanData = {
   plan: {
@@ -52,6 +53,8 @@ export default function StudyPlanPage() {
   const [selectedExam, setSelectedExam] = React.useState("");
   const [selectedSubject, setSelectedSubject] = React.useState("");
   const [duration, setDuration] = React.useState("3"); // months
+  // exact date by which the whole syllabus must be finished (typed or from the calendar)
+  const [targetIso, setTargetIso] = React.useState("");
   const [loading, setLoading] = React.useState(true);
 
   const apiBase = API_BASE;
@@ -83,9 +86,15 @@ export default function StudyPlanPage() {
 
   const createPlan = async () => {
     if (!selectedExam) return alert("Please select an exam");
-    const targetDate = new Date();
-    targetDate.setMonth(targetDate.getMonth() + parseInt(duration));
-    const body: any = { examId: selectedExam, type: "COMBINED", targetDate: targetDate.toISOString().split("T")[0] };
+    let targetStr = targetIso;
+    if (targetStr) {
+      if (new Date(targetStr + "T00:00:00").getTime() <= Date.now()) return alert("Target date aaj ke baad ki honi chahiye");
+    } else {
+      const d = new Date();
+      d.setMonth(d.getMonth() + parseInt(duration));
+      targetStr = d.toISOString().split("T")[0];
+    }
+    const body: any = { examId: selectedExam, type: "COMBINED", targetDate: targetStr };
     if (selectedSubject) body.subjectId = selectedSubject;
     try {
       const r = await fetchAuth(`${apiBase}/study-plan/create`, {
@@ -134,14 +143,18 @@ export default function StudyPlanPage() {
                 </select>
               </div>
               <div>
-                <label className="text-sm font-medium">Prep Duration</label>
+                <label className="text-sm font-medium">Syllabus kab tak complete karna hai?</label>
                 <div className="mt-2 flex gap-2">
                   {["3", "6", "12"].map(m => (
-                    <button key={m} onClick={() => setDuration(m)}
-                      className={`flex-1 rounded-lg border px-4 py-3 text-sm font-semibold transition ${duration === m ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted"}`}>
+                    <button key={m} onClick={() => { setDuration(m); setTargetIso(""); }}
+                      className={`flex-1 rounded-lg border px-4 py-3 text-sm font-semibold transition ${!targetIso && duration === m ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted"}`}>
                       {m} Months
                     </button>
                   ))}
+                </div>
+                <p className="mt-3 text-xs text-muted-foreground">Ya apni exact date chunein (likhein ya 📅 calendar se):</p>
+                <div className="mt-1">
+                  <DateField className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm" value={targetIso} onChange={setTargetIso} placeholder="DD/MM/YYYY" />
                 </div>
               </div>
               <button onClick={createPlan} disabled={!selectedExam}
