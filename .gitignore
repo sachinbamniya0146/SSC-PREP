@@ -28,3 +28,7 @@ docker-compose.yml.before-*
 docker-compose.yml.safe
 frontend/..env.local.swp
 frontend/Dockerfile.backup
+
+backend/extract/hindi/
+backend/extract/maths/
+final_output/
