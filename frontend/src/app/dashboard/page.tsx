@@ -1,5 +1,6 @@
 "use client";
 
+import PlanTestBanner from "@/components/PlanTestBanner";
 import * as React from "react";
 import { Logo } from "@/components/Logo";
 import { ThemeContext } from "@/components/theme-provider";
@@ -159,6 +160,7 @@ export default function DashboardPage() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-10">
+        <PlanTestBanner />
         {/* Hero: greeting + streak as the page's one deliberate visual
             moment, instead of a plain h1 sitting above an undifferentiated
             grid of identical cards. Numbers get to be genuinely large —

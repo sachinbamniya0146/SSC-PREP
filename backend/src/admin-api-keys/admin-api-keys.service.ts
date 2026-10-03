@@ -108,6 +108,55 @@ export class AdminApiKeyService {
     return { ...created, apiKey: maskKey(created.apiKey) };
   }
 
+  /** Next number for the auto name "OpenRouter Key N" (key 1, then 2, 3 ...). */
+  async nextKeyNumber(provider = 'openrouter'): Promise<number> {
+    const rows = await this.prisma.adminApiKey.findMany({ where: { provider }, select: { keyName: true } });
+    let max = 0;
+    for (const r of rows) {
+      const m = /(\d+)\s*$/.exec(r.keyName || '');
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+    return Math.max(max, rows.length) + 1;
+  }
+
+  /** One-field add: the admin only pastes the key — name, number, provider, free-only flag are automatic. */
+  async addNumbered(apiKeyRaw: string, createdBy?: string, provider = 'openrouter') {
+    const apiKey = String(apiKeyRaw || '').trim().replace(/^["']|["']$/g, '');
+    if (!apiKey) throw new BadRequestException('Key paste karein.');
+    if (provider === 'openrouter' && !apiKey.startsWith('sk-or-')) {
+      throw new BadRequestException('Ye OpenRouter key nahi lag rahi — OpenRouter ki key "sk-or-" se shuru hoti hai.');
+    }
+    const dup = await this.prisma.adminApiKey.findFirst({ where: { provider, apiKey }, select: { id: true, keyName: true } });
+    if (dup) throw new BadRequestException(`Ye key pehle se add hai (${dup.keyName}).`);
+    const number = await this.nextKeyNumber(provider);
+    const hasPrimary = await this.prisma.adminApiKey.findFirst({ where: { provider, isPrimary: true }, select: { id: true } });
+    const created = await this.prisma.adminApiKey.create({
+      data: { provider, keyName: `OpenRouter Key ${number}`, apiKey, freeModelOnly: true, isPrimary: !hasPrimary, createdBy },
+      select: { id: true, keyName: true, apiKey: true },
+    });
+    await this.autoResolveLowKeyAlerts(provider);
+    return { id: created.id, keyName: created.keyName, number, apiKey: maskKey(created.apiKey) };
+  }
+
+  /** internal use only (key test) — never returned to the browser */
+  async getRawKey(id: string): Promise<string> {
+    const k = await this.prisma.adminApiKey.findUnique({ where: { id }, select: { apiKey: true } });
+    if (!k) throw new NotFoundException('Key nahi mili.');
+    return k.apiKey;
+  }
+
+  /** a key that passed a live test is switched back on and its error marks are cleared */
+  async markHealthy(id: string) {
+    await this.prisma.adminApiKey.update({ where: { id }, data: { isActive: true, exhaustedAt: null, failureCount: 0, lastErrorMessage: null } });
+  }
+
+  async markBroken(id: string, message: string) {
+    await this.prisma.adminApiKey.update({
+      where: { id },
+      data: { lastErrorMessage: message.slice(0, 500), lastFailureAt: new Date() },
+    });
+  }
+
   /**
    * Bulk-add many keys for one provider in a single call — e.g. pasting a
    * list of free OpenRouter keys collected from several accounts. Keys

@@ -99,6 +99,21 @@ export class MailService {
     );
   }
 
+  /** Generic HTML mail (study-plan reminders etc.). Never throws; returns true when really sent. */
+  async sendHtml(to: string, subject: string, html: string): Promise<boolean> {
+    if (!this.transporter) {
+      this.logger.warn(`[DEV-MAIL] SMTP not configured; mail to ${to}: ${subject}`);
+      return false;
+    }
+    try {
+      await this.transporter.sendMail({ from: this.from, to, subject, html });
+      return true;
+    } catch (err) {
+      this.logger.error(`Failed to send mail to ${to}: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
   get isConfigured(): boolean {
     return this.isSmtpConfigured;
   }

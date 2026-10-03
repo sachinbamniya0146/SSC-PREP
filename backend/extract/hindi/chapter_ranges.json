@@ -1,0 +1,58 @@
+{
+  "Analogy": [
+    24,
+    105
+  ],
+  "Odd one out": [
+    109,
+    142
+  ],
+  "Coding-Decoding": [
+    146,
+    248
+  ],
+  "Missing Number": [
+    249,
+    267
+  ],
+  "Statement and Conclusion": [
+    268,
+    275
+  ],
+  "Blood Relation": [
+    276,
+    301
+  ],
+  "Venn Diagram": [
+    302,
+    322
+  ],
+  "Cube and Dice": [
+    323,
+    343
+  ],
+  "Sitting Arrangement": [
+    344,
+    362
+  ],
+  "Direction": [
+    363,
+    374
+  ],
+  "Mathematical Operations": [
+    375,
+    491
+  ],
+  "Counting Figure": [
+    492,
+    505
+  ],
+  "Paper Folding": [
+    506,
+    569
+  ],
+  "Mirror Image": [
+    570,
+    617
+  ]
+}

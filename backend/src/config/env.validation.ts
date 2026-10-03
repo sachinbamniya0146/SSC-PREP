@@ -31,8 +31,8 @@ export const envValidationSchema = Joi.object({
     'any.required': 'JWT_REFRESH_SECRET is required (min 32 chars)',
     'string.min': 'JWT_REFRESH_SECRET must be at least 32 characters',
   }),
-  JWT_ACCESS_EXPIRES_IN: Joi.string().default('15m'),
-  JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
+  JWT_ACCESS_EXPIRES_IN: Joi.string().default('1h'),
+  JWT_REFRESH_EXPIRES_IN: Joi.string().default('30d'),
 
   // Admin seed — single admin (legacy, still supported)
   ADMIN_DEFAULT_EMAIL: Joi.string().email().default('admin@sscprephub.in'),

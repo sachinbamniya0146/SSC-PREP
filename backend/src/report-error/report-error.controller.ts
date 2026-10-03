@@ -103,6 +103,15 @@ export class ReportErrorController {
     return this.reportError.resolve(reportId, body.status, user.userId, body.adminNotes);
   }
 
+  // NEW (Oct 3 2026): admin fixed the question -> close its reports + thank the reporting students
+  @Post('question/:questionId/fixed')
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN', 'MODERATOR')
+  @Department('QUESTIONS', 'SUPPORT')
+  async markFixed(@CurrentUser() user: { userId: string; role?: string }, @Param('questionId') questionId: string) {
+    return this.reportError.markQuestionFixed(questionId, user.userId, user.role ?? 'ADMIN');
+  }
+
   @Post('question/:questionId/unsuspend')
   @UseGuards(RolesGuard)
   @Roles('ADMIN')

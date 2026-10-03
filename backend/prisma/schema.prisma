@@ -154,6 +154,7 @@ model User {
   auditLogs        AuditLog[]
   dailyQuizAttempts DailyQuizAttempt[]
   weakTopicReports  WeakTopicReport[]
+  weakTopicEntries  UserWeakTopic[]
   mockAccesses      MockAccess[]
   chapterPurchases  ChapterPurchase[]
   vocabWordProgress VocabWordProgress[]
@@ -429,6 +430,10 @@ model QuestionUploadBatch {
 
 model Question {
   id                 String            @id @default(uuid())
+  // NEW (Oct 3 2026): short, human-friendly unique number of every question
+  // (1, 2, 3 ...). Shown to students on the question card + in error reports,
+  // and typed by admin in the search box to jump straight to ONE question.
+  questionNo         Int               @unique @default(autoincrement())
   sourcePdfId        String?
   importBatchId      String?
   // Bulk Upload History feature — tags a question with the upload run that
@@ -1013,6 +1018,43 @@ model WeakTopicReport {
   @@map("weak_topic_reports")
 }
 
+// NEW (Oct 3 2026) — persistent weak-topic tracker.
+// One row per (student, chapter/topic/sub-topic). A row is created / re-opened
+// (status WEAK) every time the student gets a question of that scope wrong or
+// skips it in ANY submitted test (mock, sectional, PYQ, daily test, quiz,
+// practice). It only turns STRENGTHENED when the student finishes a practice
+// set of that scope with enough accuracy — until then it stays in the weak
+// list and keeps being counted.
+model UserWeakTopic {
+  id                 String    @id @default(uuid())
+  userId             String
+  subjectId          String?
+  chapterId          String?
+  topicId            String?
+  subTopicId         String?
+  // "<chapterId>|<topicId>|<subTopicId>" (empty string for a missing level) — makes the row unique per scope
+  scopeKey           String
+  status             String    @default("WEAK") // WEAK | STRENGTHENED
+  wrongCount         Int       @default(0)      // lifetime wrong + skipped in tests
+  attemptedCount     Int       @default(0)      // lifetime questions seen in tests
+  practiceSetsDone   Int       @default(0)      // completed practice sets of this scope since it turned weak
+  practiceCorrect    Int       @default(0)
+  practiceTotal      Int       @default(0)
+  lastPracticeScore  Int?
+  lastSourceAttemptId String?
+  firstDetectedAt    DateTime  @default(now())
+  lastDetectedAt     DateTime  @default(now())
+  strengthenedAt     DateTime?
+  updatedAt          DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scopeKey])
+  @@index([userId, status])
+  @@index([userId, chapterId])
+  @@map("user_weak_topics")
+}
+
 // ================= MOCK GATING & PRICING =================
 model MockAccess {
   id            String   @id @default(uuid())
@@ -1132,6 +1174,7 @@ model QuestionErrorReport {
   resolvedAt       DateTime?
   resolvedBy       String?
   firstAdminViewAt DateTime? // set once, first time an admin/moderator posts in the thread (OPEN -> REVIEWING)
+  fixedNotifiedAt  DateTime? // NEW (Oct 3 2026): admin fixed the question and the student got the thank-you message
   createdAt        DateTime @default(now())
 
   user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1661,6 +1704,9 @@ model StudyPlanChapter {
   lastScorePct Int?
   lastTestedAt DateTime?
   completedAt  DateTime?
+  // NEW (Oct 3 2026) — daily revision tracking
+  lastRevisedAt DateTime?
+  revisionCount Int      @default(0)
   updatedAt    DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1682,6 +1728,9 @@ model StudyPlanTest {
   scheduledFor DateTime
   chapterIds   Json      // string[] — chapters this test covers
   status       String    @default("SCHEDULED")
+  // NEW (Oct 3 2026): TEST = the 9 AM chapter test, REVISION = the mandatory daily 50-question revision
+  kind         String    @default("TEST")
+  reminderSentAt DateTime? // 8:30 AM email sent
   attemptId    String?   @unique
   scorePct     Int?
   resultJson   Json?     // [{ chapterId, name, correct, total, pct, status }]
@@ -1693,5 +1742,6 @@ model StudyPlanTest {
 
   @@index([userId, status])
   @@index([userId, scheduledFor])
+  @@index([kind, scheduledFor])
   @@map("study_plan_tests")
 }

@@ -5,12 +5,12 @@
 // module dependency (StudyPlanModule -> TestsModule would be circular).
 //
 // Rules (Sachin's spec):
-//   * chapter >= 90%  (in ANY test, or a chapter-wide practice set) -> COMPLETE
-//   * chapter <  90%  in the student's own scheduled Study-Plan test -> WEAK
+//   * chapter >= 95%  (in ANY test, or a chapter-wide practice set) -> COMPLETE
+//   * chapter <  95%  in the student's own scheduled Study-Plan test -> WEAK
 //     ("ye weak topic he ab bhi, is chapter ko phir se practice karo")
 import { PrismaService } from '../prisma/prisma.service';
 
-export const CHAPTER_COMPLETE_PCT = 90;
+export const CHAPTER_COMPLETE_PCT = 95; // Oct 3 2026: was 90 — a chapter is complete only at 95%+
 export const PLAN_TEST_MIN_Q_PER_CHAPTER = 2;
 export const GENERIC_TEST_MIN_Q_PER_CHAPTER = 5;
 
@@ -56,6 +56,24 @@ export async function applyAttemptToChapters(prisma: PrismaService, userId: stri
   }
 
   const now = new Date();
+  // NEW (Oct 3 2026): the daily REVISION paper only records "revised today"; a chapter is
+  // moved back to WEAK only when it clearly slipped (<60% on 3+ questions).
+  if (planTest?.kind === 'REVISION') {
+    const out: ChapterVerdict[] = [];
+    for (const [chapterId, e] of per) {
+      const pct = e.total ? Math.round((e.correct / e.total) * 100) : 0;
+      await prisma.studyPlanChapter.updateMany({
+        where: { userId, chapterId },
+        data: { lastRevisedAt: now, revisionCount: { increment: 1 }, lastScorePct: pct, lastTestedAt: now },
+      });
+      const slipped = e.total >= 3 && pct < 60;
+      if (slipped) await prisma.studyPlanChapter.updateMany({ where: { userId, chapterId, status: 'COMPLETE' }, data: { status: 'WEAK', completedAt: null } });
+      out.push({ chapterId, name: e.name, correct: e.correct, total: e.total, pct, status: slipped ? 'WEAK' : 'UNVERIFIED' });
+    }
+    const overall = qIds.length ? Math.round((totalCorrect / qIds.length) * 100) : 0;
+    await prisma.studyPlanTest.update({ where: { id: planTest.id }, data: { status: 'SUBMITTED', submittedAt: now, scorePct: overall, resultJson: out as any } });
+    return out;
+  }
   const minQ = planTest ? PLAN_TEST_MIN_Q_PER_CHAPTER : GENERIC_TEST_MIN_Q_PER_CHAPTER;
   const verdicts: ChapterVerdict[] = [];
 
@@ -84,7 +102,7 @@ export async function applyAttemptToChapters(prisma: PrismaService, userId: stri
       });
       verdicts.push({ chapterId, name: e.name, correct: e.correct, total: e.total, pct, status: 'COMPLETE' });
     } else if (planTest || existing?.status === 'SELF_MARKED') {
-      // Below 90% in the verification test -> un-mark and flag as weak.
+      // Below 95% in the verification test -> un-mark and flag as weak.
       await prisma.studyPlanChapter.upsert({
         where: { userId_chapterId: { userId, chapterId } },
         create: { userId, chapterId, status: 'WEAK', ...scoreFields },
@@ -109,7 +127,7 @@ export async function applyAttemptToChapters(prisma: PrismaService, userId: stri
   return verdicts;
 }
 
-/** A chapter-wide practice set scored >= 90% marks the chapter COMPLETE (never downgrades). */
+/** A chapter-wide practice set scored >= 95% marks the chapter COMPLETE (never downgrades). */
 export async function markChapterFromPractice(prisma: PrismaService, userId: string, chapterId: string, scorePct: number): Promise<void> {
   if (!chapterId || scorePct < CHAPTER_COMPLETE_PCT) return;
   const now = new Date();

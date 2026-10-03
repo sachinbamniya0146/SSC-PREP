@@ -18,6 +18,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import DateField from "@/components/DateField";
 
 type TaxTopic = { id: string; name: string; nameHindi?: string | null; slug: string; _count: { questions: number }; subTopics: TaxSubTopic[] };
 type TaxSubTopic = { id: string; name: string; nameHindi?: string | null; slug: string; _count: { questions: number } };
@@ -28,6 +29,10 @@ type Exam = { id: string; name: string };
 
 type QuestionRow = {
   id: string;
+  questionNo?: number;
+  hasImage?: boolean;
+  errorReportCount?: number;
+  examDate?: string | null;
   questionText: string;
   hasHindi: boolean;
   correctAnswer: string;
@@ -65,6 +70,23 @@ export default function QuestionManagerPage() {
   const [kind, setKind] = React.useState<"" | "pyq" | "practice">("");
   const [status, setStatus] = React.useState<"" | "live" | "pending" | "hidden">("");
   const [q, setQ] = React.useState("");
+  const [fYear, setFYear] = React.useState("");
+  const [fShift, setFShift] = React.useState("");
+  const [fDate, setFDate] = React.useState("");
+  const [fImage, setFImage] = React.useState(false);
+  // ?batch=<uploadId> comes from the upload history ("Questions dekhein / edit karein")
+  const [batchId, setBatchId] = React.useState("");
+  React.useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("batch")) setBatchId(sp.get("batch") || "");
+    if (sp.get("q")) setQ(sp.get("q") || "");
+  }, []);
+  const [opts, setOpts] = React.useState<{ years: { year: number; count: number }[]; shifts: { shift: string; count: number }[] }>({ years: [], shifts: [] });
+  // bulk "details badlein"
+  const [bExam, setBExam] = React.useState("");
+  const [bYear, setBYear] = React.useState("");
+  const [bShift, setBShift] = React.useState("");
+  const [bDate, setBDate] = React.useState("");
 
   const [rows, setRows] = React.useState<QuestionRow[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -126,11 +148,16 @@ export default function QuestionManagerPage() {
       if (kind) p.set("kind", kind);
       if (status) p.set("status", status);
       if (q.trim()) p.set("q", q.trim());
+      if (fYear) p.set("year", fYear);
+      if (fShift) p.set("shift", fShift);
+      if (fDate) p.set("examDate", fDate);
+      if (fImage) p.set("hasImage", "1");
+      if (batchId) p.set("batchId", batchId);
       p.set("skip", String(skip));
       p.set("take", String(PAGE_SIZE));
       return p;
     },
-    [examId, subjectId, chapterId, topicId, subTopicId, kind, status, q],
+    [examId, subjectId, chapterId, topicId, subTopicId, kind, status, q, fYear, fShift, fDate, fImage, batchId],
   );
 
   const load = React.useCallback(
@@ -157,7 +184,14 @@ export default function QuestionManagerPage() {
   );
 
   React.useEffect(() => { if (authChecked) { loadStatic(); loadStats(); } }, [authChecked, loadStatic, loadStats]);
-  React.useEffect(() => { if (authChecked) { setPage(0); load(0); } }, [authChecked, examId, subjectId, chapterId, topicId, subTopicId, kind, status]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { if (authChecked) { setPage(0); load(0); } }, [authChecked, examId, subjectId, chapterId, topicId, subTopicId, kind, status, fYear, fShift, fDate, fImage, batchId]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    if (!authChecked) return;
+    fetchAuth(`${API_BASE}/bank/admin/manage/filter-options${examId ? `?examId=${examId}` : ""}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setOpts({ years: d.years ?? [], shifts: d.shifts ?? [] }))
+      .catch(() => undefined);
+  }, [authChecked, examId]);
   React.useEffect(() => { if (authChecked) load(page); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // cascading option lists
@@ -195,6 +229,11 @@ export default function QuestionManagerPage() {
     kind: kind || undefined,
     status: status || undefined,
     q: q.trim() || undefined,
+    year: fYear || undefined,
+    shift: fShift || undefined,
+    examDate: fDate || undefined,
+    hasImage: fImage ? "1" : undefined,
+    batchId: batchId || undefined,
   });
 
   async function runBulk(path: string, body: any, successMsg: (d: any) => string) {
@@ -231,6 +270,18 @@ export default function QuestionManagerPage() {
     else if (targetChapterId) target.chapterId = targetChapterId;
     else { setError("Target chapter/topic/sub-topic pehle chunein"); return; }
     runBulk("questions/move", { ...scopeForAction(useFilterForAll), target }, (d) => `${d.moved} question(s) move ho gaye.`);
+  };
+
+  const doBulkMeta = (useFilterForAll: boolean) => {
+    const set: Record<string, string> = {};
+    if (bExam) set.examId = bExam;
+    if (bYear) set.year = bYear;
+    if (bShift) set.shift = bShift;
+    if (bDate) set.examDate = bDate;
+    if (Object.keys(set).length === 0) { setError("Exam / year / shift / date me se kam se kam ek bharein"); return; }
+    const n = useFilterForAll || selected.size === 0 ? total : selected.size;
+    if (!confirm(`${n} question(s) ki details badal dein?`)) return;
+    runBulk("questions/bulk-meta", { ...scopeForAction(useFilterForAll), set }, (d) => `${d.updated} question(s) ki details badal gayi.`);
   };
 
   const doVisibility = (action: "publish" | "unpublish", useFilterForAll: boolean) =>
@@ -316,11 +367,22 @@ export default function QuestionManagerPage() {
               <option value="pending">Pending</option>
               <option value="hidden">Hidden</option>
             </select>
+            {batchId && <button onClick={() => setBatchId("")} className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-sm font-semibold text-amber-700">📦 Sirf ek upload ✕</button>}
+            <select value={fYear} onChange={(e) => setFYear(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
+              <option value="">Saare year</option>
+              {opts.years.map((y) => <option key={y.year} value={String(y.year)}>{y.year} ({y.count})</option>)}
+            </select>
+            <select value={fShift} onChange={(e) => setFShift(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
+              <option value="">Saari shift</option>
+              {opts.shifts.map((s) => <option key={s.shift} value={s.shift}>{s.shift} ({s.count})</option>)}
+            </select>
+            <div className="w-40"><DateField className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm" value={fDate} onChange={setFDate} placeholder="Exam date" /></div>
+            <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2 py-1.5 text-sm"><input type="checkbox" checked={fImage} onChange={(e) => setFImage(e.target.checked)} /> 🖼️ Image wale</label>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { setPage(0); load(0); } }}
-              placeholder="Search question text…"
+              placeholder="Q number (1042) ya question text…"
               className="col-span-2 rounded-lg border border-border bg-background px-2 py-1.5 text-sm sm:col-span-3 lg:col-span-2"
             />
             <button onClick={() => { setPage(0); load(0); }} className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground">
@@ -380,6 +442,20 @@ export default function QuestionManagerPage() {
           </div>
         </div>
 
+        <div className="mb-4 rounded-xl border border-border bg-card p-4">
+          <h2 className="mb-1 font-semibold">📅 Exam / year / shift / date ek sath badlein</h2>
+          <p className="mb-3 text-xs text-muted-foreground">{selected.size > 0 ? `${selected.size} selected question(s)` : `filter se match: ${total} question(s)`} par lagega. Jo box khaali hai wo nahi badlega.</p>
+          <div className="flex flex-wrap items-end gap-2">
+            <select value={bExam} onChange={(e) => setBExam(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"><option value="">Exam (na badlein)</option>{exams.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
+            <input value={bYear} onChange={(e) => setBYear(e.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" placeholder="Year" className="w-24 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
+            <input value={bShift} onChange={(e) => setBShift(e.target.value)} list="bulk-shift-list" placeholder="Shift" className="w-28 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
+            <datalist id="bulk-shift-list">{["Shift 1", "Shift 2", "Shift 3", "Shift 4"].map((s) => <option key={s} value={s} />)}</datalist>
+            <div className="w-40"><DateField className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm" value={bDate} onChange={setBDate} placeholder="Exam date" /></div>
+            <button onClick={() => doBulkMeta(false)} disabled={busy || selected.size === 0} className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary disabled:opacity-40">Selected par lagayein</button>
+            <button onClick={() => doBulkMeta(true)} disabled={busy} className="rounded-lg border border-primary/40 px-3 py-1.5 text-sm text-primary disabled:opacity-40">Filter ke sab par lagayein</button>
+          </div>
+        </div>
+
         {/* Table */}
         <div className="rounded-xl border border-border bg-card">
           <div className="overflow-x-auto">
@@ -387,21 +463,26 @@ export default function QuestionManagerPage() {
               <thead className="border-b border-border text-xs text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2"><input type="checkbox" checked={rows.length > 0 && rows.every((r) => selected.has(r.id))} onChange={toggleAllOnPage} /></th>
+                  <th className="px-3 py-2">Q#</th>
                   <th className="px-3 py-2">Question</th>
                   <th className="px-3 py-2">Kind</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Chapter › Topic › Sub-topic</th>
-                  <th className="px-3 py-2">Year</th>
+                  <th className="px-3 py-2">Year · Shift · Date</th>
+                  <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>}
-                {!loading && rows.length === 0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">Koi question nahi mila.</td></tr>}
+                {loading && <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>}
+                {!loading && rows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">Koi question nahi mila.</td></tr>}
                 {!loading && rows.map((r) => (
                   <tr key={r.id} className="border-b border-border last:border-0">
                     <td className="px-3 py-2 align-top"><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleRow(r.id)} /></td>
+                    <td className="px-3 py-2 align-top text-xs font-bold">#{r.questionNo ?? "—"}</td>
                     <td className="max-w-xs px-3 py-2 align-top">
-                      <p className="line-clamp-2">{r.questionText}</p>
+                      <p className="line-clamp-2">{r.questionText || (r.hasImage ? "🖼️ (image question)" : "")}</p>
+                      {r.hasImage && r.questionText && <span className="text-[10px] text-sky-600">🖼️ image</span>}
+                      {!!r.errorReportCount && <span className="ml-2 text-[10px] text-red-600">🚩 {r.errorReportCount} report</span>}
                       {!r.hasHindi && r.subject && !/english/i.test(r.subject.name) && (
                         <span className="text-[10px] text-amber-600 dark:text-amber-400">Hindi missing</span>
                       )}
@@ -419,7 +500,8 @@ export default function QuestionManagerPage() {
                     <td className="px-3 py-2 align-top text-xs text-muted-foreground">
                       {[r.chapter?.name, r.topic?.name, r.subTopic?.name].filter(Boolean).join(" › ") || "—"}
                     </td>
-                    <td className="px-3 py-2 align-top text-xs">{r.year ?? "—"}</td>
+                    <td className="px-3 py-2 align-top text-xs">{r.year ?? "—"}{r.shift ? ` · ${r.shift}` : ""}{r.examDate ? ` · ${r.examDate.split("-").reverse().join("/")}` : ""}</td>
+                    <td className="px-3 py-2 align-top"><a href={`/admin/questions/edit?q=${r.questionNo ?? r.id}`} className="whitespace-nowrap rounded-lg border border-primary/40 px-2 py-1 text-xs font-semibold text-primary">✏️ Edit</a></td>
                   </tr>
                 ))}
               </tbody>

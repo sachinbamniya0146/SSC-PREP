@@ -44,7 +44,13 @@ export interface AdminQuestionFilter {
   /** live = visible to students, pending = waiting for approval, hidden = deactivated/suspended */
   status?: 'live' | 'pending' | 'hidden';
   year?: number;
-  /** free-text search inside question text (English or Hindi) */
+  /** exact shift label, e.g. "Shift 1" */
+  shift?: string;
+  /** real exam date "YYYY-MM-DD" */
+  examDate?: string;
+  /** only questions that carry an image (question or option image) */
+  hasImage?: boolean;
+  /** free-text search inside question text (English or Hindi) — a bare number / "Q123" / "#123" also matches the unique question number */
   q?: string;
 }
 
@@ -64,7 +70,7 @@ export class BankAdminService {
   // helpers
   // ---------------------------------------------------------------------------
 
-  private clearCaches(): void {
+  clearCaches(): void {
     cacheClearPrefix('bank:subjects');
     cacheClearPrefix('bank:chapters');
     cacheClearPrefix('bank:meta');
@@ -92,11 +98,16 @@ export class BankAdminService {
     if (st === 'live' || st === 'pending' || st === 'hidden') f.status = st;
     const yr = str(raw?.year);
     if (yr && /^\d{4}$/.test(yr)) f.year = parseInt(yr, 10);
+    f.shift = str(raw?.shift);
+    const ed = str(raw?.examDate);
+    if (ed && /^\d{4}-\d{2}-\d{2}$/.test(ed)) f.examDate = ed;
+    const hi = str(raw?.hasImage);
+    if (hi === '1' || hi === 'true') f.hasImage = true;
     return f;
   }
 
   private isEmptyFilter(f: AdminQuestionFilter): boolean {
-    return !(f.examId || f.subjectId || f.chapterId || f.topicId || f.subTopicId || f.kind || f.batchId || f.status || f.year || f.q);
+    return !(f.examId || f.subjectId || f.chapterId || f.topicId || f.subTopicId || f.kind || f.batchId || f.status || f.year || f.shift || f.examDate || f.hasImage || f.q);
   }
 
   buildWhere(f: AdminQuestionFilter): Prisma.QuestionWhereInput {
@@ -109,6 +120,9 @@ export class BankAdminService {
     if (f.subTopicId) where.subTopicId = f.subTopicId === 'none' ? null : f.subTopicId;
     if (f.batchId) where.uploadBatchId = f.batchId;
     if (f.year) where.year = f.year;
+    if (f.shift) where.shift = f.shift;
+    if (f.examDate) where.examDate = f.examDate;
+    if (f.hasImage) and.push({ OR: [{ questionImageUrl: { not: null } }, { questionDiagramType: { not: null } }] });
     const kw = kindWhere(f.kind);
     if (kw.year !== undefined && !f.year) where.year = kw.year as any;
     if (f.status === 'live') {
@@ -122,19 +136,23 @@ export class BankAdminService {
       and.push({ OR: [{ isActive: false }, { autoSuspended: true }] });
     }
     if (f.q) {
-      and.push({
-        OR: [
-          { questionText: { contains: f.q, mode: 'insensitive' } },
-          { questionTextHindi: { contains: f.q, mode: 'insensitive' } },
-        ],
-      });
+      const or: Prisma.QuestionWhereInput[] = [
+        { questionText: { contains: f.q, mode: 'insensitive' } },
+        { questionTextHindi: { contains: f.q, mode: 'insensitive' } },
+      ];
+      // "123", "Q123", "Q.123", "#123", "no 123" -> the unique question number
+      const m = /^(?:q(?:uestion)?\.?\s*(?:no\.?)?|no\.?|#)?\s*(\d{1,9})$/i.exec(f.q.trim());
+      if (m) or.push({ questionNo: parseInt(m[1], 10) });
+      // a pasted question id (uuid) works too
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(f.q.trim())) or.push({ id: f.q.trim().toLowerCase() });
+      and.push({ OR: or });
     }
     if (and.length) where.AND = and;
     return where;
   }
 
   /** Resolves "these ids" or "everything matching this filter" into a concrete id list. */
-  private async resolveTargetIds(ids?: string[], filter?: AdminQuestionFilter): Promise<string[]> {
+  async resolveTargetIds(ids?: string[], filter?: AdminQuestionFilter): Promise<string[]> {
     if (Array.isArray(ids) && ids.length > 0) {
       const clean = [...new Set(ids.map((i) => String(i)).filter(Boolean))];
       if (clean.length > MAX_BULK) {
@@ -177,11 +195,16 @@ export class BankAdminService {
         take: limit,
         select: {
           id: true,
+          questionNo: true,
           questionText: true,
           questionTextHindi: true,
+          questionImageUrl: true,
+          questionDiagramType: true,
           correctAnswer: true,
+          errorReportCount: true,
           year: true,
           shift: true,
+          examDate: true,
           paperCode: true,
           isApproved: true,
           isActive: true,
@@ -201,11 +224,15 @@ export class BankAdminService {
       total,
       data: rows.map((r) => ({
         id: r.id,
+        questionNo: r.questionNo,
         questionText: r.questionText.length > 400 ? r.questionText.slice(0, 400) + '…' : r.questionText,
         hasHindi: !!(r.questionTextHindi && r.questionTextHindi.trim()),
+        hasImage: !!(r.questionImageUrl || r.questionDiagramType),
+        errorReportCount: r.errorReportCount,
         correctAnswer: r.correctAnswer,
         year: r.year,
         shift: r.shift,
+        examDate: r.examDate,
         paperCode: r.paperCode,
         kind: r.year != null ? 'pyq' : 'practice',
         isApproved: r.isApproved,

@@ -1,230 +1,193 @@
 "use client";
 
+// Student → My weak chapters / topics / sub-topics (rewritten Oct 3 2026)
+//
+// After ANY test (mock, PYQ, sectional, daily test, study-plan test, quiz) the questions you got
+// wrong or skipped put their chapter › topic › sub-topic on this list. Pick one and strengthen it
+// with a practice set. A topic leaves the weak list ONLY when you score the pass mark on its
+// practice — until then it stays here and keeps being counted.
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 
-type WeakTopic = {
-  chapterId: string;
-  chapterName: string;
+type Item = {
+  id: string;
+  status: "WEAK" | "STRENGTHENED";
+  subjectId: string | null;
   subjectName: string;
-  total: number;
-  correct: number;
-  accuracyPercent: number;
-  strengthScore: number;
-  isWeak: boolean;
-  action: { drillQuestions: number; testQuestions: number; message: string };
+  chapterId: string | null;
+  chapterName: string;
+  topicId: string | null;
+  topicName: string;
+  subTopicId: string | null;
+  subTopicName: string;
+  label: string;
+  wrongCount: number;
+  attemptedCount: number;
+  practiceSetsDone: number;
+  lastPracticeScore: number | null;
+  available: number | null;
+  strengthenedAt: string | null;
 };
+type Data = { passPercent: number; summary: { weakCount: number; strengthenedCount: number; chaptersAffected: number }; weak: Item[]; strengthened: Item[] };
 
 export default function WeakTopicsPage() {
-  const [weak, setWeak] = React.useState<WeakTopic[]>([]);
-  const [strong, setStrong] = React.useState<WeakTopic[]>([]);
-  const [summary, setSummary] = React.useState<{
-    chaptersAttempted: number;
-    weakChapters: number;
-    strongChapters: number;
-  } | null>(null);
+  const [data, setData] = React.useState<Data | null>(null);
   const [loading, setLoading] = React.useState(true);
-  const [drill, setDrill] = React.useState<{
-    chapterId: string;
-    chapterName: string;
-    drill: { id: string; q: string; opts: string[] }[];
-    test: { id: string; q: string; opts: string[] }[];
-  } | null>(null);
-
-  const load = async () => {
-    try {
-      // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual
-      // token, so an expired access token auto-refreshes instead of
-      // leaving this page stuck showing nothing.
-      const res = await fetchAuth(`${API_BASE}/analytics/performance`);
-      if (res.ok) {
-        const d = await res.json();
-        setWeak(d.weakTopics);
-        setStrong(d.strongTopics);
-        setSummary(d.summary);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [error, setError] = React.useState("");
+  const [starting, setStarting] = React.useState("");
+  const [size, setSize] = React.useState(25);
+  const [subjectFilter, setSubjectFilter] = React.useState("");
 
   React.useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/bank/weak-topics`);
+        if (r.ok) setData(await r.json());
+        else setError("List load nahi hui. Dobara try karein.");
+      } catch {
+        setError("Network error.");
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
-  const startDrill = async (t: WeakTopic) => {
-    // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual token.
-    const res = await fetchAuth(`${API_BASE}/analytics/chapter/${t.chapterId}/drill`);
-    if (res.ok) {
-      const d = await res.json();
-      setDrill({ ...d, chapterName: t.chapterName });
+  const start = async (it: Item) => {
+    setStarting(it.id);
+    setError("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/practice/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chapterId: it.chapterId || undefined,
+          topicId: it.topicId || undefined,
+          subTopicId: it.subTopicId || undefined,
+          size,
+          mode: "practice",
+          allowPyqFallback: true,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setError(d.code === "PREMIUM_REQUIRED" ? "Is topic ka free practice limit khatam — Premium lein." : `Start nahi hua: ${d.message || r.status}`);
+        return;
+      }
+      sessionStorage.setItem("ssc_sectional_set", JSON.stringify(d));
+      sessionStorage.setItem("ssc_sectional_subject", d.chapterName || it.label || "Weak topic practice");
+      window.location.href = "/test?sectional=1";
+    } catch {
+      setError("Network error — practice start nahi hui.");
+    } finally {
+      setStarting("");
     }
   };
+
+  const subjects = React.useMemo(() => {
+    const m = new Map<string, string>();
+    data?.weak.forEach((w) => w.subjectId && m.set(w.subjectId, w.subjectName));
+    return [...m.entries()];
+  }, [data]);
+
+  const grouped = React.useMemo(() => {
+    const out = new Map<string, { chapter: string; subject: string; items: Item[] }>();
+    for (const w of data?.weak ?? []) {
+      if (subjectFilter && w.subjectId !== subjectFilter) continue;
+      const k = w.chapterId || "none";
+      if (!out.has(k)) out.set(k, { chapter: w.chapterName || "General", subject: w.subjectName, items: [] });
+      out.get(k)!.items.push(w);
+    }
+    return [...out.values()];
+  }, [data, subjectFilter]);
+
+  const pass = data?.passPercent ?? 60;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <a href="/dashboard" className="btn btn-outline text-sm">
-            Back to Dashboard
-          </a>
+      <header className="sticky top-0 z-30 border-b border-border bg-background/90 px-4 py-3 backdrop-blur">
+        <div className="mx-auto flex max-w-3xl items-center justify-between">
+          <a href="/dashboard" className="text-sm font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
+          <span className="text-sm font-bold">🎯 Meri weak list</span>
+          <a href="/study-plan" className="text-xs font-semibold text-primary">Planner</a>
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl px-4 py-10">
-        <h1 className="text-2xl font-bold">Your Performance Analysis 📊</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Chapter-wise weak / strong analysis from your tests. Strengthen weak topics with a
-          25-question drill, then a 10-question test.
-        </p>
+      <main className="mx-auto max-w-3xl space-y-4 px-3 py-5">
+        {error && <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-600">{error}</div>}
+        {loading && <p className="py-10 text-center text-sm text-muted-foreground">Aapke tests check ho rahe hain…</p>}
 
-        {loading && <p className="mt-8 text-muted-foreground">Analyzing your attempts…</p>}
-
-        {!loading && summary && (
+        {!loading && data && (
           <>
-            {/* Summary cards */}
-            <div className="mt-8 grid gap-4 sm:grid-cols-3">
-              <div className="card p-5">
-                <p className="text-xs text-muted-foreground">Chapters Attempted</p>
-                <p className="mt-1 text-3xl font-bold">{summary.chaptersAttempted}</p>
-              </div>
-              <div className="card border-danger/30 bg-danger/5 p-5">
-                <p className="text-xs text-danger">Weak Chapters ⚠️</p>
-                <p className="mt-1 text-3xl font-bold text-danger">{summary.weakChapters}</p>
-              </div>
-              <div className="card border-success/30 bg-success/5 p-5">
-                <p className="text-xs text-success">Strong Chapters 💪</p>
-                <p className="mt-1 text-3xl font-bold text-success">{summary.strongChapters}</p>
-              </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-3"><p className="text-2xl font-extrabold text-red-600">{data.summary.weakCount}</p><p className="text-[11px] text-muted-foreground">Weak topics</p></div>
+              <div className="rounded-xl border border-border bg-card p-3"><p className="text-2xl font-extrabold">{data.summary.chaptersAffected}</p><p className="text-[11px] text-muted-foreground">Chapters</p></div>
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3"><p className="text-2xl font-extrabold text-emerald-600">{data.summary.strengthenedCount}</p><p className="text-[11px] text-muted-foreground">Strong ho gaye</p></div>
             </div>
 
-            {summary.chaptersAttempted === 0 && (
-              <div className="card mt-10 p-8 text-center">
-                <p className="text-lg font-semibold">No test attempts yet 📝</p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Attempt your first chapter test or daily quiz — then come back here to see your
-                  weak topics and personalized drill.
-                </p>
-              </div>
-            )}
+            <div className="rounded-xl border border-border bg-card p-3 text-xs text-muted-foreground">
+              💡 Topic tab tak <b>weak</b> rehta hai jab tak aap uski practice me <b>{pass}%+</b> score nahi laate. Kisi bhi test me galat hone par wo wapas yahan aa jata hai.
+            </div>
 
-            {/* Weak topics with direct action */}
-            {weak.length > 0 && !drill && (
-              <div className="mt-8">
-                <h2 className="text-lg font-semibold text-danger">
-                  🔴 Your Weak Topics — Strengthen Them Now
-                </h2>
-                <div className="mt-3 space-y-3">
-                  {weak.map((t) => (
-                    <div key={t.chapterId} className="card border-danger/20 p-5">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="font-semibold">{t.chapterName}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {t.subjectName} · {t.correct}/{t.total} correct ·{" "}
-                            <span className="font-semibold text-danger">
-                              {t.accuracyPercent}% accuracy
-                            </span>
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => startDrill(t)}
-                          className="btn bg-primary text-primary-foreground hover:opacity-90"
-                        >
-                          🎯 Strengthen: {t.action.drillQuestions}Q drill → {t.action.testQuestions}Q test
-                        </button>
-                      </div>
-                      <p className="mt-2 text-xs text-muted-foreground">{t.action.message}</p>
-                    </div>
-                  ))}
+            {data.weak.length === 0 ? (
+              <div className="rounded-xl border border-border bg-card p-8 text-center">
+                <p className="text-lg font-semibold">Koi weak topic nahi 🎉</p>
+                <p className="mt-2 text-sm text-muted-foreground">Mock, PYQ ya sectional test dein — galat hue topics yahan aa jayenge.</p>
+                <a href="/mocks" className="btn btn-primary mt-4 inline-block">Test dein</a>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select value={subjectFilter} onChange={(e) => setSubjectFilter(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-2 text-sm">
+                    <option value="">Saare subjects</option>
+                    {subjects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                  </select>
+                  <select value={size} onChange={(e) => setSize(Number(e.target.value))} className="rounded-lg border border-border bg-background px-2 py-2 text-sm">
+                    {[15, 25, 35, 50].map((n) => <option key={n} value={n}>{n} questions</option>)}
+                  </select>
                 </div>
-              </div>
-            )}
 
-            {/* Strong topics */}
-            {strong.length > 0 && (
-              <div className="mt-10">
-                <h2 className="text-lg font-semibold text-success">
-                  💪 Your Strong Topics
-                </h2>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  {strong.map((t) => (
-                    <div key={t.chapterId} className="card border-success/20 p-4">
-                      <p className="font-semibold">{t.chapterName}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {t.accuracyPercent}% accuracy · {t.correct}/{t.total} correct
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Drill in progress */}
-            {drill && (
-              <div className="mt-8">
-                <h2 className="text-lg font-semibold text-primary">
-                  🎯 Strengthening: {drill.chapterName}
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Practice {drill.drill.length} questions, then take the {drill.test.length}-question
-                  test below.
-                </p>
-
-                <div className="mt-4">
-                  <h3 className="font-semibold">Practice Drill ({drill.drill.length} Q)</h3>
-                  <div className="mt-3 space-y-4">
-                    {drill.drill.map((q, i) => (
-                      <div key={q.id} className="card p-5">
-                        <p className="text-sm font-medium">
-                          {i + 1}. {q.q}
-                        </p>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                          {q.opts.map((o, oi) => (
-                            <div key={oi} className="rounded-lg border border-border bg-card px-3 py-2 text-sm">
-                              {o}
+                {grouped.map((g) => (
+                  <section key={g.chapter + g.subject} className="rounded-xl border border-border bg-card p-3">
+                    <p className="text-xs font-semibold text-muted-foreground">{g.subject}</p>
+                    <h2 className="mb-2 text-base font-bold">{g.chapter}</h2>
+                    <ul className="space-y-2">
+                      {g.items.map((w) => {
+                        const label = [w.topicName, w.subTopicName].filter(Boolean).join(" › ") || "Poora chapter";
+                        const score = w.lastPracticeScore;
+                        return (
+                          <li key={w.id} className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="break-words text-sm font-semibold">{label}</p>
+                                <p className="mt-0.5 text-[11px] text-muted-foreground">❌ {w.wrongCount} galat/skip · {w.practiceSetsDone} practice set{score != null ? ` · last score ${score}%` : ""}</p>
+                              </div>
+                              <button onClick={() => start(w)} disabled={starting === w.id || w.available === 0} className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground disabled:opacity-50">
+                                {w.available === 0 ? "Questions jald" : starting === w.id ? "Shuru ho raha…" : "💪 Strong karein"}
+                              </button>
                             </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <h3 className="font-semibold">Chapter Test ({drill.test.length} Q)</h3>
-                  <div className="mt-3 space-y-4">
-                    {drill.test.map((q, i) => (
-                      <div key={q.id} className="card border-primary/30 bg-primary/5 p-5">
-                        <p className="text-sm font-medium">
-                          {i + 1}. {q.q}
-                        </p>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                          {q.opts.map((o, oi) => (
-                            <div key={oi} className="rounded-lg border border-border bg-card px-3 py-2 text-sm">
-                              {o}
+                            <div className="mt-2">
+                              <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+                                <div className={`h-full ${score != null && score >= pass ? "bg-emerald-500" : "bg-red-500"}`} style={{ width: `${Math.min(100, score ?? 0)}%` }} />
+                                <div className="absolute inset-y-0 w-0.5 bg-foreground/60" style={{ left: `${pass}%` }} />
+                              </div>
+                              <p className="mt-1 text-[10px] text-muted-foreground">Pass mark {pass}% · {w.available != null ? `${w.available} questions available` : ""}</p>
                             </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                ))}
+              </>
+            )}
 
-                <button
-                  onClick={() => {
-                    setDrill(null);
-                    load();
-                  }}
-                  className="mt-6 btn btn-outline"
-                >
-                  ← Done, show my analysis again
-                </button>
-              </div>
+            {data.strengthened.length > 0 && (
+              <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+                <h2 className="mb-2 text-sm font-bold text-emerald-700">✅ Strong ho gaye ({data.strengthened.length})</h2>
+                <ul className="space-y-1 text-xs">
+                  {data.strengthened.map((s) => <li key={s.id} className="break-words">{s.label || s.chapterName}{s.lastPracticeScore != null ? ` — ${s.lastPracticeScore}%` : ""}</li>)}
+                </ul>
+              </section>
             )}
           </>
         )}

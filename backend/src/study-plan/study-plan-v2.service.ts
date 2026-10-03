@@ -6,7 +6,7 @@
 //  2. student marks chapters "I finished this"          -> markChapters()
 //  3. next day 9:00 AM IST a customised test is due, in the FULL pattern of the
 //     target exam, built ONLY from the chapters marked  -> upcomingTest()/startTest()
-//  4. chapter < 90% in that test -> un-marked + WEAK; >= 90% -> COMPLETE
+//  4. chapter < 95% in that test -> un-marked + WEAK; >= 95% -> COMPLETE
 //     (also COMPLETE from any other test or a chapter-wide practice set)
 //  5. weak chapters/topics/sub-topics visible exam-wise & subject-wise, with a
 //     practice deep-link to strengthen them                -> weakBoard()
@@ -72,8 +72,8 @@ const MSG = {
     };
   },
   allComplete: {
-    en: 'Excellent! Every marked chapter scored 90%+ and is now complete.',
-    hi: 'शानदार! आपके सभी मार्क किए हुए चैप्टर में 90%+ आया और वे अब पूरे हो गए हैं।',
+    en: 'Excellent! Every marked chapter scored 95%+ and is now complete.',
+    hi: 'शानदार! आपके सभी मार्क किए हुए चैप्टर में 95%+ आया और वे अब पूरे हो गए हैं।',
   } as BiMsg,
 };
 
@@ -157,6 +157,8 @@ export class StudyPlanV2Service {
         testable: qc > 0,
         status,
         lastScorePct: p?.lastScorePct ?? null,
+        lastRevisedAt: p?.lastRevisedAt ?? null,
+        revisionCount: p?.revisionCount ?? 0,
       });
       if (qc > 0) {
         summary.total++;
@@ -213,7 +215,7 @@ export class StudyPlanV2Service {
       where: { userId, chapterId: { in: valid }, status: { in: ['SELF_MARKED', 'WEAK'] } },
       data: { status: 'PENDING', selfMarkedAt: null },
     });
-    const sched = await this.prisma.studyPlanTest.findFirst({ where: { userId, status: 'SCHEDULED' }, orderBy: { scheduledFor: 'desc' } });
+    const sched = await this.prisma.studyPlanTest.findFirst({ where: { userId, kind: 'TEST', status: 'SCHEDULED' }, orderBy: { scheduledFor: 'desc' } });
     if (sched) {
       const left = ((sched.chapterIds as string[]) ?? []).filter((id) => !valid.includes(id));
       if (left.length) await this.prisma.studyPlanTest.update({ where: { id: sched.id }, data: { chapterIds: left } });
@@ -223,7 +225,7 @@ export class StudyPlanV2Service {
   }
 
   private async addToScheduledTest(userId: string, examId: string, chapterIds: string[], now: Date) {
-    const sched = await this.prisma.studyPlanTest.findFirst({ where: { userId, status: 'SCHEDULED' }, orderBy: { scheduledFor: 'desc' } });
+    const sched = await this.prisma.studyPlanTest.findFirst({ where: { userId, kind: 'TEST', status: 'SCHEDULED' }, orderBy: { scheduledFor: 'desc' } });
     if (sched) {
       const merged = [...new Set([...((sched.chapterIds as string[]) ?? []), ...chapterIds])];
       await this.prisma.studyPlanTest.update({ where: { id: sched.id }, data: { chapterIds: merged, examId } });
@@ -238,11 +240,11 @@ export class StudyPlanV2Service {
   /** GET /study-plan/test/upcoming — countdown + what to revise, or the last result. */
   async upcomingTest(userId: string) {
     const active = await this.prisma.studyPlanTest.findFirst({
-      where: { userId, status: { in: ['SCHEDULED', 'IN_PROGRESS'] } },
+      where: { userId, kind: 'TEST', status: { in: ['SCHEDULED', 'IN_PROGRESS'] } },
       orderBy: { scheduledFor: 'asc' },
     });
     if (!active) {
-      const last = await this.prisma.studyPlanTest.findFirst({ where: { userId, status: 'SUBMITTED' }, orderBy: { submittedAt: 'desc' } });
+      const last = await this.prisma.studyPlanTest.findFirst({ where: { userId, kind: 'TEST', status: 'SUBMITTED' }, orderBy: { submittedAt: 'desc' } });
       return { test: null, lastResult: last ? { id: last.id, scorePct: last.scorePct, submittedAt: last.submittedAt } : null };
     }
     const chapterIds = (active.chapterIds as string[]) ?? [];
@@ -297,6 +299,7 @@ export class StudyPlanV2Service {
       .map((r: any) => ({
         id: r.id,
         questionText: r.questionText,
+        questionNo: (r as any).questionNo,
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -395,7 +398,8 @@ export class StudyPlanV2Service {
     }
 
     const totalPool = valid.length;
-    const targetN = Math.min(pattern?.totalQuestions || 100, totalPool);
+    // Oct 3 2026: the daily REVISION paper is always 50 questions spread over the subjects
+    const targetN = test.kind === 'REVISION' ? Math.min(50, totalPool) : Math.min(pattern?.totalQuestions || 100, totalPool);
 
     // Subject weights from the pattern (renormalised over subjects actually chosen).
     const weightBySubject = new Map<string, number>();
@@ -483,8 +487,8 @@ export class StudyPlanV2Service {
       where: { id: templateId },
       create: {
         id: templateId,
-        title: `Study Plan Test — ${exam?.name ?? 'SSC'}`,
-        description: 'Customised test from the chapters you marked complete (full exam pattern).',
+        title: test.kind === 'REVISION' ? `Daily Revision — ${exam?.name ?? 'SSC'}` : `Study Plan Test — ${exam?.name ?? 'SSC'}`,
+        description: test.kind === 'REVISION' ? 'Daily revision of the chapters you already completed (50 questions).' : 'Customised test from the chapters you marked complete (full exam pattern).',
         type: 'CUSTOM',
         durationMinutes,
         totalQuestions: picked.length,
@@ -714,10 +718,101 @@ export class StudyPlanV2Service {
         pyqTestsPerWeek: pyqPerWeek,
         pyqTestsRecommendedTotal: Math.ceil((daysLeft / 7) * pyqPerWeek),
       },
+      revision: await this.revisionToday(userId).catch(() => null),
       message: {
         en: `${daysLeft} day(s) left. Today: study ${chaptersPerDay} chapter(s), practise ${practiceTarget} questions, and take ${pyqPerWeek} PYQ mock(s) this week.`,
         hi: `${daysLeft} दिन बाकी हैं। आज: ${chaptersPerDay} चैप्टर पढ़ें, ${practiceTarget} प्रश्न प्रैक्टिस करें, और इस हफ़्ते ${pyqPerWeek} PYQ मॉक दें।`,
       },
+    };
+  }
+
+  // ------------------------------------------------ 5. mandatory daily REVISION
+  // NEW (Oct 3 2026). Every day the student must revise chapters they already completed:
+  // 50 questions, mixed from up to 4 subjects, least-recently-revised chapters first, so the
+  // whole completed syllabus keeps rotating. Reuses the StudyPlanTest flow (kind = REVISION).
+  async revisionToday(userId: string) {
+    const plan = await this.latestPlan(userId);
+    if (!plan) throw new BadRequestException({ message: MSG.noPlan.en, code: 'NO_PLAN', messages: MSG.noPlan });
+
+    const done = await this.prisma.studyPlanChapter.findMany({ where: { userId, status: 'COMPLETE' } });
+    if (!done.length) {
+      return {
+        available: false,
+        mandatory: true,
+        message: {
+          en: 'Revision starts once a chapter is complete (95%+). Complete your first chapter and it will appear here every day.',
+          hi: 'रिवीज़न तब शुरू होगा जब कोई चैप्टर पूरा (95%+) होगा। पहला चैप्टर पूरा करें, फिर यह रोज़ यहाँ दिखेगा।',
+        },
+      };
+    }
+    const chapters = await this.prisma.chapter.findMany({
+      where: { id: { in: done.map((d) => d.chapterId) } },
+      include: { subject: { select: { id: true, name: true, nameHindi: true } } },
+    });
+    const cMap = new Map(chapters.map((c) => [c.id, c]));
+    const counts = await this.chapterQuestionCounts(chapters.map((c) => c.id));
+    const usable = done.filter((d) => cMap.has(d.chapterId) && (counts.get(d.chapterId) ?? 0) > 0);
+
+    const now = new Date();
+    const dayStart = istMidnightUtc(now);
+    const dayEnd = new Date(dayStart.getTime() + DAY_MS);
+    const revisedToday = usable.filter((d) => d.lastRevisedAt && d.lastRevisedAt >= dayStart && d.lastRevisedAt < dayEnd);
+    const weekAgo = new Date(now.getTime() - 7 * DAY_MS);
+    const notRevised7 = usable.filter((d) => !d.lastRevisedAt || d.lastRevisedAt < weekAgo).length;
+
+    // today's paper (one per IST day)
+    let test = await this.prisma.studyPlanTest.findFirst({
+      where: { userId, kind: 'REVISION', scheduledFor: { gte: dayStart, lt: dayEnd } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!test && usable.length) {
+      // least recently revised first, round-robin over subjects so ~4 subjects are mixed
+      const sorted = [...usable].sort((a, b) => (a.lastRevisedAt?.getTime() ?? 0) - (b.lastRevisedAt?.getTime() ?? 0));
+      const bySubject = new Map<string, string[]>();
+      for (const d of sorted) {
+        const sid = cMap.get(d.chapterId)!.subjectId;
+        if (!bySubject.has(sid)) bySubject.set(sid, []);
+        bySubject.get(sid)!.push(d.chapterId);
+      }
+      const lists = [...bySubject.values()];
+      const picked: string[] = [];
+      for (let i = 0; picked.length < 12; i++) {
+        let any = false;
+        for (const l of lists) if (i < l.length && picked.length < 12) { picked.push(l[i]); any = true; }
+        if (!any) break;
+      }
+      test = await this.prisma.studyPlanTest.create({
+        data: { userId, examId: plan.examId, scheduledFor: now, chapterIds: picked, kind: 'REVISION' },
+      });
+    }
+
+    const chapterIds = ((test?.chapterIds as string[]) ?? []).filter((id) => cMap.has(id));
+    const todayChapters = chapterIds.map((id) => {
+      const c = cMap.get(id)!;
+      return { id, name: c.name, nameHindi: c.nameHindi, subject: c.subject.name, subjectHindi: c.subject.nameHindi };
+    });
+    const perDay = 12;
+    return {
+      available: true,
+      mandatory: true,
+      testId: test?.id ?? null,
+      status: test?.status ?? 'SCHEDULED',
+      doneToday: test?.status === 'SUBMITTED',
+      scorePct: test?.scorePct ?? null,
+      questions: 50,
+      chapters: todayChapters,
+      subjects: [...new Set(todayChapters.map((c) => c.subject))],
+      completeChapters: usable.length,
+      revisedTodayCount: revisedToday.length,
+      notRevisedInWeek: notRevised7,
+      syllabusCycleDays: Math.max(1, Math.ceil(usable.length / perDay)),
+      message:
+        test?.status === 'SUBMITTED'
+          ? { en: 'Revision done for today. Well done!', hi: 'आज का रिवीज़न पूरा हुआ। शाबाश!' }
+          : {
+              en: `Today's revision: 50 questions from ${todayChapters.length} chapter(s) you already completed. Revision is compulsory every day.`,
+              hi: `आज का रिवीज़न: आपके पूरे किए ${todayChapters.length} चैप्टर से 50 प्रश्न। रोज़ रिवीज़न करना ज़रूरी है।`,
+            },
     };
   }
 }

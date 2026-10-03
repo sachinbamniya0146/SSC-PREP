@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { WeakTopicService } from '../weak-topics/weak-topic.service';
 import { Injectable, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
@@ -32,6 +33,8 @@ export class TestsService {
     // below) delegates to the same no-repeat-until-exhausted set logic
     // used by the general question bank, instead of a second copy of it.
     private practiceService: QuestionBankPracticeService,
+    // NEW (Oct 3 2026) — persistent weak chapter/topic/sub-topic tracker
+    private weakTopics: WeakTopicService,
   ) {}
 
   // ---- P0 — premium entitlement enforcement (server-side, never trust FE) ----
@@ -368,6 +371,8 @@ async submitAttempt(
   // Study-Plan test marks chapters <90% as WEAK. Fire-and-forget — must never
   // fail or slow the submit response.
   applyAttemptToChapters(this.prisma, userId, updated.id).catch(() => undefined);
+  // NEW (Oct 3 2026): wrong / skipped questions open weak topics (mock, PYQ, daily, study-plan tests all submit here)
+  this.weakTopics.recordAnswers(userId, updated.id, scoredAnswers).catch(() => undefined);
 
   // Requirement 5, part (a) — auto-send the result PDF on Telegram right
   // after submit, for premium+linked users. Subscription-active + linked
@@ -546,6 +551,11 @@ async saveAnswers(
     const accuracyPercent =
       totalCorrect + totalWrong > 0 ? Math.round((totalCorrect / (totalCorrect + totalWrong)) * 1000) / 10 : 0;
 
+    // NEW (Oct 3 2026): sets that are scored by /bank/practice/set/:id/complete (practiceSetId given) update weak topics there.
+    if (!(input as any).practiceSetId) {
+      this.weakTopics.recordAnswers(userId, null, scoredAnswers).catch(() => undefined);
+    }
+
     const attempt = await this.prisma.testAttempt.create({
       data: {
         userId,
@@ -688,6 +698,7 @@ async saveAnswers(
       return {
         questionId: q.id,
         questionText: q.questionText,
+        questionNo: (q as any).questionNo,
         questionTextHindi: q.questionTextHindi,
         questionDiagramType: (q as any).questionDiagramType ?? null,
         questionDiagramLabels: (q as any).questionDiagramLabels ?? null,
@@ -906,6 +917,7 @@ async saveAnswers(
         questions: picked.slice(0, sec.q).map((r) => ({
           id: r.id,
           questionText: r.questionText,
+          questionNo: (r as any).questionNo,
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1042,6 +1054,7 @@ async saveAnswers(
       questions: sec.rows.map((r) => ({
         id: r.id,
         questionText: r.questionText,
+        questionNo: (r as any).questionNo,
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1195,6 +1208,7 @@ async saveAnswers(
         questions: picked.slice(0, sec.q).map((r) => ({
           id: r.id,
           questionText: r.questionText,
+          questionNo: (r as any).questionNo,
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1304,6 +1318,7 @@ async saveAnswers(
     const questions = selected.map((r) => ({
       id: r.id,
       questionText: r.questionText,
+      questionNo: (r as any).questionNo,
       questionTextHindi: r.questionTextHindi,
       questionDiagramType: r.questionDiagramType ?? null,
       questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1473,6 +1488,7 @@ async saveAnswers(
       questions: validRows.map((r) => ({
         id: r.id,
         questionText: r.questionText,
+        questionNo: (r as any).questionNo,
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1657,6 +1673,7 @@ async saveAnswers(
         practiceQuestions.push({
           id: r.id,
           questionText: r.questionText,
+          questionNo: (r as any).questionNo,
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,

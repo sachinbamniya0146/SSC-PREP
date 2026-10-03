@@ -126,6 +126,7 @@ function normalizeExamDate(raw: string): string | undefined {
 }
 
 import { hasSolution, applyInlineMedia, hasBase64Media, parseJsonQuestions, buildJsonTemplate, mediaKey, shortDigest, questionMediaSignature, hasAnyMedia } from './question-media.util';
+import { normalizeQuestionMath } from '../common/math-text';
 
 export interface BulkUploadQuestion {
   examId: string;
@@ -715,7 +716,7 @@ export class BankUploadService {
   // the row's REAL paperCode value (null), so this never accidentally
   // merges with a differently-coded paper that happens to share the same
   // year+shift.
-  private async upsertPyqMockForPaper(examId: string, year: number, shift: string, paperCode: string | null, examDate: string | null = null): Promise<void> {
+  async upsertPyqMockForPaper(examId: string, year: number, shift: string, paperCode: string | null, examDate: string | null = null): Promise<void> {
     const effectiveCode = paperCode ?? `${year}-${shift}`;
     const [exam, candidateRows] = await Promise.all([
       this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } }),
@@ -2971,7 +2972,7 @@ export class BankUploadService {
    * batched duplicate index below and createQuestion() can never drift
    * out of sync with each other.
    */
-  private computeSearchHash(question: BulkUploadQuestion): string {
+  computeSearchHash(question: BulkUploadQuestion): string {
     const normalizedText = question.questionText.trim().toLowerCase();
     const optionsSignature = question.options
       .slice()
@@ -3175,6 +3176,7 @@ export class BankUploadService {
     // each call site — so this method only ever sees rows with either no
     // image or an already-resolved questionImageUrl/option.imageUrl.
     applyInlineMedia(question); // SVG code -> stored image, solution image -> explanation markdown
+    normalizeQuestionMath(question); // 2^2 -> 2², x^-1 -> x⁻¹ (Excel / typed powers)
     if (!question.questionText || !question.questionText.trim()) {
       if (!question.questionDiagramType && !question.questionImageUrl && !question.questionSvg) {
         throw new Error('questionText is empty — question text cannot be blank.');
@@ -3393,6 +3395,7 @@ export class BankUploadService {
       question.explanationImageUrl = await this.uploadBase64Image(question.explanationImageBase64, question.explanationImageMimeType);
     }
     applyInlineMedia(question); // SVG code -> stored image, solution image -> explanation markdown
+    normalizeQuestionMath(question); // 2^2 -> 2², x^-1 -> x⁻¹ (Excel / typed powers)
 
     // BUGFIX (this session — "student ko question dikhta hai par answer nahi
     // de pa raha" root cause #1): NOTHING anywhere in the 5 upload paths

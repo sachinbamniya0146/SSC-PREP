@@ -107,6 +107,12 @@ export class StudyPlanController {
     return this.v2.weakBoard(user.userId, examId || undefined);
   }
 
+  // NEW (Oct 3 2026): mandatory daily revision of completed chapters (50 questions)
+  @Get('revision/today')
+  revisionToday(@CurrentUser() user: AuthenticatedUser) {
+    return this.v2.revisionToday(user.userId);
+  }
+
   @Get('today')
   todayPlan(@CurrentUser() user: AuthenticatedUser) {
     return this.v2.todayPlan(user.userId);

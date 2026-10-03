@@ -25,6 +25,7 @@ type ReportRow = {
   adminNotes?: string | null;
   question: {
     id: string;
+    questionNo?: number;
     questionText: string;
     correctAnswer: string;
     year: number | null;
@@ -231,7 +232,7 @@ export default function ErrorReportsPage() {
                         </span>
                       )}
                     </div>
-                    <p className="mt-2 line-clamp-2 text-sm font-medium">{r.question.questionText}</p>
+                    <p className="mt-2 line-clamp-2 text-sm font-medium">{r.question.questionNo ? <span className="mr-1 font-extrabold">Q#{r.question.questionNo}</span> : null}{r.question.questionText}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {r.question.exam?.name || "—"} {r.question.year ? `· ${r.question.year}` : ""} · Correct Ans: {r.question.correctAnswer}
                     </p>
@@ -254,6 +255,7 @@ export default function ErrorReportsPage() {
                     )}
                   </div>
                   <div className="flex shrink-0 flex-col gap-2">
+                    <a href={`/admin/questions/edit?q=${r.question.questionNo ?? r.question.id}`} className="rounded-lg bg-primary px-3 py-1.5 text-center text-xs font-bold text-primary-foreground">✏️ Question check / edit</a>
                     {(r.status === "OPEN" || r.status === "REVIEWING") && (
                       <>
                         <button

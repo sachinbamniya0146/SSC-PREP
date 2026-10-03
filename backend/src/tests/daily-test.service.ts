@@ -293,6 +293,7 @@ export class DailyTestService {
       .map((r: any) => ({
         id: r.id,
         questionText: r.questionText,
+        questionNo: (r as any).questionNo,
         questionTextHindi: r.questionTextHindi,
         // BUGFIX (Sep 29 2026 — image questions): this loader used to drop every
         // image/diagram field, so an image-based question reached the student

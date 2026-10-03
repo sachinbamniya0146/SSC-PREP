@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { WeakTopicService } from '../weak-topics/weak-topic.service';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { istDateKey } from '../gamification/gamification.service';
@@ -71,7 +72,10 @@ export class QuestionBankPracticeService {
   // is unlimited. Weak-topic remediation practice never consumes this quota.
   private readonly FREE_DAILY_PRACTICE_LIMIT = Math.max(1, parseInt(process.env.FREE_DAILY_PRACTICE_LIMIT || '5', 10) || 5);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private weakTopics: WeakTopicService,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // scope resolution (NEW — Sep 21 2026)
@@ -1145,7 +1149,13 @@ export class QuestionBankPracticeService {
     if (set.chapterId && !set.topicId && !set.subTopicId && questionIds.length >= 10) {
       markChapterFromPractice(this.prisma, userId, set.chapterId, score).catch(() => undefined);
     }
-    return { alreadyCompleted: false, score, correct, wrong, skipped, total: questionIds.length };
+    // NEW (Oct 3 2026): a weak topic is only strengthened when this set was passed (>= 60% on that topic).
+    const weakResult = await this.weakTopics.completePractice(
+      userId,
+      { chapterId: set.chapterId ?? null, topicId: set.topicId ?? null, subTopicId: set.subTopicId ?? null },
+      questionIds.map((qid) => ({ questionId: qid, correct: stored[qid] !== 'SKIPPED' && correctMap.get(qid) === stored[qid] })),
+    );
+    return { alreadyCompleted: false, score, correct, wrong, skipped, total: questionIds.length, weakTopics: weakResult };
   }
 
   // Check if user has premium access.
@@ -1181,6 +1191,12 @@ export class QuestionBankPracticeService {
   // finished practice set as a submitted TestAttempt.
   private async isScopeWeakForUser(userId: string, topicId?: string, subTopicId?: string): Promise<boolean> {
     if (!topicId && !subTopicId) return false;
+    // Oct 3 2026: the persistent tracker decides — a topic stays weak until its practice is passed.
+    return this.weakTopics.isScopeWeak(userId, topicId, subTopicId);
+  }
+
+  /** @deprecated old rule (any wrong answer ever); kept only for reference */
+  private async isScopeWeakLegacy(userId: string, topicId?: string, subTopicId?: string): Promise<boolean> {
     const wrongOrSkipped = await this.prisma.attemptAnswer.findFirst({
       where: {
         testAttempt: { userId, status: 'SUBMITTED' },
@@ -1195,6 +1211,10 @@ export class QuestionBankPracticeService {
   // One grouped query: every (topic, sub-topic) the user has got wrong/skipped.
   // Never throws — a failure here must not take the whole practice screen down.
   private async weakScopeRows(userId: string): Promise<{ topicId: string | null; subTopicId: string | null }[]> {
+    return this.weakTopics.weakScopeRows(userId);
+  }
+
+  private async weakScopeRowsLegacy(userId: string): Promise<{ topicId: string | null; subTopicId: string | null }[]> {
     try {
       return await this.prisma.$queryRaw<{ topicId: string | null; subTopicId: string | null }[]>`
         SELECT DISTINCT q."topicId" AS "topicId", q."subTopicId" AS "subTopicId"
@@ -1220,15 +1240,7 @@ export class QuestionBankPracticeService {
     });
     if (topics.length === 0) return [];
 
-    const wrongOrSkipped = await this.prisma.attemptAnswer.findMany({
-      where: {
-        testAttempt: { userId, status: 'SUBMITTED' },
-        question: { chapterId, topicId: { not: null } },
-        OR: [{ isCorrect: false }, { selectedOption: null }],
-      },
-      select: { question: { select: { topicId: true } } },
-    });
-    const weakTopicIds = new Set(wrongOrSkipped.map((w) => w.question?.topicId).filter((id): id is string => Boolean(id)));
+    const weakTopicIds = await this.weakTopics.weakTopicIdsInChapter(userId, chapterId);
 
     return topics.map((t) => ({
       id: t.id,
@@ -1342,6 +1354,7 @@ export class QuestionBankPracticeService {
     return {
       id: q.id,
       questionText: q.questionText,
+      questionNo: (q as any).questionNo,
       questionTextHindi: q.questionTextHindi,
       options: (q.optionsJson as any[]).map((o: any) => ({
         key: o.key,

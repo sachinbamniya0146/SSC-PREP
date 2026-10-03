@@ -8,140 +8,195 @@ export interface AiGenerateResult {
   adminKeyId?: string;
 }
 
-// Free-tier-only OpenRouter models, tried in order. An env override can be
-// prepended (must itself end in ":free" to stay within the "free models
-// only" requirement) without needing a redeploy for every new free model
-// OpenRouter ships.
-const FREE_MODELS: string[] = [
-  process.env.OPENROUTER_MODEL,
-  'nvidia/nemotron-3-ultra-550b-a55b:free',
-  'nvidia/nemotron-3-super-120b-a12b:free',
-  'nvidia/nemotron-3.5-lightning:free',
+export interface KeyTestResult {
+  ok: boolean;
+  status: 'working' | 'invalid' | 'rate_limited' | 'error';
+  message: string;
+  model?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Free models only (rewritten Oct 3 2026)
+//
+// OpenRouter keeps renaming / retiring its ":free" models, so a hard-coded list
+// goes stale and every call fails. Now the list is read LIVE from OpenRouter's
+// public catalogue (only models whose prompt AND completion price are 0 and whose
+// id ends in ":free"), cached for an hour, with the old static list as a fallback.
+// An OPENROUTER_MODEL env value (must end in ":free") is still tried first.
+// ---------------------------------------------------------------------------
+const FALLBACK_FREE_MODELS: string[] = [
   'meta-llama/llama-3.3-70b-instruct:free',
   'google/gemini-2.0-flash-exp:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
   'meta-llama/llama-3.1-8b-instruct:free',
-].filter((m): m is string => !!m && m.trim() !== '' && m.trim().endsWith(':free'));
+];
+// families that follow instructions + JSON + Hindi best, tried first when present
+const PREFERRED = ['llama-3.3-70b', 'gemini', 'qwen', 'deepseek', 'gpt-oss', 'nemotron', 'mistral', 'llama'];
 
-/** True when the error looks like "this key itself is dead", not a transient network/rate blip. */
-function looksExhausted(status: number, bodyText: string): boolean {
-  if (status === 401 || status === 402 || status === 403) return true;
+const MODELS_TTL_MS = 60 * 60 * 1000;
+const KEY_COOLDOWN_MS = 90 * 1000; // a rate-limited key rests for 90 s, then is used again
+const REQUEST_TIMEOUT_MS = 45_000;
+
+/** 401/403 = the key itself is wrong/revoked. 429 = only a rate limit — NEVER a dead key. */
+function looksDead(status: number, bodyText: string): boolean {
+  if (status === 401 || status === 403) return true;
+  if (status === 402) return true; // no credit at all
+  if (status === 429) return false;
   const t = bodyText.toLowerCase();
-  return t.includes('insufficient') || t.includes('quota') || t.includes('invalid api key') || t.includes('exceeded');
+  return t.includes('invalid api key') || t.includes('no auth credentials') || t.includes('user not found');
 }
 
 @Injectable()
 export class AiProviderService {
   private readonly logger = new Logger(AiProviderService.name);
+  private modelsCache: { at: number; list: string[] } | null = null;
+  private readonly cooldown = new Map<string, number>();
 
   constructor(private readonly adminApiKeys: AdminApiKeyService) {}
 
-  getFreeModels(): string[] {
-    return [...FREE_MODELS];
+  /** the free models that will be tried, best first */
+  async getFreeModels(): Promise<string[]> {
+    const env = (process.env.OPENROUTER_MODEL || '').trim();
+    const head = env && env.endsWith(':free') ? [env] : [];
+    if (this.modelsCache && Date.now() - this.modelsCache.at < MODELS_TTL_MS) return [...head, ...this.modelsCache.list.filter((m) => m !== env)];
+    let list: string[] = [];
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(15_000) });
+      if (res.ok) {
+        const data: any = await res.json();
+        list = (data?.data ?? [])
+          .filter((m: any) => typeof m?.id === 'string' && m.id.endsWith(':free') && Number(m?.pricing?.prompt ?? 1) === 0 && Number(m?.pricing?.completion ?? 1) === 0)
+          // text-in/text-out chat models only
+          .filter((m: any) => !Array.isArray(m?.architecture?.output_modalities) || m.architecture.output_modalities.includes('text'))
+          .sort((a: any, b: any) => {
+            const ra = PREFERRED.findIndex((p) => a.id.includes(p));
+            const rb = PREFERRED.findIndex((p) => b.id.includes(p));
+            return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb) || (Number(b.context_length) || 0) - (Number(a.context_length) || 0);
+          })
+          .map((m: any) => m.id as string)
+          .slice(0, 8);
+      }
+    } catch {
+      /* offline / blocked -> fallback list below */
+    }
+    if (list.length === 0) list = [...FALLBACK_FREE_MODELS];
+    this.modelsCache = { at: Date.now(), list };
+    return [...head, ...list.filter((m) => m !== env)];
   }
 
   /**
-   * Generate a completion, preferring the caller's own OpenRouter key
-   * (still restricted to free models — never charges the user's paid
-   * quota on their behalf without asking) and falling back to this app's
-   * rotating admin key pool. Every admin-key attempt is reported back to
-   * AdminApiKeyService so a dead/quota-exhausted key gets auto-deactivated
-   * and the admin is alerted before the *whole* pool goes down.
+   * Generate a completion, preferring the caller's own OpenRouter key and falling back to
+   * the admin key pool (free models only). A rate-limited key just rests for a minute and the
+   * next key is used; ONLY a key that OpenRouter rejects as invalid is switched off.
    */
   async generate(
     prompt: string,
-    opts: { userApiKey?: string | null; provider?: string; jsonResponse?: boolean } = {},
+    opts: { userApiKey?: string | null; provider?: string; jsonResponse?: boolean; maxTokens?: number } = {},
   ): Promise<AiGenerateResult> {
     const provider = opts.provider ?? 'openrouter';
+    const models = await this.getFreeModels();
 
     if (opts.userApiKey) {
-      const result = await this.tryModels(opts.userApiKey, prompt, opts.jsonResponse);
+      const result = await this.tryModels(opts.userApiKey, prompt, models, opts);
       if (result.content) return { content: result.content, model: result.model!, source: 'USER_KEY' };
       this.logger.warn('User-supplied OpenRouter key failed on all free models; falling back to admin pool.');
     }
 
     const pool = await this.adminApiKeys.getRotationPool(provider);
     if (pool.length === 0) {
-      throw new ServiceUnavailableException(
-        'No AI API key is configured right now. Please try again later or contact admin.',
-      );
+      throw new ServiceUnavailableException('Koi AI API key add nahi hai. Admin → API Keys me OpenRouter key daalein.');
     }
 
-    for (const key of pool) {
-      const result = await this.tryModels(key.apiKey, prompt, opts.jsonResponse);
+    const now = Date.now();
+    // keys that are resting after a 429 go to the back of the line (still tried if nothing else works)
+    const ordered = [...pool].sort((a, b) => Number((this.cooldown.get(a.id) ?? 0) > now) - Number((this.cooldown.get(b.id) ?? 0) > now));
+
+    for (const key of ordered) {
+      const result = await this.tryModels(key.apiKey, prompt, models, opts);
       if (result.content) {
+        this.cooldown.delete(key.id);
         await this.adminApiKeys.reportUsage(key.id, true);
         return { content: result.content, model: result.model!, source: 'ADMIN_KEY', adminKeyId: key.id };
       }
-      // Only a definitely-dead key (invalid/quota-exceeded — 401/402/403 or
-      // a quota-worded error body) gets permanently deactivated. A key that
-      // just got rate-limited (429) on every free model is left active —
-      // free-tier rate limits reset, so rotation will simply try it again
-      // (least-recently-used first) rather than throwing away a good key.
+      if (result.reason === 'rate_limited') this.cooldown.set(key.id, Date.now() + KEY_COOLDOWN_MS);
       await this.adminApiKeys.reportUsage(key.id, false, {
         exhausted: result.reason === 'dead',
-        errorMessage:
-          result.reason === 'dead'
-            ? 'key invalid or out of quota (all free models rejected it)'
-            : 'rate-limited on all free models — will retry later',
+        errorMessage: result.detail || (result.reason === 'dead' ? 'OpenRouter ne key reject ki (invalid / no credit)' : 'free models abhi busy (rate limit) — thodi der baad dobara chalegi'),
       });
     }
 
-    throw new ServiceUnavailableException(
-      'All AI API keys are currently exhausted or rate-limited. The admin has been alerted — please try again shortly.',
-    );
+    throw new ServiceUnavailableException('Sabhi AI keys abhi busy ya band hain. Thodi der baad try karein ya nayi key add karein.');
+  }
+
+  /** "Test key" button: one tiny real request. Never throws. */
+  async testKey(apiKey: string): Promise<KeyTestResult> {
+    const key = String(apiKey || '').trim();
+    if (!key) return { ok: false, status: 'error', message: 'Key khaali hai.' };
+    const models = await this.getFreeModels();
+    const r = await this.tryModels(key, 'Reply with exactly one word: OK', models, { maxTokens: 16 });
+    if (r.content) return { ok: true, status: 'working', message: 'Key sahi chal rahi hai ✅', model: r.model };
+    if (r.reason === 'dead') return { ok: false, status: 'invalid', message: r.detail || 'OpenRouter ne key accept nahi ki (galat ya band key).' };
+    if (r.reason === 'rate_limited') return { ok: false, status: 'rate_limited', message: 'Key sahi hai par free models abhi busy hain — thodi der baad phir test karein.' };
+    return { ok: false, status: 'error', message: r.detail || 'Test fail hua — internet / OpenRouter check karein.' };
   }
 
   /**
-   * Tries every free model in order with ONE key.
-   * - Success: { content, model }.
-   * - Failure: { reason: 'dead' } if the key itself looks invalid/out of
-   *   quota (stop trying further models — it won't get better), or
-   *   { reason: 'rate_limited' } if every model just hit a transient/429
-   *   error (the key may still be fine later).
+   * Tries the free models in order with ONE key.
+   *  dead         -> the key itself is rejected (401/403/402): stop, rotate to the next key
+   *  rate_limited -> models answered 429 / were busy: key is fine, rest it for a bit
    */
   private async tryModels(
     apiKey: string,
     prompt: string,
-    jsonResponse?: boolean,
-  ): Promise<{ content?: string; model?: string; reason?: 'dead' | 'rate_limited' }> {
-    for (const model of FREE_MODELS) {
-      try {
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-            'HTTP-Referer': 'https://sscprephub.in',
-            'X-Title': 'SSC Prep Hub',
-          },
-          body: JSON.stringify({
-            model,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.3,
-            max_tokens: 2000,
-            ...(jsonResponse ? { response_format: { type: 'json_object' } } : {}),
-          }),
-        });
+    models: string[],
+    opts: { jsonResponse?: boolean; maxTokens?: number },
+  ): Promise<{ content?: string; model?: string; reason?: 'dead' | 'rate_limited' | 'error'; detail?: string }> {
+    let sawRateLimit = false;
+    let lastDetail = '';
+    for (const model of models) {
+      for (const useJson of opts.jsonResponse ? [true, false] : [false]) {
+        try {
+          const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+              'HTTP-Referer': 'https://sscprephub.in',
+              'X-Title': 'SSC Prep Hub',
+            },
+            body: JSON.stringify({
+              model,
+              messages: [{ role: 'user', content: prompt }],
+              temperature: 0.2,
+              max_tokens: opts.maxTokens ?? 3000,
+              ...(useJson ? { response_format: { type: 'json_object' } } : {}),
+            }),
+          });
 
-        if (!response.ok) {
-          const bodyText = await response.text().catch(() => '');
-          if (looksExhausted(response.status, bodyText)) {
-            // This key is dead for every model, not just this one — stop
-            // trying further models with it and let the caller rotate on.
-            return { reason: 'dead' };
+          if (!response.ok) {
+            const bodyText = await response.text().catch(() => '');
+            lastDetail = `${response.status}: ${bodyText.slice(0, 160)}`;
+            if (looksDead(response.status, bodyText)) return { reason: 'dead', detail: `OpenRouter ne key reject ki (${response.status})` };
+            if (response.status === 429) {
+              sawRateLimit = true;
+              break; // this model is busy -> next model
+            }
+            if (response.status === 400 && useJson) continue; // model has no JSON mode -> retry same model without it
+            break; // 404 (model retired) / 5xx -> next model
           }
-          // Rate-limited (429) or transient — try the next free model with the same key.
-          continue;
-        }
 
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
-        if (content) return { content, model };
-      } catch {
-        // network hiccup — try next model
-        continue;
+          const data: any = await response.json();
+          const msg = data?.choices?.[0]?.message;
+          const content = typeof msg?.content === 'string' && msg.content.trim() ? msg.content : '';
+          if (content) return { content, model };
+          break;
+        } catch (e) {
+          lastDetail = (e as Error)?.message || 'network error';
+          break; // timeout / network -> next model
+        }
       }
     }
-    return { reason: 'rate_limited' };
+    return { reason: sawRateLimit ? 'rate_limited' : 'error', detail: sawRateLimit ? undefined : lastDetail };
   }
 }

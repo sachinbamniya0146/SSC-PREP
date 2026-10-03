@@ -3,6 +3,7 @@
 import * as React from "react";
 import { usePathname } from "next/navigation";
 import { syncSessionUser } from "@/lib/permissions";
+import { ensureFreshToken } from "@/lib/api";
 
 /**
  * Keeps localStorage("ssc_user") (role + staff permissions) in step with the
@@ -26,11 +27,22 @@ export default function SessionSync() {
   }, [pathname, run]);
 
   React.useEffect(() => {
-    const onFocus = () => run(true);
+    const onFocus = () => {
+      void ensureFreshToken(); // tab was asleep -> renew before the first click
+      run(true);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") onFocus();
+    };
     window.addEventListener("focus", onFocus);
-    const t = setInterval(() => run(true), 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", onVisible);
+    const t = setInterval(() => {
+      void ensureFreshToken();
+      run(true);
+    }, 4 * 60 * 1000);
     return () => {
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
       clearInterval(t);
     };
   }, [run]);

@@ -16,7 +16,7 @@ import { ReferralModule } from '../referral/referral.module';
         ({
           secret: config.get<string>('JWT_ACCESS_SECRET') as string,
           signOptions: {
-            expiresIn: config.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m',
+            expiresIn: config.get<string>('JWT_ACCESS_EXPIRES_IN') || '1h',
           },
         }) as JwtModuleOptions,
     }),

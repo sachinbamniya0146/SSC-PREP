@@ -1006,6 +1006,8 @@ export default function TestPage() {
           totalSkipped: skipped,
           accuracyPercent: acc,
           answers: answersPayload,
+          // practice sets are scored by /bank/practice/set/:id/complete (weak topics are updated there)
+          practiceSetId: practiceSetIdRef.current || undefined,
         }),
       });
     } catch {
@@ -1496,24 +1498,24 @@ export default function TestPage() {
     <div ref={screenRef} className="min-h-screen bg-muted/40 text-foreground">
       {/* TOP BAR */}
       <div className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
-          <div className="flex items-center gap-3">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3" style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}>
+          <div className="flex items-center gap-2 sm:gap-3">
             {/* Mobile palette toggle (drawer) */}
             <button onClick={() => setPaletteOpen(true)} className="rounded-lg border border-border px-2.5 py-1 text-xs lg:hidden" aria-label="Open question palette">
               ☰ Palette
             </button>
             {/* Zoom */}
-            <div className="flex items-center gap-1 rounded-lg border border-border p-1 text-xs">
+            <div className="hidden items-center gap-1 rounded-lg border border-border p-1 text-xs sm:flex">
               <button onClick={() => setZoom((z) => Math.max(90, z - 5))} aria-label="Zoom out" className="rounded px-1.5 hover:bg-muted">−</button>
               <span className="w-8 text-center font-semibold">{zoom}%</span>
               <button onClick={() => setZoom((z) => Math.min(130, z + 5))} aria-label="Zoom in" className="rounded px-1.5 hover:bg-muted">+</button>
             </div>
-            <button onClick={toggleFullscreen} className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted">
+            <button onClick={toggleFullscreen} className="hidden rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted sm:inline-flex">
               {fullscreen ? "Exit Fullscreen" : "⛶ Fullscreen"}
             </button>
           </div>
 
-          <div className="text-center">
+          <div className="hidden text-center md:block">
             <p className="text-sm font-bold leading-tight">{preMeta?.title || "Practice Mock"}</p>
             <div className="mt-0.5 flex items-center justify-center gap-2">
               <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-bold text-success">
@@ -1524,25 +1526,26 @@ export default function TestPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={togglePause} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted">
+            <button onClick={togglePause} className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted sm:px-3">
               {paused ? "▶ Resume" : "⏸ Pause"}
             </button>
-            <div className={`rounded-lg border px-4 py-1.5 font-mono text-base font-bold ${timelineColor} ${paused ? "opacity-50" : ""}`}>
+            <div className={`rounded-lg border px-3 py-1 font-mono text-sm font-bold sm:px-4 sm:py-1.5 sm:text-base ${timelineColor} ${paused ? "opacity-50" : ""}`}>
               {formatSec(timeLeft)}
             </div>
           </div>
         </div>
       </div>
 
-      <div className="mx-auto flex max-w-7xl gap-6 px-4 py-6" style={{ zoom: zoom / 100 }}>
+      <div className="mx-auto flex max-w-7xl gap-6 px-2 py-3 pb-28 sm:px-4 sm:py-6 lg:pb-6" style={{ zoom: zoom / 100 }}>
         {/* MAIN QUESTION AREA */}
         <main className="min-w-0 flex-1">
           {!q ? (
             <div className="card p-10 text-center text-sm text-muted-foreground">No questions loaded.</div>
           ) : (
-            <motion.div key={q.id} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.2 }} className="card p-6">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
+            <motion.div key={q.id} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.2 }} className="card p-3 sm:p-6">
+              <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+                <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                  {(q as any).questionNo ? <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-extrabold" title="Question number — report karte waqt yahi number batayein">Q#{(q as any).questionNo}</span> : null}
                   <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-bold text-primary">{q.chapter || "General"}</span>
                   <span className="text-xs text-muted-foreground">Question {idx + 1} of {questions.length}</span>
                   {q.examName && (
@@ -1554,7 +1557,7 @@ export default function TestPage() {
                 </div>
                 <span className="badge badge-info">EN + हिंदी</span>
               </div>
-              <h2 className="mt-4 text-base font-semibold leading-relaxed">
+              <h2 className="mt-4 break-words text-base font-semibold leading-relaxed">
                 {q.questionText}
               </h2>
               {q.questionTextHindi && (
@@ -1705,7 +1708,7 @@ export default function TestPage() {
                   )}
                 </div>
               )}
-              <div className="mt-3 flex justify-between text-xs text-muted-foreground">
+              <div className="mt-3 hidden justify-between text-xs text-muted-foreground lg:flex">
                 <button onClick={() => idx > 0 && markVisited(idx - 1, questions[idx - 1].id)} className="hover:text-foreground">← Previous</button>
                 <button onClick={() => idx < questions.length - 1 && markVisited(idx + 1, questions[idx + 1].id)} className="hover:text-foreground">Next →</button>
               </div>
@@ -1762,6 +1765,17 @@ export default function TestPage() {
           </div>
         </aside>
       </div>
+
+      {/* MOBILE BOTTOM NAV (phones): big thumb-friendly Prev / Palette / Next */}
+      {questions.length > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 backdrop-blur lg:hidden" style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
+          <div className="mx-auto flex max-w-xl items-center gap-2 px-3 pt-2">
+            <button onClick={() => idx > 0 && markVisited(idx - 1, questions[idx - 1].id)} disabled={idx === 0} className="flex-1 rounded-xl border border-border px-3 py-3 text-sm font-semibold disabled:opacity-40">← Prev</button>
+            <button onClick={() => setPaletteOpen(true)} className="rounded-xl border border-border px-3 py-3 text-sm font-bold" aria-label="Open question palette">☰ {idx + 1}/{questions.length}</button>
+            <button onClick={() => (idx < questions.length - 1 ? markVisited(idx + 1, questions[idx + 1].id) : setReviewOpen(true))} className="flex-1 rounded-xl bg-primary px-3 py-3 text-sm font-bold text-primary-foreground">{idx < questions.length - 1 ? "Next →" : "Submit"}</button>
+          </div>
+        </div>
+      )}
 
       {/* MOBILE QUESTION PALETTE DRAWER */}
       {paletteOpen && (

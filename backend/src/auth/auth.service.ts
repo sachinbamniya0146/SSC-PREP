@@ -53,7 +53,7 @@ export interface AuthenticatedSession {
 
 export type Authenticated = AuthenticatedSession;
 
-const ACCESS_TTL_SECONDS_DEFAULT = 15 * 60;
+const ACCESS_TTL_SECONDS_DEFAULT = 60 * 60;
 
 /**
  * AuthService — signup/login/refresh/logout, password reset OTP, Google OAuth,
@@ -412,7 +412,12 @@ export class AuthService implements OnModuleInit {
     // Verify the stored refresh token row is present & not revoked.
     const hash = createHash('sha256').update(refreshToken).digest('hex');
     const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
-    if (!stored || stored.revokedAt) {
+    // Oct 3 2026 — "baar baar logout" fix: a token that was rotated only a few
+    // seconds ago is still accepted (parallel requests / two tabs sending the
+    // same refresh token at the same moment). Anything older stays rejected.
+    const REUSE_GRACE_MS = 60_000;
+    const withinGrace = !!stored?.revokedAt && Date.now() - new Date(stored.revokedAt).getTime() < REUSE_GRACE_MS;
+    if (!stored || (stored.revokedAt && !withinGrace)) {
       throw new UnauthorizedException('Refresh token has been revoked');
     }
     if (new Date(stored.expiresAt) < new Date()) {
@@ -432,10 +437,13 @@ export class AuthService implements OnModuleInit {
     }
 
     // Rotation: revoke current, issue new pair bound to the same session.
-    await this.prisma.refreshToken.update({
-      where: { id: stored.id },
-      data: { revokedAt: new Date() },
-    });
+    // (a token that is already inside its grace window keeps its original revokedAt)
+    if (!stored.revokedAt) {
+      await this.prisma.refreshToken.update({
+        where: { id: stored.id },
+        data: { revokedAt: new Date() },
+      });
+    }
 
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) throw new UnauthorizedException('User no longer exists');
@@ -690,7 +698,7 @@ export class AuthService implements OnModuleInit {
   ): TokenPair {
     const now = Math.floor(Date.now() / 1000);
     const accessSec = this.parseAccessSeconds(
-      this.config.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m',
+      this.config.get<string>('JWT_ACCESS_EXPIRES_IN') || '1h',
       ACCESS_TTL_SECONDS_DEFAULT,
     );
     const accessSecret = this.config.get<string>('JWT_ACCESS_SECRET') || this.config.get<string>('JWT_SECRET') || '';
@@ -711,7 +719,7 @@ export class AuthService implements OnModuleInit {
       { ...base, type: 'refresh', jti: randomBytes(8).toString('hex') } as object,
       refreshSecret,
       {
-        expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d',
+        expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '30d',
       } as jwt.SignOptions,
     );
     return { accessToken, refreshToken };
@@ -731,7 +739,7 @@ export class AuthService implements OnModuleInit {
   }
 
   private refreshExpiryDate(): Date {
-    const v = this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d';
+    const v = this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '30d';
     const days = v.endsWith('d')
       ? parseInt(v, 10)
       : v.endsWith('w')

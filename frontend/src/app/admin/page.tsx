@@ -986,6 +986,18 @@ export default function AdminPage() {
           >
             ➕ Ek-ek question daalein (PYQ ya Practice) — Hindi box + question/option image + duplicate check →
           </a>
+          <form
+            className="mb-4 flex gap-2 rounded-xl border border-border bg-card p-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const v = String(new FormData(e.currentTarget).get("qno") || "").trim();
+              if (v) window.location.href = `/admin/questions/edit?q=${encodeURIComponent(v)}`;
+            }}
+          >
+            <input name="qno" inputMode="search" placeholder="Question number (jaise 1042) — seedha kholkar edit karein" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" />
+            <button type="submit" className="shrink-0 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">✏️ Edit</button>
+            <a href="/admin/questions/manage" className="hidden shrink-0 rounded-lg border border-border px-3 py-2 text-sm font-semibold sm:block">Sab questions</a>
+          </form>
           <AdminImageTools />
           <div className="mb-3 flex flex-wrap gap-2">
             {(["excel", "csv", "json", "text"] as const).map((f) => (
@@ -1265,6 +1277,13 @@ export default function AdminPage() {
                           >
                             {expandedBatchId === b.id ? "Hide" : "Details ▾"}
                           </button>
+                          <a
+                            href={`/admin/questions/manage?batch=${b.id}`}
+                            className="ml-2 rounded-lg border border-primary/40 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/10"
+                            title="Is upload ke saare questions dekhein, search karein aur ek-ek ko edit karein"
+                          >
+                            ✏️ Questions dekhein / edit
+                          </a>
                           {(b.pendingCount ?? 0) > 0 && (
                             <button
                               onClick={() => publishBatchHandler(b.id)}

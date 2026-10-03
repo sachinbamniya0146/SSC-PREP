@@ -104,6 +104,7 @@ export class ReportErrorService {
         question: {
           select: {
             id: true,
+            questionNo: true,
             questionText: true,
             correctAnswer: true,
             year: true,
@@ -143,6 +144,68 @@ export class ReportErrorService {
       this.reindexAfterVisibilityChange(report.questionId);
     }
     return { report };
+  }
+
+  /**
+   * NEW (Oct 3 2026) — admin fixed a reported question.
+   * Every report on it that is still OPEN / REVIEWING / CONFIRMED is closed as CONFIRMED
+   * (the student was right), the question is un-suspended, and the reporting student gets a
+   * thank-you message in their report thread (+ live notification) saying the problem is fixed.
+   * Safe to call again: a report is only thanked once (fixedNotifiedAt).
+   */
+  async markQuestionFixed(questionId: string, adminId: string, adminRole: string) {
+    const reports = await this.prisma.questionErrorReport.findMany({
+      where: { questionId, fixedNotifiedAt: null, status: { in: ['OPEN', 'REVIEWING', 'CONFIRMED'] } },
+      select: { id: true, userId: true },
+    });
+    const q = await this.prisma.question.findUnique({ where: { id: questionId }, select: { questionNo: true, autoSuspended: true } });
+    if (!q) throw new NotFoundException('Question not found');
+    const senderRole = adminRole === 'MODERATOR' ? 'MODERATOR' : 'ADMIN';
+    const text =
+      `🙏 Dhanyavaad! Aapne Question #${q.questionNo} me jo problem batayi thi, wo theek kar di gayi hai. ` +
+      `Ab aap us question ko dobara dekh sakte hain. Aapki wajah se platform behtar bana.\n` +
+      `धन्यवाद! आपने प्रश्न #${q.questionNo} में जो समस्या बताई थी, वह ठीक कर दी गई है। ` +
+      `अब आप उस प्रश्न को दोबारा देख सकते हैं। आपकी वजह से प्लेटफ़ॉर्म बेहतर बना।`;
+    const encrypted = encryptMessageContent(text);
+    let thanked = 0;
+    for (const r of reports) {
+      try {
+        const now = new Date();
+        const claim = await this.prisma.questionErrorReport.updateMany({
+          where: { id: r.id, fixedNotifiedAt: null },
+          data: { status: 'CONFIRMED', resolvedAt: now, resolvedBy: adminId, fixedNotifiedAt: now, firstAdminViewAt: now },
+        });
+        if (claim.count === 0) continue;
+        const message = await this.prisma.reportMessage.create({
+          data: { reportId: r.id, senderId: adminId, senderRole: senderRole as any, ...encrypted },
+          include: { sender: { select: { id: true, fullName: true, role: true } } },
+        });
+        this.chatGateway.emitReportMessage(
+          r.id,
+          {
+            id: message.id,
+            reportId: r.id,
+            senderId: adminId,
+            senderRole,
+            senderName: message.sender.fullName,
+            content: text,
+            createdAt: message.createdAt,
+            readAt: null,
+          },
+          r.userId,
+        );
+        this.chatGateway.emitReportStatusChange(r.id, 'CONFIRMED', r.userId);
+        thanked++;
+      } catch (e) {
+        this.logger.warn(`thank-you for report ${r.id} failed: ${(e as Error).message}`);
+      }
+    }
+    // the question was corrected, so it can be shown to students again
+    if (q.autoSuspended) {
+      await this.prisma.question.update({ where: { id: questionId }, data: { autoSuspended: false, suspendedAt: null } });
+      this.reindexAfterVisibilityChange(questionId);
+    }
+    return { reports: reports.length, thanked };
   }
 
   /** Get all reports for a specific question */

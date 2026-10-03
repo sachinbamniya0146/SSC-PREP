@@ -13,6 +13,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import DateField from "@/components/DateField";
 
 type Kind = "pyq" | "practice";
 type TaxSubTopic = { id: string; name: string };
@@ -306,7 +307,7 @@ export default function AddQuestionPage() {
               </div>
               <div>
                 <label className={lbl}>Exam date</label>
-                <input type="date" className={inp} value={examDate} onChange={(e) => { setExamDate(e.target.value); setDup(null); }} />
+                <DateField className={inp} value={examDate} onChange={(v) => { setExamDate(v); setDup(null); }} />
               </div>
               <div className="sm:col-span-3">
                 <label className={lbl}>Paper code (optional — blank chhodein to date + shift se ban jayega)</label>

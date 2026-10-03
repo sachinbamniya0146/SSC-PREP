@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { WeakTopicService } from '../weak-topics/weak-topic.service';
 import { Injectable, BadRequestException, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AttemptStatus, Prisma } from '@prisma/client';
@@ -40,7 +41,10 @@ const CORE_SUBJECTS: { slug: string; name: string }[] = [
 export class BankService implements OnModuleInit {
   private readonly logger = new Logger(BankService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private weakTopics: WeakTopicService,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     await this.seedCoreSubjects();
@@ -852,6 +856,7 @@ export class BankService implements OnModuleInit {
       data: rows.map((r) => ({
         id: r.id,
         questionText: r.questionText,
+        questionNo: (r as any).questionNo,
         questionTextHindi: r.questionTextHindi,
         options: r.optionsJson,
         correctAnswer: r.correctAnswer,
@@ -1183,6 +1188,7 @@ export class BankService implements OnModuleInit {
       return {
         id: r.id,
         questionText: r.questionText,
+        questionNo: (r as any).questionNo,
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1258,6 +1264,7 @@ export class BankService implements OnModuleInit {
     return {
       id: q.id,
       questionText: q.questionText,
+      questionNo: (q as any).questionNo,
       questionTextHindi: q.questionTextHindi,
       questionDiagramType: q.questionDiagramType ?? null,
       questionDiagramLabels: q.questionDiagramLabels ?? null,
@@ -1349,6 +1356,8 @@ export class BankService implements OnModuleInit {
           isCorrect: correct,
         },
       });
+      // NEW (Oct 3 2026): instant-feedback practice answers feed the weak-topic tracker too
+      this.weakTopics.recordAnswers(userId, attempt.id, [{ questionId: q.id, selectedOption: option, isCorrect: correct }]).catch(() => undefined);
     }
 
     return {
@@ -1402,6 +1411,7 @@ export class BankService implements OnModuleInit {
       questions: rows.map(r => ({
         id: r.id,
         questionText: r.questionText,
+        questionNo: (r as any).questionNo,
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1526,6 +1536,7 @@ export class BankService implements OnModuleInit {
     return {
       id: q.id,
       questionText: q.questionText,
+      questionNo: (q as any).questionNo,
       questionTextHindi: q.questionTextHindi,
       questionDiagramType: q.questionDiagramType ?? null,
       questionDiagramLabels: q.questionDiagramLabels ?? null,
@@ -1568,6 +1579,7 @@ export class BankService implements OnModuleInit {
       questions: shuffled.map((r: any) => ({
         id: r.id,
         questionText: r.questionText,
+        questionNo: (r as any).questionNo,
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,

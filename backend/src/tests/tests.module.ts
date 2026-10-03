@@ -7,6 +7,7 @@ import { DailyTestController } from './daily-test.controller';
 import { GamificationModule } from '../gamification/gamification.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { BankModule } from '../bank/bank.module';
+import { WeakTopicModule } from '../weak-topics/weak-topic.module';
 
 @Module({
   // Requirement 5, part (a): TestsService now injects TelegramService (to
@@ -20,7 +21,7 @@ import { BankModule } from '../bank/bank.module';
   // to QuestionBankPracticeService.getOrCreateSet() (see tests.service.ts
   // getWeakAreasPractice) so it inherits the no-repeat-until-exhausted +
   // configurable-size fix built there, instead of duplicating that logic.
-  imports: [GamificationModule, forwardRef(() => TelegramModule), BankModule],
+  imports: [GamificationModule, forwardRef(() => TelegramModule), BankModule, WeakTopicModule],
   providers: [TestsService, DailyTestService, TestStatsService],
   controllers: [TestsController, DailyTestController],
   // BUGFIX (bonus grep — module-registration gap, same family as the
