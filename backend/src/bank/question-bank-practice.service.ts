@@ -8,6 +8,7 @@ import { PUBLISHED_QUESTION_WHERE, PRACTICE_QUESTION_WHERE, PYQ_QUESTION_WHERE }
 
 export interface PracticeQuestion {
   id: string;
+  questionNo?: number;
   questionText: string;
   questionTextHindi?: string | null;
   options: { key: string; text: string; textHi?: string | null }[];
