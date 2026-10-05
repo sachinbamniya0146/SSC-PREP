@@ -2,10 +2,9 @@
 # Builds production images for linux/amd64 and pushes to GHCR on push to main
 name: Docker Publish
 
+# Images are now built by deploy.yml on every push to main. This workflow stays only as a manual extra.
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:  # manual trigger only
 
 permissions:
   contents: read

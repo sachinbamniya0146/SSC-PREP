@@ -1,0 +1,9 @@
+# Override file: run backend + frontend from the prebuilt GHCR images instead of building on the VPS.
+# Used by deploy.sh:  docker compose -f docker-compose.yml -f docker-compose.images.yml ...
+# Everything else (env, volumes, database URL, ports) still comes from docker-compose.yml.
+# IMAGE_TAG = git commit sha built by GitHub Actions (default: latest).
+services:
+  backend:
+    image: ghcr.io/sachinbamniya0146/ssc-prep-backend:${IMAGE_TAG:-latest}
+  frontend:
+    image: ghcr.io/sachinbamniya0146/ssc-prep-frontend:${IMAGE_TAG:-latest}
