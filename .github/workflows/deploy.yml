@@ -103,7 +103,7 @@ jobs:
     name: Deploy to VPS (pull + restart)
     needs: [build-backend, build-frontend]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60   # first pull of big images on the small VPS can take a while
     permissions:
       contents: read
       packages: read
