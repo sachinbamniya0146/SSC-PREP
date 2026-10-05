@@ -149,6 +149,7 @@ export default function AdminVocabPage() {
 
   const openQuestions = async (w: AdminWord) => {
     setQError("");
+    setQForm(null);
     setQLoading(true);
     setQPanel({ wordId: w.id, word: w.word, questions: [] });
     try {
@@ -178,6 +179,60 @@ export default function AdminVocabPage() {
       setQError("Network error — question delete nahi hua.");
     } finally {
       setQBusy(null);
+    }
+  };
+
+  // ---- add / edit ONE question ----
+  type QForm = {
+    id: string | null; // null = adding a new question
+    questionText: string;
+    options: Record<"A" | "B" | "C" | "D", string>;
+    correctAnswer: string;
+    explanation: string;
+    questionType: string;
+  };
+  const blankQForm = (): QForm => ({
+    id: null, questionText: "", options: { A: "", B: "", C: "", D: "" }, correctAnswer: "A", explanation: "", questionType: "",
+  });
+  const [qForm, setQForm] = React.useState<QForm | null>(null);
+  const [qSaving, setQSaving] = React.useState(false);
+
+  const startEditQuestion = (q: AdminQuestion) => {
+    const opts = { A: "", B: "", C: "", D: "" } as QForm["options"];
+    for (const o of Array.isArray(q.optionsJson) ? q.optionsJson : []) {
+      if (o.key === "A" || o.key === "B" || o.key === "C" || o.key === "D") opts[o.key] = o.text;
+    }
+    setQError("");
+    setQForm({ id: q.id, questionText: q.questionText, options: opts, correctAnswer: q.correctAnswer || "A", explanation: q.explanation ?? "", questionType: q.questionType ?? "" });
+  };
+
+  const saveQuestion = async () => {
+    if (!qPanel || !qForm) return;
+    setQError("");
+    if (!qForm.questionText.trim()) { setQError("Question text likhein."); return; }
+    if (!(["A", "B", "C", "D"] as const).every((k) => qForm.options[k].trim())) { setQError("Char options (A-D) bharna zaroori hai."); return; }
+    if (!qForm.explanation.trim()) { setQError("Solution / explanation likhna zaroori hai."); return; }
+    const body = {
+      questionText: qForm.questionText.trim(),
+      optionsJson: (["A", "B", "C", "D"] as const).map((k) => ({ key: k, text: qForm.options[k].trim() })),
+      correctAnswer: qForm.correctAnswer,
+      explanation: qForm.explanation.trim(),
+      questionType: qForm.questionType || null,
+    };
+    setQSaving(true);
+    try {
+      const url = qForm.id ? `${API_BASE}/vocab/admin/questions/${qForm.id}` : `${API_BASE}/vocab/admin/words/${qPanel.wordId}/questions`;
+      const r = await fetchAuth(url, { method: qForm.id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setQError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Save nahi hua (HTTP ${r.status})`); return; }
+      setQForm(null);
+      const lr = await fetchAuth(`${API_BASE}/vocab/admin/words/${qPanel.wordId}/questions`);
+      if (lr.ok) { const ld = await lr.json(); setQPanel({ wordId: qPanel.wordId, word: ld.word ?? qPanel.word, questions: ld.questions ?? [] }); }
+      await loadWords();
+    } catch {
+      setQError("Network error — question save nahi hua.");
+    } finally {
+      setQSaving(false);
     }
   };
 
@@ -226,9 +281,19 @@ export default function AdminVocabPage() {
     });
   };
 
+  const openNew = () => {
+    setEditError("");
+    setEditing({ isNew: true, word: "", partOfSpeech: "", meaningEnglish: "", meaningHindi: "", pronunciation: "", memoryTrick: "", etymology: "", registerNote: "", examTrendNote: "", confusingPairNote: "" });
+    setJsonText({ examplesJson: "[]", synonymsJson: "[]", antonymsJson: "[]" });
+  };
+
   const saveEdit = async () => {
     if (!editing) return;
     setEditError("");
+    if (editing.isNew && (!String(editing.word ?? "").trim() || !String(editing.meaningHindi ?? "").trim() || !String(editing.meaningEnglish ?? "").trim())) {
+      setEditError("Word, Meaning (English) aur Meaning (Hindi) zaroori hain.");
+      return;
+    }
     const body: Record<string, unknown> = {};
     for (const k of ["word", "meaningHindi", "meaningEnglish", "partOfSpeech", "pronunciation", "memoryTrick", "etymology", "registerNote", "examTrendNote", "confusingPairNote"]) {
       body[k] = editing[k] ?? "";
@@ -245,8 +310,8 @@ export default function AdminVocabPage() {
     }
     setSaving(true);
     try {
-      const r = await fetchAuth(`${API_BASE}/vocab/admin/words/${editing.id}`, {
-        method: "PUT",
+      const r = await fetchAuth(editing.isNew ? `${API_BASE}/vocab/admin/words` : `${API_BASE}/vocab/admin/words/${editing.id}`, {
+        method: editing.isNew ? "POST" : "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
@@ -368,6 +433,13 @@ export default function AdminVocabPage() {
           <div className="border-b border-border p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-semibold">Words ({words.length})</h2>
+              <div className="flex gap-2">
+              <button
+                onClick={openNew}
+                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
+              >
+                + Naya word
+              </button>
               <button
                 onClick={() => callOrder("normalize")}
                 disabled={busyOrder}
@@ -376,6 +448,7 @@ export default function AdminVocabPage() {
               >
                 Fix numbering
               </button>
+              </div>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Type a number in <b>Move to #</b> and press Go (or use ↑ ↓) to put a word at any position — the other words shift automatically.
@@ -460,6 +533,61 @@ export default function AdminVocabPage() {
               <h3 className="text-base font-bold">Questions — {qPanel.word} ({qPanel.questions.length})</h3>
               <button onClick={() => setQPanel(null)} className="rounded-md px-2 py-1 text-sm hover:bg-muted" aria-label="Close">✕</button>
             </div>
+            {!qForm && (
+              <button onClick={() => { setQError(""); setQForm(blankQForm()); }} className="mt-3 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground">
+                + Naya question
+              </button>
+            )}
+            {qForm && (
+              <div className="mt-3 rounded-lg border border-primary/40 bg-muted/20 p-3 text-sm">
+                <p className="mb-2 font-semibold">{qForm.id ? "Question edit karein" : "Naya question"}</p>
+                <textarea
+                  rows={2}
+                  value={qForm.questionText}
+                  onChange={(e) => setQForm({ ...qForm, questionText: e.target.value })}
+                  placeholder="Question"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                />
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {(["A", "B", "C", "D"] as const).map((k) => (
+                    <label key={k} className="flex items-center gap-2 text-xs">
+                      <input type="radio" name="correct" checked={qForm.correctAnswer === k} onChange={() => setQForm({ ...qForm, correctAnswer: k })} title="Sahi answer" />
+                      <span className="font-semibold">{k}</span>
+                      <input
+                        value={qForm.options[k]}
+                        onChange={(e) => setQForm({ ...qForm, options: { ...qForm.options, [k]: e.target.value } })}
+                        placeholder={`Option ${k}`}
+                        className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">Radio button se sahi answer chunein (abhi: {qForm.correctAnswer}).</p>
+                <textarea
+                  rows={2}
+                  value={qForm.explanation}
+                  onChange={(e) => setQForm({ ...qForm, explanation: e.target.value })}
+                  placeholder="Solution / explanation"
+                  className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                />
+                <select
+                  value={qForm.questionType}
+                  onChange={(e) => setQForm({ ...qForm, questionType: e.target.value })}
+                  className="mt-2 rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
+                >
+                  <option value="">Type (optional)</option>
+                  <option value="SYNONYM">SYNONYM</option>
+                  <option value="ANTONYM">ANTONYM</option>
+                  <option value="CONTEXT">CONTEXT</option>
+                </select>
+                <div className="mt-3 flex justify-end gap-2">
+                  <button onClick={() => setQForm(null)} disabled={qSaving} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted">Cancel</button>
+                  <button onClick={saveQuestion} disabled={qSaving} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-50">
+                    {qSaving ? "Saving…" : "Save question"}
+                  </button>
+                </div>
+              </div>
+            )}
             {qError && <p className="mt-3 text-xs font-medium text-danger">{qError}</p>}
             {qLoading && <p className="mt-4 text-sm text-muted-foreground">Loading…</p>}
             {!qLoading && qPanel.questions.length === 0 && !qError && (
@@ -470,13 +598,21 @@ export default function AdminVocabPage() {
                 <li key={q.id} className="rounded-lg border border-border p-3 text-sm">
                   <div className="flex items-start justify-between gap-3">
                     <p className="font-medium">{i + 1}. {q.questionText}</p>
-                    <button
-                      onClick={() => deleteQuestion(q)}
-                      disabled={qBusy === q.id}
-                      className="shrink-0 rounded-lg border border-danger/30 px-2 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50"
-                    >
-                      {qBusy === q.id ? "Deleting…" : "Delete"}
-                    </button>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        onClick={() => startEditQuestion(q)}
+                        className="rounded-lg border border-primary/40 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/10"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => deleteQuestion(q)}
+                        disabled={qBusy === q.id}
+                        className="rounded-lg border border-danger/30 px-2 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50"
+                      >
+                        {qBusy === q.id ? "Deleting…" : "Delete"}
+                      </button>
+                    </div>
                   </div>
                   <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
                     {(Array.isArray(q.optionsJson) ? q.optionsJson : []).map((o) => (
@@ -485,6 +621,7 @@ export default function AdminVocabPage() {
                       </li>
                     ))}
                   </ul>
+                  {q.explanation && <p className="mt-2 text-xs text-muted-foreground">💡 {q.explanation}</p>}
                 </li>
               ))}
             </ul>
@@ -496,7 +633,7 @@ export default function AdminVocabPage() {
         <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={() => !saving && setEditing(null)}>
           <div className="my-6 w-full max-w-2xl rounded-2xl border border-border bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold">Edit word #{editing.orderIndex}</h3>
+              <h3 className="text-base font-bold">{editing.isNew ? "Naya word add karein" : `Edit word #${editing.orderIndex}`}</h3>
               <button onClick={() => setEditing(null)} className="rounded-md px-2 py-1 text-sm hover:bg-muted" aria-label="Close">✕</button>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -555,7 +692,7 @@ export default function AdminVocabPage() {
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setEditing(null)} disabled={saving} className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted">Cancel</button>
               <button onClick={saveEdit} disabled={saving} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">
-                {saving ? "Saving…" : "Save changes"}
+                {saving ? "Saving…" : editing.isNew ? "Add word" : "Save changes"}
               </button>
             </div>
           </div>

@@ -22,7 +22,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { Department } from '../common/decorators/department.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { VocabUploadService } from './vocab-upload.service';
-import { archiveWordProgress, preserveUnlockBeforeMove } from './vocab-unlock-memory';
+import { archiveWordProgress, preserveUnlockBeforeMove, restoreArchivedProgress, vocabWordKey } from './vocab-unlock-memory';
 import { AuditLogService } from '../audit-log/audit-log.service';
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -97,6 +97,70 @@ export class VocabAdminController {
     const w = await this.prisma.vocabWord.findUnique({ where: { id }, include: { _count: { select: { questions: true } } } });
     if (!w) throw new BadRequestException('Word not found');
     return w;
+  }
+
+  private static slugify(s: string): string {
+    return String(s ?? '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+
+  /** Validate + normalise one quiz question from the admin form (same rules as the Excel import). */
+  private static cleanQuestion(body: Record<string, any>) {
+    const questionText = String(body?.questionText ?? '').trim();
+    if (!questionText) throw new BadRequestException('Question text khali hai');
+    const raw: any[] = Array.isArray(body?.optionsJson) ? body.optionsJson : [];
+    const options = ['A', 'B', 'C', 'D'].map((key) => {
+      const found = raw.find((o) => String(o?.key ?? '').toUpperCase() === key);
+      const text = String(found?.text ?? '').trim();
+      if (!text) throw new BadRequestException(`Option ${key} khali hai — char options zaroori hain`);
+      return { key, text };
+    });
+    const correctAnswer = String(body?.correctAnswer ?? '').trim().toUpperCase();
+    if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) throw new BadRequestException('Sahi answer A, B, C ya D hona chahiye');
+    const explanation = String(body?.explanation ?? '').trim();
+    if (!explanation) throw new BadRequestException('Solution / explanation zaroori hai');
+    const qt = body?.questionType === undefined || body?.questionType === null ? '' : String(body.questionType).trim().toUpperCase();
+    if (qt && !['SYNONYM', 'ANTONYM', 'CONTEXT'].includes(qt)) throw new BadRequestException('questionType SYNONYM, ANTONYM ya CONTEXT hona chahiye');
+    return { questionText, optionsJson: options as any, correctAnswer, explanation, questionType: qt || null };
+  }
+
+  /** Add one word by hand (no Excel). It goes to the END of the list; a word deleted earlier gets its students' unlocks back. */
+  @Post('words')
+  async createWord(@Body() body: Record<string, any>) {
+    const str = (k: string, required = false): string | null => {
+      const v = body?.[k] === undefined || body?.[k] === null ? '' : String(body[k]).trim();
+      if (required && !v) throw new BadRequestException(`'${k}' zaroori hai`);
+      return v || null;
+    };
+    const word = str('word', true) as string;
+    const meaningHindi = str('meaningHindi', true) as string;
+    const meaningEnglish = str('meaningEnglish', true) as string;
+    const slug = VocabAdminController.slugify(str('slug') || word);
+    if (!slug) throw new BadRequestException('Word se valid slug nahi ban paya');
+
+    const all = await this.prisma.vocabWord.findMany({ select: { word: true, slug: true, orderIndex: true } });
+    const key = vocabWordKey(word);
+    const dup = all.find((w) => w.slug === slug || vocabWordKey(w.word) === key);
+    if (dup) throw new BadRequestException(`Word "${dup.word}" pehle se maujood hai — usse Edit karein`);
+
+    const lists: Record<string, any> = {};
+    for (const k of ['examplesJson', 'synonymsJson', 'antonymsJson']) {
+      const v = body?.[k];
+      if (v === undefined || v === null) { lists[k] = []; continue; }
+      if (!Array.isArray(v)) throw new BadRequestException(`'${k}' must be a list`);
+      lists[k] = v;
+    }
+    const created = await this.prisma.vocabWord.create({
+      data: {
+        slug, word, meaningHindi, meaningEnglish,
+        orderIndex: all.reduce((m, w) => Math.max(m, w.orderIndex ?? 0), 0) + 1,
+        partOfSpeech: str('partOfSpeech'), pronunciation: str('pronunciation'), memoryTrick: str('memoryTrick'),
+        etymology: str('etymology'), registerNote: str('registerNote'), examTrendNote: str('examTrendNote'),
+        confusingPairNote: str('confusingPairNote'),
+        ...lists,
+      },
+    });
+    await restoreArchivedProgress(this.prisma, created.id, created.word);
+    return created;
   }
 
   /**
@@ -213,6 +277,30 @@ export class VocabAdminController {
     if (!q) throw new BadRequestException('Question not found');
     await this.prisma.vocabQuestion.delete({ where: { id: qid } });
     return { deleted: true, wordId: q.wordId };
+  }
+
+  /** Add one quiz question to a word by hand. */
+  @Post('words/:id/questions')
+  async createQuestion(@Param('id') id: string, @Body() body: Record<string, any>) {
+    const word = await this.prisma.vocabWord.findUnique({ where: { id }, select: { id: true } });
+    if (!word) throw new BadRequestException('Word not found');
+    const data = VocabAdminController.cleanQuestion(body);
+    const existing = await this.prisma.vocabQuestion.findMany({ where: { wordId: id }, select: { questionText: true } });
+    const key = vocabWordKey(data.questionText);
+    if (existing.some((q) => vocabWordKey(q.questionText) === key)) throw new BadRequestException('Ye question is word me pehle se hai');
+    return this.prisma.vocabQuestion.create({ data: { wordId: id, ...data } });
+  }
+
+  /** Edit one quiz question (text, the four options, correct answer, solution, type). */
+  @Put('questions/:qid')
+  async updateQuestion(@Param('qid') qid: string, @Body() body: Record<string, any>) {
+    const q = await this.prisma.vocabQuestion.findUnique({ where: { id: qid }, select: { id: true, wordId: true } });
+    if (!q) throw new BadRequestException('Question not found');
+    const data = VocabAdminController.cleanQuestion(body);
+    const siblings = await this.prisma.vocabQuestion.findMany({ where: { wordId: q.wordId, id: { not: qid } }, select: { questionText: true } });
+    const key = vocabWordKey(data.questionText);
+    if (siblings.some((x) => vocabWordKey(x.questionText) === key)) throw new BadRequestException('Isi word me ye question pehle se hai');
+    return this.prisma.vocabQuestion.update({ where: { id: qid }, data });
   }
 
   // Oct 2026: delete is now SOFT by default (word hidden from students, everything kept) because a hard

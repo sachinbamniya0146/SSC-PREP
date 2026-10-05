@@ -1,175 +1,168 @@
+# Build on GitHub (fast, 7 GB RAM) -> push images to GHCR -> the VPS only pulls + restarts (about a minute).
+# The 1 GB VPS never compiles Next.js / TypeScript any more.
 name: Deploy to Production
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch: # Allow manual trigger — always deploys immediately, no debounce
+    branches: [main]
+  workflow_dispatch: # manual "Run workflow" button — builds and deploys the selected branch's latest commit
 
-permissions:
-  contents: read
+env:
+  REGISTRY_OWNER: sachinbamniya0146
+  NEXT_PUBLIC_API_BASE_URL: https://sscprephub.in/api/v1
+  NEXT_PUBLIC_GOOGLE_CLIENT_ID: 449330513452-02oguopf78aldfio3r2pa98dujkbkheo.apps.googleusercontent.com
 
 jobs:
-  # ───────────────────────────────────────────────────────────────────────
-  # DEBOUNCE: collapse a burst of pushes into a single deploy per quiet hour.
-  #
-  # Problem this solves: pushing 3-4 files 5-8 minutes apart used to trigger
-  # 3-4 separate deploys back to back. Instead, every push now waits 60
-  # minutes before deploying, and each new push during that wait CANCELS the
-  # previous wait (via the `concurrency` group below) and starts its own
-  # fresh 60-minute timer. Only the push that ends up being the last one for
-  # a full hour survives its wait and proceeds to deploy — carrying whatever
-  # is the latest commit on `main` at that point (so nothing is ever lost;
-  # in-between commits just ride along in the same deploy instead of each
-  # triggering their own).
-  #
-  # Manual runs (workflow_dispatch) skip this entirely and deploy right away
-  # — that's an explicit human decision to deploy now, not a batchable push.
-  debounce:
-    name: Debounce (wait for a quiet hour)
+  build-backend:
+    name: Build backend image
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    timeout-minutes: 75
-    # Only one debounce wait may be "in flight" at a time. When a new push
-    # arrives while a previous one is still waiting, cancel-in-progress
-    # kills the older wait and this new run becomes the one that decides
-    # whether to deploy — this is what gives the "1 push per hour" effect
-    # even if commits land every 5-8 minutes.
-    concurrency:
-      group: production-deploy-debounce
-      cancel-in-progress: true
-    outputs:
-      should_deploy: ${{ steps.check.outputs.should_deploy }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Wait 60 minutes for the push burst to settle
-        run: |
-          echo "⏳ Waiting 60 minutes to see if more pushes land (commit: ${{ github.sha }})"
-          sleep 3600
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/sachinbamniya0146/ssc-prep-backend:${{ github.sha }}
+            ghcr.io/sachinbamniya0146/ssc-prep-backend:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
 
-      - name: Check whether this is still the latest commit on main
-        id: check
+  build-frontend:
+    name: Build frontend image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # The public VAPID key is baked into the frontend at build time. Use the repo variable if it is set,
+      # otherwise read it from the server's .env (same value the old on-server build used).
+      - name: Setup SSH (to read the public VAPID key)
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Resolve VAPID public key
+        id: vapid
         env:
-          GH_TOKEN: ${{ github.token }}
+          FROM_VAR: ${{ vars.NEXT_PUBLIC_VAPID_PUBLIC_KEY }}
         run: |
-          latest_sha=$(gh api repos/${{ github.repository }}/commits/main --jq '.sha')
-          echo "This run's commit:   ${{ github.sha }}"
-          echo "Latest commit on main: $latest_sha"
-          if [ "$latest_sha" = "${{ github.sha }}" ]; then
-            echo "✅ No newer push landed during the wait — proceeding to deploy."
-            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            # This should be rare in practice (cancel-in-progress normally
-            # stops us before we even get here), but it's a safe fallback
-            # for any timing edge-case around the API/cancellation race.
-            echo "⏭️ A newer commit exists on main — that push's own debounce run will handle the deploy. Skipping."
-            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          key="$FROM_VAR"
+          if [ -z "$key" ]; then
+            raw=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+              "grep -m1 '^VAPID_PUBLIC_KEY=' /opt/ssc-prep-hub/.env" 2>/dev/null || true)
+            key=$(printf '%s' "${raw#VAPID_PUBLIC_KEY=}" | tr -d "\"' \r")
           fi
+          if [ -z "$key" ]; then
+            echo "::warning::VAPID public key not found - push notifications will not work in this build. Set the repo variable NEXT_PUBLIC_VAPID_PUBLIC_KEY."
+          fi
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/sachinbamniya0146/ssc-prep-frontend:${{ github.sha }}
+            ghcr.io/sachinbamniya0146/ssc-prep-frontend:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=${{ env.NEXT_PUBLIC_API_BASE_URL }}
+            NEXT_PUBLIC_API_URL=${{ env.NEXT_PUBLIC_API_BASE_URL }}
+            NEXT_PUBLIC_GOOGLE_CLIENT_ID=${{ env.NEXT_PUBLIC_GOOGLE_CLIENT_ID }}
+            NEXT_PUBLIC_VAPID_PUBLIC_KEY=${{ steps.vapid.outputs.key }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
 
   deploy:
-    name: Deploy to VPS
-    needs: debounce
-    if: |
-      always() &&
-      (github.event_name == 'workflow_dispatch' || needs.debounce.outputs.should_deploy == 'true')
+    name: Deploy to VPS (pull + restart)
+    needs: [build-backend, build-frontend]
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    # Deploys themselves still run one-at-a-time and queue rather than
-    # overlap (a debounced deploy and a manual workflow_dispatch could in
-    # theory land close together) — but never cancel a deploy that has
-    # already started.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    # deploys queue one after another; a deploy that has started is never cancelled
     concurrency:
       group: production-deploy
       cancel-in-progress: false
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
       - name: Verify SSH connection
-        run: |
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "echo 'SSH connection successful' && hostname"
+        run: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "echo 'SSH ok' && hostname"
 
-      - name: Copy production env file
+      - name: Make sure .env exists on the server
         env:
           PRODUCTION_ENV: ${{ secrets.PRODUCTION_ENV }}
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-            cd /opt/ssc-prep-hub && 
+            cd /opt/ssc-prep-hub &&
             if [ ! -f .env ]; then
               echo 'Creating .env from template...'
               printf '%s' \"$PRODUCTION_ENV\" > .env
             fi
           "
 
-      - name: Run deployment script with retry
-        id: deploy
+      # Lets the server pull the private images. Uses the GHCR_PULL_TOKEN secret (a PAT with read:packages) if you
+      # added one, otherwise this run's own token.
+      - name: Log the server in to GHCR
+        env:
+          PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          max_retries=3
-          retry_count=0
-          while [ $retry_count -lt $max_retries ]; do
-            echo "🚀 Deployment attempt $((retry_count + 1))/$max_retries"
-            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST}} "
-              cd /opt/ssc-prep-hub &&
-              chmod +x deploy.sh &&
-              ./deploy.sh
-            "; then
-              echo "✅ Deployment succeeded"
-              exit 0
-            else
-              retry_count=$((retry_count + 1))
-              if [ $retry_count -lt $max_retries ]; then
-                echo "⚠️ Deployment failed, retrying in 60 seconds..."
-                sleep 60
-              else
-                echo "❌ All deployment attempts failed"
-                exit 1
-              fi
-            fi
-          done
-        timeout-minutes: 80
+          printf '%s' "$PULL_TOKEN" | ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            "docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin"
 
-      - name: Verify deployment with retry
-        if: success()
+      # The server's checkout is synced HERE (before deploy.sh starts), so the very first run after this change never
+      # executes an old deploy.sh that git replaces halfway through.
+      - name: Deploy
         run: |
-          max_retries=5
-          retry_count=0
-          while [ $retry_count -lt $max_retries ]; do
-            echo "🔍 Verification attempt $((retry_count + 1))/$max_retries"
-            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-              sleep 15 &&
-              curl -sf -o /dev/null -w '%{http_code}' --max-time 30 https://sscprephub.in | grep -q '^200$' &&
-              curl -sf -o /dev/null -w '%{http_code}' --max-time 30 https://sscprephub.in/api/v1/health | grep -q '^200$'
-            "; then
-              echo "✅ Deployment verification PASSED"
-              exit 0
-            else
-              retry_count=$((retry_count + 1))
-              if [ $retry_count -lt $max_retries ]; then
-                echo "⚠️ Verification failed, retrying in 30 seconds..."
-                sleep 30
-              else
-                echo "❌ All verification attempts failed"
-                exit 1
-              fi
+          for attempt in 1 2 3; do
+            echo "🚀 Deploy attempt $attempt/3 (image tag ${{ github.sha }})"
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+              "cd /opt/ssc-prep-hub && git remote set-url origin https://github.com/${{ github.repository }}.git && git fetch origin && git reset --hard origin/main && chmod +x deploy.sh && IMAGE_TAG=${{ github.sha }} ./deploy.sh"; then
+              echo "✅ Deployed"; exit 0
             fi
+            [ "$attempt" -lt 3 ] && { echo "⚠️ failed, retrying in 30s"; sleep 30; }
           done
-        timeout-minutes: 10
+          echo "❌ All attempts failed"; exit 1
 
-  notify:
-    name: Notify on failure
-    runs-on: ubuntu-latest
-    needs: [debounce, deploy]
-    if: failure()
-    steps:
-      - name: Send failure notification
+      - name: Verify the live site
         run: |
-          echo "Deployment failed for commit ${{ github.sha }}"
-          echo "Check GitHub Actions for details"
-          # Add Slack/Discord/Email notification here if needed
+          for attempt in 1 2 3 4 5; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
+              curl -sf -o /dev/null --max-time 30 https://sscprephub.in &&
+              curl -sf -o /dev/null --max-time 30 https://sscprephub.in/api/v1/health"; then
+              echo "✅ Site is up"; exit 0
+            fi
+            echo "⚠️ not ready yet ($attempt/5)"; sleep 20
+          done
+          echo "❌ Site did not come up"; exit 1
