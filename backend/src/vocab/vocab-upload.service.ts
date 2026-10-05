@@ -30,10 +30,10 @@ export interface VocabUploadResult {
   success: boolean;
   dryRun: boolean;
   wordsCreated: number;
-  wordsUpdated: number; // always 0 now — existing words are skipped, not overwritten (kept for API compatibility)
+  wordsUpdated: number; // existing words whose content was refreshed from the sheet (hidden ones are re-activated)
   wordsSkipped: number;
   questionsCreated: number;
-  questionsUpdated: number; // always 0 now (kept for API compatibility)
+  questionsUpdated: number; // existing questions (same word + same text) whose options / answer / solution were refreshed
   questionsSkipped: number;
   errors: { sheet: string; row: number; error: string }[];
   skipped: { sheet: string; row: number; word: string; code: VocabSkipCode; message: string }[];
@@ -115,7 +115,7 @@ export class VocabUploadService {
       ['2. Sheet "Questions": one row per quiz question. wordSlug must match a word\'s slug (slug defaults to the lower-case word).'],
       ['3. correctAnswer must be A, B, C or D.'],
       ['4. synonymsJson / antonymsJson must be a JSON list, e.g. ["a","b"] — or leave empty.'],
-      ['5. Duplicate word / duplicate question skip ho jate hain (update nahi hote). Answer key ya solution missing ho to question upload nahi hota — report me dikhta hai.'],
+      ['5. Jo word / question pehle se system me hai (same word, same question text) wo duplicate nahi banta — uska content Excel ke naye data se UPDATE ho jata hai. Khali cell purani value ko nahi mitata. Answer key ya solution missing ho to question upload nahi hota — report me dikhta hai.'],
       ['6. You can upload only the Questions sheet to add questions to words that already exist.'],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(notes), 'Instructions');
@@ -126,10 +126,12 @@ export class VocabUploadService {
   /**
    * Import rules (Oct 2026):
    *  - A word that already exists (same slug OR same word text, case-insensitive)
-   *    or appears twice in the file is SKIPPED and reported — never overwritten.
+   *    is UPDATED in place from the sheet (meanings, notes, examples, synonyms ...). Only non-empty cells
+   *    overwrite; slug, position (orderIndex) and every student's progress are never touched. A hidden word
+   *    is re-activated. A word that appears twice in the same file is SKIPPED and reported.
+   *  - A question that already exists (same word + same text) is UPDATED (options, answer, solution, type).
    *  - A question is SKIPPED and reported when: answer key missing/invalid,
-   *    solution (explanation) missing, any option missing, or it duplicates an
-   *    existing / earlier question (same word + same text, or same text anywhere).
+   *    solution (explanation) missing, any option missing, or it appears twice in the same file.
    *  - dryRun=true validates everything and writes nothing.
    * Every skip lands in `skipped` (with a reason code) and in `wordReport`
    * (per-word summary: "word X: 3 questions rejected: 2 solution missing ...").
@@ -179,9 +181,29 @@ export class VocabUploadService {
     // ---- Words sheet ----
     const existingWords = await this.prisma.vocabWord.findMany({ select: { id: true, slug: true, word: true, isActive: true, orderIndex: true } });
     const slugToId = new Map<string, string>(existingWords.map((w) => [w.slug, w.id]));
-    const knownWordText = new Set(existingWords.map((w) => normText(w.word)));
-    const existingSlugs = new Set(existingWords.map((w) => w.slug));
     const wordSlugsThisFile = new Set<string>();
+    const wordTextsThisFile = new Set<string>();
+
+    // Content fields of a sheet row that should overwrite an existing word. Empty cells are left alone.
+    const buildWordUpdate = (row: any): Record<string, any> => {
+      const data: Record<string, any> = {};
+      for (const k of ['meaningHindi', 'meaningEnglish', 'partOfSpeech', 'pronunciation', 'memoryTrick', 'etymology', 'registerNote', 'examTrendNote', 'confusingPairNote']) {
+        const v = optionalCell(row, k);
+        if (v !== null) data[k] = v;
+      }
+      const examples: { en: string; hi: string }[] = [];
+      for (const n of [1, 2, 3]) {
+        const en = cell(row, `exampleSentenceEn${n}`);
+        const hi = cell(row, `exampleSentenceHi${n}`);
+        if (en || hi) examples.push({ en, hi });
+      }
+      if (examples.length) data.examplesJson = examples as any;
+      const synRaw = cell(row, 'synonymsJson');
+      const antRaw = cell(row, 'antonymsJson');
+      if (synRaw) { try { data.synonymsJson = JSON.parse(synRaw); } catch { throw new Error("'synonymsJson' is not valid JSON"); } }
+      if (antRaw) { try { data.antonymsJson = JSON.parse(antRaw); } catch { throw new Error("'antonymsJson' is not valid JSON"); } }
+      return data;
+    };
 
     if (wordsSheet) {
       const rows: any[] = XLSX.utils.sheet_to_json(wordsSheet, { defval: '' });
@@ -194,25 +216,30 @@ export class VocabUploadService {
           if (!wordText) throw new Error("'word' column is required");
           const slug = cell(row, 'slug') || slugify(wordText);
           if (!slug) throw new Error("word se valid slug nahi ban paya");
-          // A word hidden (soft-deleted) earlier comes back with ALL student progress intact — never a new copy.
-          const hidden = existingWords.find((w) => !w.isActive && (w.slug === slug || normText(w.word) === normText(wordText)));
-          if (hidden && !wordSlugsThisFile.has(slug)) {
-            if (!dryRun) await this.prisma.vocabWord.update({ where: { id: hidden.id }, data: { isActive: true } });
-            hidden.isActive = true;
-            wordSlugsThisFile.add(hidden.slug);
-            result.wordsUpdated++;
-            rep(wordText).wordStatus = 'OK';
-            continue;
-          }
-          const dupInDb = existingSlugs.has(slug) || knownWordText.has(normText(wordText));
-          const dupInFile = wordSlugsThisFile.has(slug);
-          if (dupInDb || dupInFile) {
+          const wordKey = normText(wordText);
+          if (wordSlugsThisFile.has(slug) || wordTextsThisFile.has(wordKey)) {
             result.wordsSkipped++;
             result.skipped.push({
               sheet: 'Words', row: rowNum, word: wordText, code: 'DUPLICATE_WORD',
-              message: dupInFile ? 'Ye word isi file me pehle bhi aa chuka hai — skip kiya' : 'Ye word database me pehle se maujood hai — skip kiya (update nahi kiya)',
+              message: 'Ye word isi file me pehle bhi aa chuka hai — skip kiya',
             });
             rep(wordText).wordStatus = 'DUPLICATE';
+            continue;
+          }
+          // Word already in the system (active OR hidden): refresh its content from the sheet, never a second copy.
+          // Position, slug and all student progress stay as they are; a hidden word comes back with progress intact.
+          const existing = existingWords.find((w) => w.slug === slug || normText(w.word) === wordKey);
+          if (existing) {
+            const data = buildWordUpdate(row);
+            if (!existing.isActive) data.isActive = true;
+            if (!dryRun && Object.keys(data).length) await this.prisma.vocabWord.update({ where: { id: existing.id }, data });
+            existing.isActive = true;
+            slugToId.set(slug, existing.id); // Questions sheet may use the sheet's slug
+            wordSlugsThisFile.add(existing.slug);
+            wordSlugsThisFile.add(slug);
+            wordTextsThisFile.add(wordKey);
+            result.wordsUpdated++;
+            rep(wordText).wordStatus = 'OK';
             continue;
           }
           const meaningHindi = cell(row, 'meaningHindi');
@@ -258,7 +285,7 @@ export class VocabUploadService {
             antonymsJson: antonyms as any,
           });
           wordSlugsThisFile.add(slug);
-          knownWordText.add(normText(wordText));
+          wordTextsThisFile.add(wordKey);
           rep(wordText);
         } catch (e) {
           result.errors.push({ sheet: 'Words', row: rowNum, error: e instanceof Error ? e.message : String(e) });
@@ -295,11 +322,17 @@ export class VocabUploadService {
       const rows: any[] = XLSX.utils.sheet_to_json(questionsSheet, { defval: '' });
       const realWordIds = [...new Set(rows.map((r) => slugToId.get(cell(r, 'wordSlug'))).filter((x): x is string => !!x && !x.startsWith('dry:')))];
       const existingQ = realWordIds.length
-        ? await this.prisma.vocabQuestion.findMany({ where: { wordId: { in: realWordIds } }, select: { wordId: true, questionText: true } })
+        ? await this.prisma.vocabQuestion.findMany({ where: { wordId: { in: realWordIds } }, select: { id: true, wordId: true, questionText: true } })
         : [];
-      const seenKey = new Set(existingQ.map((q) => `${q.wordId}::${normText(q.questionText)}`));
-      const slugToWord = new Map<string, string>();
+      // existing question (same word + same normalised text) -> its id, so the sheet row UPDATES it instead of duplicating
+      const existingQByKey = new Map<string, string>();
+      for (const q of existingQ) {
+        const k = `${q.wordId}::${normText(q.questionText)}`;
+        if (!existingQByKey.has(k)) existingQByKey.set(k, q.id);
+      }
+      const seenInFile = new Set<string>();
       const toCreateQ: any[] = [];
+      const toUpdateQ: { id: string; data: Record<string, any> }[] = [];
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -324,24 +357,38 @@ export class VocabUploadService {
           if (!explanation) { skipQ(rowNum, wordLabel, 'MISSING_SOLUTION', 'Solution/explanation missing hai'); continue; }
 
           const key = `${wordId}::${normText(questionText)}`;
-          if (seenKey.has(key)) { skipQ(rowNum, wordLabel, 'DUPLICATE_QUESTION', 'Is word ka ye question pehle se hai — skip kiya'); continue; }
-          seenKey.add(key);
-          slugToWord.set(wordSlug, wordLabel);
+          if (seenInFile.has(key)) { skipQ(rowNum, wordLabel, 'DUPLICATE_QUESTION', 'Ye question isi file me pehle bhi aa chuka hai — skip kiya'); continue; }
+          seenInFile.add(key);
 
-          toCreateQ.push({
-            wordId,
-            questionText,
-            optionsJson: [
-              { key: 'A', text: optA }, { key: 'B', text: optB }, { key: 'C', text: optC }, { key: 'D', text: optD },
-            ] as any,
-            correctAnswer,
-            explanation,
-            questionType: optionalCell(row, 'questionType'),
-            _label: wordLabel,
-          });
+          const optionsJson = [
+            { key: 'A', text: optA }, { key: 'B', text: optB }, { key: 'C', text: optC }, { key: 'D', text: optD },
+          ] as any;
+          const questionType = optionalCell(row, 'questionType');
+
+          const existingId = existingQByKey.get(key);
+          if (existingId) {
+            // already in the system -> refresh it from the sheet (questionType only when the sheet gives one)
+            const data: Record<string, any> = { questionText, optionsJson, correctAnswer, explanation };
+            if (questionType !== null) data.questionType = questionType;
+            toUpdateQ.push({ id: existingId, data });
+            continue;
+          }
+
+          toCreateQ.push({ wordId, questionText, optionsJson, correctAnswer, explanation, questionType, _label: wordLabel });
         } catch (e) {
           result.errors.push({ sheet: 'Questions', row: rowNum, error: e instanceof Error ? e.message : String(e) });
         }
+      }
+
+      if (toUpdateQ.length) {
+        if (!dryRun) {
+          for (let i = 0; i < toUpdateQ.length; i += 100) {
+            await this.prisma.$transaction(
+              toUpdateQ.slice(i, i + 100).map((u) => this.prisma.vocabQuestion.update({ where: { id: u.id }, data: u.data })),
+            );
+          }
+        }
+        result.questionsUpdated = toUpdateQ.length;
       }
 
       if (toCreateQ.length) {

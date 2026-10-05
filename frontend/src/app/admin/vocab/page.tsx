@@ -17,12 +17,23 @@ type AdminWord = {
   studentsProgressing: number;
 };
 
+type AdminQuestion = {
+  id: string;
+  questionText: string;
+  optionsJson: { key: string; text: string }[] | null;
+  correctAnswer: string;
+  explanation: string | null;
+  questionType: string | null;
+};
+
 type UploadResult = {
   success: boolean;
   dryRun?: boolean;
   wordsCreated: number;
+  wordsUpdated?: number;
   wordsSkipped?: number;
   questionsCreated: number;
+  questionsUpdated?: number;
   questionsSkipped?: number;
   errors: { sheet: string; row: number; error: string }[];
   skipped?: { sheet: string; row: number; word: string; code: string; message: string }[];
@@ -102,10 +113,72 @@ export default function AdminVocabPage() {
     await loadWords();
   };
 
+  // Delete = really remove the word (and its questions) from the list. Every student's unlock / mastery of it is
+  // archived first by the server, so uploading the same word again brings their progress back.
+  const [deleting, setDeleting] = React.useState<string | null>(null);
   const deleteWord = async (w: AdminWord) => {
-    if (!confirm(`"${w.word}" ko list se hata dein? Word students se chhup jayega, lekin unka unlock/progress safe rahega. Wahi word dobara upload karenge to wo unlock hi dikhega.`)) return;
-    await fetchAuth(`${API_BASE}/vocab/admin/words/${w.id}`, { method: "DELETE" });
-    await loadWords();
+    if (!confirm(`"${w.word}" aur uske ${w.questionCount} question(s) list se hamesha ke liye delete karein?\n\nStudents ka unlock/progress safe rahega — wahi word dobara upload karenge to unlock wapas aa jayega.`)) return;
+    setDeleting(w.id);
+    setError("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/vocab/admin/words/${w.id}?hard=true`, { method: "DELETE" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Delete nahi hua (HTTP ${r.status})`);
+        return;
+      }
+      // close the gap in the numbering so ↑ ↓ / Move-to keep working
+      await fetchAuth(`${API_BASE}/vocab/admin/words/normalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }).catch(() => undefined);
+    } catch {
+      setError("Network error — word delete nahi hua.");
+    } finally {
+      setDeleting(null);
+      await loadWords();
+    }
+  };
+
+  // ---- one word's questions (delete a single question) ----
+  const [qPanel, setQPanel] = React.useState<{ wordId: string; word: string; questions: AdminQuestion[] } | null>(null);
+  const [qLoading, setQLoading] = React.useState(false);
+  const [qBusy, setQBusy] = React.useState<string | null>(null);
+  const [qError, setQError] = React.useState("");
+
+  const openQuestions = async (w: AdminWord) => {
+    setQError("");
+    setQLoading(true);
+    setQPanel({ wordId: w.id, word: w.word, questions: [] });
+    try {
+      const r = await fetchAuth(`${API_BASE}/vocab/admin/words/${w.id}/questions`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setQError(d?.message || `Questions load nahi hue (HTTP ${r.status})`); return; }
+      setQPanel({ wordId: w.id, word: d.word ?? w.word, questions: d.questions ?? [] });
+    } catch {
+      setQError("Network error — questions load nahi hue.");
+    } finally {
+      setQLoading(false);
+    }
+  };
+
+  const deleteQuestion = async (q: AdminQuestion) => {
+    if (!qPanel) return;
+    if (!confirm("Ye question delete karein?")) return;
+    setQBusy(q.id);
+    setQError("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/vocab/admin/questions/${q.id}`, { method: "DELETE" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setQError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Delete nahi hua (HTTP ${r.status})`); return; }
+      setQPanel((p) => (p ? { ...p, questions: p.questions.filter((x) => x.id !== q.id) } : p));
+      await loadWords();
+    } catch {
+      setQError("Network error — question delete nahi hua.");
+    } finally {
+      setQBusy(null);
+    }
   };
 
   // ---- re-order / edit (admin can change any word after upload) ----
@@ -201,9 +274,9 @@ export default function AdminVocabPage() {
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-semibold">📤 Bulk Import (Excel)</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Do sheets: <b>Words</b> (poora learning content) + <b>Questions</b> (wordSlug se link). Duplicate word ya duplicate question
-            upload nahi hota (skip hokar report me aata hai). Jis question ka <b>answer</b> ya <b>solution</b> missing hai wo bhi upload nahi hota — report me
-            word-wise dikhta hai.
+            Do sheets: <b>Words</b> (poora learning content) + <b>Questions</b> (wordSlug se link). Jo word ya question pehle se system me hai
+            wo dobara nahi banta — uska content Excel ke naye data se <b>update</b> ho jata hai (khali cell purani value nahi mitati; position aur students ka progress safe rehta hai).
+            Jis question ka <b>answer</b> ya <b>solution</b> missing hai wo upload nahi hota — report me word-wise dikhta hai.
           </p>
           <div className="mt-3">
             <button
@@ -249,8 +322,8 @@ export default function AdminVocabPage() {
           {uploadResult && (
             <div className="mt-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
               {uploadResult.dryRun && <p className="mb-1 font-semibold text-amber-600">Sirf check hua — kuch save nahi hua</p>}
-              <p>Words: <b className="text-emerald-600">{uploadResult.wordsCreated}</b> {uploadResult.dryRun ? "upload honge" : "upload hue"}, <b className="text-amber-600">{uploadResult.wordsSkipped ?? 0}</b> skip</p>
-              <p>Questions: <b className="text-emerald-600">{uploadResult.questionsCreated}</b> {uploadResult.dryRun ? "upload honge" : "upload hue"}, <b className="text-amber-600">{uploadResult.questionsSkipped ?? 0}</b> skip</p>
+              <p>Words: <b className="text-emerald-600">{uploadResult.wordsCreated}</b> naye {uploadResult.dryRun ? "add honge" : "add hue"}, <b className="text-sky-600">{uploadResult.wordsUpdated ?? 0}</b> {uploadResult.dryRun ? "update honge" : "update hue"}, <b className="text-amber-600">{uploadResult.wordsSkipped ?? 0}</b> skip</p>
+              <p>Questions: <b className="text-emerald-600">{uploadResult.questionsCreated}</b> naye {uploadResult.dryRun ? "add honge" : "add hue"}, <b className="text-sky-600">{uploadResult.questionsUpdated ?? 0}</b> {uploadResult.dryRun ? "update honge" : "update hue"}, <b className="text-amber-600">{uploadResult.questionsSkipped ?? 0}</b> skip</p>
               {(uploadResult.wordReport?.length ?? 0) > 0 && (
                 <div className="mt-2">
                   <p className="font-semibold text-amber-600">Word-wise report (kya missing / duplicate hai):</p>
@@ -361,8 +434,15 @@ export default function AdminVocabPage() {
                       <button onClick={() => toggleActive(w)} className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted">
                         {w.isActive ? "Deactivate" : "Activate"}
                       </button>
-                      <button onClick={() => deleteWord(w)} className="rounded-lg border border-danger/30 px-2 py-1 text-xs text-danger hover:bg-danger/10">
-                        Delete
+                      <button onClick={() => openQuestions(w)} className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted">
+                        Questions
+                      </button>
+                      <button
+                        onClick={() => deleteWord(w)}
+                        disabled={deleting === w.id}
+                        className="rounded-lg border border-danger/30 px-2 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50"
+                      >
+                        {deleting === w.id ? "Deleting…" : "Delete"}
                       </button>
                     </td>
                   </tr>
@@ -372,6 +452,45 @@ export default function AdminVocabPage() {
           </div>
         </div>
       </main>
+
+      {qPanel && (
+        <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={() => !qBusy && setQPanel(null)}>
+          <div className="my-6 w-full max-w-2xl rounded-2xl border border-border bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold">Questions — {qPanel.word} ({qPanel.questions.length})</h3>
+              <button onClick={() => setQPanel(null)} className="rounded-md px-2 py-1 text-sm hover:bg-muted" aria-label="Close">✕</button>
+            </div>
+            {qError && <p className="mt-3 text-xs font-medium text-danger">{qError}</p>}
+            {qLoading && <p className="mt-4 text-sm text-muted-foreground">Loading…</p>}
+            {!qLoading && qPanel.questions.length === 0 && !qError && (
+              <p className="mt-4 text-sm text-muted-foreground">Is word ka koi question nahi bacha.</p>
+            )}
+            <ul className="mt-4 space-y-3">
+              {qPanel.questions.map((q, i) => (
+                <li key={q.id} className="rounded-lg border border-border p-3 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-medium">{i + 1}. {q.questionText}</p>
+                    <button
+                      onClick={() => deleteQuestion(q)}
+                      disabled={qBusy === q.id}
+                      className="shrink-0 rounded-lg border border-danger/30 px-2 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50"
+                    >
+                      {qBusy === q.id ? "Deleting…" : "Delete"}
+                    </button>
+                  </div>
+                  <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+                    {(Array.isArray(q.optionsJson) ? q.optionsJson : []).map((o) => (
+                      <li key={o.key} className={o.key === q.correctAnswer ? "font-semibold text-emerald-600" : ""}>
+                        {o.key}. {o.text}{o.key === q.correctAnswer ? "  ✓" : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={() => !saving && setEditing(null)}>

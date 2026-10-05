@@ -7,7 +7,7 @@ import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
 
 type AuthResponse = {
-  user: { id: string; email: string; fullName: string; role: string };
+  user: { id: string; email: string; fullName: string; role: string; preferredLanguage?: string };
   accessToken: string;
   refreshToken: string;
 };
