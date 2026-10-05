@@ -193,6 +193,28 @@ export class VocabAdminController {
     }
   }
 
+  /** Every quiz question of one word — feeds the admin "Questions" panel (so single questions can be deleted). */
+  @Get('words/:id/questions')
+  async listWordQuestions(@Param('id') id: string) {
+    const word = await this.prisma.vocabWord.findUnique({ where: { id }, select: { id: true, word: true } });
+    if (!word) throw new BadRequestException('Word not found');
+    const questions = await this.prisma.vocabQuestion.findMany({
+      where: { wordId: id },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, questionText: true, optionsJson: true, correctAnswer: true, explanation: true, questionType: true },
+    });
+    return { word: word.word, questions };
+  }
+
+  /** Delete ONE quiz question. Students' word progress is untouched (it is stored per word, not per question). */
+  @Delete('questions/:qid')
+  async deleteQuestion(@Param('qid') qid: string) {
+    const q = await this.prisma.vocabQuestion.findUnique({ where: { id: qid }, select: { id: true, wordId: true } });
+    if (!q) throw new BadRequestException('Question not found');
+    await this.prisma.vocabQuestion.delete({ where: { id: qid } });
+    return { deleted: true, wordId: q.wordId };
+  }
+
   // Oct 2026: delete is now SOFT by default (word hidden from students, everything kept) because a hard
   // delete wipes every student's progress and used to push them backwards / re-lock words. Re-uploading the
   // same word later simply re-activates it with all progress intact. Pass ?hard=true only for a mis-import
