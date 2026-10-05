@@ -401,7 +401,7 @@ export class AuthService implements OnModuleInit {
     } else {
       // Keep the Google profile photo (and the e-mail verification flag) in step with the Google account, so the
       // photo the student sees in the app — and the admin sees in the user list — is their current Google photo.
-      const patch: Record<string, unknown> = {};
+      const patch: { avatarUrl?: string; isEmailVerified?: boolean } = {};
       if (payload.picture && payload.picture !== user.avatarUrl) patch.avatarUrl = payload.picture;
       if (payload.email_verified === true && !user.isEmailVerified) patch.isEmailVerified = true;
       if (Object.keys(patch).length) {

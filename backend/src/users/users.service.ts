@@ -169,7 +169,7 @@ export class UserService {
 
   /** Student-editable profile fields. Email stays fixed (it is the login identity); the Google photo is read-only. */
   async updateProfile(userId: string, body: { fullName?: string; phone?: string; preferredLanguage?: string }) {
-    const data: Record<string, unknown> = {};
+    const data: { fullName?: string } = {};
     if (body.fullName !== undefined) {
       const name = body.fullName.trim().replace(/\s+/g, ' ');
       if (name.length < 2) throw new BadRequestException('Name must be at least 2 characters');
