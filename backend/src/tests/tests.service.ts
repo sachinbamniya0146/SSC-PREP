@@ -201,7 +201,7 @@ export class TestsService {
 async submitAttempt(
   userId: string,
   attemptId: string,
-  input: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[] },
+  input: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; clientSubmittedAt?: number | string },
 ) {
   const attempt = await this.prisma.testAttempt.findFirst({
     where: { id: attemptId, userId },
@@ -212,6 +212,22 @@ async submitAttempt(
   }
   const now = new Date();
   const expired = attempt.expiresAt != null && now > attempt.expiresAt;
+
+  // OFFLINE-SAFE SUBMIT: a student whose internet dropped keeps writing the test on the device; the app queues the
+  // submit and replays it when the network is back — possibly AFTER the server deadline. The client stamps the moment
+  // the student actually finished (clientSubmittedAt). If that moment was inside the test window (+30s clock slack) and
+  // the replay arrives within 6 hours, the client's answers are honoured, so the student gets their REAL result.
+  // Anything later / unstamped keeps the old strict behaviour (autosaved answers only).
+  const OFFLINE_REPLAY_WINDOW_MS = 6 * 60 * 60 * 1000;
+  const CLOCK_SLACK_MS = 30 * 1000;
+  const clientAtMs = input.clientSubmittedAt != null ? new Date(input.clientSubmittedAt as any).getTime() : NaN;
+  const finishedInsideWindow =
+    attempt.expiresAt != null &&
+    Number.isFinite(clientAtMs) &&
+    clientAtMs <= attempt.expiresAt.getTime() + CLOCK_SLACK_MS &&
+    clientAtMs <= now.getTime() + CLOCK_SLACK_MS && // a client can't claim a future time
+    now.getTime() <= attempt.expiresAt.getTime() + OFFLINE_REPLAY_WINDOW_MS;
+  const honourClientAnswers = !expired || finishedInsideWindow;
 
   // Base = answers already persisted by AUTOSAVE (v4 §31). Client payload is
   // merged on top when the attempt is still live; when expired it is dropped
@@ -228,7 +244,7 @@ async submitAttempt(
       timeSpentSeconds: s.timeSpentSeconds,
     });
   }
-  if (!expired) {
+  if (honourClientAnswers) {
     for (const a of input.answers ?? []) {
       merged.set(a.questionId, {
         questionId: a.questionId,

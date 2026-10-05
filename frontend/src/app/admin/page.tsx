@@ -1,5 +1,6 @@
 "use client";
 
+import UserAvatar from "@/components/UserAvatar";
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
 import { BackButton } from "@/components/BackButton";
@@ -14,6 +15,8 @@ interface User {
   fullName: string;
   role: string;
   phone?: string | null;
+  avatarUrl?: string | null;
+  preferredLanguage?: string;
   isEmailVerified: boolean;
   createdAt: string;
   subscriptions: { status: string; endsAt: string | null; planId: string }[];
@@ -1445,8 +1448,13 @@ export default function AdminPage() {
                   users.map((u) => (
                     <tr key={u.id} className="border-t border-border hover:bg-muted/50">
                       <td className="px-4 py-3">
-                        <div className="font-medium">{u.fullName}</div>
-                        <div className="text-xs text-muted-foreground">{u.email}</div>
+                        <div className="flex items-center gap-3">
+                          <UserAvatar name={u.fullName} email={u.email} src={u.avatarUrl} size={36} />
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">{u.fullName}</div>
+                            <div className="truncate text-xs text-muted-foreground">{u.email}</div>
+                          </div>
+                        </div>
                       </td>
                       <td className="px-4 py-3">{roleBadge(u.role)}</td>
                       <td className="px-4 py-3 text-sm">{u.phone || <span className="text-muted-foreground">—</span>}</td>

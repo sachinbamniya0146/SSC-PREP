@@ -81,3 +81,35 @@ export async function restoreArchivedProgress(prisma: PrismaService, wordId: str
   }
   return saved.length;
 }
+
+/**
+ * Call BEFORE moving a word LATER in the list. A student who can reach the word today (they mastered the word just
+ * before it, or anything after it) must not find it locked again after the admin re-orders the list — "ek baar
+ * unlock hua word dobara lock nahi hona chahiye". We pin that by setting forceUnlocked on their progress row
+ * (forceUnlocked only unlocks; it never marks a word mastered).
+ */
+export async function preserveUnlockBeforeMove(prisma: PrismaService, wordId: string): Promise<number> {
+  const word = await prisma.vocabWord.findUnique({ where: { id: wordId } });
+  if (!word) return 0;
+  const prev = await prisma.vocabWord.findFirst({
+    where: { orderIndex: { lt: word.orderIndex } },
+    orderBy: { orderIndex: 'desc' },
+  });
+  const reach = await prisma.vocabWordProgress.findMany({
+    where: prev
+      ? { masteredAt: { not: null }, remasterRequired: false, word: { orderIndex: { gte: prev.orderIndex } } }
+      : {},
+    select: { userId: true },
+    distinct: ['userId'],
+  });
+  const ids = reach.map((r) => r.userId);
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const part = ids.slice(i, i + CHUNK);
+    await prisma.vocabWordProgress.updateMany({ where: { wordId, userId: { in: part } }, data: { forceUnlocked: true } });
+    await prisma.vocabWordProgress.createMany({
+      data: part.map((userId) => ({ userId, wordId, forceUnlocked: true })),
+      skipDuplicates: true,
+    });
+  }
+  return ids.length;
+}

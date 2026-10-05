@@ -5,6 +5,7 @@
 // Renders nothing when the student has no plan / nothing is due.
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type Upcoming = {
   test: { id: string; status: string; examName: string; scheduledFor: string; msLeft: number; canStart: boolean; chapterCount: number; pattern: { totalQuestions: number; durationMinutes: number } } | null;
@@ -17,6 +18,7 @@ const fmt = (ms: number) => {
 };
 
 export default function PlanTestBanner() {
+  const tr = useT();
   const [up, setUp] = React.useState<Upcoming | null>(null);
   const [rev, setRev] = React.useState<Revision | null>(null);
   const [loadedAt, setLoadedAt] = React.useState(Date.now());
@@ -50,14 +52,14 @@ export default function PlanTestBanner() {
       {!test && !showRev && (
         <a href={hasPlan ? "/study-plan/board" : "/study-plan"} className="flex items-center justify-between gap-3 rounded-2xl border border-primary/40 bg-primary/5 p-4">
           <div>
-            <p className="text-sm font-bold">{hasPlan ? "🗓️ Aapka Study Planner" : "🎯 Apna Study Planner banayein"}</p>
+            <p className="text-sm font-bold">{hasPlan ? tr("🗓️ Your Study Planner", "🗓️ Aapka Study Planner") : tr("🎯 Build your Study Planner", "🎯 Apna Study Planner banayein")}</p>
             <p className="text-xs text-muted-foreground">
               {hasPlan
-                ? "Complete kiye chapters mark karein — kal 9 AM ka test aur roz ka revision yahin se milega."
-                : "Target exam aur date chunein, phir chapters mark karein — hum roz ka plan, test aur revision bana denge."}
+                ? tr("Mark the chapters you have completed — tomorrow's 9 AM test and your daily revision come from here.", "Complete kiye chapters mark karein — kal 9 AM ka test aur roz ka revision yahin se milega.")
+                : tr("Choose your target exam and date, then mark chapters — we will build your daily plan, test and revision.", "Target exam aur date chunein, phir chapters mark karein — hum roz ka plan, test aur revision bana denge.")}
             </p>
           </div>
-          <span className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground">{hasPlan ? "Kholein →" : "Shuru →"}</span>
+          <span className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground">{hasPlan ? "Kholein →" : tr("Start →", "Shuru →")}</span>
         </a>
       )}
       {test && (
@@ -65,11 +67,11 @@ export default function PlanTestBanner() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-xs font-semibold text-muted-foreground">{test.examName} · Study-plan test</p>
-              <p className="text-base font-bold">{open ? "⏰ Aapka test taiyaar hai!" : "📅 Aapka test 9:00 AM par khulega"}</p>
+              <p className="text-base font-bold">{open ? tr("⏰ Your test is ready!", "⏰ Aapka test taiyaar hai!") : tr("📅 Your test opens at 9:00 AM", "📅 Aapka test 9:00 AM par khulega")}</p>
               <p className="text-xs text-muted-foreground">{test.chapterCount} chapter · {test.pattern.totalQuestions} questions · {test.pattern.durationMinutes} min · har chapter me 95%+ chahiye</p>
             </div>
             {open ? (
-              <a href={`/test?plantest=${test.id}`} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground">Test shuru karein →</a>
+              <a href={`/test?plantest=${test.id}`} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground">{tr("Start test →", "Test shuru karein →")}</a>
             ) : (
               <div className="rounded-xl border border-border bg-background px-4 py-2 text-center font-mono text-lg font-bold">{fmt(left)}</div>
             )}
@@ -80,9 +82,9 @@ export default function PlanTestBanner() {
         <a href={`/test?plantest=${rev!.testId}`} className="flex items-center justify-between gap-3 rounded-2xl border border-amber-500/50 bg-amber-500/5 p-4">
           <div>
             <p className="text-sm font-bold">🔁 Aaj ka revision baaki hai</p>
-            <p className="text-xs text-muted-foreground">50 questions · aapke complete chapters se · roz zaroori</p>
+            <p className="text-xs text-muted-foreground">{tr("50 questions · from your completed chapters · every day", "50 questions · aapke complete chapters se · roz zaroori")}</p>
           </div>
-          <span className="shrink-0 rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white">Shuru →</span>
+          <span className="shrink-0 rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white">{tr("Start →", "Shuru →")}</span>
         </a>
       )}
     </div>

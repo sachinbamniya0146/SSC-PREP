@@ -3,6 +3,8 @@
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { StemMedia, OptionBody, RichText } from "@/components/QuestionMedia";
+import SolutionVerify from "@/components/SolutionVerify";
+import { useT } from "@/lib/i18n";
 
 type ReviewCardData = {
   id: string;
@@ -31,6 +33,7 @@ type ReviewCardData = {
 type Grade = "again" | "hard" | "good" | "easy";
 
 type AIExplanation = {
+  source?: string;
   explanation: string;
   explanationHindi: string;
   stepByStepSolution: string;
@@ -67,6 +70,7 @@ function VideoPlayer({ url, title }: { url: string; title?: string | null }) {
 }
 
 export default function ReviewPage() {
+  const tr = useT();
   const [cards, setCards] = React.useState<ReviewCardData[]>([]);
   const [stats, setStats] = React.useState<{ dueCount: number; totalCards: number; upcomingCount: number } | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -103,7 +107,7 @@ export default function ReviewPage() {
         setAiExplanation(null);
         setAiError(null);
       } else {
-        setMsg({ ok: false, text: "Could not load review queue — login pehle karo." });
+        setMsg({ ok: false, text: tr("Could not load the review queue — please log in first.", "Could not load review queue — login pehle karo.") });
       }
     } catch {
       setMsg({ ok: false, text: "Network error loading review queue." });
@@ -151,7 +155,7 @@ export default function ReviewPage() {
       if (res.ok) {
         setAiExplanation(d as AIExplanation);
       } else {
-        setAiError(d.message || "AI explanation abhi available nahi hai is question ke liye.");
+        setAiError(d.message || tr("An AI explanation is not available for this question yet.", "AI explanation abhi available nahi hai is question ke liye."));
       }
     } catch {
       setAiError("Network error fetching AI explanation.");
@@ -273,6 +277,7 @@ export default function ReviewPage() {
                         🇮🇳 {aiExplanation.stepByStepSolutionHindi}
                       </p>
                     )}
+                    <SolutionVerify questionId={card.question.id} source={aiExplanation.source ?? "AI_GENERATED"} />
                   </div>
                 )}
               </div>

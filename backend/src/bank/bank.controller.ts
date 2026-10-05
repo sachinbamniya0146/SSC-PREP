@@ -521,6 +521,22 @@ export class BankController {
     return this.practiceService.weakFromAttempt(userId, attemptId);
   }
 
+  /** Weak topics for questions the student just missed (in-test result screen; practice/sectional sets have no server attempt). */
+  @Post('practice/weak-from-questions')
+  async weakFromQuestions(@Body() body: { questionIds?: string[] }) {
+    return this.practiceService.weakFromQuestionIds(Array.isArray(body?.questionIds) ? body.questionIds : []);
+  }
+
+  /** One practice set built from several weak topics: body.items = [{ chapterId|topicId|subTopicId, count }]. */
+  @Post('practice/custom')
+  async customPractice(
+    @Req() req: any,
+    @Body() body: { items?: { chapterId?: string; topicId?: string; subTopicId?: string; count?: number }[] },
+  ) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.practiceService.createCustomSet(userId, body?.items ?? []);
+  }
+
   @Get('practice/quota')
   async getPracticeQuota(@Req() req: any) {
     const userId = req.user?.userId ?? req.user?.id;

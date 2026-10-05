@@ -5,8 +5,10 @@ import { fetchAuth, API_BASE } from "@/lib/api";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Suspense } from "react";
+import { useT } from "@/lib/i18n";
 
 function PaymentSuccessContent() {
+  const tr = useT();
   const searchParams = useSearchParams();
   const router = useRouter();
   const [status, setStatus] = React.useState<"checking" | "success" | "pending" | "failed">("checking");
@@ -56,7 +58,7 @@ function PaymentSuccessContent() {
         }
 
         setStatus("success");
-        setMessage(data.duplicate ? "Payment already confirmed." : "Payment successful! Aapka purchase activate ho gaya hai / Your purchase is now active.");
+        setMessage(data.duplicate ? "Payment already confirmed." : tr("Payment successful! Your purchase is now active.", "Payment successful! Aapka purchase activate ho gaya hai."));
       } catch (e: any) {
         setStatus("failed");
         setMessage(e.message || "Network error while verifying payment");

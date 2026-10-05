@@ -10,6 +10,7 @@
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type QuizQuestion = { id: string; questionText: string; options: { key: string; text: string }[] };
 type QuizData = { wordId: string; word: string; slug: string; masteryThresholdPct: number; requiredCorrectCount: number; timeLimitSec?: number; questions: QuizQuestion[] };
@@ -35,6 +36,7 @@ type SubmitResult = {
 };
 
 export default function VocabWordQuizPage() {
+  const tr = useT();
   const params = useParams();
   const router = useRouter();
   const slug = String(params?.slug ?? "");
@@ -71,7 +73,7 @@ export default function VocabWordQuizPage() {
         const r = await fetchAuth(`${API_BASE}/vocab/words/${slug}/quiz`);
         if (!r.ok) {
           const d = await r.json().catch(() => ({}));
-          throw new Error(d?.message || "Quiz load nahi hui");
+          throw new Error(d?.message || tr("Could not load the quiz", "Quiz load nahi hui"));
         }
         setQuiz(await r.json());
       } catch (e: any) {
@@ -139,7 +141,7 @@ export default function VocabWordQuizPage() {
             <p className="mt-1 text-sm text-muted-foreground">{result.correct}/{result.total} sahi</p>
             {passed ? (
               <p className="mt-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-                {result.alreadyMastered ? "Ye word pehle se hi mastered hai! 🎯" : "Mubarak ho! Agla word unlock ho gaya. 🎯"}
+                {result.alreadyMastered ? tr("This word is already mastered! 🎯", "Ye word pehle se hi mastered hai! 🎯") : tr("Congratulations! The next word is unlocked. 🎯", "Mubarak ho! Agla word unlock ho gaya. 🎯")}
               </p>
             ) : (
               <p className="mt-3 text-sm text-amber-700 dark:text-amber-400">
@@ -178,7 +180,7 @@ export default function VocabWordQuizPage() {
   }
 
   if (!quiz || quiz.questions.length === 0) {
-    return <div className="min-h-screen bg-background text-foreground"><main className="mx-auto max-w-xl px-4 py-10 text-center text-muted-foreground">Is word ke liye abhi koi question nahi hai.</main></div>;
+    return <div className="min-h-screen bg-background text-foreground"><main className="mx-auto max-w-xl px-4 py-10 text-center text-muted-foreground">{tr("There are no questions for this word yet.", "Is word ke liye abhi koi question nahi hai.")}</main></div>;
   }
 
   const q = quiz.questions[current];

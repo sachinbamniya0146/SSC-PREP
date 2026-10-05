@@ -107,6 +107,12 @@ export class GoogleAuthDto {
   @IsOptional()
   @IsIn(['WEB', 'APP'], { message: 'platform must be WEB or APP' })
   platform?: 'WEB' | 'APP';
+
+  // Referral code carried from a share link (/signup?ref=CODE). Only used when this Google login creates a NEW account.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  referralCode?: string;
 }
 
 export class ChangePasswordDto {

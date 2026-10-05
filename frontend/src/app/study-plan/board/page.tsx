@@ -11,6 +11,7 @@
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import BiMessage from "@/components/BiMessage";
+import { useT } from "@/lib/i18n";
 
 type Bi = { en: string; hi: string };
 type Chapter = { id: string; name: string; nameHindi?: string | null; questionCount: number; testable: boolean; status: "PENDING" | "SELF_MARKED" | "COMPLETE" | "WEAK"; lastScorePct: number | null };
@@ -55,6 +56,7 @@ const cd = (ms: number) => {
 };
 
 export default function StudyPlanBoardPage() {
+  const tr = useT();
   const [tab, setTab] = React.useState<"today" | "chapters" | "test" | "weak">("today");
   const [noPlan, setNoPlan] = React.useState<Bi | null>(null);
   const [today, setToday] = React.useState<Today | null>(null);
@@ -81,7 +83,7 @@ export default function StudyPlanBoardPage() {
     const t = await get("/study-plan/today");
     if (!t.ok) {
       if (t.d?.code === "NO_PLAN") setNoPlan(t.d.messages);
-      else setError(t.d?.message || "Load nahi hua");
+      else setError(t.d?.message || tr("Could not load", "Load nahi hua"));
       return;
     }
     setNoPlan(null);
@@ -135,7 +137,7 @@ export default function StudyPlanBoardPage() {
         body: JSON.stringify({ chapterIds: [...picked], complete }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d?.messages?.en || d?.message || "Mark nahi hua");
+      if (!r.ok) throw new Error(d?.messages?.en || d?.message || tr("Could not mark", "Mark nahi hua"));
       setPicked(new Set());
       await loadAll();
       if (complete) setTab("test");
@@ -215,7 +217,7 @@ export default function StudyPlanBoardPage() {
                       {rv.doneToday ? (
                         <p className="mt-3 text-sm font-semibold text-emerald-700">Aaj ka revision ho gaya{rv.scorePct != null ? ` — score ${rv.scorePct}%` : ""}. Shabaash! 🎉</p>
                       ) : (
-                        <a href={`/test?plantest=${rv.testId}`} className="mt-3 block rounded-lg bg-amber-600 px-4 py-3 text-center text-sm font-bold text-white">Revision shuru karein →</a>
+                        <a href={`/test?plantest=${rv.testId}`} className="mt-3 block rounded-lg bg-amber-600 px-4 py-3 text-center text-sm font-bold text-white">{tr("Start revision →", "Revision shuru karein →")}</a>
                       )}
                     </div>
                   );
@@ -245,7 +247,7 @@ export default function StudyPlanBoardPage() {
             {/* ------------------------------------------------- Chapters */}
             {tab === "chapters" && board && (
               <div className="mt-4">
-                <p className="text-xs text-muted-foreground">Jo chapters aapne complete kar liye unhe tick karein — unka test kal subah 9 AM ko aayega. / Tick the chapters you finished — their test comes tomorrow 9 AM.</p>
+                <p className="text-xs text-muted-foreground">{tr("Tick the chapters you finished — their test comes tomorrow at 9 AM.", "Jo chapters aapne complete kar liye unhe tick karein — unka test kal subah 9 AM ko aayega.")}</p>
                 <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold">
                   <span className="text-emerald-600">✅ {board.summary.complete} complete</span><span className="text-blue-600">🕘 {board.summary.selfMarked} awaiting test</span><span className="text-red-600">⚠️ {board.summary.weak} weak</span><span className="text-muted-foreground">⬜ {board.summary.pending} pending</span>
                 </div>
@@ -286,7 +288,7 @@ export default function StudyPlanBoardPage() {
               <div className="mt-4 space-y-4">
                 {!upcoming && (
                   <div className="rounded-xl border border-border bg-card p-5 text-center text-sm">
-                    <p>Koi test scheduled nahi hai. Chapters tab me complete chapters mark karein.</p>
+                    <p>{tr("No test is scheduled. Mark your completed chapters in the Chapters tab.", "Koi test scheduled nahi hai. Chapters tab me complete chapters mark karein.")}</p>
                     <p className="mt-1 text-muted-foreground">No test scheduled. Mark finished chapters in the Chapters tab.</p>
                   </div>
                 )}
@@ -347,7 +349,7 @@ export default function StudyPlanBoardPage() {
                   </select>
                 )}
                 {!weak || weak.subjects.length === 0 ? (
-                  <p className="mt-6 text-center text-sm text-muted-foreground">Abhi koi test data nahi. Kuch tests do — phir yahan weak topics dikhenge. / Take a few tests to see weak topics here.</p>
+                  <p className="mt-6 text-center text-sm text-muted-foreground">{tr("No test data yet. Take a few tests to see your weak topics here.", "Abhi koi test data nahi. Kuch tests do — phir yahan weak topics dikhenge.")}</p>
                 ) : (
                   <div className="mt-4 space-y-4">
                     {weak.subjects.map((s) => (

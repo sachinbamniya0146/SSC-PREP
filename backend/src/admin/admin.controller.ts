@@ -253,6 +253,8 @@ export class AdminController {
           fullName: true,
           role: true,
           phone: true,
+          avatarUrl: true,
+          preferredLanguage: true,
           isEmailVerified: true,
           createdAt: true,
           subscriptions: {

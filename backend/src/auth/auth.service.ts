@@ -45,6 +45,8 @@ export interface AuthenticatedSession {
     fullName: string;
     role: string;
     hintQuota?: number;
+    avatarUrl?: string | null;
+    preferredLanguage?: string;
   };
   accessToken: string;
   refreshToken: string;
@@ -354,6 +356,7 @@ export class AuthService implements OnModuleInit {
   async googleLogin(
     idToken: string,
     platform: 'WEB' | 'APP' = 'WEB',
+    referralCode?: string,
   ): Promise<Authenticated> {
     const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
     const clientSecret = this.config.get<string>('GOOGLE_CLIENT_SECRET');
@@ -390,6 +393,20 @@ export class AuthService implements OnModuleInit {
           avatarUrl: payload.picture || null,
         },
       });
+      // BUGFIX: referral codes were only honoured for e-mail signups — Google signups (most students) silently
+      // dropped the code, so those referrers never got credit. A bad/expired code must never block the login.
+      if (referralCode) {
+        await this.referralService.applyReferralCode(referralCode, user.id);
+      }
+    } else {
+      // Keep the Google profile photo (and the e-mail verification flag) in step with the Google account, so the
+      // photo the student sees in the app — and the admin sees in the user list — is their current Google photo.
+      const patch: Record<string, unknown> = {};
+      if (payload.picture && payload.picture !== user.avatarUrl) patch.avatarUrl = payload.picture;
+      if (payload.email_verified === true && !user.isEmailVerified) patch.isEmailVerified = true;
+      if (Object.keys(patch).length) {
+        user = await this.prisma.user.update({ where: { id: user.id }, data: patch });
+      }
     }
     return this.completeAuth(user, platform);
   }
@@ -491,6 +508,8 @@ export class AuthService implements OnModuleInit {
           role: true,
           permissions: true,
           isEmailVerified: true,
+          avatarUrl: true,
+          preferredLanguage: true,
           createdAt: true,
           _count: { select: { testAttempts: true, bookmarks: true } },
           subscriptions: {
@@ -617,6 +636,8 @@ export class AuthService implements OnModuleInit {
       fullName: string;
       role: string;
       hintQuota?: number;
+      avatarUrl?: string | null;
+      preferredLanguage?: string;
     },
     platform: 'WEB' | 'APP',
     deviceId?: string,
@@ -684,6 +705,8 @@ export class AuthService implements OnModuleInit {
         fullName: user.fullName,
         role: user.role,
         hintQuota: user.hintQuota ?? 3,
+        avatarUrl: user.avatarUrl ?? null,
+        preferredLanguage: user.preferredLanguage ?? 'en',
       },
       ...pair,
       sessionId: session.id,

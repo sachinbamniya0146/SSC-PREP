@@ -5,6 +5,7 @@
 //   * or tap the calendar icon and pick it
 // The value that goes out is always YYYY-MM-DD (what the server stores) or "".
 import * as React from "react";
+import { useT } from "@/lib/i18n";
 
 function isoToDisplay(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
@@ -31,6 +32,7 @@ export default function DateField({
   className?: string;
   placeholder?: string;
 }) {
+  const tr = useT();
   const [text, setText] = React.useState(isoToDisplay(value));
   const [bad, setBad] = React.useState(false);
 
@@ -71,7 +73,7 @@ export default function DateField({
         onChange={(e) => type(e.target.value)}
         aria-invalid={bad}
       />
-      <label className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-base hover:bg-muted" title="Calendar se chunein">
+      <label className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-base hover:bg-muted" title={tr("Pick from calendar", "Calendar se chunein")}>
         📅
         <input
           type="date"
@@ -85,7 +87,7 @@ export default function DateField({
           }}
         />
       </label>
-      {bad && <p className="mt-1 text-xs text-red-600">Date galat hai — DD/MM/YYYY me likhein (jaise 05/10/2026).</p>}
+      {bad && <p className="mt-1 text-xs text-red-600">{tr("Invalid date — write it as DD/MM/YYYY (e.g. 05/10/2026).", "Date galat hai — DD/MM/YYYY me likhein (jaise 05/10/2026).")}</p>}
     </div>
   );
 }

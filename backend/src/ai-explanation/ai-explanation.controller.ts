@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Param, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -27,6 +27,22 @@ export class AIExplanationController {
     @Param('id') questionId: string,
   ) {
     return this.aiExplanationService.getOrGenerateExplanation(questionId, user.userId, user.role);
+  }
+
+  /** Tally of student confirmations for an AI solution + the caller's own vote. */
+  @Get('questions/:id/verification')
+  async getVerification(@CurrentUser() user: { userId: string }, @Param('id') questionId: string) {
+    return this.aiExplanationService.getVerification(questionId, user.userId);
+  }
+
+  /** Student confirms / disputes the AI solution. Body: { vote: 'CORRECT' | 'INCORRECT' }. */
+  @Post('questions/:id/vote')
+  async vote(
+    @CurrentUser() user: { userId: string; role: string },
+    @Param('id') questionId: string,
+    @Body() body: { vote?: string },
+  ) {
+    return this.aiExplanationService.vote(questionId, user.userId, user.role, body?.vote ?? '');
   }
 
   @Get('questions/:id/available')

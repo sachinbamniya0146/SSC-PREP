@@ -8,6 +8,9 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { SupportChatMount } from "@/components/SupportChatMount";
 import { PushNotificationMount } from "@/components/PushNotificationMount";
 import SessionSync from "@/components/SessionSync";
+import OfflineSubmitSync from "@/components/OfflineSubmitSync";
+import LanguageSync from "@/components/LanguageSync";
+import NavTracker from "@/components/NavTracker";
 
 // FIX (Sep 2026 — "hindi font me mistake ho rahi hai matrao ki"): the app
 // referenced 'Noto Sans Devanagari' by NAME in a CSS variable, but never
@@ -87,6 +90,9 @@ export default function RootLayout({
           <SupportChatMount />
           <PushNotificationMount />
           <SessionSync />
+          <OfflineSubmitSync />
+          <LanguageSync />
+          <NavTracker />
         </ThemeProvider>
       </body>
     </html>

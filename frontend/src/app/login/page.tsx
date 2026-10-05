@@ -1,5 +1,6 @@
 "use client";
 
+import { setStoredLang } from "@/lib/i18n";
 import * as React from "react";
 import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
@@ -41,6 +42,7 @@ export default function LoginPage() {
       localStorage.setItem("ssc_access_token", data.accessToken);
       localStorage.setItem("ssc_refresh_token", data.refreshToken);
       localStorage.setItem("ssc_user", JSON.stringify(data.user));
+      setStoredLang(data.user?.preferredLanguage === "hinglish" ? "hinglish" : "en");
       window.location.href = "/dashboard";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Google login failed");
@@ -98,6 +100,7 @@ export default function LoginPage() {
       localStorage.setItem("ssc_access_token", data.accessToken);
       localStorage.setItem("ssc_refresh_token", data.refreshToken);
       localStorage.setItem("ssc_user", JSON.stringify(data.user));
+      setStoredLang(data.user?.preferredLanguage === "hinglish" ? "hinglish" : "en");
       window.location.href = "/dashboard";
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";

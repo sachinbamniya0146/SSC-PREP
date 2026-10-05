@@ -33,7 +33,7 @@ export class TestsController {
   submitAttempt(
     @CurrentUser() user: { userId: string },
     @Param('attemptId') attemptId: string,
-    @Body() body: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[] },
+    @Body() body: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; clientSubmittedAt?: number | string },
   ) {
     return this.testsService.submitAttempt(user.userId, attemptId, body);
   }

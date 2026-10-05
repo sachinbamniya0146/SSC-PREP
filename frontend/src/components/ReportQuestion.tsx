@@ -3,6 +3,7 @@
 import * as React from "react";
 import { api } from "@/lib/api";
 import { getChatSocket } from "@/lib/chat-socket";
+import { useT } from "@/lib/i18n";
 
 /**
  * ReportQuestion — shared "report a question + chat about it with admin"
@@ -28,15 +29,16 @@ import { getChatSocket } from "@/lib/chat-socket";
  * from a list of "my reports").
  */
 
-const CATEGORIES: { value: string; label: string }[] = [
-  { value: "WRONG_ANSWER", label: "Answer key galat hai" },
-  { value: "WRONG_OPTION", label: "Option/text galat hai" },
-  { value: "WRONG_EXPLANATION", label: "Explanation galat hai" },
-  { value: "TRANSLATION", label: "Hindi translation galat hai" },
-  { value: "TYPO", label: "Spelling/typo mistake" },
-  { value: "MISSING_OPTION", label: "Option missing hai" },
-  { value: "DUPLICATE", label: "Yeh question duplicate hai" },
-  { value: "OTHER", label: "Kuch aur" },
+// label = [English, Hinglish]; the English text is what everybody sees unless the student chose Hinglish in Profile
+const CATEGORIES: { value: string; label: [string, string] }[] = [
+  { value: "WRONG_ANSWER", label: ["Answer key is wrong", "Answer key galat hai"] },
+  { value: "WRONG_OPTION", label: ["Option / text is wrong", "Option/text galat hai"] },
+  { value: "WRONG_EXPLANATION", label: ["Explanation is wrong", "Explanation galat hai"] },
+  { value: "TRANSLATION", label: ["Hindi translation is wrong", "Hindi translation galat hai"] },
+  { value: "TYPO", label: ["Spelling / typo mistake", "Spelling/typo mistake"] },
+  { value: "MISSING_OPTION", label: ["An option is missing", "Option missing hai"] },
+  { value: "DUPLICATE", label: ["This question is a duplicate", "Yeh question duplicate hai"] },
+  { value: "OTHER", label: ["Something else", "Kuch aur"] },
 ];
 
 interface ChatMessage {
@@ -58,6 +60,7 @@ interface ReportQuestionProps {
 }
 
 export function ReportQuestion({ questionId, existingReportId, currentUserId, compact }: ReportQuestionProps) {
+  const tr = useT();
   const [open, setOpen] = React.useState(false);
   const [reportId, setReportId] = React.useState<string | null>(existingReportId ?? null);
   const [category, setCategory] = React.useState("OTHER");
@@ -81,7 +84,7 @@ export function ReportQuestion({ questionId, existingReportId, currentUserId, co
       setReportId(res.report.id);
       setReportStatus(res.report.status);
     } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : "Report submit nahi ho paya. Dobara try karein.");
+      setSubmitError(e instanceof Error ? e.message : tr("Could not submit the report. Please try again.", "Report submit nahi ho paya. Dobara try karein."));
     } finally {
       setSubmitting(false);
     }
@@ -119,13 +122,13 @@ export function ReportQuestion({ questionId, existingReportId, currentUserId, co
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs"
           >
             {CATEGORIES.map((c) => (
-              <option key={c.value} value={c.value}>{c.label}</option>
+              <option key={c.value} value={c.value}>{tr(c.label[0], c.label[1])}</option>
             ))}
           </select>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Kya problem hai is question mein? (jitna detail denge utna jaldi fix hoga)"
+            placeholder={tr("What is wrong with this question? (the more detail, the faster it gets fixed)", "Kya problem hai is question mein? (jitna detail denge utna jaldi fix hoga)")}
             rows={3}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs"
           />
@@ -135,7 +138,7 @@ export function ReportQuestion({ questionId, existingReportId, currentUserId, co
             disabled={submitting || !description.trim()}
             className="btn btn-primary w-full text-xs disabled:opacity-50"
           >
-            {submitting ? "Submit ho raha hai…" : "Submit Report"}
+            {submitting ? tr("Submitting…", "Submit ho raha hai…") : "Submit Report"}
           </button>
         </div>
       ) : (
@@ -157,6 +160,7 @@ function ReportChatThread({
   status: string;
   onStatusChange: (s: string) => void;
 }) {
+  const tr = useT();
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [draft, setDraft] = React.useState("");
@@ -223,10 +227,10 @@ function ReportChatThread({
   };
 
   const statusLabel: Record<string, string> = {
-    OPEN: "🟡 Open — admin ko notify kar diya gaya hai",
-    REVIEWING: "🔵 Under Review — admin dekh raha hai",
-    CONFIRMED: "✅ Confirmed — is question ko fix kiya ja raha hai",
-    REJECTED: "⚪ Reviewed — koi issue nahi mila is question mein",
+    OPEN: tr("🟡 Open — the admin has been notified", "🟡 Open — admin ko notify kar diya gaya hai"),
+    REVIEWING: tr("🔵 Under Review — an admin is looking at it", "🔵 Under Review — admin dekh raha hai"),
+    CONFIRMED: tr("✅ Confirmed — this question is being fixed", "✅ Confirmed — is question ko fix kiya ja raha hai"),
+    REJECTED: tr("⚪ Reviewed — no issue found in this question", "⚪ Reviewed — koi issue nahi mila is question mein"),
   };
 
   return (

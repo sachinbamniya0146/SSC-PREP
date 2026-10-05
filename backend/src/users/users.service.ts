@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 // Fields safe to return to the client — never selects passwordHash or the
@@ -141,7 +141,10 @@ export class UserService {
     const data: Record<string, unknown> = {};
 
     if (body.darkMode !== undefined) data.darkMode = body.darkMode;
-    if (body.preferredLanguage !== undefined) data.preferredLanguage = body.preferredLanguage;
+    if (body.preferredLanguage !== undefined) {
+      // only the two UI languages the app actually has; anything else would silently fall back to English
+      data.preferredLanguage = body.preferredLanguage === 'hinglish' ? 'hinglish' : 'en';
+    }
 
     if (body.phone !== undefined) {
       const normalizedPhone = body.phone.trim();
@@ -162,6 +165,21 @@ export class UserService {
       select: PUBLIC_USER_SELECT,
     });
     return user;
+  }
+
+  /** Student-editable profile fields. Email stays fixed (it is the login identity); the Google photo is read-only. */
+  async updateProfile(userId: string, body: { fullName?: string; phone?: string; preferredLanguage?: string }) {
+    const data: Record<string, unknown> = {};
+    if (body.fullName !== undefined) {
+      const name = body.fullName.trim().replace(/\s+/g, ' ');
+      if (name.length < 2) throw new BadRequestException('Name must be at least 2 characters');
+      data.fullName = name;
+    }
+    if (Object.keys(data).length) {
+      await this.prisma.user.update({ where: { id: userId }, data });
+    }
+    // phone uniqueness + language normalisation live in updatePreferences()
+    return this.updatePreferences(userId, { phone: body.phone, preferredLanguage: body.preferredLanguage });
   }
 
   /** Save (or clear, when apiKey is null) the user's personal OpenRouter key. */

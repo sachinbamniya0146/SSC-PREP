@@ -2,6 +2,7 @@
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { StemMedia, OptionBody, RichText } from "@/components/QuestionMedia";
+import { useT } from "@/lib/i18n";
 
 type Bm = {
   bookmarkedAt: string;
@@ -35,6 +36,7 @@ const authHeaders = (): Record<string, string> => {
 };
 
 export default function BookmarksPage() {
+  const tr = useT();
   const [bookmarks, setBookmarks] = React.useState<Bm[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
@@ -108,7 +110,7 @@ export default function BookmarksPage() {
       const r = await fetchAuth(`${apiBase()}/bookmarks/practice-set`, { headers: authHeaders() });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setPracticeError(d?.message || "Practice set nahi ban paya");
+        setPracticeError(d?.message || tr("Could not create the practice set", "Practice set nahi ban paya"));
         return;
       }
       sessionStorage.setItem("ssc_sectional_set", JSON.stringify(d));
@@ -216,7 +218,7 @@ export default function BookmarksPage() {
                       value={noteDraft}
                       onChange={(e) => setNoteDraft(e.target.value)}
                       rows={3}
-                      placeholder="Apna note likhein (yaad rakhne ki trick, galti ki wajah, etc.)"
+                      placeholder={tr("Write your note (memory trick, reason for the mistake, etc.)", "Apna note likhein (yaad rakhne ki trick, galti ki wajah, etc.)")}
                       className="w-full rounded-lg border border-border bg-background p-2 text-sm"
                     />
                     <div className="mt-1.5 flex gap-2">

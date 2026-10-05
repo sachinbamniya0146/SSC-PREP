@@ -12,6 +12,7 @@ import { useParams, useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { startCashfreeCheckout, type BiMsg } from "@/lib/vocab-pay";
 import BiMessage from "@/components/BiMessage";
+import { useT } from "@/lib/i18n";
 
 type SynAnt = { word: string; hindi?: string; sentence?: string };
 type Example = { en?: string; hi?: string };
@@ -42,6 +43,7 @@ type WordDetail = {
 };
 
 export default function VocabWordDetailPage() {
+  const tr = useT();
   const params = useParams();
   const router = useRouter();
   const slug = String(params?.slug ?? "");
@@ -69,7 +71,7 @@ export default function VocabWordDetailPage() {
       const r = await fetchAuth(`${API_BASE}/vocab/words/${slug}`);
       if (r.status === 403) {
         const d = await r.json().catch(() => ({}));
-        setLockedMessage(d?.message || "Ye word abhi locked hai.");
+        setLockedMessage(d?.message || tr("This word is still locked.", "Ye word abhi locked hai."));
         setLockMsg(d?.messages || null);
         setLockCode(d?.code || "");
         setLockedWordId(d?.wordId || "");
@@ -82,7 +84,7 @@ export default function VocabWordDetailPage() {
       if (!r.ok) throw new Error("Load failed");
       setWord(await r.json());
     } catch {
-      setError("Load nahi ho paya.");
+      setError(tr("Could not load.", "Load nahi ho paya."));
     } finally {
       setLoading(false);
     }
@@ -98,7 +100,7 @@ export default function VocabWordDetailPage() {
     try {
       await startCashfreeCheckout(product);
     } catch (e: any) {
-      setError(e.message || "Payment start nahi hua");
+      setError(e.message || tr("Could not start the payment", "Payment start nahi hua"));
       setSubscribing(false);
     }
   };
@@ -113,7 +115,7 @@ export default function VocabWordDetailPage() {
       <div className="min-h-screen bg-background text-foreground">
         <main className="mx-auto max-w-md px-4 py-16 text-center">
           <div className="text-4xl">{revisionPending ? "🔁" : "🔒"}</div>
-          <h1 className="mt-3 text-lg font-bold">{revisionPending ? "Pehle aaj ki revision / Revise first" : "Ye word locked hai / This word is locked"}</h1>
+          <h1 className="mt-3 text-lg font-bold">{revisionPending ? tr("Revise first", "Pehle aaj ki revision") : "Ye word locked hai / This word is locked"}</h1>
           {lockMsg ? <BiMessage msg={lockMsg} tone="warn" className="mt-3 text-left" /> : <p className="mt-2 text-sm text-muted-foreground">{lockedMessage}</p>}
           {error && <p className="mt-2 text-sm text-danger">{error}</p>}
 
@@ -158,7 +160,7 @@ export default function VocabWordDetailPage() {
                     <button onClick={() => pay({ vocabUnlockAll: true })} disabled={subscribing} className="btn w-full border border-red-500/40 bg-red-500/10 py-2.5 text-sm font-semibold text-red-600 disabled:opacity-50">
                       {subscribing ? "Redirecting…" : `Pay ₹${pricing?.unlockAll.priceInr ?? 100} & unlock all words`}
                     </button>
-                    <button onClick={() => setConfirm("")} className="btn btn-outline w-full py-2 text-sm">Nahi, padhunga / No, I will study</button>
+                    <button onClick={() => setConfirm("")} className="btn btn-outline w-full py-2 text-sm">{tr("No, I will study", "Nahi, padhunga")}</button>
                   </div>
                 )}
               </div>
@@ -264,7 +266,7 @@ export default function VocabWordDetailPage() {
             onClick={() => router.push(`/vocabulary/${word.slug}/quiz`)}
             className="btn w-full bg-primary py-3 text-sm font-semibold text-primary-foreground hover:opacity-90"
           >
-            🚀 {word.attemptsCount > 0 ? "Quiz dobara dein" : "Quiz shuru karein"} ({word.questionCount} questions me se {word.requiredCorrectCount} sahi chahiye — {word.masteryThresholdPct}%+)
+            🚀 {word.attemptsCount > 0 ? tr("Retake quiz", "Quiz dobara dein") : tr("Start quiz", "Quiz shuru karein")} ({word.questionCount} questions me se {word.requiredCorrectCount} sahi chahiye — {word.masteryThresholdPct}%+)
           </button>
         </div>
       </main>

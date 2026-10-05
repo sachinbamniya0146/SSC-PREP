@@ -486,6 +486,20 @@ export class MonetizationService {
    * them can ever see `count === 1`; the other sees `count === 0` and
    * exits immediately without granting anything twice.
    */
+  /**
+   * Referral commission is a side effect of a payment. If it ever throws (DB hiccup, missing plan row, ...) the
+   * student's purchase has already been granted above and the Payment row is already SUCCESS — so a referral error
+   * must never turn a paid purchase into a failed API call (which also made the gateway retry the webhook).
+   */
+  private async safeReferral(userId: string, payment: { id: string; amountInr: number }): Promise<void> {
+    try {
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[referral] onPaidPurchase failed for payment ${payment.id}:`, (e as Error)?.message);
+    }
+  }
+
   private async fulfill(payment: any, gatewayPaymentId: string) {
     const claim = await this.prisma.payment.updateMany({
       where: { id: payment.id, status: { not: 'SUCCESS' } },
@@ -532,21 +546,21 @@ export class MonetizationService {
       // it — not just PLAN. It's a no-op if the buyer wasn't referred by
       // anyone, so calling it unconditionally for every fulfilled payment is
       // safe (see referral.service.ts#onPaidPurchase's early-return).
-      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+      await this.safeReferral(userId, payment);
     } else if (meta.kind === 'CHAPTER') {
       await this.prisma.chapterPurchase.upsert({
         where: { userId_chapterId: { userId, chapterId: meta.chapterId } },
         create: { userId, chapterId: meta.chapterId, amountInr: 1, status: 'SUCCESS' },
         update: { status: 'SUCCESS' },
       });
-      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+      await this.safeReferral(userId, payment);
     } else if (meta.kind === 'MOCK') {
       await this.prisma.mockAccess.upsert({
         where: { userId_testTemplateId: { userId, testTemplateId: meta.mockTemplateId } },
         create: { userId, testTemplateId: meta.mockTemplateId, paidPacksPurchased: 1 },
         update: { paidPacksPurchased: { increment: 1 } },
       });
-      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+      await this.safeReferral(userId, payment);
     } else if (meta.kind === 'VOCAB_WORD') {
       await this.prisma.vocabWordPurchase.upsert({
         where: { userId_wordId: { userId, wordId: meta.vocabWordId } },
@@ -558,14 +572,14 @@ export class MonetizationService {
         create: { userId, wordId: meta.vocabWordId, forceUnlocked: true },
         update: { forceUnlocked: true },
       });
-      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+      await this.safeReferral(userId, payment);
     } else if (meta.kind === 'VOCAB_UNLOCK_ALL') {
       await this.prisma.vocabUserState.upsert({
         where: { userId },
         create: { userId, allUnlockedAt: new Date() },
         update: { allUnlockedAt: new Date() },
       });
-      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+      await this.safeReferral(userId, payment);
     } else if (meta.kind === 'VOCAB_REVISION_SKIP') {
       const dateKey = meta.dateKey || istDateKey(new Date());
       const already = await this.prisma.vocabRevisionSession.findFirst({
@@ -596,7 +610,7 @@ export class MonetizationService {
           },
         });
       }
-      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+      await this.safeReferral(userId, payment);
     } else if (meta.kind === 'VOCAB_SUBSCRIPTION') {
       const existing = await this.prisma.vocabSubscription.findUnique({ where: { userId } });
       const base = existing && existing.expiresAt > new Date() ? existing.expiresAt : new Date();
@@ -606,7 +620,7 @@ export class MonetizationService {
         create: { userId, expiresAt, amountInr: payment.amountInr, status: 'SUCCESS' },
         update: { expiresAt, amountInr: payment.amountInr, status: 'SUCCESS' },
       });
-      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+      await this.safeReferral(userId, payment);
     }
 
     // consume coupon if any.

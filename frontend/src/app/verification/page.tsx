@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type VerifStats = {
   stats: Record<string, number>;
@@ -47,6 +48,7 @@ const STATUS_META: Record<string, { label: string; cls: string; badge: string }>
 };
 
 export default function VerificationPage() {
+  const tr = useT();
   const [stats, setStats] = React.useState<VerifStats | null>(null);
   const [questions, setQuestions] = React.useState<QRow[]>([]);
   const [user, setUser] = React.useState<any>(null);
@@ -65,7 +67,7 @@ export default function VerificationPage() {
   const [savingId, setSavingId] = React.useState<string | null>(null);
 
   const saveHindi = async (qid: string) => {
-    if (!editText.trim()) { alert("Hindi text khali nahi ho sakta"); return; }
+    if (!editText.trim()) { alert(tr("Hindi text cannot be empty", "Hindi text khali nahi ho sakta")); return; }
     setSavingId(qid);
     try {
       const r = await fetchAuth(`${apiBase}/bank/admin/questions/${qid}/translation`, {

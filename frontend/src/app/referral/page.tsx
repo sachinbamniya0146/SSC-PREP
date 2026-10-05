@@ -65,6 +65,11 @@ const statusColor: Record<Withdrawal["status"], string> = {
 export default function ReferralPage() {
   const [code, setCode] = React.useState("");
   const [shareLink, setShareLink] = React.useState("");
+  // "I was referred by a friend" — code applied to MY account (null = none yet)
+  const [referredBy, setReferredBy] = React.useState<string | null>(null);
+  const [applyCode, setApplyCode] = React.useState("");
+  const [applyMsg, setApplyMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
+  const [applying, setApplying] = React.useState(false);
   const [stats, setStats] = React.useState<ReferralStat | null>(null);
   const [wallet, setWallet] = React.useState<Wallet | null>(null);
   const [refs, setRefs] = React.useState<
@@ -101,6 +106,7 @@ export default function ReferralPage() {
         const d = await meRes.json();
         setCode(d.referralCode);
         setShareLink(d.shareLink);
+        setReferredBy(d.referredBy ?? null);
         setStats(d.stats);
         setWallet(d.wallet);
         setRefs(d.referrals);
@@ -127,10 +133,38 @@ export default function ReferralPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const applyReferral = async () => {
+    const c = applyCode.trim();
+    if (!c || applying) return;
+    setApplying(true);
+    setApplyMsg(null);
+    try {
+      const res = await fetchAuth(`${API_BASE}/referral/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: c }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setApplyMsg({ ok: false, text: d?.message || "Could not apply this code." });
+      } else {
+        setApplyMsg({ ok: !!d.applied, text: d.message || (d.applied ? "Referral code applied." : "Code not applied.") });
+        if (d.applied) {
+          setReferredBy(c.toUpperCase());
+          setApplyCode("");
+        }
+      }
+    } catch {
+      setApplyMsg({ ok: false, text: "Network error — please try again." });
+    } finally {
+      setApplying(false);
+    }
+  };
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(
-        shareLink || `https://sscprephub.in/signup?ref=${code}`,
+        shareLink || `${window.location.origin}/signup?ref=${code}`,
       );
       alert("🔗 Referral link copied! Share with friends.");
     } catch {
@@ -313,6 +347,42 @@ export default function ReferralPage() {
                 <p className="mt-3 break-all text-xs text-muted-foreground">{shareLink}</p>
               </div>
             )}
+
+            {/* ---- Got a friend's code? ---- */}
+            <div className="card mt-6 p-5">
+              <p className="text-sm font-semibold">Were you referred by a friend?</p>
+              {referredBy ? (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  ✅ Referral code <span className="font-bold text-primary">{referredBy}</span> is applied to your account.
+                </p>
+              ) : (
+                <>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Enter their code before your first purchase so they get their reward. You can only add one code.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <input
+                      value={applyCode}
+                      onChange={(e) => setApplyCode(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => { if (e.key === "Enter") applyReferral(); }}
+                      placeholder="FRIEND'S CODE"
+                      maxLength={20}
+                      className="w-48 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold tracking-widest outline-none focus:border-primary"
+                    />
+                    <button
+                      onClick={applyReferral}
+                      disabled={applying || !applyCode.trim()}
+                      className="btn bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                    >
+                      {applying ? "Applying…" : "Apply code"}
+                    </button>
+                  </div>
+                </>
+              )}
+              {applyMsg && (
+                <p className={`mt-2 text-xs font-medium ${applyMsg.ok ? "text-success" : "text-destructive"}`}>{applyMsg.text}</p>
+              )}
+            </div>
 
             {/* ---- Payout method ---- */}
             <div className="card mt-8 p-5">

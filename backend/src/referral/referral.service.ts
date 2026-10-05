@@ -40,26 +40,59 @@ export class ReferralService {
     });
   }
 
-  /** Apply a referral code at signup/registration. */
-  async applyReferralCode(referrerCode: string, refereeId: string): Promise<boolean> {
-    if (!referrerCode) return false;
+  /** Normalise whatever the student typed / the share link carried: "  ab12cd34 " -> "AB12CD34". */
+  private normalizeCode(code: string | undefined | null): string {
+    return String(code ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  }
+
+  /**
+   * Apply a referral code at signup/registration (email OR Google signup) or later from the referral page.
+   * Returns a reason when it is NOT applied so the UI can tell the student why, instead of silently doing nothing.
+   * Rules: a student can only ever have ONE referrer, can't refer themself, and can't add a code after they
+   * already made a paid purchase (the commission would be unfair to the new referrer).
+   */
+  async applyReferralCodeDetailed(
+    rawCode: string,
+    refereeId: string,
+  ): Promise<{ applied: boolean; reason?: 'EMPTY' | 'INVALID' | 'SELF' | 'ALREADY_REFERRED' | 'ALREADY_PURCHASED'; message: string }> {
+    const referrerCode = this.normalizeCode(rawCode);
+    if (!referrerCode) return { applied: false, reason: 'EMPTY', message: 'Enter a referral code.' };
+
     const referrer = await this.prisma.user.findUnique({ where: { referralCode: referrerCode } });
-    if (!referrer) return false;
-    if (referrer.id === refereeId) return false; // can't refer yourself
+    if (!referrer) return { applied: false, reason: 'INVALID', message: 'This referral code does not exist. Please check it and try again.' };
+    if (referrer.id === refereeId) return { applied: false, reason: 'SELF', message: "You can't use your own referral code." };
 
-    const existing = await this.prisma.referral.findUnique({
-      where: { referrerId_refereeId: { referrerId: referrer.id, refereeId: refereeId } },
-    });
-    if (existing) return true; // already tracked
+    const referee = await this.prisma.user.findUnique({ where: { id: refereeId }, select: { id: true, referredByCode: true } });
+    if (!referee) return { applied: false, reason: 'INVALID', message: 'User not found.' };
+    if (referee.referredByCode) {
+      return referee.referredByCode === referrerCode
+        ? { applied: true, message: 'This referral code is already applied to your account.' }
+        : { applied: false, reason: 'ALREADY_REFERRED', message: 'A referral code is already applied to your account.' };
+    }
+    const paid = await this.prisma.payment.count({ where: { userId: refereeId, status: 'SUCCESS' } });
+    if (paid > 0) {
+      return { applied: false, reason: 'ALREADY_PURCHASED', message: 'Referral codes can only be added before your first purchase.' };
+    }
 
-    await this.prisma.referral.create({
-      data: { referrerId: referrer.id, refereeId },
-    });
-    await this.prisma.user.update({
-      where: { id: refereeId },
-      data: { referredByCode: referrerCode },
-    });
-    return true;
+    try {
+      await this.prisma.$transaction([
+        this.prisma.referral.create({ data: { referrerId: referrer.id, refereeId } }),
+        this.prisma.user.update({ where: { id: refereeId }, data: { referredByCode: referrerCode } }),
+      ]);
+    } catch (e: any) {
+      // P2002 = this exact (referrer, referee) pair was already tracked by a parallel request — that's fine.
+      if (e?.code !== 'P2002') throw e;
+    }
+    return { applied: true, message: `Referral code applied — you were referred by ${referrer.fullName?.split(' ')[0] || 'a friend'}.` };
+  }
+
+  /** Boolean wrapper kept for the signup flows (a bad code must never block account creation). */
+  async applyReferralCode(referrerCode: string, refereeId: string): Promise<boolean> {
+    try {
+      return (await this.applyReferralCodeDetailed(referrerCode, refereeId)).applied;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -254,7 +287,8 @@ export class ReferralService {
 
     return {
       referralCode: code,
-      shareLink: `https://sscprephub.in/signup?ref=${code}`,
+      shareLink: `${(process.env.APP_BASE_URL || 'https://sscprephub.in').replace(/\/$/, '')}/signup?ref=${code}`,
+      referredBy: user.referredByCode ?? null,
       stats: {
         totalReferrals: referrals.length,
         paidReferrals: paidCount,

@@ -1,5 +1,6 @@
 "use client";
 import { fetchAuth } from "@/lib/api";
+import { saveDraft, loadDraft, clearDraft, queueSubmit, flushPendingSubmits } from "@/lib/offline-submit";
 import { Logo } from "@/components/Logo";
 
 import * as React from "react";
@@ -8,6 +9,9 @@ import { API_BASE } from "@/lib/api";
 import DiagramVenn from "@/components/DiagramVenn";
 import { StemMedia, QFigure } from "@/components/QuestionMedia";
 import { ReportQuestion } from "@/components/ReportQuestion";
+import WeakTopicPractice from "@/components/WeakTopicPractice";
+import SolutionVerify from "@/components/SolutionVerify";
+import { useT } from "@/lib/i18n";
 
 type UgQ = {
   id: string;
@@ -152,6 +156,7 @@ function Ring({
 }
 
 export default function TestPage() {
+  const tr = useT();
   // ---- Outer screen flow ----
   const screenRef = React.useRef<HTMLDivElement>(null);
   const [phase, setPhase] = React.useState<
@@ -180,6 +185,9 @@ export default function TestPage() {
   // (checked and set synchronously, before any await) makes every submit
   // tap after the first a no-op until the in-flight one finishes.
   const submittingRef = React.useRef(false);
+  // Offline-safe submit: true while the final submit is queued on the device waiting for internet.
+  const [offlinePending, setOfflinePending] = React.useState(false);
+  const [online, setOnline] = React.useState(true);
 
   // Current user id — needed only for the report/chat feature (ReportQuestion
   // component below needs to know "am I the sender of this message" so it
@@ -262,7 +270,7 @@ export default function TestPage() {
   // /review already uses) — now called here too when the stored
   // explanation is missing, keyed per question like showAns/hintUsed above.
   const [aiExp, setAiExp] = React.useState<{
-    [qid: string]: { loading?: boolean; error?: string | null; data?: { stepByStepSolution: string; stepByStepSolutionHindi?: string } };
+    [qid: string]: { loading?: boolean; error?: string | null; data?: { stepByStepSolution: string; stepByStepSolutionHindi?: string; source?: string } };
   }>({});
   const fetchAiExplanation = async (qid: string) => {
     setAiExp((p) => ({ ...p, [qid]: { ...p[qid], loading: true, error: null } }));
@@ -270,9 +278,9 @@ export default function TestPage() {
       const res = await fetch(`${apiBase()}/ai-explanation/questions/${qid}`, { headers: getAuthHeaders() });
       const d = await res.json().catch(() => ({}));
       if (res.ok) setAiExp((p) => ({ ...p, [qid]: { loading: false, data: d } }));
-      else setAiExp((p) => ({ ...p, [qid]: { loading: false, error: d.message || "Explanation abhi available nahi hai." } }));
+      else setAiExp((p) => ({ ...p, [qid]: { loading: false, error: d.message || tr("An explanation is not available yet.", "Explanation abhi available nahi hai.") } }));
     } catch {
-      setAiExp((p) => ({ ...p, [qid]: { loading: false, error: "Network error — explanation load nahi ho payi." } }));
+      setAiExp((p) => ({ ...p, [qid]: { loading: false, error: tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi.") } }));
     }
   };
   const [hintUsed, setHintUsed] = React.useState<{ [qid: string]: boolean }>({});
@@ -305,7 +313,7 @@ export default function TestPage() {
           const d = await r.json().catch(() => ({}));
           const t = d?.test;
           if (!r.ok || !t || t.id !== planTestParam) {
-            setDailyGate("Ye test ab available nahi hai / This test is no longer available.");
+            setDailyGate(tr("This test is no longer available.", "Ye test ab available nahi hai."));
             return;
           }
           if (!t.canStart) {
@@ -332,7 +340,7 @@ export default function TestPage() {
             return;
           }
           if (d?.takenToday) {
-            setDailyGate("Aapka aaj ka Daily Test ho chuka hai — kal dobara try karo.");
+            setDailyGate(tr("You have already taken today's Daily Test — try again tomorrow.", "Aapka aaj ka Daily Test ho chuka hai — kal dobara try karo."));
             return;
           }
           const q = d?.dailyTarget || 10;
@@ -413,7 +421,7 @@ export default function TestPage() {
         });
         const pd = await pr.json().catch(() => ({}));
         if (!pr.ok) {
-          alert(`⚠️ ${pd?.messages ? `${pd.messages.en}\n${pd.messages.hi}` : pd?.message || "Study Plan Test start nahi hua."}`);
+          alert(`⚠️ ${pd?.messages ? `${pd.messages.en}\n${pd.messages.hi}` : pd?.message || tr("Could not start the Study Plan Test.", "Study Plan Test start nahi hua.")}`);
           setLoading(false);
           setStarting(false);
           return;
@@ -527,15 +535,20 @@ export default function TestPage() {
           setAttemptId(attemptId);
           if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
           // v4 §31 — resumed attempt (refresh/revisit): hydrate persisted autosaves
-          if (Array.isArray(ad.answers) && ad.answers.length) {
+          {
             const savedMap: { [qid: string]: string } = {};
-            for (const a of ad.answers) if (a.selectedOption) savedMap[a.questionId] = a.selectedOption;
+            if (Array.isArray(ad.answers)) for (const a of ad.answers) if (a.selectedOption) savedMap[a.questionId] = a.selectedOption;
+            // answers mirrored on this device (written even while offline) are newer than the server autosave
+            const draft = attemptId ? loadDraft(attemptId) : null;
+            if (draft) Object.assign(savedMap, draft.answers);
+            if (Object.keys(savedMap).length > 0) {
             setAnswers(savedMap);
             setStatus((p) => {
               const n = { ...p };
               for (const qid of Object.keys(savedMap)) n[qid] = "answered";
               return n;
             });
+            }
           }
         } catch {
           attemptId = null;
@@ -633,6 +646,42 @@ export default function TestPage() {
       [qid]: wasMarked ? "answered-marked" : "answered",
     }));
   };
+
+  // ---- Offline-safe: mirror answers on the device immediately (no debounce, no network) ----
+  React.useEffect(() => {
+    if (!attemptId || phase !== "exam") return;
+    saveDraft(attemptId, answers, timeSpent);
+  }, [answers, timeSpent, attemptId, phase]);
+
+  // ---- Offline-safe: track connectivity; replay a queued submit as soon as the network is back ----
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    setOnline(navigator.onLine);
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+
+  const retryQueuedSubmit = React.useCallback(async () => {
+    const id = typeof window !== "undefined" ? sessionStorage.getItem("ssc_active_attempt") : null;
+    const done = await flushPendingSubmits();
+    if (id && done.includes(id)) {
+      sessionStorage.removeItem("ssc_active_attempt");
+      window.location.href = `/results/${id}`;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!offlinePending) return;
+    if (online) retryQueuedSubmit();
+    const t = window.setInterval(retryQueuedSubmit, 8000);
+    return () => window.clearInterval(t);
+  }, [offlinePending, online, retryQueuedSubmit]);
 
   // ---- v4 §31 — AUTOSAVE: debounced persist of answers mid-attempt. What's
   // saved here is exactly what an auto-submit-at-expiry scores (lossless). ----
@@ -760,6 +809,8 @@ export default function TestPage() {
     // explanation above submitTest): submit to the real attempt, then pull
     // the server-scored per-question detail — never call /bank/attempt here.
     if (activeAttempt) {
+      const clientSubmittedAt = Date.now(); // the moment the student actually finished (server uses it for offline replays)
+      let stayInExam = false; // true => submit did not reach the server: keep the student on the exam screen, NOT results
       try {
         const answersPayload = qs.map((q) => ({
           questionId: q.id,
@@ -778,11 +829,23 @@ export default function TestPage() {
         // answer to show. Now: check .ok, and on failure, leave the
         // attempt token in place and let the student retry Submit instead
         // of silently showing a broken/empty results screen.
-        const sr = await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
-          method: "POST",
-          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ answers: answersPayload }),
-        });
+        let sr: Response;
+        try {
+          sr = await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
+            method: "POST",
+            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify({ answers: answersPayload, clientSubmittedAt }),
+          });
+        } catch {
+          // Internet is down: the test is NOT lost. Queue the final submit on the device; it is sent automatically
+          // when the network returns (even after closing the app) and the real result is shown then.
+          queueSubmit({ attemptId: activeAttempt, answers: answersPayload, clientSubmittedAt });
+          stayInExam = true;
+          setOfflinePending(true);
+          setStarting(false);
+          setLoading(false);
+          return;
+        }
         if (!sr.ok) {
           const errBody = await sr.json().catch(() => ({}));
           // "Attempt already submitted" means an earlier tap actually DID
@@ -795,6 +858,16 @@ export default function TestPage() {
             alert(
               `⚠️ ${errBody?.message || "Could not submit your test — please check your connection."} Your answers are safe (auto-saved) — tap Submit again to retry.`,
             );
+            // server error (5xx) / gateway down: same safety net as offline — queue it and keep retrying
+            if (sr.status >= 500 || sr.status === 0) {
+              queueSubmit({ attemptId: activeAttempt, answers: answersPayload, clientSubmittedAt });
+              stayInExam = true;
+              setOfflinePending(true);
+              setStarting(false);
+              setLoading(false);
+              return;
+            }
+            stayInExam = true;
             setRunning(true); // resume the clock — nothing was lost, let them retry
             setStarting(false);
             setLoading(false);
@@ -802,6 +875,7 @@ export default function TestPage() {
           }
         }
         sessionStorage.removeItem("ssc_active_attempt");
+        clearDraft(activeAttempt);
 
         // Single source of truth for the results screen: the same
         // attemptDetail() data the /results/[attemptId] page already uses,
@@ -873,7 +947,7 @@ export default function TestPage() {
           return;
         }
       } finally {
-        setPhase("results");
+        if (!stayInExam) setPhase("results");
       }
       return;
     }
@@ -1075,12 +1149,12 @@ export default function TestPage() {
   // what-to-do-next (v6 §6)
   const nextAction =
     attempted === 0
-      ? "Is test me koi answer nahi kiya — pehle 5 questions attempt karke aao."
+      ? tr("You did not answer anything — attempt at least 5 questions first.", "Is test me koi answer nahi kiya — pehle 5 questions attempt karke aao.")
       : accPct < 60
-        ? "Accuracy 60% se kam hai — weak topics review karke wapas try karo."
+        ? tr("Accuracy is below 60% — review your weak topics and try again.", "Accuracy 60% se kam hai — weak topics review karke wapas try karo.")
         : skipped > 0
           ? "Bach gaye " + skipped + " skipped questions — ab unhe attempt karna seekho, speed par kaam karo."
-          : "Achhi accuracy! Ab naya test try karke speed badhao.";
+          : tr("Good accuracy! Now take a new test to build speed.", "Achhi accuracy! Ab naya test try karke speed badhao.");
 
   const timelineColor =
     timeLeft > 120 ? "text-success" : timeLeft > 60 ? "text-warning" : "text-danger";
@@ -1107,7 +1181,7 @@ export default function TestPage() {
             // they clicked Start. Now we check status up front and show this
             // instead of the (misleading) instructions form.
             <div className="card mt-8 border-warning/40 bg-warning/5 p-6">
-              <p className="font-semibold text-warning">⚠️ Test abhi locked hai / locked</p>
+              <p className="font-semibold text-warning">{tr("⚠️ This test is locked", "⚠️ Test abhi locked hai")}</p>
               <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">{dailyGate}</p>
               <a
                 href="/study-plan"
@@ -1279,7 +1353,7 @@ export default function TestPage() {
               <p className="text-xs font-bold text-muted-foreground">WHAT IT LOOKED AT — TOPIC BREAKDOWN (weakest first)</p>
             </div>
             {topicRows.length === 0 ? (
-              <div className="px-5 py-4 text-sm text-muted-foreground">Koi attempt nahi — topics analyze nahi ho sake.</div>
+              <div className="px-5 py-4 text-sm text-muted-foreground">{tr("No attempts — topics could not be analysed.", "Koi attempt nahi — topics analyze nahi ho sake.")}</div>
             ) : (
               topicRows.map((t) => (
                 <div key={t.name} className="flex items-center gap-3 border-b border-border px-5 py-3 last:border-0">
@@ -1324,11 +1398,18 @@ export default function TestPage() {
             </div>
           </div>
 
+          {/* What to do next — weak topics of THIS submission + custom practice (pick topics, choose counts) */}
+          <WeakTopicPractice
+            className="mt-6"
+            attemptId={attemptId || undefined}
+            questionIds={questions.filter((q) => !result[q.id]?.correct).map((q) => q.id)}
+          />
+
           {/* What to do next (v6 §6) */}
           <div className="card mt-6 flex flex-wrap items-center justify-between gap-3 p-5">
             <div>
               <h3 className="font-semibold">📌 What to do next</h3>
-              <p className="mt-1 text-xs text-muted-foreground">Practice with another 10-question set, phir review mistakes.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Take another test, or review your mistakes below.</p>
             </div>
             <div className="flex gap-2">
               <a href="/test" className="btn btn-primary">New Test →</a>
@@ -1456,7 +1537,7 @@ export default function TestPage() {
                       {/* Report + chat — works for every test type since this
                           only renders post-submit (phase === "results"), same
                           reasoning as the Show Solution button above. Lets a
-                          student flag "answer/explanation galat hai" right
+                          student flag tr("answer / explanation is wrong", "answer/explanation galat hai") right
                           where they're looking at it, and then talk to admin
                           about it without leaving this page. */}
                       {currentUserId && <ReportQuestion questionId={q.id} currentUserId={currentUserId} compact />}
@@ -1466,13 +1547,17 @@ export default function TestPage() {
                         <p className="font-bold text-success">Correct Answer: {correctKey || "—"}{correctLabel ? ` — ${correctLabel}` : ""}</p>
                         {expl && <p className="mt-2 whitespace-pre-line text-muted-foreground">{expl}</p>}
                         {explHi && <p className="mt-2 whitespace-pre-line border-t border-success/20 pt-2 text-muted-foreground">🇮🇳 {explHi}</p>}
+                        {expl && <SolutionVerify questionId={q.id} source={ex?.explanationSource ?? a?.explanationSource ?? null} />}
                         {!expl && (
                           <div className="mt-2 text-muted-foreground">
                             <span className="mr-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
-                            {aiExp[q.id]?.loading && <p className="mt-1">Explanation ban rahi hai…</p>}
+                            {aiExp[q.id]?.loading && <p className="mt-1">{tr("Preparing the explanation…", "Explanation ban rahi hai…")}</p>}
                             {aiExp[q.id]?.error && <p className="mt-1 text-danger">{aiExp[q.id]?.error}</p>}
                             {aiExp[q.id]?.data?.stepByStepSolution && (
                               <p className="mt-1 whitespace-pre-line">{aiExp[q.id]?.data?.stepByStepSolution}</p>
+                            )}
+                            {aiExp[q.id]?.data?.stepByStepSolution && (
+                              <SolutionVerify questionId={q.id} source={aiExp[q.id]?.data?.source ?? "AI_GENERATED"} />
                             )}
                           </div>
                         )}
@@ -1482,7 +1567,7 @@ export default function TestPage() {
                 );
               })}
               {reviewQs.length === 0 && navQ === null && (
-                <div className="px-5 py-6 text-center text-sm text-muted-foreground">Is tab me koi question nahi.</div>
+                <div className="px-5 py-6 text-center text-sm text-muted-foreground">{tr("No questions in this tab.", "Is tab me koi question nahi.")}</div>
               )}
             </div>
           </div>
@@ -1496,6 +1581,32 @@ export default function TestPage() {
 
   return (
     <div ref={screenRef} className="min-h-screen bg-muted/40 text-foreground">
+      {/* OFFLINE BANNER — answers are mirrored on the device; the test keeps running and submits when the net is back */}
+      {!online && !offlinePending && (
+        <div className="sticky top-0 z-40 bg-amber-500 px-3 py-1.5 text-center text-xs font-semibold text-white">
+          You are offline. Keep going — your answers are saved on this device and the test will submit automatically when your internet returns.
+        </div>
+      )}
+      {/* OFFLINE SUBMIT QUEUED */}
+      {offlinePending && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 p-6 backdrop-blur">
+          <div className="max-w-md rounded-2xl border border-border bg-card p-6 text-center shadow-xl">
+            <div className="text-4xl">{online ? "⏳" : "📡"}</div>
+            <h2 className="mt-3 text-lg font-bold">{online ? "Submitting your test…" : "Your test is finished and saved"}</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {online
+                ? "Connection is back. Sending your answers now."
+                : "No internet right now. Your answers are safely stored on this device and will be submitted automatically the moment you are back online — you will see your real result then. You can keep this page open."}
+            </p>
+            <button
+              onClick={retryQueuedSubmit}
+              className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+            >
+              Retry now
+            </button>
+          </div>
+        </div>
+      )}
       {/* TOP BAR */}
       <div className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur-lg">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3" style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}>
@@ -1687,7 +1798,7 @@ export default function TestPage() {
                   {showAns[q.id] && !q.explanation && (
                     <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
                       <span className="mr-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
-                      {aiExp[q.id]?.loading && <p className="mt-1">Explanation ban rahi hai…</p>}
+                      {aiExp[q.id]?.loading && <p className="mt-1">{tr("Preparing the explanation…", "Explanation ban rahi hai…")}</p>}
                       {aiExp[q.id]?.error && (
                         <p className="mt-1">
                           {aiExp[q.id]?.error}{" "}

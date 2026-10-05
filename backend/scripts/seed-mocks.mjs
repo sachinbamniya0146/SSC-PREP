@@ -14,6 +14,14 @@ async function main() {
     { id: 'tpl-cpo-full-1', title: 'SSC CPO Full Mock 1', description: 'Full-length CPO mock — 100 Q, 60 min', type: 'FULL_MOCK', durationMinutes: 60, totalQuestions: 100, totalMarks: 200, isPremium: true },
   ];
   
+  // Seed ONLY a brand-new, empty database. Earlier this ran on every deploy with upsert, so any template an admin
+  // deleted came back after the next VPS deploy. Once templates exist, the admin panel is the single source of truth.
+  const existing = await prisma.testTemplate.count();
+  if (existing > 0) {
+    console.log(`Templates already present (${existing}) — seed skipped, admin data left untouched.`);
+    return;
+  }
+
   let created = 0;
   for (const t of templates) {
     try {

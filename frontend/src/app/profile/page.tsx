@@ -4,6 +4,7 @@ import * as React from "react";
 import { Logo } from "@/components/Logo";
 import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
+import { getStoredLang, setStoredLang, useLang } from "@/lib/i18n";
 
 interface UserProfile {
   id: string;
@@ -11,6 +12,8 @@ interface UserProfile {
   fullName: string;
   role: string;
   phone?: string | null;
+  avatarUrl?: string | null;
+  preferredLanguage?: string;
   isEmailVerified: boolean;
   createdAt: string;
   _count: { testAttempts: number; bookmarks: number };
@@ -32,6 +35,11 @@ export default function ProfilePage() {
   const [info, setInfo] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [fullName, setFullName] = React.useState("");
+  const [savingDetails, setSavingDetails] = React.useState(false);
+  const [savingLang, setSavingLang] = React.useState(false);
+  const [avatarBroken, setAvatarBroken] = React.useState(false);
+  const lang = useLang();
 
   // Telegram state
   const [telegram, setTelegram] = React.useState<{
@@ -62,6 +70,10 @@ export default function ProfilePage() {
       const data = await api<{ user: UserProfile; entitlements: any }>("/auth/me", { headers: { Authorization: `Bearer ${token}` } });
       setUser(data.user);
       if (data.user.phone) setPhone(data.user.phone);
+      setFullName(data.user.fullName || "");
+      // account language wins (set on another device); keep this device in step
+      const serverLang = data.user.preferredLanguage === "hinglish" ? "hinglish" : "en";
+      if (serverLang !== getStoredLang()) setStoredLang(serverLang);
     } catch (err) {
       console.error("Failed to load profile", err);
     }
@@ -169,6 +181,52 @@ export default function ProfilePage() {
     }
   }
 
+  async function saveDetails() {
+    const name = fullName.trim().replace(/\s+/g, " ");
+    if (name.length < 2) { setError("Please enter your full name (at least 2 characters)."); return; }
+    if (phone && !/^\+?[0-9]{10,15}$/.test(phone.replace(/[\s-]/g, ""))) { setError("Enter a valid mobile number (10-15 digits)."); return; }
+    setSavingDetails(true);
+    setError("");
+    setInfo("");
+    try {
+      await api("/users/me/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fullName: name, ...(phone ? { phone: phone.replace(/[\s-]/g, "") } : {}) }),
+      });
+      try {
+        const raw = localStorage.getItem("ssc_user");
+        if (raw) localStorage.setItem("ssc_user", JSON.stringify({ ...JSON.parse(raw), fullName: name }));
+      } catch { /* ignore */ }
+      setInfo("Your details were updated.");
+      await loadProfile();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update your details");
+    } finally {
+      setSavingDetails(false);
+    }
+  }
+
+  async function chooseLanguage(next: "en" | "hinglish") {
+    if (next === lang) return;
+    setSavingLang(true);
+    setError("");
+    setStoredLang(next); // instant on this device
+    try {
+      await api("/users/me/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferredLanguage: next }),
+      });
+      setInfo(next === "hinglish" ? "Language set to Hinglish." : "Language set to English.");
+    } catch (err) {
+      setStoredLang(lang); // roll back
+      setError(err instanceof Error ? err.message : "Could not save your language");
+    } finally {
+      setSavingLang(false);
+    }
+  }
+
   async function changePassword() {
     if (newPassword.length < 6 || newPassword.length > 20) {
       setError("New password must be between 6 and 20 characters");
@@ -236,6 +294,90 @@ export default function ProfilePage() {
 
         {error && <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">{error}</div>}
         {info && <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-600 dark:text-emerald-400">{info}</div>}
+
+        {/* Identity: Google profile photo (read-only — it follows the student's Google account) */}
+        <div className="mt-6 flex items-center gap-4 rounded-xl border border-border bg-card p-6">
+          {user.avatarUrl && !avatarBroken ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={user.avatarUrl}
+              alt={user.fullName}
+              referrerPolicy="no-referrer"
+              onError={() => setAvatarBroken(true)}
+              className="h-16 w-16 rounded-full border border-border object-cover"
+            />
+          ) : (
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/15 text-xl font-bold text-primary">
+              {(user.fullName || user.email || "?").trim().charAt(0).toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="truncate text-lg font-semibold">{user.fullName}</p>
+            <p className="truncate text-sm text-muted-foreground">{user.email}</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              {user.avatarUrl ? "Photo is synced from your Google account." : "Sign in with Google to show your Google profile photo here."}
+            </p>
+          </div>
+        </div>
+
+        {/* Language: English (default) or Hinglish */}
+        <div className="mt-6 rounded-xl border border-border bg-card p-6">
+          <h2 className="text-lg font-semibold">🌐 Language</h2>
+          <p className="mt-1 text-xs text-muted-foreground">Choose how the app talks to you. English is the default; pick Hinglish if you prefer simple Hindi-English wording.</p>
+          <div className="mt-3 inline-flex rounded-lg border border-border p-1 text-sm font-semibold" role="radiogroup" aria-label="Language">
+            {([["en", "English"], ["hinglish", "Hinglish"]] as const).map(([k, label]) => (
+              <button
+                key={k}
+                role="radio"
+                aria-checked={lang === k}
+                disabled={savingLang}
+                onClick={() => chooseLanguage(k)}
+                className={`rounded-md px-4 py-1.5 transition ${lang === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Edit registered details */}
+        <div className="mt-6 rounded-xl border border-border bg-card p-6">
+          <h2 className="text-lg font-semibold">✏️ Edit my details</h2>
+          <p className="mt-1 text-xs text-muted-foreground">Update the details you registered with. Your email is your login and cannot be changed here.</p>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">Full name</label>
+              <input
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                maxLength={100}
+                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">Mobile number</label>
+              <input
+                type="tel"
+                inputMode="numeric"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+91 9876543210"
+                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-1.5 block text-sm font-medium">Email</label>
+              <input value={user.email} readOnly className="w-full cursor-not-allowed rounded-lg border border-border bg-muted px-4 py-2.5 text-sm text-muted-foreground" />
+            </div>
+          </div>
+          <button
+            onClick={saveDetails}
+            disabled={savingDetails}
+            className="mt-4 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {savingDetails ? "Saving…" : "Save changes"}
+          </button>
+        </div>
 
         {/* Account Info */}
         <div className="mt-6 rounded-xl border border-border bg-card p-6">

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import BiMessage from "@/components/BiMessage";
+import { useT } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // REWRITTEN (Sep 21 2026) — "practice vale me topic subtopic ka pura syllabus
@@ -59,6 +60,7 @@ type Selection = { subjectId?: string; chapterId?: string; topicId?: string; sub
 type Quota = { premium: boolean; dailyLimit: number | null; usedToday: number; remainingToday: number | null; planPriceInr: number };
 
 export default function QuestionBankPracticePage() {
+  const tr = useT();
   const [taxonomy, setTaxonomy] = React.useState<TaxonomyResponse | null>(null);
   const [userProgress, setUserProgress] = React.useState<UserProgress[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -301,7 +303,7 @@ export default function QuestionBankPracticePage() {
         {/* Syllabus tree */}
         <div className="card mt-6 space-y-3 p-6">
           <h2 className="font-semibold text-lg">Syllabus</h2>
-          {subjects.length === 0 && <p className="text-sm text-muted-foreground">Abhi syllabus me kuch nahi hai.</p>}
+          {subjects.length === 0 && <p className="text-sm text-muted-foreground">{tr("There is nothing in the syllabus yet.", "Abhi syllabus me kuch nahi hai.")}</p>}
 
           <div className="space-y-2">
             {subjects.map((s) => (
@@ -351,7 +353,7 @@ export default function QuestionBankPracticePage() {
                         {openChapter === c.id && (
                           <div className="space-y-1 border-t border-border/60 px-3 py-2">
                             {c.topics.length === 0 && (
-                              <p className="text-xs text-muted-foreground">Is chapter me abhi koi topic nahi bana.</p>
+                              <p className="text-xs text-muted-foreground">{tr("No topics have been added to this chapter yet.", "Is chapter me abhi koi topic nahi bana.")}</p>
                             )}
                             {c.topics.map((t) => (
                               <div key={t.id} className="rounded-lg border border-border/40">

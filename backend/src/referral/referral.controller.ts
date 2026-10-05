@@ -15,7 +15,7 @@ export class ReferralController {
 
   @Post('apply')
   applyCode(@CurrentUser() user: AuthenticatedUser, @Body() body: { code?: string }) {
-    return this.referralService.applyReferralCode(body.code ?? '', user.userId);
+    return this.referralService.applyReferralCodeDetailed(body.code ?? '', user.userId);
   }
 
   @Get('earnings')

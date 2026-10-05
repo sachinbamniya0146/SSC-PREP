@@ -56,6 +56,7 @@ enum ExplanationSource {
   PDF
   AI_GENERATED
   HUMAN_VERIFIED
+  COMMUNITY_VERIFIED // AI explanation confirmed correct by >= 10 distinct students (see ai-explanation.service.ts)
 }
 
 enum TranslationStatus {
@@ -184,6 +185,7 @@ model User {
   reportMessagesSent      ReportMessage[]
   supportConversations    SupportConversation[]
   supportMessagesSent     SupportMessage[]
+  explanationVotes        ExplanationVote[]
 
   @@map("users")
 }
@@ -485,6 +487,7 @@ model Question {
   explanationSource  ExplanationSource @default(PDF)
   explanationModel   String? // e.g. "meta-llama/llama-3.3-70b-instruct:free" — which free model generated/last-improved this
   explanationGeneratedAt DateTime? // when the current explanation text was (re)generated
+  explanationVerifiedAt DateTime? // set when >= 10 students confirmed an AI explanation (source -> COMMUNITY_VERIFIED)
   translationStatus  TranslationStatus @default(HUMAN_VERIFIED)
   answerVerificationStatus String @default("UNVERIFIED_SINGLE_SOURCE") // VERIFIED_OFFICIAL, VERIFIED_MULTI_SOURCE, VERIFIED_COMPUTED, UNVERIFIED_SINGLE_SOURCE, DISPUTED
   lastVerifiedAt DateTime?
@@ -533,6 +536,7 @@ model Question {
   notes              UserNote[]
   reviewCards        ReviewCard[]
   errorReports       QuestionErrorReport[]
+  explanationVotes   ExplanationVote[]
 
   @@index([subjectId, examId, year, shift])
   @@index([searchHash])
@@ -1744,4 +1748,27 @@ model StudyPlanTest {
   @@index([userId, scheduledFor])
   @@index([kind, scheduledFor])
   @@map("study_plan_tests")
+}
+
+
+// ================= AI SOLUTION VERIFICATION (Oct 2026) =================
+// A student can confirm ("correct") or dispute ("incorrect") the AI-generated
+// solution of a question. One vote per (question, student) — changing your mind
+// just updates the row. An AI solution stays labelled "AI generated" and is
+// shown to every student who has not voted yet until at least 10 DISTINCT
+// students confirmed it; then it is saved permanently (COMMUNITY_VERIFIED).
+model ExplanationVote {
+  id         String   @id @default(uuid())
+  questionId String
+  userId     String
+  vote       String   // CORRECT | INCORRECT
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, userId])
+  @@index([questionId, vote])
+  @@map("explanation_votes")
 }

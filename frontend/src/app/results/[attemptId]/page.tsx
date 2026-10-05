@@ -5,7 +5,11 @@ import * as React from "react";
 import { useParams } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import DiagramVenn from "@/components/DiagramVenn";
+import WeakTopicPractice from "@/components/WeakTopicPractice";
+import SubjectChapterAnalysis from "@/components/SubjectChapterAnalysis";
+import SolutionVerify from "@/components/SolutionVerify";
 import { StemMedia, QFigure, RichText } from "@/components/QuestionMedia";
+import { useT } from "@/lib/i18n";
 
 type ReviewQuestion = {
   questionId: string;
@@ -76,7 +80,6 @@ export default function AttemptReviewPage() {
   // v6 §6 — per-template stats (real cutoff P90 + top-5 toppers)
   const [stats, setStats] = React.useState<any>(null);
   // NEW (Sep 29 2026): topics the student got wrong in THIS attempt + Study-Plan verdict.
-  const [weakTopics, setWeakTopics] = React.useState<any>(null);
   const [planVerdict, setPlanVerdict] = React.useState<any>(null);
 
   React.useEffect(() => {
@@ -90,10 +93,6 @@ export default function AttemptReviewPage() {
         }
         const d = await r.json();
         setDetail(d);
-        fetchAuth(`${apiBase()}/bank/practice/from-attempt/${params.attemptId}`, { headers: authHeaders() })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((w) => w && setWeakTopics(w))
-          .catch(() => null);
         fetchAuth(`${apiBase()}/study-plan/attempt/${params.attemptId}/verdict`, { headers: authHeaders() })
           .then((r) => (r.ok ? r.json().catch(() => null) : null))
           .then((v) => v && v.chapters && setPlanVerdict(v))
@@ -244,31 +243,8 @@ export default function AttemptReviewPage() {
           </div>
         )}
 
-        {/* Weak topics from THIS test -> 25 level-wise practice questions each (Sep 29 2026) */}
-        {weakTopics && weakTopics.topics?.length > 0 && (
-          <div className="card mt-4 border-amber-500/30 bg-amber-500/5 p-5">
-            <p className="text-sm font-bold">🎯 Is test me galat hue topics — abhi practice karein</p>
-            <p className="text-xs text-muted-foreground">Topics you got wrong here. Each button starts a 25-question, level-wise (Easy → Hard) practice set.</p>
-            <div className="mt-3 space-y-2">
-              {weakTopics.topics.map((t: any, i: number) => {
-                const q = new URLSearchParams({ ...(t.chapterId ? { chapterId: t.chapterId } : {}), ...(t.topicId ? { topicId: t.topicId } : {}), ...(t.subTopicId ? { subTopicId: t.subTopicId } : {}) }).toString();
-                return (
-                  <div key={i} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background p-3 text-sm">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{[t.chapter, t.topic, t.subTopic].filter(Boolean).join(" › ")}</p>
-                      <p className="text-xs text-muted-foreground">{t.wrongCount} galat · {t.practiceAvailable} practice Qs available</p>
-                    </div>
-                    {t.practiceAvailable > 0 ? (
-                      <a href={`/question-bank-practice?${q}`} className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground">Practice {t.practiceQuestions}</a>
-                    ) : (
-                      <span className="shrink-0 text-[11px] text-muted-foreground">coming soon</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        {/* What to do next: weak topics of THIS test (wrong + skipped) with custom practice */}
+        <WeakTopicPractice className="mt-4" attemptId={String(params.attemptId)} />
 
         {/* Topper benchmark + pacing (v6 §6) */}
         {detail.topper?.score != null && (
@@ -365,53 +341,8 @@ export default function AttemptReviewPage() {
           </div>
         </div>
 
-        {/* Section-wise cards (exam-style breakdown) */}
-        {sections.length > 1 && (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            {sections.map((s) => (
-              <div key={s.name} className="card p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold">{s.name}</p>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                      s.acc < 40 ? "bg-danger/15 text-danger" : s.acc < 70 ? "bg-warning/15 text-warning" : "bg-success/15 text-success"
-                    }`}
-                  >
-                    {s.acc}%
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {s.correct}/{s.total} correct · {s.score.toFixed(1)} marks
-                </p>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                  <div
-                    className={`h-full rounded-full ${s.acc < 40 ? "bg-danger" : s.acc < 70 ? "bg-warning" : "bg-success"}`}
-                    style={{ width: `${s.acc}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Chapter breakdown — weakest first */}
-        <div className="card mt-4 p-5">
-          <h2 className="text-sm font-bold">📚 Chapter Breakdown <span className="font-normal text-muted-foreground">(weakest first)</span></h2>
-          <div className="mt-3 space-y-2">
-            {topics.map((t) => (
-              <div key={t.name} className="flex items-center gap-3 text-sm">
-                <span className="w-40 truncate text-muted-foreground">{t.name}</span>
-                <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className={`h-full rounded-full ${t.acc < 40 ? "bg-danger" : t.acc < 70 ? "bg-warning" : "bg-success"}`}
-                    style={{ width: `${t.acc}%` }}
-                  />
-                </div>
-                <span className="w-24 text-right text-xs text-muted-foreground">{t.correct}/{t.total} · {t.acc}%</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* Subject-wise analysis -> tap a subject for its chapters -> tap a chapter for topics / sub-topics */}
+        <SubjectChapterAnalysis questions={questions} />
 
         {/* NEW (Sep 21 2026) — TRUE Topic (and Sub-topic) deep analysis, drilled
             below chapter level. Only rendered when at least one question in
@@ -527,9 +458,11 @@ type AIExplanation = {
   stepByStepSolutionHindi: string;
   keyConcepts: string[];
   keyConceptsHindi: string[];
+  source?: string;
 };
 
 function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; lang: "en" | "both" }) {
+  const tr = useT();
   const showHi = lang === "both";
   const optText = (o: { key: string; text: string; textHi: string | null }) =>
     showHi && o.textHi ? `${o.text} / ${o.textHi}` : o.text;
@@ -564,9 +497,9 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
         const d = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (res.ok) setAiExplanation(d as AIExplanation);
-        else setAiError(d.message || "Explanation abhi available nahi hai is question ke liye.");
+        else setAiError(d.message || tr("An explanation is not available for this question yet.", "Explanation abhi available nahi hai is question ke liye."));
       } catch {
-        if (!cancelled) setAiError("Network error — explanation load nahi ho payi.");
+        if (!cancelled) setAiError(tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi."));
       } finally {
         if (!cancelled) setAiLoading(false);
       }
@@ -581,6 +514,8 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
       ? { text: "🤖 AI-generated", cls: "bg-primary/10 text-primary" }
       : q.explanationSource === "HUMAN_VERIFIED"
         ? { text: "✅ Human-verified", cls: "bg-success/10 text-success" }
+        : q.explanationSource === "COMMUNITY_VERIFIED"
+          ? { text: "✅ Verified by students", cls: "bg-success/10 text-success" }
         : q.explanationSource === "PDF"
           ? { text: "📄 From PDF", cls: "bg-muted text-muted-foreground" }
           : null;
@@ -666,6 +601,7 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
             </span>
           )}
           <RichText text={explanation} className="pt-1" />
+          <SolutionVerify questionId={q.questionId} source={q.explanationSource} />
         </div>
       )}
 
@@ -680,7 +616,7 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
           <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
             🤖 AI-generated
           </span>
-          {aiLoading && <p className="mt-2 text-muted-foreground">Explanation ban rahi hai…</p>}
+          {aiLoading && <p className="mt-2 text-muted-foreground">{tr("Preparing the explanation…", "Explanation ban rahi hai…")}</p>}
           {aiError && !aiLoading && (
             <div className="mt-2">
               <p className="text-xs text-muted-foreground">{aiError}</p>
@@ -694,9 +630,9 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
                     .then(async (res) => {
                       const d = await res.json().catch(() => ({}));
                       if (res.ok) setAiExplanation(d as AIExplanation);
-                      else setAiError(d.message || "Explanation abhi available nahi hai is question ke liye.");
+                      else setAiError(d.message || tr("An explanation is not available for this question yet.", "Explanation abhi available nahi hai is question ke liye."));
                     })
-                    .catch(() => setAiError("Network error — explanation load nahi ho payi."))
+                    .catch(() => setAiError(tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi.")))
                     .finally(() => setAiLoading(false));
                 }}
                 className="mt-1 rounded-md border border-primary/30 px-3 py-1 text-xs font-semibold text-primary"
@@ -711,6 +647,7 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
               {showHi && aiExplanation.stepByStepSolutionHindi && (
                 <p className="mt-2">🇮🇳 {aiExplanation.stepByStepSolutionHindi}</p>
               )}
+              <SolutionVerify questionId={q.questionId} source={aiExplanation.source ?? "AI_GENERATED"} />
             </div>
           )}
         </div>

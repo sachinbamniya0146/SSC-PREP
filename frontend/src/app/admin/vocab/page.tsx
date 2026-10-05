@@ -108,6 +108,84 @@ export default function AdminVocabPage() {
     await loadWords();
   };
 
+  // ---- re-order / edit (admin can change any word after upload) ----
+  const [moveTo, setMoveTo] = React.useState<Record<string, string>>({});
+  const [editing, setEditing] = React.useState<Record<string, any> | null>(null);
+  const [jsonText, setJsonText] = React.useState({ examplesJson: "", synonymsJson: "", antonymsJson: "" });
+  const [saving, setSaving] = React.useState(false);
+  const [editError, setEditError] = React.useState("");
+  const [busyOrder, setBusyOrder] = React.useState(false);
+
+  const callOrder = async (path: string, body?: unknown) => {
+    setBusyOrder(true);
+    setError("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/vocab/admin/words/${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || "Could not change the order.");
+      await loadWords();
+    } catch {
+      setError("Network error — order not changed.");
+    } finally {
+      setBusyOrder(false);
+    }
+  };
+  const moveWordTo = async (w: AdminWord, position: number) => {
+    if (!Number.isFinite(position) || position < 1 || position === w.orderIndex) return;
+    await callOrder(`${w.id}/move`, { position });
+    setMoveTo((m) => ({ ...m, [w.id]: "" }));
+  };
+
+  const openEdit = async (w: AdminWord) => {
+    setEditError("");
+    const r = await fetchAuth(`${API_BASE}/vocab/admin/words/${w.id}`);
+    if (!r.ok) { setError("Could not load this word."); return; }
+    const d = await r.json();
+    setEditing(d);
+    setJsonText({
+      examplesJson: JSON.stringify(d.examplesJson ?? [], null, 2),
+      synonymsJson: JSON.stringify(d.synonymsJson ?? [], null, 2),
+      antonymsJson: JSON.stringify(d.antonymsJson ?? [], null, 2),
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setEditError("");
+    const body: Record<string, unknown> = {};
+    for (const k of ["word", "meaningHindi", "meaningEnglish", "partOfSpeech", "pronunciation", "memoryTrick", "etymology", "registerNote", "examTrendNote", "confusingPairNote"]) {
+      body[k] = editing[k] ?? "";
+    }
+    for (const k of ["examplesJson", "synonymsJson", "antonymsJson"] as const) {
+      try {
+        const v = JSON.parse(jsonText[k] || "[]");
+        if (!Array.isArray(v)) throw new Error("not a list");
+        body[k] = v;
+      } catch {
+        setEditError(`"${k}" must be a valid JSON list, e.g. [ { "en": "...", "hi": "..." } ]`);
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      const r = await fetchAuth(`${API_BASE}/vocab/admin/words/${editing.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setEditError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || "Save failed."); return; }
+      setEditing(null);
+      await loadWords();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!authChecked) return null;
 
   return (
@@ -215,13 +293,28 @@ export default function AdminVocabPage() {
 
         <div className="mt-6 rounded-xl border border-border bg-card">
           <div className="border-b border-border p-4">
-            <h2 className="font-semibold">Words ({words.length})</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="font-semibold">Words ({words.length})</h2>
+              <button
+                onClick={() => callOrder("normalize")}
+                disabled={busyOrder}
+                title="Renumber 1..N in the current order (removes gaps / duplicate numbers)"
+                className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
+              >
+                Fix numbering
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Type a number in <b>Move to #</b> and press Go (or use ↑ ↓) to put a word at any position — the other words shift automatically.
+              Students who could already open a word keep it unlocked.
+            </p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="border-b border-border text-xs text-muted-foreground">
                 <tr>
                   <th className="px-4 py-2">#</th>
+                  <th className="px-4 py-2">Move to #</th>
                   <th className="px-4 py-2">Word</th>
                   <th className="px-4 py-2">Slug</th>
                   <th className="px-4 py-2">Questions</th>
@@ -231,10 +324,27 @@ export default function AdminVocabPage() {
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">Loading…</td></tr>}
+                {loading && <tr><td colSpan={8} className="px-4 py-6 text-center text-muted-foreground">Loading…</td></tr>}
                 {!loading && words.map((w) => (
                   <tr key={w.id} className="border-b border-border last:border-0">
                     <td className="px-4 py-2 text-muted-foreground">{w.orderIndex}</td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center gap-1">
+                        <button disabled={busyOrder || w.orderIndex <= 1} onClick={() => moveWordTo(w, w.orderIndex - 1)} aria-label="Move up" className="rounded border border-border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-30">↑</button>
+                        <button disabled={busyOrder || w.orderIndex >= words.length} onClick={() => moveWordTo(w, w.orderIndex + 1)} aria-label="Move down" className="rounded border border-border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-30">↓</button>
+                        <input
+                          type="number"
+                          min={1}
+                          max={words.length}
+                          value={moveTo[w.id] ?? ""}
+                          onChange={(e) => setMoveTo((m) => ({ ...m, [w.id]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === "Enter") moveWordTo(w, Number(moveTo[w.id])); }}
+                          placeholder="#"
+                          className="h-7 w-14 rounded border border-border bg-background px-1 text-center text-xs"
+                        />
+                        <button disabled={busyOrder || !moveTo[w.id]} onClick={() => moveWordTo(w, Number(moveTo[w.id]))} className="rounded border border-primary/40 px-2 py-0.5 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-30">Go</button>
+                      </div>
+                    </td>
                     <td className="px-4 py-2 font-medium">{w.word}</td>
                     <td className="px-4 py-2 text-xs text-muted-foreground">{w.slug}</td>
                     <td className="px-4 py-2">{w.questionCount}</td>
@@ -245,6 +355,9 @@ export default function AdminVocabPage() {
                       </span>
                     </td>
                     <td className="px-4 py-2 text-right space-x-1">
+                      <button onClick={() => openEdit(w)} className="rounded-lg border border-primary/40 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/10">
+                        Edit
+                      </button>
                       <button onClick={() => toggleActive(w)} className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted">
                         {w.isActive ? "Deactivate" : "Activate"}
                       </button>
@@ -259,6 +372,76 @@ export default function AdminVocabPage() {
           </div>
         </div>
       </main>
+
+      {editing && (
+        <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={() => !saving && setEditing(null)}>
+          <div className="my-6 w-full max-w-2xl rounded-2xl border border-border bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold">Edit word #{editing.orderIndex}</h3>
+              <button onClick={() => setEditing(null)} className="rounded-md px-2 py-1 text-sm hover:bg-muted" aria-label="Close">✕</button>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {([
+                ["word", "Word"],
+                ["partOfSpeech", "Part of speech"],
+                ["meaningEnglish", "Meaning (English)"],
+                ["meaningHindi", "Meaning (Hindi)"],
+                ["pronunciation", "Pronunciation"],
+              ] as const).map(([k, label]) => (
+                <label key={k} className="text-xs font-semibold text-muted-foreground">
+                  {label}
+                  <input
+                    value={editing[k] ?? ""}
+                    onChange={(e) => setEditing({ ...editing, [k]: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal text-foreground"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 grid gap-3">
+              {([
+                ["memoryTrick", "Memory trick"],
+                ["etymology", "Etymology"],
+                ["registerNote", "Register / usage note"],
+                ["examTrendNote", "Exam trend note"],
+                ["confusingPairNote", "Confusing pair note"],
+              ] as const).map(([k, label]) => (
+                <label key={k} className="text-xs font-semibold text-muted-foreground">
+                  {label}
+                  <textarea
+                    rows={2}
+                    value={editing[k] ?? ""}
+                    onChange={(e) => setEditing({ ...editing, [k]: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal text-foreground"
+                  />
+                </label>
+              ))}
+              {([
+                ["examplesJson", "Examples — JSON list of { en, hi }"],
+                ["synonymsJson", "Synonyms — JSON list of { word, hindi, sentence }"],
+                ["antonymsJson", "Antonyms — JSON list of { word, hindi, sentence }"],
+              ] as const).map(([k, label]) => (
+                <label key={k} className="text-xs font-semibold text-muted-foreground">
+                  {label}
+                  <textarea
+                    rows={4}
+                    value={jsonText[k]}
+                    onChange={(e) => setJsonText({ ...jsonText, [k]: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs font-normal text-foreground"
+                  />
+                </label>
+              ))}
+            </div>
+            {editError && <p className="mt-3 text-xs font-medium text-danger">{editError}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setEditing(null)} disabled={saving} className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted">Cancel</button>
+              <button onClick={saveEdit} disabled={saving} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">
+                {saving ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

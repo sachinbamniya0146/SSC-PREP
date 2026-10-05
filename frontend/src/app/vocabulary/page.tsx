@@ -9,6 +9,7 @@
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import BiMessage from "@/components/BiMessage";
+import { useT } from "@/lib/i18n";
 
 type WordCard = {
   id: string;
@@ -42,6 +43,7 @@ type TodaysPlan = {
 };
 
 export default function VocabularyHubPage() {
+  const tr = useT();
   const [words, setWords] = React.useState<WordCard[]>([]);
   const [totalWords, setTotalWords] = React.useState(0);
   const [masteredCount, setMasteredCount] = React.useState(0);
@@ -71,7 +73,7 @@ export default function VocabularyHubPage() {
       // NEW (Sep 29 2026): today's daily-revision status drives the banner below.
       fetchAuth(`${API_BASE}/vocab/revision/status`).then((rr) => (rr.ok ? rr.json() : null)).then((rj) => rj && setRevision(rj)).catch(() => undefined);
     } catch {
-      setError("Load nahi ho paya — dobara try karein.");
+      setError(tr("Could not load — please try again.", "Load nahi ho paya — dobara try karein."));
     } finally {
       setLoading(false);
     }
@@ -131,7 +133,7 @@ export default function VocabularyHubPage() {
         {revision?.due && (
           <a href="/vocabulary/revision" className="mt-4 block">
             <BiMessage msg={revision.messages.pending} tone="warn" />
-            <span className="btn mt-2 inline-block bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">🔁 Aaj ki revision shuru karein →</span>
+            <span className="btn mt-2 inline-block bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">{tr("🔁 Start today's revision →", "🔁 Aaj ki revision shuru karein →")}</span>
           </a>
         )}
         {revision && revision.remaster.length > 0 && (
@@ -198,7 +200,7 @@ export default function VocabularyHubPage() {
             )}
             {plan.revisionToday.length > 0 && (
               <div className="mt-3">
-                <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">🔥 Revise karein (pichli baar kuch galat hue the):</p>
+                <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">{tr("🔥 Revise these (you got some wrong last time):", "🔥 Revise karein (pichli baar kuch galat hue the):")}</p>
                 <div className="mt-1 flex flex-wrap gap-2">
                   {plan.revisionToday.map((w) => (
                     <a key={w.slug} href={`/vocabulary/${w.slug}/quiz`} className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
@@ -223,8 +225,8 @@ export default function VocabularyHubPage() {
                 <span className="text-xs text-muted-foreground">#{w.orderIndex}</span>
                 {w.state === "MASTERED" && <span className="text-xs">✅</span>}
                 {w.state === "LOCKED" && <span className="text-xs">🔒</span>}
-                {w.needsRevision && <span className="text-xs" title="Revision chahiye">🔥</span>}
-                {w.needsRemaster && <span className="text-xs" title="95%+ dobara score karein">⚠️</span>}
+                {w.needsRevision && <span className="text-xs" title={tr("Needs revision", "Revision chahiye")}>🔥</span>}
+                {w.needsRemaster && <span className="text-xs" title={tr("Score 95%+ again", "95%+ dobara score karein")}>⚠️</span>}
               </div>
               <h3 className="mt-1 font-bold">{w.state === "LOCKED" ? "?????" : w.word}</h3>
               {w.state !== "LOCKED" && <p className="mt-0.5 truncate text-xs text-muted-foreground">{w.meaningHindi}</p>}

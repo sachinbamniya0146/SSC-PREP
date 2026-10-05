@@ -3,6 +3,8 @@
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { ReportQuestion } from "@/components/ReportQuestion";
+import SolutionVerify from "@/components/SolutionVerify";
+import { useT } from "@/lib/i18n";
 
 type QuizQ = {
   id: string;
@@ -33,6 +35,7 @@ function QuizExplanation({
   explanation?: string | null;
   explanationHindi?: string | null;
 }) {
+  const tr = useT();
   const [ai, setAi] = React.useState<{ stepByStepSolution: string; stepByStepSolutionHindi?: string } | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
@@ -48,9 +51,9 @@ function QuizExplanation({
         const d = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (res.ok) setAi(d);
-        else setErr(d.message || "Explanation abhi available nahi hai is question ke liye.");
+        else setErr(d.message || tr("An explanation is not available for this question yet.", "Explanation abhi available nahi hai is question ke liye."));
       })
-      .catch(() => !cancelled && setErr("Network error — explanation load nahi ho payi."))
+      .catch(() => !cancelled && setErr(tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi.")))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
@@ -70,12 +73,13 @@ function QuizExplanation({
   return (
     <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm leading-relaxed">
       <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
-      {loading && <p className="mt-2 text-muted-foreground">Explanation ban rahi hai…</p>}
+      {loading && <p className="mt-2 text-muted-foreground">{tr("Preparing the explanation…", "Explanation ban rahi hai…")}</p>}
       {err && !loading && <p className="mt-2 text-xs text-muted-foreground">{err}</p>}
       {ai && !loading && (
         <div className="mt-2 whitespace-pre-line text-muted-foreground">
           <p>{ai.stepByStepSolution}</p>
           {ai.stepByStepSolutionHindi && <p className="mt-2">🇮🇳 {ai.stepByStepSolutionHindi}</p>}
+          <SolutionVerify questionId={questionId} source={(ai as any).source ?? "AI_GENERATED"} />
         </div>
       )}
     </div>

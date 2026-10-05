@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type Mock = {
   id: string;
@@ -31,6 +32,7 @@ type ExamOption = { id: string; name: string; count: number };
 // Cashfree JS SDK (v3), loaded only when the student is about to pay (same as /premium).
 let cashfreeSdkPromise: Promise<any> | null = null;
 function loadCashfreeSdk(): Promise<any> {
+  const tr = useT();
   if (typeof window === "undefined") return Promise.resolve(null);
   if ((window as any).Cashfree) return Promise.resolve((window as any).Cashfree);
   if (cashfreeSdkPromise) return cashfreeSdkPromise;
@@ -41,7 +43,7 @@ function loadCashfreeSdk(): Promise<any> {
     script.onload = () => resolve((window as any).Cashfree);
     script.onerror = () => {
       cashfreeSdkPromise = null;
-      reject(new Error("Payment SDK load nahi hua — internet check karke dobara try karein"));
+      reject(new Error(tr("Payment SDK did not load — check your internet and try again", "Payment SDK load nahi hua — internet check karke dobara try karein")));
     };
     document.body.appendChild(script);
   });

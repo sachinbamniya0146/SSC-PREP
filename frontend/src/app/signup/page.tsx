@@ -1,5 +1,6 @@
 "use client";
 
+import { setStoredLang } from "@/lib/i18n";
 import * as React from "react";
 import { Logo } from "@/components/Logo";
 import { ThemeContext } from "@/components/theme-provider";
@@ -29,6 +30,9 @@ export default function SignupPage() {
   // never actually be triggered by a real signup. Prefill from the link if
   // present, and let the user type/paste one manually either way.
   const [referralCode, setReferralCode] = React.useState("");
+  // read by the Google callback (created once) so a code typed AFTER the button rendered is still sent
+  const referralCodeRef = React.useRef("");
+  React.useEffect(() => { referralCodeRef.current = referralCode; }, [referralCode]);
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -50,11 +54,12 @@ export default function SignupPage() {
     try {
       const data = await api<AuthResponse>("/auth/google", {
         method: "POST",
-        body: JSON.stringify({ idToken: credential, platform: "WEB" }),
+        body: JSON.stringify({ idToken: credential, platform: "WEB", ...(referralCodeRef.current.trim() ? { referralCode: referralCodeRef.current.trim().toUpperCase() } : {}) }),
       });
       localStorage.setItem("ssc_access_token", data.accessToken);
       localStorage.setItem("ssc_refresh_token", data.refreshToken);
       localStorage.setItem("ssc_user", JSON.stringify(data.user));
+      setStoredLang(data.user?.preferredLanguage === "hinglish" ? "hinglish" : "en");
       window.location.href = "/dashboard";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Google sign-up failed");
@@ -196,6 +201,7 @@ export default function SignupPage() {
       localStorage.setItem("ssc_access_token", data.accessToken);
       localStorage.setItem("ssc_refresh_token", data.refreshToken);
       localStorage.setItem("ssc_user", JSON.stringify(data.user));
+      setStoredLang(data.user?.preferredLanguage === "hinglish" ? "hinglish" : "en");
       window.location.href = "/dashboard";
     } catch (err) {
       const message = err instanceof Error ? err.message : "Signup failed";

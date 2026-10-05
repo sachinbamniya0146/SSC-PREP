@@ -3,6 +3,7 @@
 import * as React from "react";
 import { api } from "@/lib/api";
 import { getChatSocket } from "@/lib/chat-socket";
+import { useT } from "@/lib/i18n";
 
 /**
  * SupportChatWidget — floating "Chat with Admin" button + panel, for
@@ -22,6 +23,7 @@ interface ChatMessage {
 }
 
 export function SupportChatWidget({ currentUserId }: { currentUserId: string }) {
+  const tr = useT();
   const [panelOpen, setPanelOpen] = React.useState(false);
   const [conversationId, setConversationId] = React.useState<string | null>(null);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -140,7 +142,7 @@ export function SupportChatWidget({ currentUserId }: { currentUserId: string }) 
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-              placeholder="Apna message likhein…"
+              placeholder={tr("Type your message…", "Apna message likhein…")}
               maxLength={4000}
               className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-xs"
             />

@@ -1,9 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { AiProviderService } from '../ai-provider/ai-provider.service';
+
+/** An AI-generated solution is saved permanently once this many DISTINCT students confirmed it. */
+export const AI_SOLUTION_VERIFY_THRESHOLD = 10;
+/** ...and is thrown away (regenerated on next view) when this many students dispute it and they outnumber the confirmations. */
+export const AI_SOLUTION_REJECT_THRESHOLD = 5;
 
 /**
  * v1 Phase 6-adjacent — AI Explanation lookup for a question.
@@ -124,6 +129,7 @@ export class AIExplanationService {
         keyConceptsHindi: [],
         source: question.explanationSource,
         cached: true,
+        verification: await this.verificationStatus(questionId, userId, question.explanationSource),
       };
     }
 
@@ -131,7 +137,7 @@ export class AIExplanationService {
     // student (and this one, next time) gets it instantly from the DB.
     const personalKey = userOpenRouterKey ?? (await this.getUserOpenRouterKey(userId));
     const generated = await this.generateAndSave(question, personalKey);
-    return { ...generated, cached: false };
+    return { ...generated, cached: false, verification: await this.verificationStatus(questionId, userId, 'AI_GENERATED') };
   }
 
   private async getUserOpenRouterKey(userId: string): Promise<string | undefined> {
@@ -215,8 +221,11 @@ Respond ONLY as JSON, no markdown fences, in exactly this shape:
         explanationSource: 'AI_GENERATED',
         explanationModel: result.model,
         explanationGeneratedAt: new Date(),
+        explanationVerifiedAt: null,
       },
     });
+    // brand-new AI text => earlier confirmations/disputes were about different text
+    await this.prisma.explanationVote.deleteMany({ where: { questionId: question.id } });
 
     return {
       explanation: parsed.explanation,
@@ -283,7 +292,107 @@ Respond ONLY as JSON, no markdown fences, in exactly this shape:
       select: { explanation: true, explanationHindi: true, explanationSource: true },
     });
     return !!(question?.explanation && question?.explanationHindi &&
-      (question.explanationSource === 'AI_GENERATED' || question.explanationSource === 'HUMAN_VERIFIED'));
+      (question.explanationSource === 'AI_GENERATED' || question.explanationSource === 'HUMAN_VERIFIED' || question.explanationSource === 'COMMUNITY_VERIFIED'));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Student verification of AI-generated solutions (Oct 2026)
+  // ---------------------------------------------------------------------------
+
+  /** Vote tally + this student's own vote. Only AI solutions are votable; PDF/human ones return votable:false. */
+  async verificationStatus(questionId: string, userId: string, source?: string | null) {
+    const votable = source === 'AI_GENERATED' || source === 'COMMUNITY_VERIFIED';
+    if (!votable) {
+      return { votable: false, verified: source === 'COMMUNITY_VERIFIED' || source === 'HUMAN_VERIFIED', correct: 0, incorrect: 0, required: AI_SOLUTION_VERIFY_THRESHOLD, myVote: null as string | null };
+    }
+    const [grouped, mine] = await Promise.all([
+      this.prisma.explanationVote.groupBy({ by: ['vote'], where: { questionId }, _count: { _all: true } }),
+      this.prisma.explanationVote.findUnique({ where: { questionId_userId: { questionId, userId } }, select: { vote: true } }),
+    ]);
+    const count = (v: string) => grouped.find((g) => g.vote === v)?._count._all ?? 0;
+    return {
+      votable: true,
+      verified: source === 'COMMUNITY_VERIFIED',
+      correct: count('CORRECT'),
+      incorrect: count('INCORRECT'),
+      required: AI_SOLUTION_VERIFY_THRESHOLD,
+      myVote: mine?.vote ?? null,
+    };
+  }
+
+  async getVerification(questionId: string, userId: string) {
+    const q = await this.prisma.question.findUnique({ where: { id: questionId }, select: { explanationSource: true } });
+    if (!q) throw new NotFoundException('Question not found');
+    return this.verificationStatus(questionId, userId, q.explanationSource);
+  }
+
+  /**
+   * A student confirms (CORRECT) or disputes (INCORRECT) the AI solution of a question.
+   *  - one vote per student, changing it just updates the row
+   *  - only students who actually attempted the question can vote (same gate as reading the solution)
+   *  - >= 10 distinct CORRECT votes  => solution is saved permanently (source COMMUNITY_VERIFIED)
+   *  - >= 5 INCORRECT votes that outnumber CORRECT ones => the AI text is dropped; the next student who opens the
+   *    solution triggers a fresh generation (and every student is asked to verify it again)
+   */
+  async vote(questionId: string, userId: string, role: string, vote: string) {
+    const v = String(vote || '').toUpperCase();
+    if (v !== 'CORRECT' && v !== 'INCORRECT') throw new BadRequestException("vote must be 'CORRECT' or 'INCORRECT'");
+    if (role !== 'STUDENT') throw new BadRequestException('Only students can verify solutions. Staff: use the regenerate action.');
+
+    const q = await this.prisma.question.findUnique({
+      where: { id: questionId },
+      select: { id: true, explanation: true, explanationSource: true },
+    });
+    if (!q) throw new NotFoundException('Question not found');
+    if (!q.explanation || (q.explanationSource !== 'AI_GENERATED' && q.explanationSource !== 'COMMUNITY_VERIFIED')) {
+      throw new BadRequestException('Only AI-generated solutions can be verified.');
+    }
+    if (!(await this.hasAttempted(userId, questionId))) {
+      throw new ForbiddenException('Attempt this question first to verify its solution.');
+    }
+
+    await this.prisma.explanationVote.upsert({
+      where: { questionId_userId: { questionId, userId } },
+      create: { questionId, userId, vote: v },
+      update: { vote: v },
+    });
+
+    // Already permanently saved: nothing more to decide, just report the tally.
+    if (q.explanationSource === 'COMMUNITY_VERIFIED') {
+      return this.verificationStatus(questionId, userId, 'COMMUNITY_VERIFIED');
+    }
+
+    const status = await this.verificationStatus(questionId, userId, 'AI_GENERATED');
+    if (status.correct >= AI_SOLUTION_VERIFY_THRESHOLD) {
+      await this.prisma.question.update({
+        where: { id: questionId },
+        data: { explanationSource: 'COMMUNITY_VERIFIED', explanationVerifiedAt: new Date() },
+      });
+      await this.audit.log({
+        userId,
+        action: 'AI_SOLUTION_COMMUNITY_VERIFIED',
+        targetEntity: 'Question',
+        entityId: questionId,
+        metadataJson: { correct: status.correct, incorrect: status.incorrect },
+      }).catch(() => undefined);
+      return this.verificationStatus(questionId, userId, 'COMMUNITY_VERIFIED');
+    }
+    if (status.incorrect >= AI_SOLUTION_REJECT_THRESHOLD && status.incorrect > status.correct) {
+      await this.prisma.question.update({
+        where: { id: questionId },
+        data: { explanation: null, explanationHindi: null, explanationVerifiedAt: null },
+      });
+      await this.prisma.explanationVote.deleteMany({ where: { questionId } });
+      await this.audit.log({
+        userId,
+        action: 'AI_SOLUTION_REJECTED_BY_STUDENTS',
+        targetEntity: 'Question',
+        entityId: questionId,
+        metadataJson: { correct: status.correct, incorrect: status.incorrect },
+      }).catch(() => undefined);
+      return { votable: false, verified: false, correct: 0, incorrect: 0, required: AI_SOLUTION_VERIFY_THRESHOLD, myVote: null, reset: true };
+    }
+    return status;
   }
 
   async getAvailableModels() {

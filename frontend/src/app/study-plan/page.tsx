@@ -3,6 +3,7 @@
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
+import { useT } from "@/lib/i18n";
 
 type PlanData = {
   plan: {
@@ -45,6 +46,7 @@ type DailyTarget = {
 };
 
 export default function StudyPlanPage() {
+  const tr = useT();
   const [step, setStep] = React.useState<"create" | "view">("view");
   const [plan, setPlan] = React.useState<PlanData | null>(null);
   const [daily, setDaily] = React.useState<DailyTarget | null>(null);
@@ -88,7 +90,7 @@ export default function StudyPlanPage() {
     if (!selectedExam) return alert("Please select an exam");
     let targetStr = targetIso;
     if (targetStr) {
-      if (new Date(targetStr + "T00:00:00").getTime() <= Date.now()) return alert("Target date aaj ke baad ki honi chahiye");
+      if (new Date(targetStr + "T00:00:00").getTime() <= Date.now()) return alert(tr("Target date must be after today", "Target date aaj ke baad ki honi chahiye"));
     } else {
       const d = new Date();
       d.setMonth(d.getMonth() + parseInt(duration));
@@ -143,7 +145,7 @@ export default function StudyPlanPage() {
                 </select>
               </div>
               <div>
-                <label className="text-sm font-medium">Syllabus kab tak complete karna hai?</label>
+                <label className="text-sm font-medium">{tr("By when do you want to complete the syllabus?", "Syllabus kab tak complete karna hai?")}</label>
                 <div className="mt-2 flex gap-2">
                   {["3", "6", "12"].map(m => (
                     <button key={m} onClick={() => { setDuration(m); setTargetIso(""); }}
@@ -152,7 +154,7 @@ export default function StudyPlanPage() {
                     </button>
                   ))}
                 </div>
-                <p className="mt-3 text-xs text-muted-foreground">Ya apni exact date chunein (likhein ya 📅 calendar se):</p>
+                <p className="mt-3 text-xs text-muted-foreground">{tr("Or pick your exact date (type it or use the 📅 calendar):", "Ya apni exact date chunein (likhein ya 📅 calendar se):")}</p>
                 <div className="mt-1">
                   <DateField className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm" value={targetIso} onChange={setTargetIso} placeholder="DD/MM/YYYY" />
                 </div>
@@ -220,7 +222,7 @@ export default function StudyPlanPage() {
             {/* Plan Details */}
             {/* BUGFIX: this used to show plan.plan.examId (a raw database ID
                 like "ckx9a2j4b0001...") in the "Exam" row instead of the
-                exam's actual name — the exact "exam ka naam nahi aa raha"
+                exam's actual name — the exact tr("exam name is not showing", "exam ka naam nahi aa raha")
                 problem, just showing up here on the study-plan page too. */}
             <div className="card divide-y divide-border overflow-hidden">
               {[

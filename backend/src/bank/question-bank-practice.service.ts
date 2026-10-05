@@ -452,32 +452,48 @@ export class QuestionBankPracticeService {
    * page can offer a 25-question level-wise practice set per weak topic.
    */
   async weakFromAttempt(userId: string, attemptId: string) {
+    // BUGFIX: this only accepted status 'SUBMITTED' — an attempt that ended by the timer (AUTO_SUBMITTED) or was
+    // submitted late from an offline queue got a 404 and the student saw no weak topics at all.
     const attempt = await this.prisma.testAttempt.findFirst({
-      where: { id: attemptId, userId, status: 'SUBMITTED' },
-      select: { answers: { where: { isCorrect: false, selectedOption: { not: null } }, select: { questionId: true } } },
+      where: { id: attemptId, userId, status: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] as any } },
+      select: { answers: { select: { questionId: true, isCorrect: true, selectedOption: true } } },
     });
     if (!attempt) throw new NotFoundException('Attempt not found');
-    const wrongIds = attempt.answers.map((a) => a.questionId);
-    if (!wrongIds.length) return { totalWrong: 0, topics: [] };
+    // wrong answers AND skipped questions both point at a weak area (same rule the weak-topic tracker uses)
+    const missed = attempt.answers.filter((a) => !a.selectedOption || a.isCorrect === false).map((a) => a.questionId);
+    return this.weakFromQuestionIds(missed);
+  }
+
+  /**
+   * Weak topics for an arbitrary set of missed question ids. Used by the in-test result screen (practice / sectional
+   * sets have no server attempt), so the "What to do next" panel can list exactly the topic / sub-topic of every
+   * question the student just got wrong or skipped. Grouped subject -> chapter on the client.
+   */
+  async weakFromQuestionIds(questionIds: string[]) {
+    const ids = [...new Set((questionIds ?? []).map(String))].slice(0, 500);
+    if (!ids.length) return { totalWrong: 0, topics: [] as any[] };
 
     const qs = await this.prisma.question.findMany({
-      where: { id: { in: wrongIds } },
-      select: { chapterId: true, topicId: true, subTopicId: true },
+      where: { id: { in: ids } },
+      select: { subjectId: true, chapterId: true, topicId: true, subTopicId: true },
     });
-    const agg = new Map<string, { chapterId: string | null; topicId: string | null; subTopicId: string | null; wrong: number }>();
+    const agg = new Map<string, { subjectId: string | null; chapterId: string | null; topicId: string | null; subTopicId: string | null; wrong: number }>();
     for (const q of qs) {
       if (!q.chapterId && !q.topicId) continue;
       const key = `${q.chapterId ?? ''}|${q.topicId ?? ''}|${q.subTopicId ?? ''}`;
-      const e = agg.get(key) ?? { chapterId: q.chapterId, topicId: q.topicId, subTopicId: q.subTopicId, wrong: 0 };
+      const e = agg.get(key) ?? { subjectId: q.subjectId, chapterId: q.chapterId, topicId: q.topicId, subTopicId: q.subTopicId, wrong: 0 };
       e.wrong++;
       agg.set(key, e);
     }
-    const rows = [...agg.values()].sort((a, b) => b.wrong - a.wrong).slice(0, 12);
-    const [chs, tps, sts] = await Promise.all([
-      this.prisma.chapter.findMany({ where: { id: { in: rows.map((r) => r.chapterId).filter((x): x is string => !!x) } }, select: { id: true, name: true } }),
-      this.prisma.topic.findMany({ where: { id: { in: rows.map((r) => r.topicId).filter((x): x is string => !!x) } }, select: { id: true, name: true } }),
-      this.prisma.subTopic.findMany({ where: { id: { in: rows.map((r) => r.subTopicId).filter((x): x is string => !!x) } }, select: { id: true, name: true } }),
+    const rows = [...agg.values()].sort((a, b) => b.wrong - a.wrong).slice(0, 30);
+    const idsOf = (f: (r: (typeof rows)[number]) => string | null) => [...new Set(rows.map(f).filter((x): x is string => !!x))];
+    const [subs, chs, tps, sts] = await Promise.all([
+      this.prisma.subject.findMany({ where: { id: { in: idsOf((r) => r.subjectId) } }, select: { id: true, name: true } }),
+      this.prisma.chapter.findMany({ where: { id: { in: idsOf((r) => r.chapterId) } }, select: { id: true, name: true } }),
+      this.prisma.topic.findMany({ where: { id: { in: idsOf((r) => r.topicId) } }, select: { id: true, name: true } }),
+      this.prisma.subTopic.findMany({ where: { id: { in: idsOf((r) => r.subTopicId) } }, select: { id: true, name: true } }),
     ]);
+    const sjN = new Map(subs.map((x) => [x.id, x.name]));
     const chN = new Map(chs.map((x) => [x.id, x.name]));
     const tpN = new Map(tps.map((x) => [x.id, x.name]));
     const stN = new Map(sts.map((x) => [x.id, x.name]));
@@ -490,7 +506,18 @@ export class QuestionBankPracticeService {
           ...(r.subTopicId ? { subTopicId: r.subTopicId } : r.topicId ? { topicId: r.topicId } : { chapterId: r.chapterId! }),
         },
       });
+      // PYQ questions of the same scope can top a thin practice pool up (allowPyqFallback) — count them too so the
+      // student is not told "0 available" for a topic they can actually practise.
+      const pyqAvailable = await this.prisma.question.count({
+        where: {
+          ...PYQ_QUESTION_WHERE,
+          ...(r.subTopicId ? { subTopicId: r.subTopicId } : r.topicId ? { topicId: r.topicId } : { chapterId: r.chapterId! }),
+        },
+      });
+      const total = available + pyqAvailable;
       topics.push({
+        subjectId: r.subjectId,
+        subject: r.subjectId ? sjN.get(r.subjectId) ?? '' : '',
         chapterId: r.chapterId,
         chapter: r.chapterId ? chN.get(r.chapterId) ?? '' : '',
         topicId: r.topicId,
@@ -498,11 +525,96 @@ export class QuestionBankPracticeService {
         subTopicId: r.subTopicId,
         subTopic: r.subTopicId ? stN.get(r.subTopicId) ?? '' : '',
         wrongCount: r.wrong,
-        practiceAvailable: available,
-        practiceQuestions: Math.min(this.QUESTIONS_PER_SET, available),
+        practiceAvailable: total,
+        practiceQuestions: Math.min(this.QUESTIONS_PER_SET, total),
       });
     }
-    return { totalWrong: wrongIds.length, topics };
+    return { totalWrong: ids.length, topics };
+  }
+
+  /**
+   * Custom practice built from SEVERAL weak scopes at once: [{ chapterId|topicId|subTopicId, count }].
+   * The student picks, per topic, how many questions to practise; the server draws that many from each scope
+   * (practice pool first, PYQ top-up like weak-topic practice) and merges them into ONE practice set.
+   */
+  async createCustomSet(
+    userId: string,
+    items: { chapterId?: string; topicId?: string; subTopicId?: string; count?: number }[],
+  ): Promise<PracticeSet> {
+    const picks = (Array.isArray(items) ? items : []).filter((i) => i && (i.chapterId || i.topicId || i.subTopicId)).slice(0, 20);
+    if (!picks.length) throw new BadRequestException('Select at least one topic to practise.');
+
+    // Free students: custom practice over scopes that are NOT weak counts as ONE quota start (weak scopes are free).
+    let allWeak = true;
+    for (const p of picks) {
+      if (p.topicId || p.subTopicId) {
+        if (!(await this.isScopeWeakForUser(userId, p.topicId, p.subTopicId))) allWeak = false;
+      } else allWeak = false;
+    }
+    if (!allWeak) {
+      const premium = await this.checkPremiumAccess(userId);
+      if (!premium) {
+        const usedToday = await this.countQuotaPracticeStartsToday(userId);
+        if (usedToday >= this.FREE_DAILY_PRACTICE_LIMIT) {
+          throw new ForbiddenException({
+            message: `Free limit reached: ${this.FREE_DAILY_PRACTICE_LIMIT} practice sets per day. Get the ₹19 plan for unlimited practice.`,
+            code: 'PREMIUM_REQUIRED',
+            reason: 'DAILY_FREE_LIMIT',
+          });
+        }
+      }
+    }
+
+    const chosen: string[] = [];
+    const used = new Set<string>();
+    let firstScope: { subjectId?: string; chapterId?: string } = {};
+    for (const p of picks) {
+      const scope = await this.resolveScope({ chapterId: p.chapterId, topicId: p.topicId, subTopicId: p.subTopicId });
+      if (!firstScope.chapterId && !firstScope.subjectId) firstScope = { subjectId: scope.subjectId, chapterId: scope.chapterId };
+      const want = Math.min(50, Math.max(1, Math.floor(Number(p.count) || 5)));
+      // fetchQuestionsForSet already de-prioritises questions this student has seen in this scope
+      const qs = await this.fetchQuestionsForSet(userId, { ...scope }, Math.max(want, 1), true);
+      let taken = 0;
+      for (const q of qs) {
+        if (taken >= want) break;
+        if (used.has(q.id)) continue;
+        used.add(q.id);
+        chosen.push(q.id);
+        taken++;
+      }
+    }
+    if (!chosen.length) {
+      throw new NotFoundException('No practice questions are available for the selected topics yet. Try other topics.');
+    }
+
+    const ordered = await this.loadOrderedQuestions(chosen, false);
+    let created: any = null;
+    for (let attempt = 0; attempt < 2 && !created; attempt++) {
+      const agg = await this.prisma.questionBankSet.aggregate({
+        where: { userId, subjectId: null, chapterId: null, examId: null },
+        _max: { setNumber: true },
+      });
+      try {
+        created = await this.prisma.questionBankSet.create({
+          data: {
+            userId,
+            subjectId: null,
+            chapterId: null,
+            topicId: null,
+            subTopicId: null,
+            examId: null,
+            setNumber: (agg._max.setNumber ?? 0) + 1,
+            questions: ordered.map((q) => q.id),
+            currentIndex: 0,
+            answers: {},
+            mode: 'practice',
+          },
+        });
+      } catch (e: any) {
+        if (e?.code !== 'P2002' || attempt === 1) throw e;
+      }
+    }
+    return this.formatSet(created, ordered, { chapterName: 'Custom weak-topic practice' });
   }
 
   /** GET /bank/practice/quota — powers the "3/5 free sets used today" chip. */

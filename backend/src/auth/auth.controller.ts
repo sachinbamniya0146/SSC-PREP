@@ -60,7 +60,7 @@ export class AuthController {
   @Post('google')
   @HttpCode(HttpStatus.OK)
   google(@Body() dto: GoogleAuthDto) {
-    return this.authService.googleLogin(dto.idToken, dto.platform || 'WEB');
+    return this.authService.googleLogin(dto.idToken, dto.platform || 'WEB', dto.referralCode);
   }
 
   @Public()

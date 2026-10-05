@@ -32,3 +32,8 @@ frontend/Dockerfile.backup
 backend/extract/hindi/
 backend/extract/maths/
 final_output/
+
+# one-off import data / editor backups — never commit (they bloat the repo and were never used at runtime)
+backend/extract/
+*.bak
+*.video-backup

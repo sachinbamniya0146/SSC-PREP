@@ -10,6 +10,7 @@ import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { startCashfreeCheckout, type BiMsg } from "@/lib/vocab-pay";
 import BiMessage from "@/components/BiMessage";
+import { useT } from "@/lib/i18n";
 
 type Status = {
   due: boolean;
@@ -33,6 +34,7 @@ type Result = { scorePct: number; correct: number; wrong: number; total: number;
 const fmt = (s: number) => `${String(Math.floor(Math.max(0, s) / 60)).padStart(2, "0")}:${String(Math.max(0, s) % 60).padStart(2, "0")}`;
 
 export default function VocabRevisionPage() {
+  const tr = useT();
   const [status, setStatus] = React.useState<Status | null>(null);
   const [session, setSession] = React.useState<Session | null>(null);
   const [answers, setAnswers] = React.useState<Record<string, string>>({});
@@ -53,7 +55,7 @@ export default function VocabRevisionPage() {
       if (!r.ok) throw new Error("Load failed");
       setStatus(await r.json());
     } catch {
-      setError("Status load nahi ho paya.");
+      setError(tr("Could not load the status.", "Status load nahi ho paya."));
     } finally {
       setLoading(false);
     }
@@ -68,7 +70,7 @@ export default function VocabRevisionPage() {
     try {
       const r = await fetchAuth(`${API_BASE}/vocab/revision/start`, { method: "POST" });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d?.message || "Start nahi hua");
+      if (!r.ok) throw new Error(d?.message || tr("Could not start", "Start nahi hua"));
       submittedRef.current = false;
       deadlineRef.current = Date.now() + d.timeLimitSec * 1000;
       setRemaining(d.timeLimitSec);
@@ -122,7 +124,7 @@ export default function VocabRevisionPage() {
     try {
       await startCashfreeCheckout({ vocabRevisionSkip: true });
     } catch (e: any) {
-      setError(e.message || "Payment start nahi hua");
+      setError(e.message || tr("Could not start the payment", "Payment start nahi hua"));
       setBusy(false);
     }
   };
@@ -222,7 +224,7 @@ export default function VocabRevisionPage() {
   }
 
   // ------------------------------------------------------------------- home
-  if (!status) return shell(<p className="text-center text-danger">{error || "Load nahi hua"}</p>);
+  if (!status) return shell(<p className="text-center text-danger">{error || tr("Could not load", "Load nahi hua")}</p>);
   return shell(
     <>
       {error && <p className="mb-3 text-sm text-danger">{error}</p>}
@@ -240,14 +242,14 @@ export default function VocabRevisionPage() {
             {status.inProgressSessionId ? "▶ Continue revision" : "▶ Start revision (free)"}
           </button>
           {!confirmSkip ? (
-            <button onClick={() => setConfirmSkip(true)} className="mt-2 w-full text-xs text-muted-foreground underline">Aaj skip karna hai? / Skip today?</button>
+            <button onClick={() => setConfirmSkip(true)} className="mt-2 w-full text-xs text-muted-foreground underline">{tr("Skip today?", "Aaj skip karna hai?")}</button>
           ) : (
             <div className="mt-3 space-y-2">
               <BiMessage msg={status.messages.skipWarning} tone="danger" />
               <button onClick={paySkip} disabled={busy} className="btn w-full border border-red-500/40 bg-red-500/10 py-2.5 text-sm font-semibold text-red-600 disabled:opacity-50">
                 {busy ? "Redirecting…" : `Pay ₹${status.skipFeeInr} & skip today`}
               </button>
-              <button onClick={() => setConfirmSkip(false)} className="btn btn-outline w-full py-2 text-sm">Nahi, revision karunga / No, I will revise</button>
+              <button onClick={() => setConfirmSkip(false)} className="btn btn-outline w-full py-2 text-sm">{tr("No, I will revise", "Nahi, revision karunga")}</button>
             </div>
           )}
         </>

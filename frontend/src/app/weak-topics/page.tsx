@@ -8,6 +8,7 @@
 // practice — until then it stays here and keeps being counted.
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type Item = {
   id: string;
@@ -31,6 +32,7 @@ type Item = {
 type Data = { passPercent: number; summary: { weakCount: number; strengthenedCount: number; chaptersAffected: number }; weak: Item[]; strengthened: Item[] };
 
 export default function WeakTopicsPage() {
+  const tr = useT();
   const [data, setData] = React.useState<Data | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
@@ -43,7 +45,7 @@ export default function WeakTopicsPage() {
       try {
         const r = await fetchAuth(`${API_BASE}/bank/weak-topics`);
         if (r.ok) setData(await r.json());
-        else setError("List load nahi hui. Dobara try karein.");
+        else setError(tr("Could not load the list. Please try again.", "List load nahi hui. Dobara try karein."));
       } catch {
         setError("Network error.");
       } finally {
@@ -70,14 +72,14 @@ export default function WeakTopicsPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setError(d.code === "PREMIUM_REQUIRED" ? "Is topic ka free practice limit khatam — Premium lein." : `Start nahi hua: ${d.message || r.status}`);
+        setError(d.code === "PREMIUM_REQUIRED" ? tr("Free practice limit for this topic is over — get Premium.", "Is topic ka free practice limit khatam — Premium lein.") : `Start nahi hua: ${d.message || r.status}`);
         return;
       }
       sessionStorage.setItem("ssc_sectional_set", JSON.stringify(d));
       sessionStorage.setItem("ssc_sectional_subject", d.chapterName || it.label || "Weak topic practice");
       window.location.href = "/test?sectional=1";
     } catch {
-      setError("Network error — practice start nahi hui.");
+      setError(tr("Network error — practice could not start.", "Network error — practice start nahi hui."));
     } finally {
       setStarting("");
     }
@@ -114,7 +116,7 @@ export default function WeakTopicsPage() {
 
       <main className="mx-auto max-w-3xl space-y-4 px-3 py-5">
         {error && <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-600">{error}</div>}
-        {loading && <p className="py-10 text-center text-sm text-muted-foreground">Aapke tests check ho rahe hain…</p>}
+        {loading && <p className="py-10 text-center text-sm text-muted-foreground">{tr("Checking your tests…", "Aapke tests check ho rahe hain…")}</p>}
 
         {!loading && data && (
           <>
@@ -130,8 +132,8 @@ export default function WeakTopicsPage() {
 
             {data.weak.length === 0 ? (
               <div className="rounded-xl border border-border bg-card p-8 text-center">
-                <p className="text-lg font-semibold">Koi weak topic nahi 🎉</p>
-                <p className="mt-2 text-sm text-muted-foreground">Mock, PYQ ya sectional test dein — galat hue topics yahan aa jayenge.</p>
+                <p className="text-lg font-semibold">{tr("No weak topics 🎉", "Koi weak topic nahi 🎉")}</p>
+                <p className="mt-2 text-sm text-muted-foreground">{tr("Take a mock, PYQ or sectional test — the topics you got wrong will appear here.", "Mock, PYQ ya sectional test dein — galat hue topics yahan aa jayenge.")}</p>
                 <a href="/mocks" className="btn btn-primary mt-4 inline-block">Test dein</a>
               </div>
             ) : (
@@ -162,7 +164,7 @@ export default function WeakTopicsPage() {
                                 <p className="mt-0.5 text-[11px] text-muted-foreground">❌ {w.wrongCount} galat/skip · {w.practiceSetsDone} practice set{score != null ? ` · last score ${score}%` : ""}</p>
                               </div>
                               <button onClick={() => start(w)} disabled={starting === w.id || w.available === 0} className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground disabled:opacity-50">
-                                {w.available === 0 ? "Questions jald" : starting === w.id ? "Shuru ho raha…" : "💪 Strong karein"}
+                                {w.available === 0 ? "Questions jald" : starting === w.id ? tr("Starting…", "Shuru ho raha…") : tr("💪 Strengthen", "💪 Strong karein")}
                               </button>
                             </div>
                             <div className="mt-2">

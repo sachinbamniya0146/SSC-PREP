@@ -22,7 +22,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { Department } from '../common/decorators/department.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { VocabUploadService } from './vocab-upload.service';
-import { archiveWordProgress } from './vocab-unlock-memory';
+import { archiveWordProgress, preserveUnlockBeforeMove } from './vocab-unlock-memory';
 import { AuditLogService } from '../audit-log/audit-log.service';
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -91,14 +91,106 @@ export class VocabAdminController {
     }));
   }
 
+  /** One word with every learning field — feeds the admin "Edit word" form. */
+  @Get('words/:id')
+  async getWord(@Param('id') id: string) {
+    const w = await this.prisma.vocabWord.findUnique({ where: { id }, include: { _count: { select: { questions: true } } } });
+    if (!w) throw new BadRequestException('Word not found');
+    return w;
+  }
+
+  /**
+   * Edit a word after upload. Any learning field can be changed; `orderIndex` is NOT taken from here any more (a raw
+   * number created duplicate / gapped positions) — use POST words/:id/move or POST words/reorder instead.
+   */
   @Put('words/:id')
-  async updateWord(@Param('id') id: string, @Body() body: { orderIndex?: number; isActive?: boolean }) {
+  async updateWord(@Param('id') id: string, @Body() body: Record<string, any>) {
     const existing = await this.prisma.vocabWord.findUnique({ where: { id } });
     if (!existing) throw new BadRequestException('Word not found');
-    const data: { orderIndex?: number; isActive?: boolean } = {};
-    if (body.orderIndex !== undefined) data.orderIndex = Number(body.orderIndex);
+
+    const data: Record<string, any> = {};
+    const str = (k: string, required = false) => {
+      if (body[k] === undefined) return;
+      const v = body[k] === null ? '' : String(body[k]).trim();
+      if (required && !v) throw new BadRequestException(`'${k}' cannot be empty`);
+      data[k] = v || (required ? v : null);
+    };
+    str('word', true);
+    str('meaningHindi', true);
+    str('meaningEnglish', true);
+    for (const k of ['partOfSpeech', 'pronunciation', 'memoryTrick', 'etymology', 'registerNote', 'examTrendNote', 'confusingPairNote']) str(k);
+    for (const k of ['examplesJson', 'synonymsJson', 'antonymsJson']) {
+      if (body[k] === undefined) continue;
+      if (body[k] !== null && !Array.isArray(body[k])) throw new BadRequestException(`'${k}' must be a list`);
+      data[k] = body[k] === null ? null : body[k];
+    }
     if (body.isActive !== undefined) data.isActive = !!body.isActive;
+
+    // a changed word text must not collide with another word's text/slug
+    if (data.word && data.word !== existing.word) {
+      const dup = await this.prisma.vocabWord.findFirst({ where: { id: { not: id }, word: { equals: data.word, mode: 'insensitive' } } });
+      if (dup) throw new BadRequestException(`Another word "${dup.word}" already exists`);
+    }
+    if (!Object.keys(data).length) return existing;
     return this.prisma.vocabWord.update({ where: { id }, data });
+  }
+
+  /**
+   * Put a word at ANY position (1 = first). Everything in between shifts by one, so the list always stays 1..N with
+   * no duplicates or gaps. Students who could already reach the word keep it unlocked.
+   */
+  @Post('words/:id/move')
+  async moveWord(@Param('id') id: string, @Body() body: { position?: number }) {
+    const pos = Math.floor(Number(body?.position));
+    if (!Number.isFinite(pos) || pos < 1) throw new BadRequestException('position must be a number >= 1');
+    const all = await this.prisma.vocabWord.findMany({ orderBy: [{ orderIndex: 'asc' }, { createdAt: 'asc' }], select: { id: true, orderIndex: true, word: true } });
+    const from = all.findIndex((w) => w.id === id);
+    if (from < 0) throw new BadRequestException('Word not found');
+    const to = Math.min(pos, all.length) - 1;
+    if (from !== to) {
+      if (to > from) await preserveUnlockBeforeMove(this.prisma, id);
+      const ids = all.map((w) => w.id);
+      ids.splice(from, 1);
+      ids.splice(to, 0, id);
+      await this.applyOrder(ids, all);
+    }
+    return { moved: true, word: all[from].word, from: from + 1, to: to + 1, total: all.length };
+  }
+
+  /** Full re-order in one call (drag & drop): body.orderedIds is the complete list of word ids in the new order. */
+  @Post('words/reorder')
+  async reorderWords(@Body() body: { orderedIds?: string[] }) {
+    const ids = Array.isArray(body?.orderedIds) ? body.orderedIds.map(String) : [];
+    const all = await this.prisma.vocabWord.findMany({ orderBy: [{ orderIndex: 'asc' }, { createdAt: 'asc' }], select: { id: true, orderIndex: true } });
+    const known = new Set(all.map((w) => w.id));
+    if (ids.length !== all.length || new Set(ids).size !== ids.length || ids.some((x) => !known.has(x))) {
+      throw new BadRequestException('orderedIds must list every word exactly once');
+    }
+    const oldPos = new Map(all.map((w, i) => [w.id, i]));
+    for (let i = 0; i < ids.length; i++) {
+      if ((oldPos.get(ids[i]) ?? i) < i) await preserveUnlockBeforeMove(this.prisma, ids[i]); // word moved later
+    }
+    await this.applyOrder(ids, all);
+    return { reordered: true, total: ids.length };
+  }
+
+  /** Close gaps / remove duplicate numbers (e.g. after many uploads and deletes): renumber 1..N keeping the current order. */
+  @Post('words/normalize')
+  async normalizeOrder() {
+    const all = await this.prisma.vocabWord.findMany({ orderBy: [{ orderIndex: 'asc' }, { createdAt: 'asc' }], select: { id: true, orderIndex: true } });
+    await this.applyOrder(all.map((w) => w.id), all);
+    return { normalized: true, total: all.length };
+  }
+
+  private async applyOrder(ids: string[], before: { id: string; orderIndex: number }[]) {
+    const prev = new Map(before.map((w) => [w.id, w.orderIndex]));
+    const changed = ids.map((wid, i) => ({ wid, idx: i + 1 })).filter((x) => prev.get(x.wid) !== x.idx);
+    const CHUNK = 200;
+    for (let i = 0; i < changed.length; i += CHUNK) {
+      await this.prisma.$transaction(
+        changed.slice(i, i + CHUNK).map((x) => this.prisma.vocabWord.update({ where: { id: x.wid }, data: { orderIndex: x.idx } })),
+      );
+    }
   }
 
   // Oct 2026: delete is now SOFT by default (word hidden from students, everything kept) because a hard

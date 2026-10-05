@@ -3,6 +3,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserService } from './users.service';
 import { UpdatePhoneDto } from './dto/update-phone.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -52,6 +53,12 @@ export class UsersController {
     @Body() body: UpdatePhoneDto,
   ) {
     return this.usersService.updatePreferences(user.userId, { phone: body.phone });
+  }
+
+  /** Student edits their own registration details (name, mobile) and display language. */
+  @Put('me/profile')
+  async updateProfile(@CurrentUser() user: { userId: string }, @Body() body: UpdateProfileDto) {
+    return this.usersService.updateProfile(user.userId, body);
   }
 
   /** Save/replace the user's personal OpenRouter API key (used for free-model AI explanations). */

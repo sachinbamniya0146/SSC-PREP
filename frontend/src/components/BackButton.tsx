@@ -1,14 +1,17 @@
 "use client";
 
-// NEW ("left side me top me back jaane ka button hona tha") — a single
-// reusable back button instead of every one of the 30+ pages hand-rolling
-// its own header/back-link (which is why some pages had one and others
-// didn't). Uses browser history when there IS a previous page in this tab
-// (so "back" truly goes back, not always to /dashboard), and falls back to
-// `fallbackHref` (default /dashboard) when there's no history to go back to
-// — e.g. the page was opened directly from a bookmark or a new tab.
+// Reusable "← Back" button.
+// BUGFIX: it used to call router.back() whenever window.history.length > 1. That number also counts pages from
+// OTHER sites and earlier logins, so Back could land on /login, an already-submitted test, a payment page, or leave
+// the app entirely — which is why "back button proper kaam nahi karta" was reported. Now it follows the in-app trail
+// recorded by <NavTracker /> (root layout), skips pages that make no sense to return to, and otherwise goes to
+// `fallbackHref` (default /dashboard).
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
+import { readNavStack, writeNavStack } from "@/components/NavTracker";
+
+const NEVER_RETURN_TO = ["/login", "/signup", "/forgot", "/reset", "/verify", "/payment", "/test"];
+const skip = (p: string) => p === "/" || NEVER_RETURN_TO.some((x) => p === x || p.startsWith(x + "/") || p.startsWith(x + "?"));
 
 export function BackButton({
   fallbackHref = "/dashboard",
@@ -20,19 +23,27 @@ export function BackButton({
   className?: string;
 }) {
   const router = useRouter();
-  const [canGoBack, setCanGoBack] = React.useState(false);
+  const pathname = usePathname();
 
-  React.useEffect(() => {
-    // window.history.length > 1 just means "this tab has history", not
-    // necessarily history within our own app — but it's the best signal
-    // available client-side, and worst case we fall back to fallbackHref
-    // if router.back() ever leaves the site (it won't for same-tab nav).
-    setCanGoBack(typeof window !== "undefined" && window.history.length > 1);
-  }, []);
+  const goBack = () => {
+    const stack = readNavStack();
+    // drop the current page, then walk back to the nearest page that is a sensible destination
+    while (stack.length && stack[stack.length - 1] === pathname) stack.pop();
+    let target: string | null = null;
+    while (stack.length) {
+      const p = stack.pop() as string;
+      if (p !== pathname && !skip(p)) {
+        target = p;
+        break;
+      }
+    }
+    writeNavStack(stack); // the destination re-adds itself via NavTracker
+    router.push(target || fallbackHref);
+  };
 
   return (
     <button
-      onClick={() => (canGoBack ? router.back() : router.push(fallbackHref))}
+      onClick={goBack}
       className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground ${className}`}
       aria-label={label}
     >
