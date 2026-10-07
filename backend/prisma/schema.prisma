@@ -430,6 +430,41 @@ model QuestionUploadBatch {
   @@map("question_upload_batches")
 }
 
+// NEW (Oct 6 2026 — Sachin: "duplicate question admin ke review me jaye").
+// When an upload (or a scan of the bank) finds a question that is the SAME as one
+// already live, it is NOT silently rejected: a row is queued here and the admin
+// decides — keep the old one, keep the new one, or keep both.
+// No foreign keys on purpose: a review must survive if either question is later
+// deleted, and the screen shows "deleted" for a missing side.
+model DuplicateReview {
+  id                  String    @id @default(uuid())
+  // PENDING | KEPT_EXISTING | KEPT_NEW | KEPT_BOTH
+  status              String    @default("PENDING")
+  // EXACT (everything identical) | SIMILAR (same question, some detail differs)
+  matchType           String
+  // names of the fields that differ (see common/duplicate-compare.ts); [] when EXACT
+  differences         Json?
+  // the question already live in the bank ("old" / side A)
+  existingQuestionId  String?
+  // scan mode: the second live question ("side B"). null in upload mode.
+  candidateQuestionId String?
+  // upload mode: the whole not-yet-saved question, saved only if the admin keeps it
+  candidateJson       Json?
+  searchHash          String?
+  uploadBatchId       String?
+  sourceRow           Int?
+  createdById         String?
+  resolvedById        String?
+  resolvedAt          DateTime?
+  createdAt           DateTime  @default(now())
+
+  @@index([status, matchType, createdAt])
+  @@index([existingQuestionId])
+  @@index([candidateQuestionId])
+  @@index([uploadBatchId])
+  @@map("question_duplicate_reviews")
+}
+
 model Question {
   id                 String            @id @default(uuid())
   // NEW (Oct 3 2026): short, human-friendly unique number of every question

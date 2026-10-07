@@ -59,6 +59,8 @@ interface UploadResult {
   errorsTruncated?: boolean;
   errorSummary?: Record<string, number>;
   warningsTotal?: number;
+  queuedForReview?: number;
+  queuedExact?: number;
 }
 
 interface UploadJobState {
@@ -538,7 +540,7 @@ export default function AdminPage() {
       if (j.status === "FAILED") throw new Error(j.fatalError || "Upload fail ho gaya");
       if (j.status === "DONE") {
         if (j.hasRejected) setRejectedUrl(`${API_BASE}/bank/admin/upload/job/${started.id}/rejected`);
-        setUploadResult({ success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors, warnings: j.warnings } as UploadResult);
+        setUploadResult({ success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors, warnings: j.warnings, queuedForReview: j.queuedForReview, queuedExact: j.queuedExact } as UploadResult);
         loadBatches();
         if (checkOnly) setInfo(`Sirf check hua (kuch save nahi hua): ${j.created} question upload ke liye tayyar, ${j.failed} reject.`);
         else if (j.created > 0) setInfo(`${j.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye`);
@@ -969,6 +971,12 @@ export default function AdminPage() {
             🕳️ Kaunse Topic/Sub-Topic mein question missing hai? Coverage / Gap Finder →
           </a>
           <a
+            href="/admin/questions/duplicates"
+            className="mb-3 ml-2 inline-block rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+          >
+            🧬 Duplicate Review — same question ek rakhein ya dono →
+          </a>
+          <a
             href="/admin/questions/manage"
             className="mb-3 ml-2 inline-block rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
           >
@@ -1121,6 +1129,11 @@ export default function AdminPage() {
                 <span>Total: <strong>{uploadResult.total}</strong></span>
                 <span className="text-emerald-600 dark:text-emerald-400">Created: <strong>{uploadResult.created}</strong></span>
                 <span className="text-red-600 dark:text-red-400">Failed: <strong>{uploadResult.failed}</strong></span>
+                {(uploadResult.queuedForReview ?? 0) > 0 && (
+                  <a href="/admin/questions/duplicates" className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                    🧬 {uploadResult.queuedForReview} duplicate Review me gaye{(uploadResult.queuedExact ?? 0) > 0 ? ` (${uploadResult.queuedExact} exact same)` : ""} — purana / naya / dono chunne ke liye kholein →
+                  </a>
+                )}
                 {uploadResult.errorsTruncated && (
                   <span className="w-full text-xs text-amber-600">
                     ⚠️ Total {uploadResult.failed.toLocaleString()} rows fail hui — yahan sirf pehli {uploadResult.errors.length.toLocaleString()} dikh rahi hain. Pehle inhe theek karke dobara upload karein. / Only the first {uploadResult.errors.length.toLocaleString()} failures are listed.

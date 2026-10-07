@@ -14,6 +14,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
+import { normalizeShift } from "@/lib/shift";
 
 type Kind = "pyq" | "practice";
 type TaxSubTopic = { id: string; name: string };
@@ -98,7 +99,7 @@ export default function AddQuestionPage() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const [ok, setOk] = React.useState<{ msg: string; warnings: string[] } | null>(null);
-  const [dup, setDup] = React.useState<{ checked: boolean; isDuplicate: boolean; existing?: DupInfo } | null>(null);
+  const [dup, setDup] = React.useState<{ checked: boolean; isDuplicate: boolean; existing?: DupInfo; exact?: boolean; differences?: string[] } | null>(null);
   const [savedCount, setSavedCount] = React.useState(0);
 
   React.useEffect(() => {
@@ -155,11 +156,11 @@ export default function AddQuestionPage() {
     difficulty,
   });
 
-  const post = async (path: string) => {
+  const post = async (path: string, extra?: Record<string, unknown>) => {
     const r = await fetchAuth(`${API_BASE}/bank/admin/upload/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload()),
+      body: JSON.stringify({ ...payload(), ...(extra ?? {}) }),
     });
     const d = await r.json().catch(() => null);
     return { r, d };
@@ -174,10 +175,35 @@ export default function AddQuestionPage() {
     try {
       const { r, d } = await post("single/check-duplicate");
       if (!r.ok) throw new Error(d?.message || `Check failed (HTTP ${r.status})`);
-      setDup({ checked: true, isDuplicate: !!d.isDuplicate, existing: d.existing });
+      setDup({ checked: true, isDuplicate: !!d.isDuplicate, existing: d.existing, exact: d.exact, differences: d.differences });
     } catch (e) {
       setDup(null);
       setError(e instanceof Error ? e.message : "Duplicate check failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Oct 6 2026: instead of dropping a duplicate, queue it for the Duplicate Review screen
+  const sendToReview = async () => {
+    setError("");
+    setOk(null);
+    setBusy(true);
+    try {
+      const { r, d } = await post("single", { duplicateAction: "review" });
+      if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `Failed (HTTP ${r.status})`);
+      setOk({ msg: "📥 Duplicate review queue me bhej diya — Admin → Duplicate Review me purana / naya / dono chunein.", warnings: [] });
+      setQuestionText("");
+      setQuestionTextHindi("");
+      setQuestionImageUrl("");
+      setOptions(emptyOpts());
+      setCorrect("");
+      setExplanation("");
+      setExplanationHindi("");
+      setDup(null);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
     } finally {
       setBusy(false);
     }
@@ -190,7 +216,7 @@ export default function AddQuestionPage() {
     try {
       const { r, d } = await post("single");
       if (r.status === 409 && d?.code === "DUPLICATE") {
-        setDup({ checked: true, isDuplicate: true, existing: d.existing });
+        setDup({ checked: true, isDuplicate: true, existing: d.existing, exact: d.exact, differences: d.differences });
         throw new Error(d.message);
       }
       if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `Save failed (HTTP ${r.status})`);
@@ -302,7 +328,8 @@ export default function AddQuestionPage() {
               </div>
               <div>
                 <label className={lbl}>Shift</label>
-                <input className={inp} list="shift-list" placeholder="Shift 1" value={shift} onChange={(e) => { setShift(e.target.value); setDup(null); }} />
+                <input className={inp} list="shift-list" placeholder="Shift 1 / morning / evening" value={shift} onChange={(e) => { setShift(e.target.value); setDup(null); }} onBlur={() => setShift((v) => normalizeShift(v) ?? "")} />
+                <p className="mt-1 text-[11px] text-muted-foreground">Morning / subah = Shift 1 · Afternoon / dopahar = Shift 2 · Evening / shaam = Shift 3 (apne aap badal jayega)</p>
                 <datalist id="shift-list">{["Shift 1", "Shift 2", "Shift 3", "Shift 4"].map((s) => <option key={s} value={s} />)}</datalist>
               </div>
               <div>
@@ -374,7 +401,12 @@ export default function AddQuestionPage() {
           <div className={`rounded-lg border p-3 text-sm ${dup.isDuplicate ? "border-red-500/40 bg-red-500/10" : "border-emerald-500/40 bg-emerald-500/10"}`}>
             {dup.isDuplicate && dup.existing ? (
               <>
-                <p className="font-semibold text-red-600">❌ Ye question pehle se database me hai — save nahi hoga.</p>
+                <p className="font-semibold text-red-600">
+                  {dup.exact
+                    ? "❌ Exactly same question (question, options, solution, shift sab same) pehle se database me hai."
+                    : `⚠️ Same question pehle se hai, lekin ye alag hai: ${(dup.differences ?? []).join(", ") || "details"}.`}
+                </p>
+                <button type="button" onClick={sendToReview} disabled={busy} className="mt-2 rounded-lg border border-red-500/50 bg-background px-3 py-1.5 text-xs font-semibold hover:bg-red-500/10 disabled:opacity-40">📥 Review queue me bhejo (purana / naya / dono wahan chunein)</button>
                 <p className="mt-1 text-xs text-muted-foreground">“{dup.existing.questionText || "(image question)"}” {dup.existing.year ? `· ${dup.existing.year}` : ""} {dup.existing.shift ? `· ${dup.existing.shift}` : ""} · ID {dup.existing.id}</p>
               </>
             ) : (

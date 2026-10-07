@@ -11,6 +11,8 @@ import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagr
 import { cacheClearPrefix } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, QuestionKind } from '../common/question-visibility';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
+import { normalizeShiftOrUndefined } from '../common/shift';
+import { compareQuestions } from '../common/duplicate-compare';
 import {
   DB_IN_CHUNK,
   INSERT_CHUNK,
@@ -234,6 +236,10 @@ export interface UploadResult {
   errorsTruncated?: boolean;
   errorSummary?: Record<string, number>;
   warningsTotal?: number;
+  // Oct 6 2026: rows that are the same question as one already in the bank. They are NOT
+  // failures — they wait in the admin's duplicate review queue (/admin/questions/duplicates).
+  queuedForReview?: number;
+  queuedExact?: number;
 }
 
 export interface ExistingQuestionSummary {
@@ -257,6 +263,26 @@ export interface QuestionTemplate {
  * consulted per-row instead of hitting the database on every single row.
  * See the doc-comment on buildDuplicateIndex() for the full rationale.
  */
+/**
+ * Thrown (instead of a plain Error) when a row is the same question as one that
+ * is already live. The bulk loops catch it and QUEUE the row for admin review
+ * (see DuplicateReviewService) instead of counting it as a failed row. The
+ * message is unchanged, so any other caller still sees the old text.
+ */
+export class DuplicateQuestionError extends Error {
+  constructor(message: string, public readonly existing: any, public readonly question: BulkUploadQuestion) {
+    super(message);
+    this.name = 'DuplicateQuestionError';
+  }
+}
+
+/** A review row whose "existing" side is another row of the SAME upload that has no DB id yet. */
+interface PendingDuplicateLink {
+  reviewId: string;
+  searchHash: string;
+  question: BulkUploadQuestion;
+}
+
 interface DuplicateIndex {
   byHash: Map<string, any>;
   byText: Map<string, any[]>;
@@ -500,7 +526,8 @@ export class BankUploadService {
     if (kind === 'pyq') {
       year = Number(input.year);
       if (!Number.isInteger(year) || year < 1990 || year > 2100) throw new BadRequestException('PYQ ke liye sahi year likhein (jaise 2024). / A valid year is required for a PYQ.');
-      shift = str(input.shift, 60, 'Shift') || undefined;
+      // Oct 2026: morning/afternoon/evening/9 AM/"1" -> canonical "Shift 1/2/3" (see common/shift.ts)
+      shift = normalizeShiftOrUndefined(str(input.shift, 60, 'Shift'));
       paperCode = str(input.paperCode, 120, 'Paper code') || undefined;
       try {
         examDate = normalizeExamDate(str(input.examDate, 40, 'Exam date'));
@@ -545,14 +572,16 @@ export class BankUploadService {
   }
 
   /** Live "is this question already in the bank?" check for the admin form. */
-  async checkSingleDuplicate(input: any): Promise<{ isDuplicate: boolean; existing?: ExistingQuestionSummary }> {
+  async checkSingleDuplicate(input: any): Promise<{ isDuplicate: boolean; existing?: ExistingQuestionSummary; exact?: boolean; differences?: string[] }> {
     const { question } = this.buildSingleQuestion(input);
     const dup = await this.checkDuplicateDirect(question);
-    return dup.isDuplicate ? { isDuplicate: true, existing: this.summarizeExisting(dup.existingQuestion) } : { isDuplicate: false };
+    if (!dup.isDuplicate) return { isDuplicate: false };
+    const cmp = compareQuestions(question, dup.existingQuestion);
+    return { isDuplicate: true, existing: this.summarizeExisting(dup.existingQuestion), exact: cmp.exact, differences: cmp.differences };
   }
 
   /** Saves ONE question (PYQ or practice) exactly like an Excel row: same validation, duplicate rule, Hindi gate and PYQ-mock refresh. */
-  async addSingleQuestion(input: any, adminId: string): Promise<{ id: string | null; published: boolean; kind: 'pyq' | 'practice'; warnings: string[] }> {
+  async addSingleQuestion(input: any, adminId: string): Promise<{ id: string | null; published: boolean; kind: 'pyq' | 'practice'; warnings: string[]; queuedForReview?: boolean; reviewId?: string | null }> {
     const { question, kind } = this.buildSingleQuestion(input);
 
     if (kind === 'pyq' && !question.paperCode && question.examDate && question.year && question.shift) {
@@ -564,10 +593,30 @@ export class BankUploadService {
     const dup = await this.checkDuplicateDirect(question);
     if (dup.isDuplicate) {
       const ex = this.summarizeExisting(dup.existingQuestion);
+      const cmp = compareQuestions(question, dup.existingQuestion);
+      // Oct 6 2026: the admin form can send the duplicate to the review queue instead of dropping it.
+      if (input?.duplicateAction === 'review') {
+        const err = new DuplicateQuestionError(`Duplicate question found (ID: ${ex.id}).`, dup.existingQuestion, question);
+        const queued = await this.queueDuplicateForReview(err, { adminId, uploadBatchId: null });
+        return {
+          id: null,
+          published: false,
+          kind,
+          queuedForReview: true,
+          reviewId: queued.reviewId,
+          warnings: [
+            queued.outcome === 'QUEUED'
+              ? 'Duplicate review queue me bhej diya. Admin > Duplicate Review me jaake "purana / naya / dono" chunein. / Sent to the duplicate review queue.'
+              : 'Ye duplicate pehle se review list me hai ya pehle decide ho chuka hai. / Already in the review list or already decided.',
+          ],
+        };
+      }
       throw new ConflictException({
         message: `Ye question pehle se maujood hai (ID ${ex.id}). Duplicate save nahi hoga. / This question already exists.`,
         code: 'DUPLICATE',
         existing: ex,
+        exact: cmp.exact,
+        differences: cmp.differences,
       });
     }
 
@@ -1555,6 +1604,7 @@ export class BankUploadService {
       ['4. difficulty must be EASY, MEDIUM, or HARD'],
       ['5. year should be a valid year (e.g., 2023, 2024) — set this to enable Year-wise PYQ tests.'],
       ['6. shift + paperCode are optional but help students filter/identify the exact paper.'],
+      ['6b. shift accepts Shift 1/2/3 OR words: morning/subah = Shift 1, afternoon/dopahar = Shift 2, evening/shaam = Shift 3 (even a time like 9:00 AM / 4 PM). It is saved automatically as Shift 1 / Shift 2 / Shift 3.'],
       ['6a. examDate (last column, YYYY-MM-DD or DD-MM-YYYY) = the real date of the shift. With exam + year + shift + examDate'],
       ['   every date/shift becomes its OWN real-paper mock (max 100 questions) automatically — no paperCode needed.'],
       ['7. marks default to 1, negativeMarks default to 0.25'],
@@ -2134,6 +2184,8 @@ export class BankUploadService {
         // this is also exactly what questionsWithGaps()'s `isPyq` filter
         // (year == null) keys off, so practice-only uploads are correctly
         // excluded from PYQ-only gap exports.
+        // Oct 2026: whatever the sheet/JSON/Word row says ("morning", "Shift-2", "4 PM"), store ONE canonical label.
+        question.shift = normalizeShiftOrUndefined(question.shift);
         if (isPracticeOnly) {
           question.year = undefined;
           question.shift = undefined;
@@ -2227,6 +2279,7 @@ export class BankUploadService {
     // the actual DB writes now run in concurrent chunks of 10, which is
     // where nearly all the wall-clock time was going.
     const toCommit: { rowNum: number; row: any[]; question: BulkUploadQuestion; data: any; published: boolean }[] = [];
+    const pendingLinks: PendingDuplicateLink[] = [];
     let preparedCount = 0;
     for (const { rowNum, row, question } of parsedRows) {
       if (++preparedCount % 2000 === 0) await yieldToEventLoop();
@@ -2251,6 +2304,10 @@ export class BankUploadService {
         const prepared = this.prepareQuestion(question, duplicateIndex, uploadBatchId, hindiExempt);
         toCommit.push({ rowNum, row, question, data: prepared.data, published: prepared.published });
       } catch (error) {
+        if (error instanceof DuplicateQuestionError) {
+          const queued = await this.routeDuplicateToReview(error, { adminId, uploadBatchId, rowNum, preview: this.extractQuestionPreview(row, headerMap), result, pendingLinks });
+          if (queued) continue;
+        }
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
         this.pushUploadError(result, {
@@ -2291,6 +2348,7 @@ export class BankUploadService {
       (done, total) => onProgress?.({ phase: 'SAVING', processed: done, total, created: result.created, failed: result.failed }),
     );
 
+    await this.linkPendingDuplicateReviews(pendingLinks, adminId, uploadBatchId);
     result.success = result.failed === 0;
     return result;
   }
@@ -2391,6 +2449,8 @@ export class BankUploadService {
         // Same isPracticeOnly fix as processBulkQuestions() above — this is
         // the JSON/Word upload path, which was equally unaffected by the
         // admin's checkbox before this fix.
+        // Oct 2026: whatever the sheet/JSON/Word row says ("morning", "Shift-2", "4 PM"), store ONE canonical label.
+        question.shift = normalizeShiftOrUndefined(question.shift);
         if (isPracticeOnly) {
           question.year = undefined;
           question.shift = undefined;
@@ -2426,6 +2486,7 @@ export class BankUploadService {
     // prepare synchronously (fast, in-memory, keeps in-file dedup correct),
     // then commit to the DB in concurrent chunks instead of one row at a time.
     const toCommit: { rowNum: number; row: BulkUploadQuestion; question: BulkUploadQuestion; data: any; published: boolean }[] = [];
+    const pendingLinks: PendingDuplicateLink[] = [];
     for (const { rowNum, question } of validRows) {
       try {
         if (hasBase64Media(question)) {
@@ -2443,6 +2504,10 @@ export class BankUploadService {
         const prepared = this.prepareQuestion(question, duplicateIndex, uploadBatchId, hindiExempt);
         toCommit.push({ rowNum, row: question, question, data: prepared.data, published: prepared.published });
       } catch (error) {
+        if (error instanceof DuplicateQuestionError) {
+          const queued = await this.routeDuplicateToReview(error, { adminId, uploadBatchId, rowNum, preview: this.previewFromQuestion(question), result, pendingLinks });
+          if (queued) continue;
+        }
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
         this.pushUploadError(result, {
@@ -2481,6 +2546,7 @@ export class BankUploadService {
       },
     );
 
+    await this.linkPendingDuplicateReviews(pendingLinks, adminId, uploadBatchId);
     result.success = result.failed === 0;
     return result;
   }
@@ -2544,6 +2610,8 @@ export class BankUploadService {
       const idx = headerMap[key];
       return idx !== undefined && row[idx] !== undefined ? String(row[idx]).trim() : '';
     };
+    // Oct 2026: shift cell may say "Morning", "Afternoon", "Evening", "9:00 AM", "1" ... -> "Shift 1/2/3"
+    const shiftNormalized = normalizeShiftOrUndefined(get('shift'));
 
     // Session 22 — Venn/figure diagram OPTIONS (the common case: A/B/C/D
     // are each a different diagram, e.g. "select the correct Venn diagram").
@@ -2614,11 +2682,11 @@ export class BankUploadService {
       explanation: get('explanation') || undefined,
       explanationHindi: get('explanationHindi') || undefined,
       year,
-      shift: get('shift') || undefined,
+      shift: shiftNormalized,
       // A blank paperCode + a real exam date still identifies ONE paper: derive
       // a stable code from exam + date + shift so each date/shift becomes its
       // own 100-question mock instead of merging into a year+shift bucket.
-      paperCode: get('paperCode') || (examDate && year && get('shift') ? `${get('examId')}-${examDate}-${get('shift')}` : undefined),
+      paperCode: get('paperCode') || (examDate && year && shiftNormalized ? `${get('examId')}-${examDate}-${shiftNormalized}` : undefined),
       examDate,
       marks,
       negativeMarks,
@@ -3200,11 +3268,13 @@ export class BankUploadService {
       : { isDuplicate: false as const };
     if (duplicateCheck.isDuplicate) {
       const existing = (duplicateCheck as { existingQuestion: any }).existingQuestion;
-      throw new Error(
+      throw new DuplicateQuestionError(
         `Duplicate question found (ID: ${existing.id}). ` +
         `Question: "${existing.questionText.substring(0, 80)}..." ` +
         `Already exists in database with same options and answer. ` +
         `Created at: ${existing.createdAt}`,
+        existing,
+        question,
       );
     }
 
@@ -3452,11 +3522,13 @@ export class BankUploadService {
       : await this.checkDuplicateDirect(question);
     if (duplicateCheck.isDuplicate) {
       const existing = duplicateCheck.existingQuestion!;
-      throw new Error(
+      throw new DuplicateQuestionError(
         `Duplicate question found (ID: ${existing.id}). ` +
         `Question: "${existing.questionText.substring(0, 80)}..." ` +
         `Already exists in database with same options and answer. ` +
-        `Created at: ${existing.createdAt}`
+        `Created at: ${existing.createdAt}`,
+        existing,
+        question,
       );
     }
 
@@ -3540,6 +3612,206 @@ export class BankUploadService {
     }
 
     return { published: hasHindiTranslation };
+  }
+
+  // ===========================================================================
+  // Duplicate review queue  (Sachin, Oct 6 2026)
+  // "duplicate question ... exactly same ho to admin ke review me jaye, admin
+  //  approve karke ek rakhe / dono rakhe"
+  //
+  // A row that is the same question as one already live is NOT thrown away any
+  // more. It is stored in `question_duplicate_reviews` together with the whole
+  // not-yet-saved question, and the admin decides in
+  // /admin/questions/duplicates (see DuplicateReviewService).
+  // ===========================================================================
+
+  /** JSON-safe copy of an upload row (no raw base64 bytes) for the review queue. */
+  private duplicateSnapshot(question: BulkUploadQuestion): any {
+    const snap: any = JSON.parse(JSON.stringify(question));
+    delete snap.questionImageBase64;
+    if (Array.isArray(snap.options)) {
+      for (const o of snap.options) delete o.imageBase64;
+    }
+    return snap;
+  }
+
+  /**
+   * Stores one duplicate in the review queue. Re-uploading the same sheet does
+   * not queue the same pair twice: an identical PENDING review is reused, and a
+   * pair the admin already answered "keep the old one" is not asked again.
+   */
+  async queueDuplicateForReview(
+    err: DuplicateQuestionError,
+    ctx: { adminId: string; uploadBatchId?: string | null; rowNum?: number },
+  ): Promise<{
+    outcome: 'QUEUED' | 'ALREADY_PENDING' | 'ALREADY_DECIDED';
+    reviewId: string | null;
+    matchType: 'EXACT' | 'SIMILAR';
+    differences: string[];
+    needsLink: boolean;
+    searchHash: string;
+  }> {
+    const existing = err.existing;
+    const cmp = compareQuestions(err.question, existing);
+    const searchHash = this.computeSearchHash(err.question);
+    const existingId: string | null = existing?.id && existing.id !== '(pending)' ? String(existing.id) : null;
+
+    if (existingId) {
+      const prior = await this.prisma.duplicateReview.findMany({
+        where: { existingQuestionId: existingId, searchHash, status: { in: ['PENDING', 'KEPT_EXISTING'] } },
+        select: { id: true, status: true, candidateJson: true },
+        take: 50,
+      });
+      for (const r of prior) {
+        const cj = r.candidateJson as any;
+        if (cj && compareQuestions(cj, err.question).exact) {
+          return {
+            outcome: r.status === 'PENDING' ? 'ALREADY_PENDING' : 'ALREADY_DECIDED',
+            reviewId: r.id,
+            matchType: cmp.matchType,
+            differences: cmp.differences,
+            needsLink: false,
+            searchHash,
+          };
+        }
+      }
+    }
+
+    const row = await this.prisma.duplicateReview.create({
+      data: {
+        status: 'PENDING',
+        matchType: cmp.matchType,
+        differences: cmp.differences as any,
+        existingQuestionId: existingId,
+        candidateJson: this.duplicateSnapshot(err.question),
+        searchHash,
+        uploadBatchId: ctx.uploadBatchId ?? null,
+        sourceRow: ctx.rowNum ?? null,
+        createdById: ctx.adminId ?? null,
+      },
+      select: { id: true },
+    });
+    return {
+      outcome: 'QUEUED',
+      reviewId: row.id,
+      matchType: cmp.matchType,
+      differences: cmp.differences,
+      needsLink: existingId === null,
+      searchHash,
+    };
+  }
+
+  /**
+   * Bulk-loop helper: queue a duplicate row and record it in the upload result.
+   * Returns false when queueing was not possible (for example the migration has
+   * not run yet) — the caller then falls back to the old "failed: duplicate"
+   * behaviour, so an upload can never break because of this feature.
+   */
+  private async routeDuplicateToReview(
+    err: DuplicateQuestionError,
+    ctx: {
+      adminId: string;
+      uploadBatchId?: string | null;
+      rowNum: number;
+      preview?: string;
+      result: UploadResult;
+      pendingLinks: PendingDuplicateLink[];
+    },
+  ): Promise<boolean> {
+    try {
+      const r = await this.queueDuplicateForReview(err, { adminId: ctx.adminId, uploadBatchId: ctx.uploadBatchId, rowNum: ctx.rowNum });
+      if (r.needsLink && r.reviewId) ctx.pendingLinks.push({ reviewId: r.reviewId, searchHash: r.searchHash, question: err.question });
+      let message: string;
+      if (r.outcome === 'QUEUED') {
+        ctx.result.queuedForReview = (ctx.result.queuedForReview ?? 0) + 1;
+        if (r.matchType === 'EXACT') ctx.result.queuedExact = (ctx.result.queuedExact ?? 0) + 1;
+        message =
+          r.matchType === 'EXACT'
+            ? 'Exact duplicate (question, options, solution, shift sab same) — Duplicate Review me bheja. Wahan purana / naya / dono me se chunein.'
+            : `Same question, lekin ye details alag hain: ${r.differences.join(', ')} — Duplicate Review me bheja.`;
+      } else if (r.outcome === 'ALREADY_PENDING') {
+        message = 'Ye duplicate pehle se Duplicate Review list me hai — dobara nahi jodha.';
+      } else {
+        message = 'Is duplicate par admin pehle "purana rakho" decide kar chuka hai — skip kiya.';
+      }
+      this.pushUploadWarning(ctx.result, { row: ctx.rowNum, message, questionPreview: ctx.preview });
+      return true;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[duplicate-review] could not queue duplicate, falling back to reject:', e instanceof Error ? e.message : e);
+      return false;
+    }
+  }
+
+  /**
+   * In-file duplicates: the "existing" side was another row of the SAME upload and
+   * had no database id when the review was queued. Once the batch is saved, find
+   * it by hash. If that first row never got saved, this row is not a duplicate of
+   * anything, so it is simply created and its review removed.
+   */
+  private async linkPendingDuplicateReviews(links: PendingDuplicateLink[], adminId: string, uploadBatchId?: string | null): Promise<void> {
+    for (const l of links) {
+      try {
+        const first = await this.prisma.question.findFirst({
+          where: { searchHash: l.searchHash, isActive: true, ...(uploadBatchId ? { uploadBatchId } : {}) },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true },
+        });
+        if (first) {
+          await this.prisma.duplicateReview.update({ where: { id: l.reviewId }, data: { existingQuestionId: first.id } });
+        } else {
+          await this.createFromReviewCandidate(l.question, adminId, uploadBatchId ?? null);
+          await this.prisma.duplicateReview.delete({ where: { id: l.reviewId } });
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[duplicate-review] could not link pending duplicate', l.reviewId, e instanceof Error ? e.message : e);
+      }
+    }
+  }
+
+  /**
+   * Saves a not-yet-created question (a review's candidate) exactly like a normal
+   * upload row — same validation, Hindi gate and PYQ-mock refresh — but WITHOUT the
+   * duplicate check (the admin has just decided it may exist). Used by
+   * DuplicateReviewService when the admin keeps the new question.
+   */
+  async createFromReviewCandidate(question: BulkUploadQuestion, adminId: string, uploadBatchId?: string | null): Promise<{ id: string; published: boolean }> {
+    const hindiExempt = await this.loadHindiExemptSubjectIds();
+    // the upload batch may have been deleted since the review was queued
+    let batchId: string | null = uploadBatchId ?? null;
+    if (batchId) {
+      const b = await this.prisma.questionUploadBatch.findUnique({ where: { id: batchId }, select: { id: true } });
+      if (!b) batchId = null;
+    }
+    const prepared = this.prepareQuestion(question, undefined, batchId, hindiExempt);
+    const created = await this.prisma.question.create({ data: prepared.data, select: { id: true } });
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: adminId,
+          action: 'QUESTION_CREATED_FROM_DUPLICATE_REVIEW',
+          targetEntity: 'Question',
+          entityId: created.id,
+          metadataJson: { questionText: String(question.questionText ?? '').substring(0, 100) } as any,
+        },
+      });
+    } catch {
+      /* audit is best effort */
+    }
+    cacheClearPrefix('bank:subjects');
+    cacheClearPrefix('bank:chapters');
+    cacheClearPrefix('bank:meta');
+    cacheClearPrefix('bank:years');
+    cacheClearPrefix('bank:shifts');
+    if (question.examId && question.year && question.shift) {
+      try {
+        await this.upsertPyqMockForPaper(question.examId, question.year, question.shift, question.paperCode ?? null, question.examDate ?? null);
+      } catch {
+        /* the question is saved; the mock refreshes on the next upload */
+      }
+    }
+    return { id: created.id, published: prepared.published };
   }
 
   /**

@@ -14,6 +14,7 @@ import { S3Service } from '../../s3/s3.service';
 import { extractPdfText } from '../pdf-text';
 import { OcrPipeline, scoreOcrQuality, normalizeAnswerKey } from '../ocr-pipeline';
 import { VisionExtractor } from '../vision-extractor';
+import { normalizeShift } from '../../common/shift';
 
 const execAsync = promisify(exec);
 
@@ -218,7 +219,7 @@ export class PdfExtractionWorker extends WorkerHost {
             subjectId: data.metadata.subjectId,
             examId: data.metadata.examId ?? null,
             year: data.metadata.year ?? null,
-            shift: data.metadata.shift ?? null,
+            shift: normalizeShift(data.metadata.shift),
             marks: 1,
             negativeMarks: 0.25,
             isApproved: false,
@@ -502,7 +503,7 @@ Options: ${options.join(' | ')}`;
             subjectId: data.metadata.subjectId,
             examId: data.metadata.examId ?? null,
             year: data.metadata.year ?? null,
-            shift: data.metadata.shift ?? null,
+            shift: normalizeShift(data.metadata.shift),
             marks: 1,
             negativeMarks: 0.25,
             isApproved: false,

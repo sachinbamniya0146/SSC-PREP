@@ -11,6 +11,7 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { extractPdfText } from './pdf-text';
 import { SearchService } from '../search/search.service';
 import { AiProviderService } from '../ai-provider/ai-provider.service';
+import { normalizeShiftOrUndefined } from '../common/shift';
 
 @Injectable()
 export class PdfIngestionService {
@@ -78,7 +79,7 @@ export class PdfIngestionService {
         publisher: dto.publisher,
         language: dto.language || 'Hindi/English',
         year: dto.year,
-        shift: dto.shift,
+        shift: normalizeShiftOrUndefined(dto.shift),
         paperCode: dto.paperCode,
       },
     });
@@ -127,7 +128,7 @@ export class PdfIngestionService {
           publisher: dto.publisher,
           language: dto.language || 'Hindi/English',
           year: dto.year,
-          shift: dto.shift,
+          shift: normalizeShiftOrUndefined(dto.shift),
           paperCode: dto.paperCode,
         },
       });
@@ -361,7 +362,7 @@ export class PdfIngestionService {
         subTopicId: dto.subTopicId ?? question.subTopicId,
         examId: dto.examId ?? question.examId,
         year: dto.year ?? question.year,
-        shift: dto.shift ?? question.shift,
+        shift: normalizeShiftOrUndefined(dto.shift) ?? question.shift,
         difficulty: dto.difficulty ?? question.difficulty,
         marks: dto.marks ?? question.marks,
         negativeMarks: dto.negativeMarks ?? question.negativeMarks,

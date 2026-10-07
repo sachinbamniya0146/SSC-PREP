@@ -19,6 +19,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
+import { normalizeShift } from "@/lib/shift";
 
 type TaxTopic = { id: string; name: string; nameHindi?: string | null; slug: string; _count: { questions: number }; subTopics: TaxSubTopic[] };
 type TaxSubTopic = { id: string; name: string; nameHindi?: string | null; slug: string; _count: { questions: number } };
@@ -448,7 +449,7 @@ export default function QuestionManagerPage() {
           <div className="flex flex-wrap items-end gap-2">
             <select value={bExam} onChange={(e) => setBExam(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"><option value="">Exam (na badlein)</option>{exams.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
             <input value={bYear} onChange={(e) => setBYear(e.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" placeholder="Year" className="w-24 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
-            <input value={bShift} onChange={(e) => setBShift(e.target.value)} list="bulk-shift-list" placeholder="Shift" className="w-28 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
+            <input value={bShift} onChange={(e) => setBShift(e.target.value)} onBlur={() => setBShift((v) => normalizeShift(v) ?? "")} list="bulk-shift-list" placeholder="Shift / morning" className="w-28 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
             <datalist id="bulk-shift-list">{["Shift 1", "Shift 2", "Shift 3", "Shift 4"].map((s) => <option key={s} value={s} />)}</datalist>
             <div className="w-40"><DateField className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm" value={bDate} onChange={setBDate} placeholder="Exam date" /></div>
             <button onClick={() => doBulkMeta(false)} disabled={busy || selected.size === 0} className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary disabled:opacity-40">Selected par lagayein</button>

@@ -37,6 +37,9 @@ export interface UploadJob {
   processed: number;
   created: number;
   failed: number;
+  // Oct 6 2026: same-question rows waiting in the admin's Duplicate Review queue (not failures)
+  queuedForReview: number;
+  queuedExact: number;
   errors: JobError[];
   warnings: { row: number; message: string; questionPreview?: string }[];
   uploadBatchId?: string;
@@ -178,7 +181,7 @@ export class BankUploadJobService {
     const job: UploadJob = {
       id: `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       adminId: opts.adminId, filename: opts.filename, kind, dryRun: opts.dryRun,
-      status: 'RUNNING', phase: 'Checking rows…', total: items.length, processed: 0, created: 0, failed: 0,
+      status: 'RUNNING', phase: 'Checking rows…', total: items.length, processed: 0, created: 0, failed: 0, queuedForReview: 0, queuedExact: 0,
       errors: [], warnings: [], headers, rejectedRows: [], startedAt: Date.now(),
     };
     this.jobs.set(job.id, job);
@@ -220,8 +223,14 @@ export class BankUploadJobService {
       }
       const key = this.dupKey(it);
       const first = seen.get(key);
-      if (first !== undefined) { this.reject(job, it, 'DUPLICATE', `Duplicate — file ki row ${first} me ye question pehle se hai`); continue; }
-      seen.set(key, it.rowNum);
+      if (first !== undefined) {
+        // Check-only run: just report it. Real run: let the row through — the importer finds it is the
+        // same question as an earlier row and sends it to the admin's Duplicate Review queue
+        // (exact copy or same question in another shift/solution), instead of silently dropping it.
+        if (opts.dryRun) { this.reject(job, it, 'DUPLICATE', `Duplicate — file ki row ${first} me ye question pehle se hai (asli upload me ye Duplicate Review me jayega)`); continue; }
+      } else {
+        seen.set(key, it.rowNum);
+      }
       ok.push(it);
     }
     job.processed = items.length - ok.length;
@@ -246,7 +255,7 @@ export class BankUploadJobService {
       let wouldCreate = 0;
       for (const it of ok) {
         const k = `${norm(it.text)}|${it.options.map(norm).join('|')}|${it.answer}`;
-        if (existing.has(k) && it.media.replace(/[~#.|]/g, '') === '') this.reject(job, it, 'DUPLICATE', 'Duplicate — ye question database me pehle se maujood hai');
+        if (existing.has(k) && it.media.replace(/[~#.|]/g, '') === '') this.reject(job, it, 'DUPLICATE', 'Duplicate — ye question database me pehle se maujood hai (asli upload me ye Duplicate Review me jayega)');
         else wouldCreate++;
       }
       job.created = wouldCreate;
@@ -279,6 +288,8 @@ export class BankUploadJobService {
           : await this.upload.processRowsChunk(job.headers, slice.map((s) => s.data), opts.adminId, batchId, opts.isPracticeOnly);
         const base = job.kind === 'JSON' ? 1 : 2; // chunk-local row numbers: JSON 1-based, sheet header+1
         job.created += res.created;
+        job.queuedForReview += res.queuedForReview ?? 0;
+        job.queuedExact += res.queuedExact ?? 0;
         for (const e of res.errors) {
           const src = slice[e.row - base];
           job.failed++;
@@ -295,6 +306,8 @@ export class BankUploadJobService {
     }
 
     total.created = job.created;
+    total.queuedForReview = job.queuedForReview;
+    total.queuedExact = job.queuedExact;
     total.failed = job.failed;
     total.errors = job.errors;
     total.warnings = job.warnings;

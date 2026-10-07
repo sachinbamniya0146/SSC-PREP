@@ -7,6 +7,7 @@ import { AiProviderService } from '../ai-provider/ai-provider.service';
 import { BankAdminService, AdminQuestionFilter } from './bank-admin.service';
 import { BankUploadService } from './bank-upload.service';
 import { normalizeMathText, normalizeQuestionMath } from '../common/math-text';
+import { normalizeShift } from '../common/shift';
 
 // =============================================================================
 // QuestionEditService  (NEW — Oct 3 2026)
@@ -315,7 +316,7 @@ export class QuestionEditService {
     }
     let shift = existing.shift;
     if (has('shift')) {
-      shift = str(body.shift, 60, 'Shift') || null;
+      shift = normalizeShift(str(body.shift, 60, 'Shift'));
       data.shift = shift;
     }
     let examDate = existing.examDate;
@@ -481,7 +482,7 @@ export class QuestionEditService {
         data.year = y;
       }
     }
-    if (has('shift')) data.shift = str(set.shift, 60, 'Shift') || null;
+    if (has('shift')) data.shift = normalizeShift(str(set.shift, 60, 'Shift'));
     if (has('examDate')) data.examDate = this.normalizeDate(set.examDate);
     if (has('paperCode')) data.paperCode = str(set.paperCode, 120, 'Paper code') || null;
     if (has('difficulty')) {

@@ -12,6 +12,7 @@ import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
+import { normalizeShift } from "@/lib/shift";
 
 type TaxSubTopic = { id: string; name: string };
 type TaxTopic = { id: string; name: string; subTopics: TaxSubTopic[] };
@@ -385,7 +386,8 @@ function EditInner() {
                 <div><label className={lbl}>Year (PYQ ke liye)</label>
                   <input className={inp} inputMode="numeric" placeholder="2024" value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))} /></div>
                 <div><label className={lbl}>Shift</label>
-                  <input className={inp} list="edit-shift-list" placeholder="Shift 1" value={shift} onChange={(e) => setShift(e.target.value)} />
+                  <input className={inp} list="edit-shift-list" placeholder="Shift 1 / morning / evening" value={shift} onChange={(e) => setShift(e.target.value)} onBlur={() => setShift((v) => normalizeShift(v) ?? "")} />
+                  <p className="mt-1 text-[11px] text-muted-foreground">Morning / subah = Shift 1 · Afternoon / dopahar = Shift 2 · Evening / shaam = Shift 3 (apne aap badal jayega)</p>
                   <datalist id="edit-shift-list">{["Shift 1", "Shift 2", "Shift 3", "Shift 4"].map((s) => <option key={s} value={s} />)}</datalist></div>
                 <div><label className={lbl}>Exam date (likhein ya 📅)</label>
                   <DateField className={inp} value={examDate} onChange={setExamDate} /></div>

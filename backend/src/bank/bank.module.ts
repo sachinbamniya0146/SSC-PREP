@@ -11,6 +11,8 @@ import { BankUploadJobController } from './bank-upload-job.controller';
 import { BankUploadJobService } from './bank-upload-job.service';
 import { QuestionEditController } from './question-edit.controller';
 import { QuestionEditService } from './question-edit.service';
+import { DuplicateReviewController } from './duplicate-review.controller';
+import { DuplicateReviewService } from './duplicate-review.service';
 import { AiProviderModule } from '../ai-provider/ai-provider.module';
 import { WeakTopicModule } from '../weak-topics/weak-topic.module';
 
@@ -23,8 +25,8 @@ import { WeakTopicModule } from '../weak-topics/weak-topic.module';
 // BankUploadController's POST /bank/admin/upload/syllabus-excel route.
 @Module({
   imports: [AiProviderModule, WeakTopicModule],
-  controllers: [BankController, BankUploadController, BankUploadJobController, BankAdminController, QuestionEditController],
-  providers: [BankService, QuestionBankPracticeService, BankUploadService, BankUploadJobService, TaxonomyImportService, BankAdminService, QuestionEditService],
+  controllers: [BankController, BankUploadController, BankUploadJobController, BankAdminController, QuestionEditController, DuplicateReviewController],
+  providers: [BankService, QuestionBankPracticeService, BankUploadService, BankUploadJobService, TaxonomyImportService, BankAdminService, QuestionEditService, DuplicateReviewService],
   exports: [BankService, QuestionBankPracticeService, BankUploadService, TaxonomyImportService, BankAdminService, QuestionEditService],
 })
 export class BankModule {}

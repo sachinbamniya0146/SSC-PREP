@@ -45,7 +45,7 @@ function _questionBlock(q: PdfQuestion, n: number, hi: boolean, showAnswer: bool
   const stem = hi ? q.qh || q.q : q.q;
   const parts: string[] = [];
   parts.push(
-    `<div class="qcard"><div class="qhead"><span class="qnum">Q${n}.</span> <span class="qmeta">[${esc(q.examName)}${q.year ? ' ' + q.year : ''}${q.shift ? ' · Shift ' + esc(q.shift) : ''}] ${esc(q.chapter)}</span></div>`,
+    `<div class="qcard"><div class="qhead"><span class="qnum">Q${n}.</span> <span class="qmeta">[${esc(q.examName)}${q.year ? ' ' + q.year : ''}${q.shift ? ' · ' + esc(/^shift\b/i.test(q.shift) ? q.shift : 'Shift ' + q.shift) : ''}] ${esc(q.chapter)}</span></div>`,
   );
   parts.push(`<div class="qstem">${esc(stem)}</div>`);
   parts.push(`<div class="opts">${q.options.map((o) => optionRow(o, hi)).join('')}</div>`);
@@ -64,7 +64,7 @@ function _questionBlock(q: PdfQuestion, n: number, hi: boolean, showAnswer: bool
 function questionBlockBi(q: PdfQuestion, n: number, showAnswer: boolean): string {
   const parts: string[] = [];
   parts.push(
-    `<div class="qcard"><div class="qhead"><span class="qnum">Q${n}.</span> <span class="qmeta">[${esc(q.examName)}${q.year ? ' ' + q.year : ''}${q.shift ? ' · Shift ' + esc(q.shift) : ''}] ${esc(q.chapter)}</span></div>`,
+    `<div class="qcard"><div class="qhead"><span class="qnum">Q${n}.</span> <span class="qmeta">[${esc(q.examName)}${q.year ? ' ' + q.year : ''}${q.shift ? ' · ' + esc(/^shift\b/i.test(q.shift) ? q.shift : 'Shift ' + q.shift) : ''}] ${esc(q.chapter)}</span></div>`,
   );
   parts.push(`<div class="lang-tag">EN</div><div class="qstem">${esc(q.q)}</div>`);
   parts.push(`<div class="opts">${q.options.map((o) => optionRow(o, false)).join('')}</div>`);
@@ -191,7 +191,7 @@ function attemptQuestionBlock(q: PdfAttemptQuestion, n: number): string {
   const statusLabel = q.isSkipped ? 'Skipped' : q.isCorrect ? 'Correct' : 'Wrong';
   const statusClass = q.isSkipped ? 'status-skip' : q.isCorrect ? 'status-correct' : 'status-wrong';
   parts.push(
-    `<div class="qcard"><div class="qhead"><span class="qnum">Q${n}.</span> <span class="qmeta">[${esc(q.examName)}${q.year ? ' ' + q.year : ''}${q.shift ? ' · Shift ' + esc(q.shift) : ''}] ${esc(q.chapter)}</span> <span class="${statusClass}">${statusLabel}</span></div>`,
+    `<div class="qcard"><div class="qhead"><span class="qnum">Q${n}.</span> <span class="qmeta">[${esc(q.examName)}${q.year ? ' ' + q.year : ''}${q.shift ? ' · ' + esc(/^shift\b/i.test(q.shift) ? q.shift : 'Shift ' + q.shift) : ''}] ${esc(q.chapter)}</span> <span class="${statusClass}">${statusLabel}</span></div>`,
   );
   parts.push(`<div class="lang-tag">EN</div><div class="qstem">${esc(q.q)}</div>`);
   parts.push(`<div class="opts">${q.options.map((o) => attemptOptionRow(o, q.selectedOption, q.correctAnswer, false)).join('')}</div>`);
