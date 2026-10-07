@@ -199,6 +199,9 @@ export default function AdminPage() {
   type UploadBatchSummary = {
     id: string; adminId: string; sourceType: string; filename: string | null;
     totalRows: number; createdCount: number; failedCount: number; createdAt: string;
+    // NEW (Oct 7 2026) — status that survives reloads: RUNNING | DONE | FAILED | INTERRUPTED
+    status?: "RUNNING" | "DONE" | "FAILED" | "INTERRUPTED"; queuedCount?: number; pendingRows?: number;
+    finishedAt?: string | null; errorMessage?: string | null;
     // NEW (Sep 21 2026) — live/current state of this batch's questions
     remainingCount?: number; liveCount?: number; pendingCount?: number;
     pyqCount?: number; practiceCount?: number; kind?: "empty" | "practice" | "pyq" | "mixed";
@@ -621,8 +624,8 @@ export default function AdminPage() {
   }
 
   // ---- Phase 3 (Sep 2026) — upload history ----
-  const loadBatches = React.useCallback(async () => {
-    setBatchesLoading(true);
+  const loadBatches = React.useCallback(async (silent?: boolean) => {
+    if (!silent) setBatchesLoading(true);
     setBatchesErr("");
     try {
       const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches`);
@@ -635,7 +638,7 @@ export default function AdminPage() {
     } catch (e) {
       setBatchesErr(e instanceof Error ? e.message : "Upload history load nahi hui");
     } finally {
-      setBatchesLoading(false);
+      if (!silent) setBatchesLoading(false);
     }
   }, []);
 
@@ -781,6 +784,15 @@ export default function AdminPage() {
   React.useEffect(() => {
     loadBatches();
   }, [loadBatches]);
+
+  // Oct 7 2026: while any upload is still saving, refresh the history every 4s so the live counts keep moving
+  // (works even after a page reload — the status/counts are stored on the server, not in this tab).
+  const anyRunning = batches.some((b) => b.status === "RUNNING");
+  React.useEffect(() => {
+    if (!anyRunning) return;
+    const t = setInterval(() => loadBatches(true), 4000);
+    return () => clearInterval(t);
+  }, [anyRunning, loadBatches]);
 
   React.useEffect(() => {
     // /admin/users and /admin/plans are ADMIN-only — staff would just get 403s.
@@ -1228,7 +1240,7 @@ export default function AdminPage() {
           <div className="flex items-center justify-between">
             <h2 className="font-semibold">📜 Upload History</h2>
             <button
-              onClick={loadBatches}
+              onClick={() => loadBatches()}
               disabled={batchesLoading}
               className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
             >
@@ -1247,9 +1259,11 @@ export default function AdminPage() {
                     <th className="px-3 py-2">Kab</th>
                     <th className="px-3 py-2">File</th>
                     <th className="px-3 py-2">Type</th>
+                    <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2 text-right">Total</th>
-                    <th className="px-3 py-2 text-right">Created</th>
+                    <th className="px-3 py-2 text-right">Upload hue</th>
                     <th className="px-3 py-2 text-right">Failed</th>
+                    <th className="px-3 py-2 text-right">Duplicate review</th>
                     <th className="px-3 py-2">Ab Live/Pending</th>
                     <th className="px-3 py-2"></th>
                   </tr>
@@ -1263,9 +1277,29 @@ export default function AdminPage() {
                         </td>
                         <td className="px-3 py-2 font-medium">{b.filename || "—"}</td>
                         <td className="px-3 py-2 text-xs">{b.sourceType}</td>
+                        <td className="px-3 py-2 text-xs">
+                          {(b.status ?? "DONE") === "RUNNING" ? (
+                            <span className="rounded-full bg-sky-500/15 px-2 py-0.5 font-semibold text-sky-600 dark:text-sky-400" title="Upload abhi chal raha hai — page band karne par bhi server par chalta rahega">
+                              ⏳ Chal raha hai {b.totalRows > 0 ? `${Math.min(100, Math.round(((b.createdCount + b.failedCount + (b.queuedCount ?? 0)) / b.totalRows) * 100))}%` : ""}
+                            </span>
+                          ) : b.status === "FAILED" ? (
+                            <span className="rounded-full bg-red-500/15 px-2 py-0.5 font-semibold text-red-600" title={b.errorMessage ?? ""}>❌ Fail</span>
+                          ) : b.status === "INTERRUPTED" ? (
+                            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400" title="Server restart ya error ki wajah se beech me ruk gaya. Jo questions save ho chuke wo Upload hue me hain; baaki ki file dobara upload karein (duplicate apne aap review me chale jayenge).">⚠️ Beech me ruka{(b.pendingRows ?? 0) > 0 ? ` (${b.pendingRows} baaki)` : ""}</span>
+                          ) : (
+                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-600 dark:text-emerald-400">✅ Poora</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right">{b.totalRows}</td>
                         <td className="px-3 py-2 text-right text-emerald-600 dark:text-emerald-400">{b.createdCount}</td>
                         <td className="px-3 py-2 text-right text-red-600 dark:text-red-400">{b.failedCount}</td>
+                        <td className="px-3 py-2 text-right">
+                          {(b.queuedCount ?? 0) > 0 ? (
+                            <a href={`/admin/questions/duplicates?batch=${b.id}`} className="font-semibold text-amber-700 underline dark:text-amber-400" title="Ye same question pehle se the — purana / naya / dono chunein">{b.queuedCount} →</a>
+                          ) : (
+                            <span className="text-muted-foreground">0</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-xs">
                           {b.kind && (
                             <span
@@ -1326,7 +1360,7 @@ export default function AdminPage() {
                       </tr>
                       {expandedBatchId === b.id && (
                         <tr className="border-b border-border last:border-0 bg-muted/20">
-                          <td colSpan={8} className="px-3 py-3">
+                          <td colSpan={10} className="px-3 py-3">
                             {!expandedBatchDetail ? (
                               <p className="text-xs text-muted-foreground">Loading...</p>
                             ) : (

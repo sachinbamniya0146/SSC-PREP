@@ -3,7 +3,7 @@ import { Injectable, BadRequestException, NotFoundException, ForbiddenException,
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { BankService } from './bank.service';
-import { BankAdminService } from './bank-admin.service';
+import { BankAdminService, AdminQuestionFilter } from './bank-admin.service';
 import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
 import { createHash } from 'crypto';
@@ -216,6 +216,88 @@ export type UploadErrorCategory =
   | 'MISSING_ANSWER'
   | 'MISSING_SOLUTION'
   | 'OTHER';
+
+
+// ---- shared by exportQuestionBank() and exportFiltered() ----
+const EXPORT_SELECT = {
+  id: true,
+  questionImageUrl: true,
+  examId: true,
+  subjectId: true,
+  chapterId: true,
+  topicId: true,
+  subTopicId: true,
+  questionText: true,
+  questionTextHindi: true,
+  optionsJson: true,
+  correctAnswer: true,
+  explanation: true,
+  explanationHindi: true,
+  year: true,
+  shift: true,
+  paperCode: true,
+  examDate: true,
+  marks: true,
+  negativeMarks: true,
+  difficulty: true,
+  isApproved: true,
+  reviewStatus: true,
+  answerVerificationStatus: true,
+  exam: { select: { name: true } },
+  subject: { select: { name: true } },
+  chapter: { select: { name: true } },
+  topic: { select: { name: true } },
+  subTopic: { select: { name: true } },
+} as const;
+
+/** One question -> one flat row, same columns as the upload template (+ readable names / status). */
+function toExportRow(q: any) {
+  const opts = (q.optionsJson as any[]) ?? [];
+  const byKey = (k: string) => opts.find((o) => o.key === k) ?? { text: '', textHi: '' };
+  return {
+    id: q.id, // included for reference only — NOT a recognized upload column; harmless if re-uploaded, ignored by the parser
+    examId: q.examId,
+    subjectId: q.subjectId,
+    chapterId: q.chapterId,
+    topicId: q.topicId ?? '',
+    subTopicId: q.subTopicId ?? '',
+    questionText: q.questionText,
+    questionTextHindi: q.questionTextHindi ?? '',
+    // pictures / diagrams: same column names the upload parser reads, so a download re-uploads intact
+    questionImageUrl: q.questionImageUrl ?? '',
+    optionImageUrls: ['A', 'B', 'C', 'D'].map((k) => (byKey(k) as any).imageUrl ?? '').join('|').replace(/^\|+$/, ''),
+    optionDiagramTypes: ['A', 'B', 'C', 'D'].map((k) => (byKey(k) as any).diagramType ?? '').join('|').replace(/^\|+$/, ''),
+    optionA: byKey('A').text ?? '', optionA_Hindi: byKey('A').textHi ?? '',
+    optionB: byKey('B').text ?? '', optionB_Hindi: byKey('B').textHi ?? '',
+    optionC: byKey('C').text ?? '', optionC_Hindi: byKey('C').textHi ?? '',
+    optionD: byKey('D').text ?? '', optionD_Hindi: byKey('D').textHi ?? '',
+    correctAnswer: q.correctAnswer,
+    explanation: q.explanation ?? '',
+    explanationHindi: q.explanationHindi ?? '',
+    year: q.year ?? '',
+    shift: q.shift ?? '',
+    paperCode: q.paperCode ?? '',
+    examDate: q.examDate ?? '',
+    marks: q.marks,
+    negativeMarks: q.negativeMarks,
+    difficulty: q.difficulty,
+    // Human-readable names (Sep 21 2026) — informational only, ignored on
+    // re-upload, so a downloaded batch is readable AND re-uploadable.
+    examName: q.exam?.name ?? '',
+    subjectName: q.subject?.name ?? '',
+    chapterName: q.chapter?.name ?? '',
+    topicName: q.topic?.name ?? '',
+    subTopicName: q.subTopic?.name ?? '',
+    type: q.year != null ? 'PYQ' : 'Practice',
+    // Status columns — informational only, ignored on re-upload:
+    isPublishedToStudents: q.isApproved,
+    reviewStatus: q.reviewStatus,
+    answerVerificationStatus: q.answerVerificationStatus,
+  };
+}
+
+/** How exportFiltered() groups rows into Excel sheets. */
+export type ExportSplit = 'none' | 'subject' | 'chapter' | 'year' | 'shift' | 'exam';
 
 export interface UploadResult {
   success: boolean;
@@ -456,7 +538,7 @@ export class BankUploadService {
       try {
         await this.prisma.questionUploadBatch.update({
           where: { id: jobId },
-          data: { errorsJson: [{ row: 0, error: message, category: 'OTHER' }] as any },
+          data: { errorsJson: [{ row: 0, error: message, category: 'OTHER' }] as any, status: 'FAILED', errorMessage: message.slice(0, 500), finishedAt: new Date() },
         });
       } catch {
         /* history note is best-effort */
@@ -658,7 +740,7 @@ export class BankUploadService {
     filename: string | undefined,
   ): Promise<string> {
     const batch = await this.prisma.questionUploadBatch.create({
-      data: { adminId, sourceType, filename: filename || null },
+      data: { adminId, sourceType, filename: filename || null, status: 'RUNNING' },
     });
     return batch.id;
   }
@@ -672,6 +754,9 @@ export class BankUploadService {
         failedCount: result.failed,
         errorsJson: result.errors as any,
         warningsJson: result.warnings as any,
+        status: 'DONE',
+        queuedCount: result.queuedForReview ?? 0,
+        finishedAt: new Date(),
       },
     });
     result.uploadBatchId = batchId;
@@ -863,6 +948,31 @@ export class BankUploadService {
     return batch.id;
   }
 
+  /**
+   * Live progress written while a background upload is still running, so the Upload History
+   * shows how many questions are already saved even after the admin reloads the page.
+   * Best effort: never throws.
+   */
+  async updateBatchProgress(batchId: string, p: { totalRows?: number; createdCount?: number; failedCount?: number; queuedCount?: number }): Promise<void> {
+    try {
+      await this.prisma.questionUploadBatch.update({ where: { id: batchId }, data: p });
+    } catch {
+      /* progress is informational only */
+    }
+  }
+
+  /** Marks an upload that crashed as FAILED (with the reason) so it never looks "stuck running". */
+  async failUploadBatch(batchId: string, message: string): Promise<void> {
+    try {
+      await this.prisma.questionUploadBatch.update({
+        where: { id: batchId },
+        data: { status: 'FAILED', errorMessage: String(message ?? '').slice(0, 500), finishedAt: new Date() },
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
   // ---- Background-job hooks (bank-upload-job.service.ts) ----
   async beginBatch(adminId: string, filename?: string): Promise<string> {
     return this.createUploadBatchPlaceholder(adminId, 'EXCEL', filename);
@@ -1020,6 +1130,7 @@ export class BankUploadService {
       select: {
         id: true, adminId: true, sourceType: true, filename: true,
         totalRows: true, createdCount: true, failedCount: true, createdAt: true,
+        status: true, queuedCount: true, finishedAt: true, errorMessage: true,
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -1043,8 +1154,14 @@ export class BankUploadService {
       const pnd = pending.get(b.id) ?? 0;
       const py = pyq.get(b.id) ?? 0;
       const remaining = l + pnd;
+      // a RUNNING batch that has not finished for 30+ minutes was killed (server restart) — say so
+      const stale = b.status === 'RUNNING' && Date.now() - new Date(b.createdAt).getTime() > 30 * 60 * 1000;
+      const accounted = b.createdCount + b.failedCount + b.queuedCount;
       return {
         ...b,
+        status: stale ? 'INTERRUPTED' : b.status,
+        // rows of the file not yet saved / rejected / queued (only meaningful while RUNNING or INTERRUPTED)
+        pendingRows: Math.max(b.totalRows - accounted, 0),
         remainingCount: remaining,
         liveCount: l,
         pendingCount: pnd,
@@ -1798,77 +1915,10 @@ export class BankUploadService {
       where,
       orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
       take: EXPORT_ROW_CAP,
-      select: {
-        id: true,
-        examId: true,
-        subjectId: true,
-        chapterId: true,
-        topicId: true,
-        subTopicId: true,
-        questionText: true,
-        questionTextHindi: true,
-        optionsJson: true,
-        correctAnswer: true,
-        explanation: true,
-        explanationHindi: true,
-        year: true,
-        shift: true,
-        paperCode: true,
-        examDate: true,
-        marks: true,
-        negativeMarks: true,
-        difficulty: true,
-        isApproved: true,
-        reviewStatus: true,
-        answerVerificationStatus: true,
-        exam: { select: { name: true } },
-        subject: { select: { name: true } },
-        chapter: { select: { name: true } },
-        topic: { select: { name: true } },
-        subTopic: { select: { name: true } },
-      },
+      select: EXPORT_SELECT,
     });
 
-    const rowsAsObjects = questions.map((q) => {
-      const opts = (q.optionsJson as any[]) ?? [];
-      const byKey = (k: string) => opts.find((o) => o.key === k) ?? { text: '', textHi: '' };
-      return {
-        id: q.id, // included for reference only — NOT a recognized upload column; harmless if re-uploaded, ignored by the parser
-        examId: q.examId,
-        subjectId: q.subjectId,
-        chapterId: q.chapterId,
-        topicId: q.topicId ?? '',
-        subTopicId: q.subTopicId ?? '',
-        questionText: q.questionText,
-        questionTextHindi: q.questionTextHindi ?? '',
-        optionA: byKey('A').text ?? '', optionA_Hindi: byKey('A').textHi ?? '',
-        optionB: byKey('B').text ?? '', optionB_Hindi: byKey('B').textHi ?? '',
-        optionC: byKey('C').text ?? '', optionC_Hindi: byKey('C').textHi ?? '',
-        optionD: byKey('D').text ?? '', optionD_Hindi: byKey('D').textHi ?? '',
-        correctAnswer: q.correctAnswer,
-        explanation: q.explanation ?? '',
-        explanationHindi: q.explanationHindi ?? '',
-        year: q.year ?? '',
-        shift: q.shift ?? '',
-        paperCode: q.paperCode ?? '',
-        examDate: q.examDate ?? '',
-        marks: q.marks,
-        negativeMarks: q.negativeMarks,
-        difficulty: q.difficulty,
-        // Human-readable names (Sep 21 2026) — informational only, ignored on
-        // re-upload, so a downloaded batch is readable AND re-uploadable.
-        examName: q.exam?.name ?? '',
-        subjectName: q.subject?.name ?? '',
-        chapterName: q.chapter?.name ?? '',
-        topicName: q.topic?.name ?? '',
-        subTopicName: q.subTopic?.name ?? '',
-        type: q.year != null ? 'PYQ' : 'Practice',
-        // Status columns — informational only, ignored on re-upload:
-        isPublishedToStudents: q.isApproved,
-        reviewStatus: q.reviewStatus,
-        answerVerificationStatus: q.answerVerificationStatus,
-      };
-    });
+    const rowsAsObjects = questions.map(toExportRow);
 
     const stamp = new Date().toISOString().slice(0, 10);
 
@@ -1900,6 +1950,105 @@ export class BankUploadService {
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Question Bank Export');
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
     return { buffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename: `question_bank_export_${stamp}.xlsx` };
+  }
+
+  /**
+   * Oct 7 2026 — "exam wise / year wise / subject wise questions ki Excel download kar sake; ek hi chapter ki
+   * alag-alag Excel merge hoke bhi download ho sake".
+   *
+   * Exports every question matching the SAME filters as the Question Manager (exam, subject, chapter, topic,
+   * year, shift, date, PYQ/Practice, status, upload batch, search text) in the upload-template column shape,
+   * so the file can be re-uploaded as is. `split` puts the rows on separate sheets of ONE workbook:
+   *   none (one sheet) | subject | chapter | year | shift | exam
+   * Because all uploads share the same columns, chapter files uploaded in many pieces come out merged.
+   * Capped at EXPORT_FILTER_CAP rows per download (narrow the filter to get the rest).
+   */
+  async exportFiltered(
+    filter: AdminQuestionFilter,
+    opts: { format: 'excel' | 'csv' | 'json'; split?: ExportSplit },
+  ): Promise<{ buffer: Buffer; contentType: string; filename: string; total: number; exported: number; capped: boolean }> {
+    const EXPORT_FILTER_CAP = 50000;
+    const PAGE = 2000;
+    const f = await this.bankAdmin.withSearch(filter);
+    const where = this.bankAdmin.buildWhere(f);
+    const total = await this.prisma.question.count({ where });
+    const limit = Math.min(total, EXPORT_FILTER_CAP);
+    const rows: any[] = [];
+    for (let skip = 0; skip < limit; skip += PAGE) {
+      const part = await this.prisma.question.findMany({
+        where,
+        orderBy: [{ examId: 'asc' }, { year: 'desc' }, { shift: 'asc' }, { subjectId: 'asc' }, { chapterId: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        skip,
+        take: Math.min(PAGE, limit - skip),
+        select: EXPORT_SELECT,
+      });
+      for (const q of part) rows.push(toExportRow(q));
+      await yieldToEventLoop();
+    }
+
+    // readable file name from what the admin filtered by
+    const first = rows[0];
+    const bits: string[] = [];
+    if (first) {
+      if (f.examId) bits.push(first.examName);
+      if (f.subjectId) bits.push(first.subjectName);
+      if (f.chapterId) bits.push(first.chapterName);
+      if (f.year) bits.push(String(f.year));
+      if (f.shift) bits.push(f.shift);
+    }
+    if (f.kind) bits.push(f.kind === 'pyq' ? 'PYQ' : 'Practice');
+    const base = (bits.filter(Boolean).join('_') || 'questions').replace(/[^\w\u0900-\u097F\-]+/g, '_').slice(0, 80);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const meta = { total, exported: rows.length, capped: total > rows.length };
+
+    if (opts.format === 'json') {
+      return { ...meta, buffer: Buffer.from(JSON.stringify(rows, null, 2), 'utf-8'), contentType: 'application/json', filename: `${base}_${stamp}.json` };
+    }
+    const headers = rows.length
+      ? Object.keys(rows[0])
+      : ['id', 'examId', 'subjectId', 'chapterId', 'topicId', 'subTopicId', 'questionText', 'questionTextHindi', 'questionImageUrl', 'optionImageUrls',
+         'optionDiagramTypes', 'optionA', 'optionA_Hindi', 'optionB', 'optionB_Hindi', 'optionC', 'optionC_Hindi', 'optionD', 'optionD_Hindi',
+         'correctAnswer', 'explanation', 'explanationHindi', 'year', 'shift', 'paperCode', 'examDate'];
+    if (opts.format === 'csv') {
+      const lines = [headers.join(',')];
+      for (const row of rows) lines.push(this.escapeCSVRow(headers.map((h) => String((row as any)[h] ?? ''))));
+      // BOM so Excel opens Hindi text correctly
+      return { ...meta, buffer: Buffer.from('\uFEFF' + lines.join('\n'), 'utf-8'), contentType: 'text/csv; charset=utf-8', filename: `${base}_${stamp}.csv` };
+    }
+
+    // excel — one sheet, or one sheet per subject / chapter / year / shift / exam
+    const split: ExportSplit = opts.split ?? 'none';
+    const keyOf = (r: any): string => {
+      switch (split) {
+        case 'subject': return r.subjectName || 'No subject';
+        case 'chapter': return `${r.subjectName || '-'} - ${r.chapterName || 'No chapter'}`;
+        case 'year': return r.year ? String(r.year) : 'Practice';
+        case 'shift': return r.year ? `${r.year} ${r.shift || 'No shift'}` : 'Practice';
+        case 'exam': return r.examName || 'No exam';
+        default: return 'Questions';
+      }
+    };
+    const groups = new Map<string, any[]>();
+    for (const r of rows) {
+      const k = keyOf(r);
+      const arr = groups.get(k) ?? [];
+      arr.push(r);
+      groups.set(k, arr);
+    }
+    if (groups.size === 0) groups.set('Questions', []);
+    const workbook = XLSX.utils.book_new();
+    const used = new Set<string>();
+    for (const [k, list] of groups) {
+      // Excel sheet names: max 31 chars, none of \ / ? * [ ] :, must be unique
+      let name = k.replace(/[\\/?*[\]:]/g, ' ').trim().slice(0, 31) || 'Sheet';
+      let n = 2;
+      while (used.has(name.toLowerCase())) name = `${name.slice(0, 28)} ${n++}`;
+      used.add(name.toLowerCase());
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...list.map((row) => headers.map((h) => (row as any)[h]))]);
+      XLSX.utils.book_append_sheet(workbook, ws, name);
+    }
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    return { ...meta, buffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename: `${base}_${stamp}.xlsx` };
   }
 
   /**

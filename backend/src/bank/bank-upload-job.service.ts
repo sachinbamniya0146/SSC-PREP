@@ -188,6 +188,7 @@ export class BankUploadJobService {
     void this.run(job, items, opts).catch((e) => {
       this.log.error(`upload job ${job.id} crashed: ${e?.stack ?? e}`);
       job.status = 'FAILED';
+      if (job.uploadBatchId) void this.upload.failUploadBatch(job.uploadBatchId, e?.message ?? String(e));
       job.fatalError = e?.message ?? String(e);
       job.phase = 'Failed';
       job.finishedAt = Date.now();
@@ -277,6 +278,7 @@ export class BankUploadJobService {
     job.phase = 'Uploading…';
     const batchId = await this.upload.beginBatch(opts.adminId, opts.filename);
     job.uploadBatchId = batchId;
+    await this.upload.updateBatchProgress(batchId, { totalRows: job.total, failedCount: job.failed });
     const total: any = { success: false, total: items.length, created: 0, failed: job.failed, errors: [], warnings: [] };
     const sizeOf = job.kind === 'JSON' ? 25 : CHUNK; // JSON may carry images -> smaller chunks
 
@@ -302,6 +304,7 @@ export class BankUploadJobService {
         for (const s of slice) this.reject(job, s, 'OTHER', `Server error: ${msg}`);
       }
       job.processed = Math.min(job.total, job.total - ok.length + off + slice.length);
+      await this.upload.updateBatchProgress(batchId, { createdCount: job.created, failedCount: job.failed, queuedCount: job.queuedForReview });
       job.phase = `Uploading… ${Math.min(off + sizeOf, ok.length)}/${ok.length}`;
     }
 

@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Department } from '../common/decorators/department.decorator';
 import { BankAdminService } from './bank-admin.service';
+import { BankUploadService, ExportSplit } from './bank-upload.service';
 
 // =============================================================================
 // Admin question manager + syllabus editor  (NEW — Sep 21 2026)
@@ -15,7 +17,7 @@ import { BankAdminService } from './bank-admin.service';
 @Roles('ADMIN', 'MODERATOR')
 @Department('QUESTIONS')
 export class BankAdminController {
-  constructor(private readonly admin: BankAdminService) {}
+  constructor(private readonly admin: BankAdminService, private readonly uploads: BankUploadService) {}
 
   private adminId(req: any): string | undefined {
     return req.user?.userId ?? req.user?.id;
@@ -29,6 +31,23 @@ export class BankAdminController {
       q?.skip ? parseInt(q.skip, 10) || 0 : 0,
       q?.take ? parseInt(q.take, 10) || 30 : 30,
     );
+  }
+
+  // GET /bank/admin/manage/export?<same filters as the list>&format=excel|csv|json&split=none|subject|chapter|year|shift|exam
+  // (Oct 7 2026) — downloads every question matching the current filters; see BankUploadService.exportFiltered().
+  @Get('export')
+  async exportQuestions(@Query() q: any, @Res() res: Response) {
+    const format = q?.format === 'csv' || q?.format === 'json' ? q.format : 'excel';
+    const splits: ExportSplit[] = ['none', 'subject', 'chapter', 'year', 'shift', 'exam'];
+    const split: ExportSplit = splits.includes(q?.split) ? q.split : 'none';
+    const out = await this.uploads.exportFiltered(this.admin.parseFilter(q), { format, split });
+    res.setHeader('Content-Type', out.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(out.filename)}"; filename*=UTF-8''${encodeURIComponent(out.filename)}`);
+    res.setHeader('X-Export-Total', String(out.total));
+    res.setHeader('X-Export-Exported', String(out.exported));
+    res.setHeader('X-Export-Capped', out.capped ? '1' : '0');
+    res.setHeader('Access-Control-Expose-Headers', 'X-Export-Total, X-Export-Exported, X-Export-Capped, Content-Disposition');
+    res.send(out.buffer);
   }
 
   @Get('stats')

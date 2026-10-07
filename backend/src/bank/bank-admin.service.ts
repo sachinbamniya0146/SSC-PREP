@@ -52,6 +52,8 @@ export interface AdminQuestionFilter {
   hasImage?: boolean;
   /** free-text search inside question text (English or Hindi) — a bare number / "Q123" / "#123" also matches the unique question number */
   q?: string;
+  /** filled by withSearch(): ids whose question / options / solution contain EVERY word of `q` (any order) */
+  searchIds?: string[];
 }
 
 export interface MoveTarget {
@@ -106,8 +108,39 @@ export class BankAdminService {
     return f;
   }
 
-  private isEmptyFilter(f: AdminQuestionFilter): boolean {
+  isEmptyFilter(f: AdminQuestionFilter): boolean {
     return !(f.examId || f.subjectId || f.chapterId || f.topicId || f.subTopicId || f.kind || f.batchId || f.status || f.year || f.shift || f.examDate || f.hasImage || f.q);
+  }
+
+  /**
+   * Oct 7 2026 — "questions ka adha portion ya question ki line se search kru ya uske options dal kar bhi
+   * question search ho sake".
+   *
+   * Splits the search box text into words; a question matches when EVERY word appears somewhere in its
+   * question text (English/Hindi), any option (English/Hindi), or its solution — in any order, any case,
+   * ignoring line breaks / double spaces. So half a sentence, a pasted line, or an option value like
+   * "3.14 22/7" all find the question. Returns a copy of the filter with `searchIds` filled; buildWhere()
+   * then ORs it with the old substring / question-number / id matches. If the extra query fails the
+   * old substring search still works.
+   */
+  async withSearch(f: AdminQuestionFilter): Promise<AdminQuestionFilter> {
+    const raw = (f.q ?? '').trim();
+    if (!raw) return f;
+    const tokens = raw.replace(/\s+/g, ' ').split(' ').filter(Boolean).slice(0, 10).map((t) => t.slice(0, 80));
+    if (tokens.length === 0) return f;
+    try {
+      const like = (t: string) => `%${t.replace(/[\\%_]/g, '\\$&')}%`;
+      const conds = tokens.map((t) => {
+        const p = like(t);
+        return Prisma.sql`(q."questionText" ILIKE ${p} OR q."questionTextHindi" ILIKE ${p} OR q."optionsJson"::text ILIKE ${p} OR q."explanation" ILIKE ${p} OR q."explanationHindi" ILIKE ${p})`;
+      });
+      const rows = await this.prisma.$queryRaw<{ id: string }[]>(
+        Prisma.sql`SELECT q.id FROM questions q WHERE ${Prisma.join(conds, ' AND ')} LIMIT 5000`,
+      );
+      return { ...f, searchIds: rows.map((r) => r.id) };
+    } catch {
+      return f;
+    }
   }
 
   buildWhere(f: AdminQuestionFilter): Prisma.QuestionWhereInput {
@@ -140,6 +173,8 @@ export class BankAdminService {
         { questionText: { contains: f.q, mode: 'insensitive' } },
         { questionTextHindi: { contains: f.q, mode: 'insensitive' } },
       ];
+      // Oct 7 2026: word-wise search over question + OPTIONS + solution (see withSearch())
+      if (f.searchIds) or.push({ id: { in: f.searchIds } });
       // "123", "Q123", "Q.123", "#123", "no 123" -> the unique question number
       const m = /^(?:q(?:uestion)?\.?\s*(?:no\.?)?|no\.?|#)?\s*(\d{1,9})$/i.exec(f.q.trim());
       if (m) or.push({ questionNo: parseInt(m[1], 10) });
@@ -166,8 +201,10 @@ export class BankAdminService {
           'Koi filter select nahi hai — poore question bank par ek saath action allowed nahi hai (galti se sab delete/move na ho jaye). Pehle exam/subject/chapter/upload-batch me se koi filter lagayein.',
         );
       }
+      // same word-wise search the list screen used, so "all matching" == what the admin sees
+      const searched = await this.withSearch(filter);
       const rows = await this.prisma.question.findMany({
-        where: this.buildWhere(filter),
+        where: this.buildWhere(searched),
         select: { id: true },
         take: MAX_BULK + 1,
       });
@@ -183,7 +220,8 @@ export class BankAdminService {
   // 1. question manager
   // ---------------------------------------------------------------------------
 
-  async listQuestions(f: AdminQuestionFilter, skip = 0, take = 30) {
+  async listQuestions(f0: AdminQuestionFilter, skip = 0, take = 30) {
+    const f = await this.withSearch(f0);
     const where = this.buildWhere(f);
     const limit = Math.min(Math.max(take, 1), 100);
     const [total, rows] = await Promise.all([

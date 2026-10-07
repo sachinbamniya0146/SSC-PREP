@@ -422,6 +422,13 @@ model QuestionUploadBatch {
   errorsJson   Json?
   warningsJson Json?
   createdAt    DateTime @default(now())
+  // Oct 7 2026 — upload status that survives page reloads / restarts:
+  // RUNNING (still saving) | DONE | FAILED. Old rows default to DONE.
+  status       String    @default("DONE")
+  // rows that were the same question as one already in the bank -> waiting in Duplicate Review
+  queuedCount  Int       @default(0)
+  finishedAt   DateTime?
+  errorMessage String?
 
   admin     User       @relation(fields: [adminId], references: [id], onDelete: Cascade)
   questions Question[]

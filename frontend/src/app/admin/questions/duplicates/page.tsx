@@ -158,6 +158,12 @@ export default function DuplicateReviewPage() {
   const [msg, setMsg] = React.useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [scanBusy, setScanBusy] = React.useState(false);
   const [includeSimilar, setIncludeSimilar] = React.useState(false);
+  // ?batch=<uploadId> comes from the Upload History ("Duplicate review" column)
+  const [batchId, setBatchId] = React.useState("");
+  React.useEffect(() => {
+    const b = new URLSearchParams(window.location.search).get("batch");
+    if (b) setBatchId(b);
+  }, []);
 
   React.useEffect(() => {
     try {
@@ -175,12 +181,13 @@ export default function DuplicateReviewPage() {
     } catch { /* ignore */ }
   }, []);
 
-  const load = React.useCallback(async (p: number, t: Tab) => {
+  const load = React.useCallback(async (p: number, t: Tab, batch: string = batchId) => {
     setLoading(true);
     try {
       const qs = new URLSearchParams({ skip: String(p * PAGE), take: String(PAGE) });
       if (t === "RESOLVED") qs.set("status", "RESOLVED");
       else { qs.set("status", "PENDING"); qs.set("matchType", t); }
+      if (batch) qs.set("batchId", batch);
       const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates?${qs.toString()}`);
       const d = await r.json().catch(() => null);
       if (!r.ok) throw new Error(d?.message || `HTTP ${r.status}`);
@@ -192,7 +199,7 @@ export default function DuplicateReviewPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [batchId]);
 
   React.useEffect(() => { if (authChecked) { loadCounts(); } }, [authChecked, loadCounts]);
   React.useEffect(() => { if (authChecked) { setPage(0); load(0, tab); } }, [authChecked, tab, load]);
@@ -231,7 +238,7 @@ export default function DuplicateReviewPage() {
     try {
       const body: Record<string, unknown> = { action };
       if (mode === "selected") body.ids = Array.from(selected);
-      else { body.confirm = true; if (tab !== "RESOLVED") body.matchType = tab; }
+      else { body.confirm = true; if (tab !== "RESOLVED") body.matchType = tab; if (batchId) body.batchId = batchId; }
       const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/bulk-resolve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -303,6 +310,13 @@ export default function DuplicateReviewPage() {
           year/shift sab same. <strong>Milte-julte</strong> = question same, par solution / shift / year jaisi koi detail alag.
           Har ek me chunein: purana rakho, naya rakho ya dono. Jo &quot;hatta&quot; hai wo sirf hide hota hai (Question Manager me wapas laa sakte hain).
         </p>
+
+        {batchId && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 p-3 text-sm">
+            Sirf ek upload ke duplicates dikh rahe hain.
+            <a href="/admin/questions/duplicates" className="font-semibold text-primary underline">Sabhi duplicates dekhein</a>
+          </div>
+        )}
 
         {msg && (
           <div className={`rounded-lg border p-3 text-sm ${msg.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10" : "border-red-500/40 bg-red-500/10"}`}>{msg.text}</div>

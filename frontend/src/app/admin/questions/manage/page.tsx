@@ -161,6 +161,54 @@ export default function QuestionManagerPage() {
     [examId, subjectId, chapterId, topicId, subTopicId, kind, status, q, fYear, fShift, fDate, fImage, batchId],
   );
 
+  // Oct 7 2026 — "exam/year/subject wise questions ki Excel download": exports everything matching the
+  // CURRENT filters (same ones as the list above), optionally one sheet per subject / chapter / year / shift / exam.
+  const [exportFormat, setExportFormat] = React.useState<"excel" | "csv">("excel");
+  const [exportSplit, setExportSplit] = React.useState<"none" | "subject" | "chapter" | "year" | "shift" | "exam">("none");
+  const [exporting, setExporting] = React.useState(false);
+  const downloadFiltered = async () => {
+    setExporting(true);
+    setError("");
+    setInfo("");
+    try {
+      const p = buildQuery(0);
+      p.delete("skip");
+      p.delete("take");
+      p.set("format", exportFormat);
+      p.set("split", exportFormat === "excel" ? exportSplit : "none");
+      const r = await fetchAuth(`${API_BASE}/bank/admin/manage/export?${p.toString()}`);
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d?.message || `Download fail (HTTP ${r.status})`);
+      }
+      const exported = r.headers.get("X-Export-Exported");
+      const totalMatch = r.headers.get("X-Export-Total");
+      const capped = r.headers.get("X-Export-Capped") === "1";
+      let name = `questions.${exportFormat === "excel" ? "xlsx" : "csv"}`;
+      const cd = r.headers.get("Content-Disposition") || "";
+      const m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      if (m) { try { name = decodeURIComponent(m[1]); } catch { /* keep default */ } }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setInfo(
+        capped
+          ? `⬇️ ${exported} questions download hue (filter me ${totalMatch} mile — max 50,000 ek baar me; baaki ke liye filter narrow karein, jaise subject ya year).`
+          : `⬇️ ${exported} questions download ho gaye.`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Download nahi hua");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const load = React.useCallback(
     async (pageNum: number) => {
       setLoading(true);
@@ -383,13 +431,36 @@ export default function QuestionManagerPage() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { setPage(0); load(0); } }}
-              placeholder="Q number (1042) ya question text…"
+              placeholder="Q number, question ki line / aadha hissa, ya option / solution ke shabd…"
               className="col-span-2 rounded-lg border border-border bg-background px-2 py-1.5 text-sm sm:col-span-3 lg:col-span-2"
             />
             <button onClick={() => { setPage(0); load(0); }} className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground">
               Search
             </button>
           </div>
+        </div>
+
+        {/* Download — everything matching the filters above, upload-template columns (re-uploadable) */}
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3 text-sm">
+          <span className="font-semibold">⬇️ Download ({total} match)</span>
+          <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value as "excel" | "csv")} className="rounded-lg border border-border bg-background px-2 py-1.5">
+            <option value="excel">Excel (.xlsx)</option>
+            <option value="csv">CSV</option>
+          </select>
+          {exportFormat === "excel" && (
+            <select value={exportSplit} onChange={(e) => setExportSplit(e.target.value as typeof exportSplit)} className="rounded-lg border border-border bg-background px-2 py-1.5" title="Ek hi file me alag-alag sheets">
+              <option value="none">Ek sheet (sab merge)</option>
+              <option value="subject">Subject-wise sheets</option>
+              <option value="chapter">Chapter-wise sheets</option>
+              <option value="year">Year-wise sheets</option>
+              <option value="shift">Year + Shift-wise sheets</option>
+              <option value="exam">Exam-wise sheets</option>
+            </select>
+          )}
+          <button onClick={downloadFiltered} disabled={exporting || total === 0} className="rounded-lg bg-primary px-3 py-1.5 font-semibold text-primary-foreground disabled:opacity-40">
+            {exporting ? "Ban raha hai…" : "Download karein"}
+          </button>
+          <span className="text-xs text-muted-foreground">Upar ke filters (exam / subject / chapter / year / shift / search) ke hisaab se. Columns upload template jaise hain, to file wapas upload bhi ho sakti hai.</span>
         </div>
 
         {/* Bulk actions */}
