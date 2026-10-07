@@ -13,6 +13,7 @@ import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, Question
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
 import { normalizeShiftOrUndefined } from '../common/shift';
 import { compareQuestions } from '../common/duplicate-compare';
+import { buildZip } from '../common/zip';
 import {
   DB_IN_CHUNK,
   INSERT_CHUNK,
@@ -297,7 +298,7 @@ function toExportRow(q: any) {
 }
 
 /** How exportFiltered() groups rows into Excel sheets. */
-export type ExportSplit = 'none' | 'subject' | 'chapter' | 'year' | 'shift' | 'exam';
+export type ExportSplit = 'none' | 'subject' | 'chapter' | 'subject_chapter' | 'year' | 'shift' | 'exam';
 
 export interface UploadResult {
   success: boolean;
@@ -322,6 +323,8 @@ export interface UploadResult {
   // failures — they wait in the admin's duplicate review queue (/admin/questions/duplicates).
   queuedForReview?: number;
   queuedExact?: number;
+  // duplicates already waiting in Duplicate Review, or already answered "keep the old one" — not new, not failed
+  reviewAlready?: number;
 }
 
 export interface ExistingQuestionSummary {
@@ -756,6 +759,7 @@ export class BankUploadService {
         warningsJson: result.warnings as any,
         status: 'DONE',
         queuedCount: result.queuedForReview ?? 0,
+        skippedCount: result.reviewAlready ?? 0,
         finishedAt: new Date(),
       },
     });
@@ -953,7 +957,7 @@ export class BankUploadService {
    * shows how many questions are already saved even after the admin reloads the page.
    * Best effort: never throws.
    */
-  async updateBatchProgress(batchId: string, p: { totalRows?: number; createdCount?: number; failedCount?: number; queuedCount?: number }): Promise<void> {
+  async updateBatchProgress(batchId: string, p: { totalRows?: number; createdCount?: number; failedCount?: number; queuedCount?: number; skippedCount?: number }): Promise<void> {
     try {
       await this.prisma.questionUploadBatch.update({ where: { id: batchId }, data: p });
     } catch {
@@ -1130,7 +1134,7 @@ export class BankUploadService {
       select: {
         id: true, adminId: true, sourceType: true, filename: true,
         totalRows: true, createdCount: true, failedCount: true, createdAt: true,
-        status: true, queuedCount: true, finishedAt: true, errorMessage: true,
+        status: true, queuedCount: true, skippedCount: true, finishedAt: true, errorMessage: true,
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -1156,7 +1160,7 @@ export class BankUploadService {
       const remaining = l + pnd;
       // a RUNNING batch that has not finished for 30+ minutes was killed (server restart) — say so
       const stale = b.status === 'RUNNING' && Date.now() - new Date(b.createdAt).getTime() > 30 * 60 * 1000;
-      const accounted = b.createdCount + b.failedCount + b.queuedCount;
+      const accounted = b.createdCount + b.failedCount + b.queuedCount + b.skippedCount;
       return {
         ...b,
         status: stale ? 'INTERRUPTED' : b.status,
@@ -1965,12 +1969,16 @@ export class BankUploadService {
    */
   async exportFiltered(
     filter: AdminQuestionFilter,
-    opts: { format: 'excel' | 'csv' | 'json'; split?: ExportSplit },
+    opts: { format: 'excel' | 'csv' | 'json'; split?: ExportSplit; includeAll?: boolean },
   ): Promise<{ buffer: Buffer; contentType: string; filename: string; total: number; exported: number; capped: boolean }> {
     const EXPORT_FILTER_CAP = 50000;
     const PAGE = 2000;
     const f = await this.bankAdmin.withSearch(filter);
-    const where = this.bankAdmin.buildWhere(f);
+    // Oct 7 2026: by default ONLY what students can actually see (approved + active + not auto-suspended —
+    // PUBLISHED_QUESTION_WHERE, the single definition used by every student screen). Pending / hidden
+    // questions are included only when the admin ticks "Pending/hidden bhi shamil karein" (includeAll).
+    const base = this.bankAdmin.buildWhere(f);
+    const where: any = opts.includeAll ? base : { AND: [base, PUBLISHED_QUESTION_WHERE] };
     const total = await this.prisma.question.count({ where });
     const limit = Math.min(total, EXPORT_FILTER_CAP);
     const rows: any[] = [];
@@ -1997,12 +2005,12 @@ export class BankUploadService {
       if (f.shift) bits.push(f.shift);
     }
     if (f.kind) bits.push(f.kind === 'pyq' ? 'PYQ' : 'Practice');
-    const base = (bits.filter(Boolean).join('_') || 'questions').replace(/[^\w\u0900-\u097F\-]+/g, '_').slice(0, 80);
+    const fileBase = (bits.filter(Boolean).join('_') || 'questions').replace(/[^\w\u0900-\u097F\-]+/g, '_').slice(0, 80);
     const stamp = new Date().toISOString().slice(0, 10);
     const meta = { total, exported: rows.length, capped: total > rows.length };
 
     if (opts.format === 'json') {
-      return { ...meta, buffer: Buffer.from(JSON.stringify(rows, null, 2), 'utf-8'), contentType: 'application/json', filename: `${base}_${stamp}.json` };
+      return { ...meta, buffer: Buffer.from(JSON.stringify(rows, null, 2), 'utf-8'), contentType: 'application/json', filename: `${fileBase}_${stamp}.json` };
     }
     const headers = rows.length
       ? Object.keys(rows[0])
@@ -2013,11 +2021,47 @@ export class BankUploadService {
       const lines = [headers.join(',')];
       for (const row of rows) lines.push(this.escapeCSVRow(headers.map((h) => String((row as any)[h] ?? ''))));
       // BOM so Excel opens Hindi text correctly
-      return { ...meta, buffer: Buffer.from('\uFEFF' + lines.join('\n'), 'utf-8'), contentType: 'text/csv; charset=utf-8', filename: `${base}_${stamp}.csv` };
+      return { ...meta, buffer: Buffer.from('\uFEFF' + lines.join('\n'), 'utf-8'), contentType: 'text/csv; charset=utf-8', filename: `${fileBase}_${stamp}.csv` };
     }
 
     // excel — one sheet, or one sheet per subject / chapter / year / shift / exam
     const split: ExportSplit = opts.split ?? 'none';
+
+    // Subject -> Chapter: a ZIP with one folder per subject and one Excel file per chapter inside it.
+    if (split === 'subject_chapter') {
+      const safe = (v: string, fb: string) => (v || fb).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80) || fb;
+      const tree = new Map<string, Map<string, any[]>>();
+      for (const r of rows) {
+        const sub = safe(r.subjectName, 'No subject');
+        const ch = safe(r.chapterName, 'No chapter');
+        const chapters = tree.get(sub) ?? new Map<string, any[]>();
+        const list = chapters.get(ch) ?? [];
+        list.push(r);
+        chapters.set(ch, list);
+        tree.set(sub, chapters);
+      }
+      const entries: { name: string; data: Buffer }[] = [];
+      const usedNames = new Set<string>();
+      for (const [sub, chapters] of tree) {
+        for (const [ch, list] of chapters) {
+          let path = `${sub}/${ch}.xlsx`;
+          let n = 2;
+          while (usedNames.has(path.toLowerCase())) path = `${sub}/${ch} (${n++}).xlsx`;
+          usedNames.add(path.toLowerCase());
+          const wbk = XLSX.utils.book_new();
+          const sheet = XLSX.utils.aoa_to_sheet([headers, ...list.map((row) => headers.map((h) => (row as any)[h]))]);
+          XLSX.utils.book_append_sheet(wbk, sheet, 'Questions');
+          entries.push({ name: path, data: XLSX.write(wbk, { type: 'buffer', bookType: 'xlsx' }) as Buffer });
+        }
+      }
+      if (entries.length === 0) {
+        const wbk = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wbk, XLSX.utils.aoa_to_sheet([headers]), 'Questions');
+        entries.push({ name: 'Questions.xlsx', data: XLSX.write(wbk, { type: 'buffer', bookType: 'xlsx' }) as Buffer });
+      }
+      return { ...meta, buffer: buildZip(entries), contentType: 'application/zip', filename: `${fileBase}_subject_chapter_${stamp}.zip` };
+    }
+
     const keyOf = (r: any): string => {
       switch (split) {
         case 'subject': return r.subjectName || 'No subject';
@@ -2048,7 +2092,7 @@ export class BankUploadService {
       XLSX.utils.book_append_sheet(workbook, ws, name);
     }
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
-    return { ...meta, buffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename: `${base}_${stamp}.xlsx` };
+    return { ...meta, buffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename: `${fileBase}_${stamp}.xlsx` };
   }
 
   /**
@@ -3879,8 +3923,10 @@ export class BankUploadService {
             ? 'Exact duplicate (question, options, solution, shift sab same) — Duplicate Review me bheja. Wahan purana / naya / dono me se chunein.'
             : `Same question, lekin ye details alag hain: ${r.differences.join(', ')} — Duplicate Review me bheja.`;
       } else if (r.outcome === 'ALREADY_PENDING') {
+        ctx.result.reviewAlready = (ctx.result.reviewAlready ?? 0) + 1;
         message = 'Ye duplicate pehle se Duplicate Review list me hai — dobara nahi jodha.';
       } else {
+        ctx.result.reviewAlready = (ctx.result.reviewAlready ?? 0) + 1;
         message = 'Is duplicate par admin pehle "purana rakho" decide kar chuka hai — skip kiya.';
       }
       this.pushUploadWarning(ctx.result, { row: ctx.rowNum, message, questionPreview: ctx.preview });

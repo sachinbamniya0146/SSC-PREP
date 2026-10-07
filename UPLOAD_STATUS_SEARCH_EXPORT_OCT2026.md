@@ -9,3 +9,11 @@
    Columns upload template jaise (+ question/option images) - file wapas upload ho sakti hai.
 
 Migration: 20261007100000_upload_batch_status (deploy me prisma migrate deploy se chalti hai)
+
+## Update 2 (Oct 7 2026, screenshots ke baad)
+- Download me ab default sirf wahi questions aate hain jo students ko dikhte hain (approved + active + not suspended). "Pending / hidden bhi shamil karein" tick karne par sab.
+- Nayi option: "Subject -> Chapter (ZIP)": har subject ka folder, usme har chapter ki alag Excel. Ek chapter ki alag-alag uploads merge hoke aati hain.
+- Upload accounting: Total = Upload hue + Failed + Duplicate review + Skip. Failed ki sahi ginti (pehle sirf capped error list se hoti thi).
+  Upload ka history row file parse hote hi ban jata hai (Chal raha hai %), bade file me bhi live. Agar kuch rows ka hisaab na mile to warning dikhti hai.
+- History ke buttons ab alag row me, badi aur saaf labels ke saath; date chhoti.
+- Migration: 20261007110000_upload_batch_skipped

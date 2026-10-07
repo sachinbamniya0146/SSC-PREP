@@ -40,6 +40,9 @@ export interface UploadJob {
   // Oct 6 2026: same-question rows waiting in the admin's Duplicate Review queue (not failures)
   queuedForReview: number;
   queuedExact: number;
+  reviewAlready: number;
+  // rows of a chunk that ended up neither saved, failed nor queued — should always be 0; shown if not
+  unaccounted: number;
   errors: JobError[];
   warnings: { row: number; message: string; questionPreview?: string }[];
   uploadBatchId?: string;
@@ -181,7 +184,7 @@ export class BankUploadJobService {
     const job: UploadJob = {
       id: `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       adminId: opts.adminId, filename: opts.filename, kind, dryRun: opts.dryRun,
-      status: 'RUNNING', phase: 'Checking rows…', total: items.length, processed: 0, created: 0, failed: 0, queuedForReview: 0, queuedExact: 0,
+      status: 'RUNNING', phase: 'Checking rows…', total: items.length, processed: 0, created: 0, failed: 0, queuedForReview: 0, queuedExact: 0, reviewAlready: 0, unaccounted: 0,
       errors: [], warnings: [], headers, rejectedRows: [], startedAt: Date.now(),
     };
     this.jobs.set(job.id, job);
@@ -208,6 +211,16 @@ export class BankUploadJobService {
   }
 
   private async run(job: UploadJob, items: Item[], opts: { adminId: string; filename: string; isPracticeOnly: boolean; requireSolution: boolean; dryRun: boolean }) {
+    // Oct 7 2026: the history row is created BEFORE any checking, so even a big file shows up (as "Chal raha hai")
+    // right away and a file where every row is rejected still leaves a record of what happened.
+    let batchId: string | null = null;
+    if (!opts.dryRun) {
+      job.phase = 'Checking rows…';
+      batchId = await this.upload.beginBatch(opts.adminId, opts.filename);
+      job.uploadBatchId = batchId;
+      await this.upload.updateBatchProgress(batchId, { totalRows: job.total });
+    }
+
     // ---------- Phase 1: quality gate (no DB) ----------
     const ok: Item[] = [];
     const seen = new Map<string, number>();
@@ -235,6 +248,7 @@ export class BankUploadJobService {
       ok.push(it);
     }
     job.processed = items.length - ok.length;
+    if (batchId) await this.upload.updateBatchProgress(batchId, { failedCount: job.failed });
 
     // ---------- Dry run: DB duplicate check only, write nothing ----------
     if (opts.dryRun) {
@@ -270,15 +284,16 @@ export class BankUploadJobService {
     // ---------- Phase 2: real import in chunks ----------
     if (ok.length === 0) {
       job.phase = 'Koi valid row nahi mili';
+      if (batchId) {
+        try { await this.upload.endBatch(batchId, { success: false, total: items.length, created: 0, failed: job.failed, errors: job.errors, warnings: job.warnings } as any); } catch { /* best effort */ }
+      }
       job.status = 'DONE';
       job.processed = job.total;
       job.finishedAt = Date.now();
       return;
     }
     job.phase = 'Uploading…';
-    const batchId = await this.upload.beginBatch(opts.adminId, opts.filename);
-    job.uploadBatchId = batchId;
-    await this.upload.updateBatchProgress(batchId, { totalRows: job.total, failedCount: job.failed });
+    const batch = batchId as string; // created above for every real (non-dry) run
     const total: any = { success: false, total: items.length, created: 0, failed: job.failed, errors: [], warnings: [] };
     const sizeOf = job.kind === 'JSON' ? 25 : CHUNK; // JSON may carry images -> smaller chunks
 
@@ -286,8 +301,8 @@ export class BankUploadJobService {
       const slice = ok.slice(off, off + sizeOf);
       try {
         const res = job.kind === 'JSON'
-          ? await this.upload.processStructuredChunk(slice.map((s) => s.data), opts.adminId, batchId, opts.isPracticeOnly)
-          : await this.upload.processRowsChunk(job.headers, slice.map((s) => s.data), opts.adminId, batchId, opts.isPracticeOnly);
+          ? await this.upload.processStructuredChunk(slice.map((s) => s.data), opts.adminId, batch, opts.isPracticeOnly)
+          : await this.upload.processRowsChunk(job.headers, slice.map((s) => s.data), opts.adminId, batch, opts.isPracticeOnly);
         const base = job.kind === 'JSON' ? 1 : 2; // chunk-local row numbers: JSON 1-based, sheet header+1
         job.created += res.created;
         job.queuedForReview += res.queuedForReview ?? 0;
@@ -298,25 +313,35 @@ export class BankUploadJobService {
           job.errors.push({ row: src?.rowNum ?? e.row, error: e.error, category: e.category, questionPreview: e.questionPreview });
           job.rejectedRows.push({ row: src?.rowNum ?? e.row, reason: e.error, data: src?.data ?? e.data ?? [] });
         }
+        // the error LIST is capped (MAX_REPORTED_ERRORS per chunk); the true number of failed rows is res.failed
+        if (res.failed > res.errors.length) job.failed += res.failed - res.errors.length;
+        job.reviewAlready += res.reviewAlready ?? 0;
         for (const w of res.warnings) job.warnings.push({ ...w, row: slice[w.row - base]?.rowNum ?? w.row });
+        // safety net: every row of the chunk must be saved, failed, or sent to Duplicate Review
+        const gap = slice.length - (res.created + res.failed + (res.queuedForReview ?? 0) + (res.reviewAlready ?? 0));
+        if (gap > 0) {
+          job.unaccounted += gap;
+          job.warnings.push({ row: slice[0]?.rowNum ?? 0, message: `${gap} row(s) ka koi result nahi mila (na save hui, na fail, na review me gayi) — file ke is hisse (row ${slice[0]?.rowNum}+) ko dobara upload karke dekhein.` });
+        }
       } catch (e: any) {
         const msg = e?.response?.message ?? e?.message ?? String(e);
         for (const s of slice) this.reject(job, s, 'OTHER', `Server error: ${msg}`);
       }
       job.processed = Math.min(job.total, job.total - ok.length + off + slice.length);
-      await this.upload.updateBatchProgress(batchId, { createdCount: job.created, failedCount: job.failed, queuedCount: job.queuedForReview });
+      await this.upload.updateBatchProgress(batch, { createdCount: job.created, failedCount: job.failed, queuedCount: job.queuedForReview, skippedCount: job.reviewAlready });
       job.phase = `Uploading… ${Math.min(off + sizeOf, ok.length)}/${ok.length}`;
     }
 
     total.created = job.created;
     total.queuedForReview = job.queuedForReview;
     total.queuedExact = job.queuedExact;
+    total.reviewAlready = job.reviewAlready;
     total.failed = job.failed;
     total.errors = job.errors;
     total.warnings = job.warnings;
-    try { await this.upload.endBatch(batchId, total); } catch (e: any) { this.log.warn(`finalize batch failed: ${e?.message ?? e}`); }
+    try { await this.upload.endBatch(batch, total); } catch (e: any) { this.log.warn(`finalize batch failed: ${e?.message ?? e}`); }
     if (opts.isPracticeOnly === false) {
-      try { await this.upload.warnYearlessInPyqUpload({ ...total, uploadBatchId: batchId }); } catch { /* best effort */ }
+      try { await this.upload.warnYearlessInPyqUpload({ ...total, uploadBatchId: batch }); } catch { /* best effort */ }
     }
     job.errors.sort((a, b) => a.row - b.row);
     job.processed = job.total;

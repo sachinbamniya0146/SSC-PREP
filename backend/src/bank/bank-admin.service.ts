@@ -3,7 +3,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { cacheClearPrefix } from '../common/cache';
-import { QuestionKind, kindWhere, parseQuestionKind } from '../common/question-visibility';
+import { PUBLISHED_QUESTION_WHERE, QuestionKind, kindWhere, parseQuestionKind } from '../common/question-visibility';
 
 // =============================================================================
 // BankAdminService  (NEW — Sep 21 2026)
@@ -224,8 +224,10 @@ export class BankAdminService {
     const f = await this.withSearch(f0);
     const where = this.buildWhere(f);
     const limit = Math.min(Math.max(take, 1), 100);
-    const [total, rows] = await Promise.all([
+    const [total, visibleTotal, rows] = await Promise.all([
       this.prisma.question.count({ where }),
+      // how many of these students can actually see (what the Download button exports by default)
+      this.prisma.question.count({ where: { AND: [where, PUBLISHED_QUESTION_WHERE] } }),
       this.prisma.question.findMany({
         where,
         orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
@@ -260,6 +262,7 @@ export class BankAdminService {
     ]);
     return {
       total,
+      visibleTotal,
       data: rows.map((r) => ({
         id: r.id,
         questionNo: r.questionNo,

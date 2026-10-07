@@ -91,6 +91,9 @@ export default function QuestionManagerPage() {
 
   const [rows, setRows] = React.useState<QuestionRow[]>([]);
   const [total, setTotal] = React.useState(0);
+  // how many of the matches students can actually see (live) — this is what Download exports by default
+  const [visibleTotal, setVisibleTotal] = React.useState(0);
+  const [includeAll, setIncludeAll] = React.useState(false);
   const [page, setPage] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -164,7 +167,7 @@ export default function QuestionManagerPage() {
   // Oct 7 2026 — "exam/year/subject wise questions ki Excel download": exports everything matching the
   // CURRENT filters (same ones as the list above), optionally one sheet per subject / chapter / year / shift / exam.
   const [exportFormat, setExportFormat] = React.useState<"excel" | "csv">("excel");
-  const [exportSplit, setExportSplit] = React.useState<"none" | "subject" | "chapter" | "year" | "shift" | "exam">("none");
+  const [exportSplit, setExportSplit] = React.useState<"none" | "subject" | "chapter" | "subject_chapter" | "year" | "shift" | "exam">("none");
   const [exporting, setExporting] = React.useState(false);
   const downloadFiltered = async () => {
     setExporting(true);
@@ -176,6 +179,7 @@ export default function QuestionManagerPage() {
       p.delete("take");
       p.set("format", exportFormat);
       p.set("split", exportFormat === "excel" ? exportSplit : "none");
+      if (includeAll) p.set("includeAll", "1");
       const r = await fetchAuth(`${API_BASE}/bank/admin/manage/export?${p.toString()}`);
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
@@ -184,7 +188,7 @@ export default function QuestionManagerPage() {
       const exported = r.headers.get("X-Export-Exported");
       const totalMatch = r.headers.get("X-Export-Total");
       const capped = r.headers.get("X-Export-Capped") === "1";
-      let name = `questions.${exportFormat === "excel" ? "xlsx" : "csv"}`;
+      let name = `questions.${exportFormat === "excel" ? (exportSplit === "subject_chapter" ? "zip" : "xlsx") : "csv"}`;
       const cd = r.headers.get("Content-Disposition") || "";
       const m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
       if (m) { try { name = decodeURIComponent(m[1]); } catch { /* keep default */ } }
@@ -222,6 +226,7 @@ export default function QuestionManagerPage() {
         const d = await r.json();
         setRows(d.data || []);
         setTotal(d.total || 0);
+        setVisibleTotal(d.visibleTotal ?? d.total ?? 0);
         setSelected(new Set());
       } catch (e) {
         setError(e instanceof Error ? e.message : "Load nahi hua");
@@ -442,7 +447,7 @@ export default function QuestionManagerPage() {
 
         {/* Download — everything matching the filters above, upload-template columns (re-uploadable) */}
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3 text-sm">
-          <span className="font-semibold">⬇️ Download ({total} match)</span>
+          <span className="font-semibold">⬇️ Download ({includeAll ? total : visibleTotal} {includeAll ? "questions — pending/hidden bhi" : "questions — jo students ko dikhte hain"})</span>
           <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value as "excel" | "csv")} className="rounded-lg border border-border bg-background px-2 py-1.5">
             <option value="excel">Excel (.xlsx)</option>
             <option value="csv">CSV</option>
@@ -451,16 +456,23 @@ export default function QuestionManagerPage() {
             <select value={exportSplit} onChange={(e) => setExportSplit(e.target.value as typeof exportSplit)} className="rounded-lg border border-border bg-background px-2 py-1.5" title="Ek hi file me alag-alag sheets">
               <option value="none">Ek sheet (sab merge)</option>
               <option value="subject">Subject-wise sheets</option>
-              <option value="chapter">Chapter-wise sheets</option>
+              <option value="subject_chapter">Subject → Chapter (ZIP: subject folder, chapter ki alag Excel)</option>
+              <option value="chapter">Chapter-wise sheets (ek file)</option>
               <option value="year">Year-wise sheets</option>
               <option value="shift">Year + Shift-wise sheets</option>
               <option value="exam">Exam-wise sheets</option>
             </select>
           )}
-          <button onClick={downloadFiltered} disabled={exporting || total === 0} className="rounded-lg bg-primary px-3 py-1.5 font-semibold text-primary-foreground disabled:opacity-40">
+          <label className="flex items-center gap-1 text-xs text-muted-foreground" title="Normal download me sirf live questions aate hain (jo students ko dikhte hain)">
+            <input type="checkbox" checked={includeAll} onChange={(e) => setIncludeAll(e.target.checked)} /> Pending / hidden bhi shamil karein
+          </label>
+          <button onClick={downloadFiltered} disabled={exporting || (includeAll ? total : visibleTotal) === 0} className="rounded-lg bg-primary px-3 py-1.5 font-semibold text-primary-foreground disabled:opacity-40">
             {exporting ? "Ban raha hai…" : "Download karein"}
           </button>
-          <span className="text-xs text-muted-foreground">Upar ke filters (exam / subject / chapter / year / shift / search) ke hisaab se. Columns upload template jaise hain, to file wapas upload bhi ho sakti hai.</span>
+          <span className="w-full text-xs text-muted-foreground">
+            Upar ke filters ke hisaab se. Normal download me sirf wahi questions aate hain jo students ko app me dikhte hain (live). Columns upload template jaise hain, to file wapas upload bhi ho sakti hai.
+            {!includeAll && total > visibleTotal ? ` (Filter me ${total - visibleTotal} questions pending/hidden hain — wo is download me nahi aayenge.)` : ""}
+          </span>
         </div>
 
         {/* Bulk actions */}

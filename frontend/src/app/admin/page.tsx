@@ -61,6 +61,8 @@ interface UploadResult {
   warningsTotal?: number;
   queuedForReview?: number;
   queuedExact?: number;
+  reviewAlready?: number;
+  unaccounted?: number;
 }
 
 interface UploadJobState {
@@ -200,7 +202,7 @@ export default function AdminPage() {
     id: string; adminId: string; sourceType: string; filename: string | null;
     totalRows: number; createdCount: number; failedCount: number; createdAt: string;
     // NEW (Oct 7 2026) — status that survives reloads: RUNNING | DONE | FAILED | INTERRUPTED
-    status?: "RUNNING" | "DONE" | "FAILED" | "INTERRUPTED"; queuedCount?: number; pendingRows?: number;
+    status?: "RUNNING" | "DONE" | "FAILED" | "INTERRUPTED"; queuedCount?: number; skippedCount?: number; pendingRows?: number;
     finishedAt?: string | null; errorMessage?: string | null;
     // NEW (Sep 21 2026) — live/current state of this batch's questions
     remainingCount?: number; liveCount?: number; pendingCount?: number;
@@ -543,7 +545,7 @@ export default function AdminPage() {
       if (j.status === "FAILED") throw new Error(j.fatalError || "Upload fail ho gaya");
       if (j.status === "DONE") {
         if (j.hasRejected) setRejectedUrl(`${API_BASE}/bank/admin/upload/job/${started.id}/rejected`);
-        setUploadResult({ success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors, warnings: j.warnings, queuedForReview: j.queuedForReview, queuedExact: j.queuedExact } as UploadResult);
+        setUploadResult({ success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors, warnings: j.warnings, queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted } as UploadResult);
         loadBatches();
         if (checkOnly) setInfo(`Sirf check hua (kuch save nahi hua): ${j.created} question upload ke liye tayyar, ${j.failed} reject.`);
         else if (j.created > 0) setInfo(`${j.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye`);
@@ -1141,6 +1143,12 @@ export default function AdminPage() {
                 <span>Total: <strong>{uploadResult.total}</strong></span>
                 <span className="text-emerald-600 dark:text-emerald-400">Created: <strong>{uploadResult.created}</strong></span>
                 <span className="text-red-600 dark:text-red-400">Failed: <strong>{uploadResult.failed}</strong></span>
+                {(uploadResult.reviewAlready ?? 0) > 0 && (
+                  <span className="text-xs text-muted-foreground" title="Pehle se Duplicate Review me the ya aap pehle 'purana rakho' decide kar chuke the">+{uploadResult.reviewAlready} pehle se review me / skip</span>
+                )}
+                {(uploadResult.unaccounted ?? 0) > 0 && (
+                  <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">⚠️ {uploadResult.unaccounted} rows ka hisaab nahi mila</span>
+                )}
                 {(uploadResult.queuedForReview ?? 0) > 0 && (
                   <a href="/admin/questions/duplicates" className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
                     🧬 {uploadResult.queuedForReview} duplicate Review me gaye{(uploadResult.queuedExact ?? 0) > 0 ? ` (${uploadResult.queuedExact} exact same)` : ""} — purana / naya / dono chunne ke liye kholein →
@@ -1265,17 +1273,16 @@ export default function AdminPage() {
                     <th className="px-3 py-2 text-right">Failed</th>
                     <th className="px-3 py-2 text-right">Duplicate review</th>
                     <th className="px-3 py-2">Ab Live/Pending</th>
-                    <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {batches.map((b) => (
                     <React.Fragment key={b.id}>
                       <tr className="border-b border-border last:border-0">
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {new Date(b.createdAt).toLocaleString()}
+                        <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
+                          {new Date(b.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                         </td>
-                        <td className="px-3 py-2 font-medium">{b.filename || "—"}</td>
+                        <td className="max-w-[260px] break-words px-3 py-2 font-medium" title={b.filename ?? ""}>{b.filename || "—"}</td>
                         <td className="px-3 py-2 text-xs">{b.sourceType}</td>
                         <td className="px-3 py-2 text-xs">
                           {(b.status ?? "DONE") === "RUNNING" ? (
@@ -1289,6 +1296,11 @@ export default function AdminPage() {
                           ) : (
                             <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-600 dark:text-emerald-400">✅ Poora</span>
                           )}
+                          {(b.status ?? "DONE") === "DONE" && (b.pendingRows ?? 0) > 0 && (
+                            <span className="mt-1 block text-[10px] font-medium text-amber-700 dark:text-amber-400" title="Total = Upload hue + Failed + Duplicate review + Skip hona chahiye. Is file ke itne rows ka hisaab nahi mila — file dobara upload karke dekhein.">
+                              ⚠️ {b.pendingRows} rows ka hisaab nahi mila
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right">{b.totalRows}</td>
                         <td className="px-3 py-2 text-right text-emerald-600 dark:text-emerald-400">{b.createdCount}</td>
@@ -1298,6 +1310,9 @@ export default function AdminPage() {
                             <a href={`/admin/questions/duplicates?batch=${b.id}`} className="font-semibold text-amber-700 underline dark:text-amber-400" title="Ye same question pehle se the — purana / naya / dono chunein">{b.queuedCount} →</a>
                           ) : (
                             <span className="text-muted-foreground">0</span>
+                          )}
+                          {(b.skippedCount ?? 0) > 0 && (
+                            <span className="block text-[10px] text-muted-foreground" title="Ye duplicate pehle se review list me the ya aap pehle 'purana rakho' decide kar chuke the">+{b.skippedCount} pehle se</span>
                           )}
                         </td>
                         <td className="px-3 py-2 text-xs">
@@ -1320,42 +1335,46 @@ export default function AdminPage() {
                           {" / "}
                           <span className="text-amber-600 dark:text-amber-400">{b.pendingCount ?? 0} pending</span>
                         </td>
-                        <td className="px-3 py-2 text-right">
-                          <button
-                            onClick={() => toggleBatchDetail(b.id)}
-                            className="rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted"
-                          >
-                            {expandedBatchId === b.id ? "Hide" : "Details ▾"}
-                          </button>
-                          <a
-                            href={`/admin/questions/manage?batch=${b.id}`}
-                            className="ml-2 rounded-lg border border-primary/40 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/10"
-                            title="Is upload ke saare questions dekhein, search karein aur ek-ek ko edit karein"
-                          >
-                            ✏️ Questions dekhein / edit
-                          </a>
-                          {(b.pendingCount ?? 0) > 0 && (
+                      </tr>
+                      <tr className="border-b border-border last:border-0">
+                        <td colSpan={10} className="px-3 pb-3 pt-0">
+                          <div className="flex flex-wrap items-center gap-2">
                             <button
-                              onClick={() => publishBatchHandler(b.id)}
-                              className="ml-2 rounded-lg border border-emerald-500/30 px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
-                              title="Is batch ke sabhi pending questions ko ek click me publish (live) karein"
+                              onClick={() => toggleBatchDetail(b.id)}
+                              className="whitespace-nowrap rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
                             >
-                              Publish All
+                              {expandedBatchId === b.id ? "▴ Details band karein" : "📋 Details / errors dekhein"}
                             </button>
-                          )}
-                          <button
-                            onClick={() => downloadBatchHandler(b.id, b.filename)}
-                            className="ml-2 rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted"
-                            title="Is batch ke abhi maujood questions Excel me download karein"
-                          >
-                            ⬇️
-                          </button>
-                          <button
-                            onClick={() => deleteBatchHandler(b.id, b.filename)}
-                            className="ml-2 rounded-lg border border-danger/30 px-2 py-1 text-xs text-danger hover:bg-danger/10"
-                          >
-                            Delete
-                          </button>
+                            <a
+                              href={`/admin/questions/manage?batch=${b.id}`}
+                              className="whitespace-nowrap rounded-lg border border-primary/40 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10"
+                              title="Is upload ke saare questions dekhein, search karein aur ek-ek ko edit karein"
+                            >
+                              ✏️ Questions dekhein / edit
+                            </a>
+                            {(b.pendingCount ?? 0) > 0 && (
+                              <button
+                                onClick={() => publishBatchHandler(b.id)}
+                                className="whitespace-nowrap rounded-lg border border-emerald-500/40 px-3 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
+                                title="Is batch ke sabhi pending questions ko ek click me publish (live) karein"
+                              >
+                                ✅ Publish All ({b.pendingCount})
+                              </button>
+                            )}
+                            <button
+                              onClick={() => downloadBatchHandler(b.id, b.filename)}
+                              className="whitespace-nowrap rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                              title="Is batch ke abhi maujood questions Excel me download karein"
+                            >
+                              ⬇️ Download
+                            </button>
+                            <button
+                              onClick={() => deleteBatchHandler(b.id, b.filename)}
+                              className="whitespace-nowrap rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10"
+                            >
+                              🗑️ Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                       {expandedBatchId === b.id && (

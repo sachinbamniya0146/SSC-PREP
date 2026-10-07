@@ -427,6 +427,8 @@ model QuestionUploadBatch {
   status       String    @default("DONE")
   // rows that were the same question as one already in the bank -> waiting in Duplicate Review
   queuedCount  Int       @default(0)
+  // duplicates the admin had already answered / that were already waiting in Duplicate Review
+  skippedCount Int       @default(0)
   finishedAt   DateTime?
   errorMessage String?
 

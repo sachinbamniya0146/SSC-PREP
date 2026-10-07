@@ -33,14 +33,14 @@ export class BankAdminController {
     );
   }
 
-  // GET /bank/admin/manage/export?<same filters as the list>&format=excel|csv|json&split=none|subject|chapter|year|shift|exam
+  // GET /bank/admin/manage/export?<same filters as the list>&format=excel|csv|json&split=none|subject|chapter|subject_chapter|year|shift|exam&includeAll=1 (pending/hidden bhi)
   // (Oct 7 2026) — downloads every question matching the current filters; see BankUploadService.exportFiltered().
   @Get('export')
   async exportQuestions(@Query() q: any, @Res() res: Response) {
     const format = q?.format === 'csv' || q?.format === 'json' ? q.format : 'excel';
-    const splits: ExportSplit[] = ['none', 'subject', 'chapter', 'year', 'shift', 'exam'];
+    const splits: ExportSplit[] = ['none', 'subject', 'chapter', 'subject_chapter', 'year', 'shift', 'exam'];
     const split: ExportSplit = splits.includes(q?.split) ? q.split : 'none';
-    const out = await this.uploads.exportFiltered(this.admin.parseFilter(q), { format, split });
+    const out = await this.uploads.exportFiltered(this.admin.parseFilter(q), { format, split, includeAll: q?.includeAll === '1' || q?.includeAll === 'true' });
     res.setHeader('Content-Type', out.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(out.filename)}"; filename*=UTF-8''${encodeURIComponent(out.filename)}`);
     res.setHeader('X-Export-Total', String(out.total));

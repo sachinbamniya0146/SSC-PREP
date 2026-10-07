@@ -29,7 +29,7 @@ export class BankUploadJobController {
     return {
       id: j.id, status: j.status, phase: j.phase, dryRun: j.dryRun, filename: j.filename,
       total: j.total, processed: j.processed, created: j.created, failed: j.failed,
-      queuedForReview: j.queuedForReview, queuedExact: j.queuedExact,
+      queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted,
       errors: j.errors, warnings: j.warnings, uploadBatchId: j.uploadBatchId, fatalError: j.fatalError,
       hasRejected: j.rejectedRows.length > 0, kind: j.kind,
     };
