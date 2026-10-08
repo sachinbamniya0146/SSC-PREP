@@ -280,7 +280,7 @@ export class PdfIngestionService {
       'Respond with strict JSON only, no markdown fences: {"chapterNumber": <int>, "confidence": "high"|"medium"|"low"}',
     ].join('\n');
 
-    const result = await this.aiProvider.generate(prompt, { jsonResponse: true });
+    const result = await this.aiProvider.generate(prompt, { jsonResponse: true, feature: 'CHAPTER_SUGGEST' });
 
     let parsed: { chapterNumber?: number; confidence?: string };
     try {

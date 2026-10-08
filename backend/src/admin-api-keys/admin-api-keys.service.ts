@@ -145,6 +145,13 @@ export class AdminApiKeyService {
     return k.apiKey;
   }
 
+  /** like getRawKey() but also returns the name, so the test can be written to the usage log */
+  async getRawKeyWithName(id: string): Promise<{ apiKey: string; keyName: string }> {
+    const k = await this.prisma.adminApiKey.findUnique({ where: { id }, select: { apiKey: true, keyName: true } });
+    if (!k) throw new NotFoundException('Key nahi mili.');
+    return k;
+  }
+
   /** a key that passed a live test is switched back on and its error marks are cleared */
   async markHealthy(id: string) {
     await this.prisma.adminApiKey.update({ where: { id }, data: { isActive: true, exhaustedAt: null, failureCount: 0, lastErrorMessage: null } });
@@ -393,6 +400,127 @@ export class AdminApiKeyService {
       },
       data: { isResolved: true, resolvedAt: new Date() },
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // NEW (Oct 7 2026) — usage log: which key was used by which feature, when, with
+  // which free model, and whether it worked. Written by AiProviderService after
+  // EVERY attempt. Logging must never break an AI call, so every method here is
+  // wrapped so that a DB hiccup is swallowed.
+  // ---------------------------------------------------------------------------
+  async logUsage(entry: {
+    keyId?: string | null;
+    keyName: string;
+    feature: string;
+    model?: string | null;
+    success: boolean;
+    errorMessage?: string | null;
+    latencyMs?: number | null;
+  }): Promise<void> {
+    try {
+      await this.prisma.aiUsageLog.create({
+        data: {
+          keyId: entry.keyId ?? null,
+          keyName: entry.keyName.slice(0, 120),
+          feature: entry.feature.slice(0, 60),
+          model: entry.model ?? null,
+          success: entry.success,
+          errorMessage: entry.errorMessage ? entry.errorMessage.slice(0, 500) : null,
+          latencyMs: entry.latencyMs ?? null,
+        },
+      });
+    } catch {
+      /* the log is best-effort only */
+    }
+  }
+
+  /**
+   * One block per key: totals, last used (time + feature + model) and a per-feature
+   * breakdown for the last `days` days. Keys that were never used still appear.
+   */
+  async getUsageSummary(days = 30) {
+    const since = new Date(Date.now() - Math.max(1, Math.min(days, 365)) * 24 * 3600 * 1000);
+    const [keys, grouped] = await Promise.all([
+      this.prisma.adminApiKey.findMany({
+        select: { id: true, keyName: true, provider: true, isActive: true, usageCount: true, failureCount: true, lastUsedAt: true },
+        orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+      }),
+      this.prisma.aiUsageLog.groupBy({
+        by: ['keyId', 'feature', 'success'],
+        where: { createdAt: { gte: since }, keyId: { not: null } },
+        _count: { _all: true },
+        _max: { createdAt: true },
+      }),
+    ]);
+
+    // newest log row of every key (a handful of small queries: keys are few)
+    const lastByKey = new Map<string, { at: Date; feature: string; model: string | null; success: boolean }>();
+    for (const k of keys) {
+      const row = await this.prisma.aiUsageLog.findFirst({
+        where: { keyId: k.id },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true, feature: true, model: true, success: true },
+      });
+      if (row) lastByKey.set(k.id, { at: row.createdAt, feature: row.feature, model: row.model, success: row.success });
+    }
+
+    const featuresByKey = new Map<string, Map<string, { feature: string; calls: number; success: number; failed: number; lastAt: Date | null }>>();
+    for (const g of grouped) {
+      if (!g.keyId) continue;
+      const perKey = featuresByKey.get(g.keyId) ?? new Map();
+      const f = perKey.get(g.feature) ?? { feature: g.feature, calls: 0, success: 0, failed: 0, lastAt: null as Date | null };
+      f.calls += g._count._all;
+      if (g.success) f.success += g._count._all;
+      else f.failed += g._count._all;
+      const at = g._max.createdAt ?? null;
+      if (at && (!f.lastAt || at > f.lastAt)) f.lastAt = at;
+      perKey.set(g.feature, f);
+      featuresByKey.set(g.keyId, perKey);
+    }
+
+    return {
+      days,
+      keys: keys.map((k) => {
+        const last = lastByKey.get(k.id) ?? null;
+        const features = Array.from(featuresByKey.get(k.id)?.values() ?? []).sort((a, b) => b.calls - a.calls);
+        return {
+          id: k.id,
+          keyName: k.keyName,
+          isActive: k.isActive,
+          totalSuccess: k.usageCount,
+          totalFailed: k.failureCount,
+          lastUsedAt: last?.at ?? k.lastUsedAt ?? null,
+          lastFeature: last?.feature ?? null,
+          lastModel: last?.model ?? null,
+          lastSuccess: last?.success ?? null,
+          features,
+        };
+      }),
+    };
+  }
+
+  /** Newest-first log lines, optionally for one key and/or one feature. */
+  async getRecentUsage(opts: { keyId?: string; feature?: string; take?: number; skip?: number } = {}) {
+    const where: Record<string, unknown> = {};
+    if (opts.keyId) where.keyId = opts.keyId;
+    if (opts.feature) where.feature = opts.feature;
+    const take = Math.max(1, Math.min(opts.take ?? 50, 200));
+    const skip = Math.max(0, opts.skip ?? 0);
+    const [rows, total] = await Promise.all([
+      this.prisma.aiUsageLog.findMany({ where, orderBy: { createdAt: 'desc' }, take, skip }),
+      this.prisma.aiUsageLog.count({ where }),
+    ]);
+    return { total, rows };
+  }
+
+  /** Housekeeping: keep the log from growing forever (called by the PYQ worker once a day). */
+  async pruneUsageLog(keepDays = 90): Promise<number> {
+    try {
+      const r = await this.prisma.aiUsageLog.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - keepDays * 24 * 3600 * 1000) } } });
+      return r.count;
+    } catch {
+      return 0;
+    }
   }
 
   async getAlerts(includeResolved = false) {

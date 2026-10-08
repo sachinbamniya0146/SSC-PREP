@@ -996,6 +996,20 @@ export default function AdminPage() {
           >
             🗂️ Questions ko chapter/topic/sub-topic me move, publish ya delete karein — Question Manager →
           </a>
+          {access.isAdmin && (
+          <a
+            href="/admin/pyq-dates"
+            className="mb-3 ml-2 inline-block rounded-lg border border-blue-500/40 bg-blue-500/5 px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-500/10 dark:text-blue-400"
+          >
+            📅 PYQ ki exam date + Tier 1/2 AI se map — Date Mapping status →
+          </a>
+          )}
+          <a
+            href="/admin/pyq-export"
+            className="mb-3 ml-2 inline-block rounded-lg border border-teal-500/40 bg-teal-500/5 px-3 py-1.5 text-xs font-medium text-teal-600 hover:bg-teal-500/10 dark:text-teal-400"
+          >
+            📥 PYQ chapter-wise / subject-wise / exam-wise Excel download →
+          </a>
           </>)}
           {access.can("VOCABULARY") && (
           <a

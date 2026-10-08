@@ -35,6 +35,7 @@ import { SolverModule } from './solver/solver.module';
 import { AIExplanationModule } from './ai-explanation/ai-explanation.module';
 import { AdminApiKeyModule } from './admin-api-keys/admin-api-keys.module';
 import { AiProviderModule } from './ai-provider/ai-provider.module';
+import { PyqDateModule } from './pyq-dates/pyq-date.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { envValidationSchema } from './config/env.validation';
@@ -99,6 +100,7 @@ import { envValidationSchema } from './config/env.validation';
     AIExplanationModule,
     AdminApiKeyModule,
     AiProviderModule,
+    PyqDateModule,
   ],
   controllers: [HealthController],
   providers: [

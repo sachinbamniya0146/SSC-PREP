@@ -25,6 +25,22 @@ interface ApiKeyRow {
   exhaustedAt: string | null;
 }
 interface TestResult { ok: boolean; status: string; message: string; model?: string }
+interface UsageFeature { feature: string; calls: number; success: number; failed: number; lastAt: string | null }
+interface UsageKey { id: string; lastUsedAt: string | null; lastFeature: string | null; lastModel: string | null; lastSuccess: boolean | null; features: UsageFeature[] }
+interface UsageRow { id: string; keyName: string; feature: string; model: string | null; success: boolean; errorMessage: string | null; latencyMs: number | null; createdAt: string }
+
+// readable names for the feature codes written by the backend
+const FEATURE_LABEL: Record<string, string> = {
+  PYQ_DATE_MAPPING: "PYQ date mapping",
+  AI_EXPLANATION: "AI solution / explanation",
+  QUESTION_HINDI_TRANSLATE: "Hindi translation (question edit)",
+  CHAPTER_SUGGEST: "Chapter suggestion (PDF import)",
+  KEY_TEST: "Key test",
+  GENERAL: "Other",
+};
+const featureName = (f: string) => FEATURE_LABEL[f] ?? f;
+const when = (s: string | null) => (s ? new Date(s).toLocaleString() : "kabhi nahi");
+
 interface Alert { id: string; severity: "INFO" | "WARNING" | "CRITICAL"; message: string; messageHindi: string | null }
 
 export default function AdminApiKeysPage() {
@@ -38,15 +54,22 @@ export default function AdminApiKeysPage() {
   const [results, setResults] = React.useState<Record<string, TestResult>>({});
   const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [usage, setUsage] = React.useState<Record<string, UsageKey>>({});
+  const [recent, setRecent] = React.useState<UsageRow[]>([]);
+  const [recentTotal, setRecentTotal] = React.useState(0);
+  const [logFeature, setLogFeature] = React.useState("");
+  const [logKey, setLogKey] = React.useState("");
 
   const load = React.useCallback(async () => {
     try {
-      const [k, a, n, m] = await Promise.all([
+      const [k, a, n, m, u] = await Promise.all([
         api<ApiKeyRow[]>("/admin/api-keys?provider=openrouter"),
         api<Alert[]>("/admin/api-keys/alerts").catch(() => []),
         api<{ next: number }>("/admin/ai/keys/next-number").catch(() => ({ next: 1 })),
         api<{ models: string[] }>("/admin/ai/models").catch(() => ({ models: [] })),
+        api<{ keys: UsageKey[] }>("/admin/api-keys/usage?days=30").catch(() => ({ keys: [] as UsageKey[] })),
       ]);
+      setUsage(Object.fromEntries(u.keys.map((x) => [x.id, x])));
       setKeys(Array.isArray(k) ? k : []);
       setAlerts(Array.isArray(a) ? a : []);
       setNextNo(n.next);
@@ -59,6 +82,20 @@ export default function AdminApiKeysPage() {
   }, []);
 
   React.useEffect(() => { void load(); }, [load]);
+
+  const loadRecent = React.useCallback(async () => {
+    const p = new URLSearchParams({ take: "40" });
+    if (logFeature) p.set("feature", logFeature);
+    if (logKey) p.set("keyId", logKey);
+    try {
+      const d = await api<{ total: number; rows: UsageRow[] }>(`/admin/api-keys/usage/recent?${p.toString()}`);
+      setRecent(d.rows);
+      setRecentTotal(d.total);
+    } catch {
+      setRecent([]);
+    }
+  }, [logFeature, logKey]);
+  React.useEffect(() => { void loadRecent(); }, [loadRecent, keys.length]);
 
   const add = async () => {
     if (!value.trim()) return;
@@ -166,6 +203,19 @@ export default function AdminApiKeysPage() {
                     <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${k.isActive ? "bg-emerald-500/15 text-emerald-700" : "bg-muted text-muted-foreground"}`}>{k.isActive ? "ON" : "OFF"}</span>
                   </div>
                   <p className="mt-1 text-[11px] text-muted-foreground">✅ {k.usageCount} successful · ❌ {k.failureCount} failed{k.lastUsedAt ? ` · last ${new Date(k.lastUsedAt).toLocaleString()}` : ""}</p>
+                  {usage[k.id]?.lastFeature && (
+                    <p className="mt-1 text-[11px]">🕒 Last use: <b>{featureName(usage[k.id].lastFeature!)}</b>{usage[k.id].lastModel ? ` · ${usage[k.id].lastModel}` : ""} · {when(usage[k.id].lastUsedAt)} {usage[k.id].lastSuccess === false ? "· ❌ fail" : "· ✅"}</p>
+                  )}
+                  {(usage[k.id]?.features.length ?? 0) > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {usage[k.id].features.map((f) => (
+                        <button key={f.feature} onClick={() => { setLogFeature(f.feature); setLogKey(k.id); }} className="rounded-full border border-border px-2 py-0.5 text-[10px] hover:bg-muted" title={`last: ${when(f.lastAt)}`}>
+                          {featureName(f.feature)}: {f.calls} (✅{f.success} ❌{f.failed})
+                        </button>
+                      ))}
+                      <span className="text-[10px] text-muted-foreground">pichhle 30 din</span>
+                    </div>
+                  )}
                   {k.lastErrorMessage && !r && <p className="mt-1 text-[11px] text-amber-700">Last error: {k.lastErrorMessage}</p>}
                   {r && <p className={`mt-1 text-xs font-semibold ${r.ok ? "text-emerald-700" : "text-red-700"}`}>{r.message}{r.model ? ` (${r.model})` : ""}</p>}
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -176,6 +226,30 @@ export default function AdminApiKeysPage() {
                 </li>
               );
             })}
+          </ul>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-4">
+          <h2 className="mb-1 text-sm font-bold">Key usage log — kis feature me kab use hui</h2>
+          <p className="mb-2 text-xs text-muted-foreground">Har AI call yahan likhi jaati hai (key, feature, free model, success/fail). 90 din ka record rehta hai.</p>
+          <div className="mb-2 flex flex-wrap gap-2">
+            <select className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs" value={logKey} onChange={(e) => setLogKey(e.target.value)}>
+              <option value="">Sab keys</option>{keys.map((k) => <option key={k.id} value={k.id}>{k.keyName}</option>)}
+            </select>
+            <select className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs" value={logFeature} onChange={(e) => setLogFeature(e.target.value)}>
+              <option value="">Sab features</option>{Object.entries(FEATURE_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+            <button onClick={() => void loadRecent()} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold">Refresh</button>
+            <span className="self-center text-[11px] text-muted-foreground">{recentTotal} entries</span>
+          </div>
+          <ul className="max-h-96 space-y-1 overflow-y-auto text-xs">
+            {recent.map((r) => (
+              <li key={r.id} className={`rounded px-2 py-1 ${r.success ? "bg-emerald-500/5" : "bg-red-500/5"}`}>
+                {r.success ? "✅" : "❌"} <b>{featureName(r.feature)}</b> · {r.keyName} · <span className="font-mono">{r.model ?? "—"}</span> · {when(r.createdAt)}{r.latencyMs != null ? ` · ${(r.latencyMs / 1000).toFixed(1)}s` : ""}
+                {r.errorMessage && <span className="block text-[11px] text-amber-700">{r.errorMessage}</span>}
+              </li>
+            ))}
+            {recent.length === 0 && <li className="text-muted-foreground">Abhi koi usage record nahi.</li>}
           </ul>
         </section>
 

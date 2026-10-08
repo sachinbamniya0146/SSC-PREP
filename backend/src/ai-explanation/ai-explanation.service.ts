@@ -210,7 +210,7 @@ Respond ONLY as JSON, no markdown fences, in exactly this shape:
     userOpenRouterKey?: string,
   ) {
     const prompt = this.buildPrompt(question);
-    const result = await this.aiProvider.generate(prompt, { userApiKey: userOpenRouterKey, jsonResponse: true });
+    const result = await this.aiProvider.generate(prompt, { userApiKey: userOpenRouterKey, jsonResponse: true, feature: 'AI_EXPLANATION' });
     const parsed = this.parseGenerated(result.content);
 
     await this.prisma.question.update({

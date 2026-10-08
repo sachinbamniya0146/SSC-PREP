@@ -6,6 +6,25 @@ export interface AiGenerateResult {
   model: string;
   source: 'USER_KEY' | 'ADMIN_KEY';
   adminKeyId?: string;
+  adminKeyName?: string;
+}
+
+/** Options every caller can pass. `feature` is what the admin sees in the key usage log. */
+export interface AiGenerateOptions {
+  userApiKey?: string | null;
+  provider?: string;
+  jsonResponse?: boolean;
+  maxTokens?: number;
+  /** NEW (Oct 7 2026): name of the feature that makes the call, e.g. 'AI_EXPLANATION'. Logged per key. */
+  feature?: string;
+  /** NEW: start the free-model list at another position, so repeated verification passes use different models. */
+  modelOffset?: number;
+}
+
+function rotateModels(list: string[], offset?: number): string[] {
+  if (!offset || list.length < 2) return list;
+  const k = ((offset % list.length) + list.length) % list.length;
+  return [...list.slice(k), ...list.slice(0, k)];
 }
 
 export interface KeyTestResult {
@@ -89,15 +108,23 @@ export class AiProviderService {
    * the admin key pool (free models only). A rate-limited key just rests for a minute and the
    * next key is used; ONLY a key that OpenRouter rejects as invalid is switched off.
    */
-  async generate(
-    prompt: string,
-    opts: { userApiKey?: string | null; provider?: string; jsonResponse?: boolean; maxTokens?: number } = {},
-  ): Promise<AiGenerateResult> {
+  async generate(prompt: string, opts: AiGenerateOptions = {}): Promise<AiGenerateResult> {
     const provider = opts.provider ?? 'openrouter';
-    const models = await this.getFreeModels();
+    const feature = (opts.feature || 'GENERAL').toUpperCase();
+    const models = rotateModels(await this.getFreeModels(), opts.modelOffset);
 
     if (opts.userApiKey) {
+      const t0 = Date.now();
       const result = await this.tryModels(opts.userApiKey, prompt, models, opts);
+      await this.adminApiKeys.logUsage({
+        keyId: null,
+        keyName: 'Student own key',
+        feature,
+        model: result.content ? result.model : null,
+        success: !!result.content,
+        errorMessage: result.content ? null : result.detail || result.reason || 'failed',
+        latencyMs: Date.now() - t0,
+      });
       if (result.content) return { content: result.content, model: result.model!, source: 'USER_KEY' };
       this.logger.warn('User-supplied OpenRouter key failed on all free models; falling back to admin pool.');
     }
@@ -112,28 +139,42 @@ export class AiProviderService {
     const ordered = [...pool].sort((a, b) => Number((this.cooldown.get(a.id) ?? 0) > now) - Number((this.cooldown.get(b.id) ?? 0) > now));
 
     for (const key of ordered) {
+      const t0 = Date.now();
       const result = await this.tryModels(key.apiKey, prompt, models, opts);
+      const latencyMs = Date.now() - t0;
       if (result.content) {
         this.cooldown.delete(key.id);
         await this.adminApiKeys.reportUsage(key.id, true);
-        return { content: result.content, model: result.model!, source: 'ADMIN_KEY', adminKeyId: key.id };
+        await this.adminApiKeys.logUsage({ keyId: key.id, keyName: key.keyName, feature, model: result.model, success: true, latencyMs });
+        return { content: result.content, model: result.model!, source: 'ADMIN_KEY', adminKeyId: key.id, adminKeyName: key.keyName };
       }
       if (result.reason === 'rate_limited') this.cooldown.set(key.id, Date.now() + KEY_COOLDOWN_MS);
-      await this.adminApiKeys.reportUsage(key.id, false, {
-        exhausted: result.reason === 'dead',
-        errorMessage: result.detail || (result.reason === 'dead' ? 'OpenRouter ne key reject ki (invalid / no credit)' : 'free models abhi busy (rate limit) — thodi der baad dobara chalegi'),
-      });
+      const errorMessage = result.detail || (result.reason === 'dead' ? 'OpenRouter ne key reject ki (invalid / no credit)' : 'free models abhi busy (rate limit) — thodi der baad dobara chalegi');
+      await this.adminApiKeys.reportUsage(key.id, false, { exhausted: result.reason === 'dead', errorMessage });
+      await this.adminApiKeys.logUsage({ keyId: key.id, keyName: key.keyName, feature, model: null, success: false, errorMessage, latencyMs });
     }
 
     throw new ServiceUnavailableException('Sabhi AI keys abhi busy ya band hain. Thodi der baad try karein ya nayi key add karein.');
   }
 
   /** "Test key" button: one tiny real request. Never throws. */
-  async testKey(apiKey: string): Promise<KeyTestResult> {
+  async testKey(apiKey: string, ctx?: { keyId?: string; keyName?: string }): Promise<KeyTestResult> {
     const key = String(apiKey || '').trim();
     if (!key) return { ok: false, status: 'error', message: 'Key khaali hai.' };
     const models = await this.getFreeModels();
+    const t0 = Date.now();
     const r = await this.tryModels(key, 'Reply with exactly one word: OK', models, { maxTokens: 16 });
+    if (ctx?.keyName) {
+      await this.adminApiKeys.logUsage({
+        keyId: ctx.keyId ?? null,
+        keyName: ctx.keyName,
+        feature: 'KEY_TEST',
+        model: r.content ? r.model : null,
+        success: !!r.content,
+        errorMessage: r.content ? null : r.detail || r.reason || 'failed',
+        latencyMs: Date.now() - t0,
+      });
+    }
     if (r.content) return { ok: true, status: 'working', message: 'Key sahi chal rahi hai ✅', model: r.model };
     if (r.reason === 'dead') return { ok: false, status: 'invalid', message: r.detail || 'OpenRouter ne key accept nahi ki (galat ya band key).' };
     if (r.reason === 'rate_limited') return { ok: false, status: 'rate_limited', message: 'Key sahi hai par free models abhi busy hain — thodi der baad phir test karein.' };

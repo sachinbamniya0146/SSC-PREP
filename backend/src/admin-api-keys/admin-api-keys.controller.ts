@@ -30,6 +30,32 @@ export class AdminApiKeyController {
     return this.apiKeysService.getPoolHealth();
   }
 
+  /**
+   * NEW (Oct 7 2026) — per key: last used time + which feature + which free model, and a
+   * per-feature breakdown for the last ?days= days (default 30).
+   */
+  @Get('usage')
+  async getUsage(@Query('days') days?: string) {
+    const d = days ? parseInt(days, 10) : 30;
+    return this.apiKeysService.getUsageSummary(Number.isFinite(d) && d > 0 ? d : 30);
+  }
+
+  /** NEW — newest-first usage log lines; filter with ?keyId= and/or ?feature=. */
+  @Get('usage/recent')
+  async getRecentUsage(
+    @Query('keyId') keyId?: string,
+    @Query('feature') feature?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.apiKeysService.getRecentUsage({
+      keyId: keyId || undefined,
+      feature: feature || undefined,
+      take: take ? parseInt(take, 10) || 50 : 50,
+      skip: skip ? parseInt(skip, 10) || 0 : 0,
+    });
+  }
+
   /** Unresolved (or, with ?all=1, every) low-key / exhausted-key alerts. */
   @Get('alerts')
   async getAlerts(@Query('all') all?: string) {

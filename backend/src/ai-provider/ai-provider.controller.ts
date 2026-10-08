@@ -39,6 +39,14 @@ export class AiProviderController {
     // a key OpenRouter itself rejects is not saved; a merely busy key is saved (it works later)
     if (test.status === 'invalid') throw new BadRequestException(test.message);
     const created = await this.keys.addNumbered(apiKey, user.userId, 'openrouter');
+    await this.keys.logUsage({
+      keyId: created.id,
+      keyName: created.keyName,
+      feature: 'KEY_TEST',
+      model: test.model ?? null,
+      success: test.ok,
+      errorMessage: test.ok ? null : test.message,
+    });
     if (test.ok) await this.keys.markHealthy(created.id);
     const next = await this.keys.nextKeyNumber('openrouter');
     return { key: created, test, next };
@@ -46,8 +54,8 @@ export class AiProviderController {
 
   @Post('keys/:id/test')
   async testSaved(@Param('id') id: string) {
-    const raw = await this.keys.getRawKey(id);
-    const test = await this.ai.testKey(raw);
+    const raw = await this.keys.getRawKeyWithName(id);
+    const test = await this.ai.testKey(raw.apiKey, { keyId: id, keyName: raw.keyName });
     if (test.ok) await this.keys.markHealthy(id);
     else await this.keys.markBroken(id, test.message);
     return test;

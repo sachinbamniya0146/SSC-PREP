@@ -603,7 +603,7 @@ export class QuestionEditService {
       JSON.stringify(payload),
     ].join('\n');
 
-    const result = await this.aiProvider.generate(prompt, { jsonResponse: true });
+    const result = await this.aiProvider.generate(prompt, { jsonResponse: true, feature: 'QUESTION_HINDI_TRANSLATE' });
     const parsed = this.parseJsonLoose(result.content);
     if (!parsed) throw new BadRequestException('AI ka jawab samajh nahi aaya — dobara try karein.');
     const opts: Record<string, string> = {};

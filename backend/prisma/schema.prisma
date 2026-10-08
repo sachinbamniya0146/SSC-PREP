@@ -501,6 +501,10 @@ model Question {
   // NEW (Sep 29 2026): real exam date of a PYQ paper, "YYYY-MM-DD". Lets a
   // shift be identified as exam + date + shift + year straight from the Excel.
   examDate           String?
+  // NEW (Oct 7 2026): which tier of the exam this PYQ came from — "TIER_1" | "TIER_2".
+  // Filled by the PYQ date-mapping worker (or typed by admin), shown in the admin
+  // PYQ export. Nullable: practice questions and older PYQs simply have no tier yet.
+  examTier           String?
 
   questionText       String
   questionTextHindi  String?
@@ -581,6 +585,7 @@ model Question {
   reviewCards        ReviewCard[]
   errorReports       QuestionErrorReport[]
   explanationVotes   ExplanationVote[]
+  pyqDateMap         PyqDateMap?
 
   @@index([subjectId, examId, year, shift])
   @@index([searchHash])
@@ -1815,4 +1820,75 @@ model ExplanationVote {
   @@unique([questionId, userId])
   @@index([questionId, vote])
   @@map("explanation_votes")
+}
+
+// ================= AI KEY USAGE LOG (NEW Oct 7 2026) =================
+// One row per AI request attempt, so the admin can see for EVERY OpenRouter key
+// which feature used it, when, with which free model and whether it worked.
+// No foreign key on purpose: the history must survive a deleted key.
+model AiUsageLog {
+  id           String   @id @default(uuid())
+  keyId        String?  // AdminApiKey.id (null = a student's own key)
+  keyName      String   // snapshot of the key name at that moment
+  feature      String   // e.g. PYQ_DATE_MAPPING | AI_EXPLANATION | QUESTION_EDIT_AI | PDF_INGESTION | KEY_TEST
+  model        String?  // free model that answered (null when the attempt failed)
+  success      Boolean
+  errorMessage String?
+  latencyMs    Int?
+  createdAt    DateTime @default(now())
+
+  @@index([keyId, createdAt])
+  @@index([feature, createdAt])
+  @@index([createdAt])
+  @@map("ai_usage_logs")
+}
+
+// ================= PYQ DATE MAPPING (NEW Oct 7 2026) =================
+// One row per PYQ question that the date-mapping worker looks at. The worker searches
+// the internet for the question, asks a FREE OpenRouter model to read the evidence
+// (5 independent passes) and only when enough passes agree - and the date's year equals
+// the question's year - the date is written to Question.examDate.
+model PyqDateMap {
+  id            String    @id @default(uuid())
+  questionId    String    @unique
+  // PENDING | RUNNING | MAPPED | NEEDS_REVIEW | NOT_FOUND | FAILED | MANUAL
+  status        String    @default("PENDING")
+  examTier      String?   // TIER_1 | TIER_2
+  proposedDate  String?   // YYYY-MM-DD voted by the passes (even when not applied)
+  proposedYear  Int?
+  agreeCount    Int       @default(0)
+  passesDone    Int       @default(0)
+  confidence    Float?    // 0-1
+  note          String?   // human readable reason (why review / why not found)
+  passesJson    Json?     // full detail of every pass (query, sources, model, answer, verdict)
+  sourcesJson   Json?     // best source urls
+  attempts      Int       @default(0)
+  lastError     String?
+  verifyExisting Boolean  @default(false) // question already had a date: only check it, never overwrite
+  nextRunAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  appliedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextRunAt])
+  @@index([updatedAt])
+  @@map("pyq_date_maps")
+}
+
+// Single row (id = "default") with the worker settings the admin can change from the UI.
+model PyqDateConfig {
+  id             String    @id @default("default")
+  autoRun        Boolean   @default(true)
+  minAgeMinutes  Int       @default(5)   // a freshly uploaded question waits this long before it is searched
+  batchSize      Int       @default(2)   // questions processed per worker tick
+  passes         Int       @default(5)   // independent verification passes per question (3-5)
+  lastTickAt     DateTime?
+  lastMessage    String?
+  updatedAt      DateTime  @updatedAt
+
+  @@map("pyq_date_configs")
 }
