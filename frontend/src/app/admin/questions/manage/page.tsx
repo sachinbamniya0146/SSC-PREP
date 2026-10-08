@@ -169,7 +169,42 @@ export default function QuestionManagerPage() {
   const [exportFormat, setExportFormat] = React.useState<"excel" | "csv">("excel");
   const [exportSplit, setExportSplit] = React.useState<"none" | "subject" | "chapter" | "subject_chapter" | "year" | "shift" | "exam">("none");
   const [exporting, setExporting] = React.useState(false);
-  const downloadFiltered = async () => {
+
+  // Chapter picker (Oct 7 2026): choose a subject -> its chapters appear with question counts -> tick chapters -> download.
+  type ChapterRow = { id: string; name: string; nameHindi: string | null; total: number; visible: number };
+  const [chapterRows, setChapterRows] = React.useState<ChapterRow[]>([]);
+  const [noChapterCount, setNoChapterCount] = React.useState(0);
+  const [picked, setPicked] = React.useState<Set<string>>(new Set());
+  const [chaptersLoading, setChaptersLoading] = React.useState(false);
+  React.useEffect(() => {
+    if (!subjectId) {
+      setChapterRows([]);
+      setNoChapterCount(0);
+      setPicked(new Set());
+      return;
+    }
+    const t = setTimeout(async () => {
+      setChaptersLoading(true);
+      try {
+        const p = buildQuery(0);
+        for (const k of ["skip", "take", "chapterId", "topicId", "subTopicId"]) p.delete(k);
+        const r = await fetchAuth(`${API_BASE}/bank/admin/manage/chapter-counts?${p.toString()}`);
+        if (r.ok) {
+          const d = await r.json();
+          const rows: ChapterRow[] = d.chapters ?? [];
+          setChapterRows(rows);
+          setNoChapterCount(d.noChapter ?? 0);
+          setPicked((prev) => new Set(Array.from(prev).filter((id) => rows.some((c) => c.id === id))));
+        }
+      } catch {
+        /* the picker is optional; the normal Download still works */
+      } finally {
+        setChaptersLoading(false);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [subjectId, buildQuery]);
+  const downloadFiltered = async (o?: { split?: "none" | "subject" | "chapter" | "subject_chapter" | "year" | "shift" | "exam"; chapterIds?: string[]; format?: "excel" | "csv" }) => {
     setExporting(true);
     setError("");
     setInfo("");
@@ -177,8 +212,17 @@ export default function QuestionManagerPage() {
       const p = buildQuery(0);
       p.delete("skip");
       p.delete("take");
-      p.set("format", exportFormat);
-      p.set("split", exportFormat === "excel" ? exportSplit : "none");
+      const fmt = o?.format ?? exportFormat;
+      const split = o?.split ?? (fmt === "excel" ? exportSplit : "none");
+      // chapters ticked in the chapter picker replace the single chapter / topic filters
+      if (o?.chapterIds && o.chapterIds.length > 0) {
+        p.delete("chapterId");
+        p.delete("topicId");
+        p.delete("subTopicId");
+        p.set("chapterIds", o.chapterIds.join(","));
+      }
+      p.set("format", fmt);
+      p.set("split", fmt === "excel" ? split : "none");
       if (includeAll) p.set("includeAll", "1");
       const r = await fetchAuth(`${API_BASE}/bank/admin/manage/export?${p.toString()}`);
       if (!r.ok) {
@@ -188,7 +232,7 @@ export default function QuestionManagerPage() {
       const exported = r.headers.get("X-Export-Exported");
       const totalMatch = r.headers.get("X-Export-Total");
       const capped = r.headers.get("X-Export-Capped") === "1";
-      let name = `questions.${exportFormat === "excel" ? (exportSplit === "subject_chapter" ? "zip" : "xlsx") : "csv"}`;
+      let name = `questions.${fmt === "excel" ? (split === "subject_chapter" ? "zip" : "xlsx") : "csv"}`;
       const cd = r.headers.get("Content-Disposition") || "";
       const m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
       if (m) { try { name = decodeURIComponent(m[1]); } catch { /* keep default */ } }
@@ -466,7 +510,7 @@ export default function QuestionManagerPage() {
           <label className="flex items-center gap-1 text-xs text-muted-foreground" title="Normal download me sirf live questions aate hain (jo students ko dikhte hain)">
             <input type="checkbox" checked={includeAll} onChange={(e) => setIncludeAll(e.target.checked)} /> Pending / hidden bhi shamil karein
           </label>
-          <button onClick={downloadFiltered} disabled={exporting || (includeAll ? total : visibleTotal) === 0} className="rounded-lg bg-primary px-3 py-1.5 font-semibold text-primary-foreground disabled:opacity-40">
+          <button onClick={() => downloadFiltered()} disabled={exporting || (includeAll ? total : visibleTotal) === 0} className="rounded-lg bg-primary px-3 py-1.5 font-semibold text-primary-foreground disabled:opacity-40">
             {exporting ? "Ban raha hai…" : "Download karein"}
           </button>
           <span className="w-full text-xs text-muted-foreground">
@@ -474,6 +518,80 @@ export default function QuestionManagerPage() {
             {!includeAll && total > visibleTotal ? ` (Filter me ${total - visibleTotal} questions pending/hidden hain — wo is download me nahi aayenge.)` : ""}
           </span>
         </div>
+
+        {/* Chapter picker: subject selected -> its chapters with counts -> tick -> download */}
+        {subjectId && (
+          <div className="mb-4 rounded-xl border border-border bg-card p-3 text-sm">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="font-semibold">📚 Chapter chunkar download</span>
+              <span className="text-xs text-muted-foreground">
+                {taxonomy.find((x) => x.id === subjectId)?.name} ke chapters — {includeAll ? "total" : "students ko dikhne wale"} questions ke saath
+              </span>
+              {chaptersLoading && <span className="text-xs text-muted-foreground">load ho raha hai…</span>}
+              {chapterRows.length > 0 && (
+                <button
+                  onClick={() => setPicked(picked.size === chapterRows.length ? new Set() : new Set(chapterRows.map((c) => c.id)))}
+                  className="ml-auto rounded-lg border border-border px-2 py-1 text-xs font-medium hover:bg-muted"
+                >
+                  {picked.size === chapterRows.length ? "Sab hatayein" : "Sab chapter chunein"}
+                </button>
+              )}
+            </div>
+            {chapterRows.length === 0 && !chaptersLoading && (
+              <p className="text-xs text-muted-foreground">Is subject me (upar ke filters ke saath) koi chapter wale questions nahi mile.</p>
+            )}
+            <div className="grid max-h-72 gap-1 overflow-y-auto sm:grid-cols-2">
+              {chapterRows.map((c) => {
+                const cnt = includeAll ? c.total : c.visible;
+                return (
+                  <label key={c.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${picked.has(c.id) ? "border-primary bg-primary/10" : "border-border"}`}>
+                    <input
+                      type="checkbox"
+                      checked={picked.has(c.id)}
+                      onChange={() => setPicked((prev) => { const n = new Set(prev); if (n.has(c.id)) n.delete(c.id); else n.add(c.id); return n; })}
+                    />
+                    <span className="min-w-0 flex-1 truncate" title={c.name}>{c.name}</span>
+                    <span className="whitespace-nowrap text-xs font-semibold">{cnt}</span>
+                    {!includeAll && c.total > c.visible && (
+                      <span className="whitespace-nowrap text-[10px] text-amber-700 dark:text-amber-400" title="Pending / hidden — normal download me nahi aate">+{c.total - c.visible} pending</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); downloadFiltered({ chapterIds: [c.id], split: "none", format: "excel" }); }}
+                      disabled={exporting || cnt === 0}
+                      className="rounded border border-border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-40"
+                      title={`Sirf "${c.name}" ki Excel`}
+                    >⬇️</button>
+                  </label>
+                );
+              })}
+            </div>
+            {noChapterCount > 0 && (
+              <p className="mt-1 text-[11px] text-muted-foreground">{noChapterCount} questions ka chapter set nahi hai — wo is list me nahi hain.</p>
+            )}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold">{picked.size} chapter chune</span>
+              <button
+                disabled={exporting || picked.size === 0}
+                onClick={() => downloadFiltered({ chapterIds: Array.from(picked), split: "none", format: "excel" })}
+                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-40"
+                title="Chune hue sabhi chapters ke questions ek hi sheet me merge"
+              >⬇️ Ek Excel (merge)</button>
+              <button
+                disabled={exporting || picked.size === 0}
+                onClick={() => downloadFiltered({ chapterIds: Array.from(picked), split: "chapter", format: "excel" })}
+                className="rounded-lg border border-primary/50 px-3 py-1.5 text-xs font-semibold text-primary disabled:opacity-40"
+                title="Ek file me, har chapter ki alag sheet"
+              >⬇️ Chapter-wise sheets</button>
+              <button
+                disabled={exporting || picked.size === 0}
+                onClick={() => downloadFiltered({ chapterIds: Array.from(picked), split: "subject_chapter", format: "excel" })}
+                className="rounded-lg border border-primary/50 px-3 py-1.5 text-xs font-semibold text-primary disabled:opacity-40"
+                title="ZIP: subject ka folder, har chapter ki alag Excel file"
+              >⬇️ Chapter-wise ZIP</button>
+            </div>
+          </div>
+        )}
 
         {/* Bulk actions */}
         <div className="mb-4 rounded-xl border border-border bg-card p-4">

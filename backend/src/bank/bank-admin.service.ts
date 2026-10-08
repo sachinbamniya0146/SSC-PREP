@@ -54,6 +54,8 @@ export interface AdminQuestionFilter {
   q?: string;
   /** filled by withSearch(): ids whose question / options / solution contain EVERY word of `q` (any order) */
   searchIds?: string[];
+  /** several chapters at once (Download picker: tick chapters of one subject) — used only when chapterId is empty */
+  chapterIds?: string[];
 }
 
 export interface MoveTarget {
@@ -91,6 +93,8 @@ export class BankAdminService {
     f.examId = str(raw?.examId);
     f.subjectId = str(raw?.subjectId);
     f.chapterId = str(raw?.chapterId);
+    const chIds = str(raw?.chapterIds);
+    if (chIds) f.chapterIds = chIds.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 300);
     f.topicId = str(raw?.topicId);
     f.subTopicId = str(raw?.subTopicId);
     f.batchId = str(raw?.batchId);
@@ -109,7 +113,7 @@ export class BankAdminService {
   }
 
   isEmptyFilter(f: AdminQuestionFilter): boolean {
-    return !(f.examId || f.subjectId || f.chapterId || f.topicId || f.subTopicId || f.kind || f.batchId || f.status || f.year || f.shift || f.examDate || f.hasImage || f.q);
+    return !(f.examId || f.subjectId || f.chapterId || (f.chapterIds && f.chapterIds.length) || f.topicId || f.subTopicId || f.kind || f.batchId || f.status || f.year || f.shift || f.examDate || f.hasImage || f.q);
   }
 
   /**
@@ -143,12 +147,48 @@ export class BankAdminService {
     }
   }
 
+  /**
+   * Oct 7 2026 — chapter list of the selected subject WITH question counts, for the Download picker
+   * ("subject chunu, uske chapters dikhen, chapter tick karke download karun").
+   * Uses every other active filter (exam, year, shift, PYQ/Practice, status, search...) but ignores the
+   * chapter / topic / sub-topic filters, so the counts show what each chapter would give.
+   * visible = what students can see (what Download exports by default); total = everything incl. pending/hidden.
+   */
+  async chapterCounts(filter: AdminQuestionFilter) {
+    const f0 = await this.withSearch(filter);
+    const f: AdminQuestionFilter = { ...f0, chapterId: undefined, chapterIds: undefined, topicId: undefined, subTopicId: undefined };
+    const where = this.buildWhere(f);
+    const [totals, visibles] = await Promise.all([
+      this.prisma.question.groupBy({ by: ['chapterId'], where, _count: { _all: true } }),
+      this.prisma.question.groupBy({ by: ['chapterId'], where: { AND: [where, PUBLISHED_QUESTION_WHERE] }, _count: { _all: true } }),
+    ]);
+    const visMap = new Map<string | null, number>(visibles.map((v) => [v.chapterId, v._count._all]));
+    const ids = totals.map((t) => t.chapterId).filter((x): x is string => !!x);
+    const chapters = ids.length
+      ? await this.prisma.chapter.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, nameHindi: true } })
+      : [];
+    const nameOf = new Map(chapters.map((c) => [c.id, c]));
+    const rows = totals
+      .filter((t) => !!t.chapterId)
+      .map((t) => ({
+        id: t.chapterId as string,
+        name: nameOf.get(t.chapterId as string)?.name ?? '(deleted chapter)',
+        nameHindi: nameOf.get(t.chapterId as string)?.nameHindi ?? null,
+        total: t._count._all,
+        visible: visMap.get(t.chapterId) ?? 0,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const noChapter = totals.find((t) => !t.chapterId)?._count._all ?? 0;
+    return { chapters: rows, noChapter, capped: f0.searchIds?.length === 5000 };
+  }
+
   buildWhere(f: AdminQuestionFilter): Prisma.QuestionWhereInput {
     const where: Prisma.QuestionWhereInput = {};
     const and: Prisma.QuestionWhereInput[] = [];
     if (f.examId) where.examId = f.examId;
     if (f.subjectId) where.subjectId = f.subjectId;
     if (f.chapterId) where.chapterId = f.chapterId;
+    else if (f.chapterIds && f.chapterIds.length) where.chapterId = { in: f.chapterIds };
     if (f.topicId) where.topicId = f.topicId === 'none' ? null : f.topicId;
     if (f.subTopicId) where.subTopicId = f.subTopicId === 'none' ? null : f.subTopicId;
     if (f.batchId) where.uploadBatchId = f.batchId;

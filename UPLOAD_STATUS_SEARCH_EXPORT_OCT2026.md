@@ -17,3 +17,8 @@ Migration: 20261007100000_upload_batch_status (deploy me prisma migrate deploy s
   Upload ka history row file parse hote hi ban jata hai (Chal raha hai %), bade file me bhi live. Agar kuch rows ka hisaab na mile to warning dikhti hai.
 - History ke buttons ab alag row me, badi aur saaf labels ke saath; date chhoti.
 - Migration: 20261007110000_upload_batch_skipped
+
+## Update 3 (Oct 7 2026) - Chapter picker download
+Question Manager me subject chunne par "Chapter chunkar download" panel aata hai: us subject ke chapters + question count (students ko dikhne wale),
+chapters tick karo, phir: ek Excel (merge) / chapter-wise sheets / chapter-wise ZIP. Har chapter ke saamne alag ⬇️ bhi hai.
+Counts upar ke baaki filters (exam / year / shift / PYQ-Practice / search) ke hisaab se badalte hain.

@@ -50,6 +50,13 @@ export class BankAdminController {
     res.send(out.buffer);
   }
 
+  // GET /bank/admin/manage/chapter-counts?subjectId=..&<other filters>  (Oct 7 2026)
+  // -> { chapters: [{ id, name, nameHindi, total, visible }], noChapter } for the Download chapter picker
+  @Get('chapter-counts')
+  chapterCounts(@Query() q: any) {
+    return this.admin.chapterCounts(this.admin.parseFilter(q));
+  }
+
   @Get('stats')
   stats(@Query('examId') examId?: string) {
     return this.admin.stats(examId || undefined);
