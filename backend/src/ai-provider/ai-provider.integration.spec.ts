@@ -12,6 +12,8 @@ let server: http.Server;
 let base = '';
 let handler: Handler;
 let hits: Array<{ key: string; model: string; path: string }> = [];
+// what GET /key answers per api key (default: key is valid)
+let keyStatus: (key: string) => { status: number; body?: unknown } = () => ({ status: 200, body: { data: { limit_remaining: null } } });
 
 const chat = (content: string) => ({ choices: [{ message: { content } }] });
 
@@ -25,6 +27,12 @@ beforeAll(async () => {
         return void res.end(JSON.stringify({ data: ['m1:free', 'm2:free'].map((id) => ({ id, pricing: { prompt: '0', completion: '0' }, architecture: { output_modalities: ['text'] }, context_length: 8000 })) }));
       }
       const key = String(req.headers.authorization || '').replace('Bearer ', '');
+      if (req.url?.endsWith('/key')) {
+        const k = keyStatus(key);
+        res.statusCode = k.status;
+        res.setHeader('content-type', 'application/json');
+        return void res.end(JSON.stringify(k.body ?? {}));
+      }
       const model = (JSON.parse(body || '{}').model as string) || '';
       hits.push({ key, model, path: req.url || '' });
       const r = handler({ key, model, n: hits.length, path: req.url || '' });
@@ -44,21 +52,28 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((ok) => server.close(() => ok())));
 beforeEach(() => {
   hits = [];
+  keyStatus = () => ({ status: 200, body: { data: { limit_remaining: null } } });
   delete process.env.OPENAI_BASE_URL;
   delete process.env.OPENAI_API_KEY;
   delete process.env.OPENROUTER_MODEL;
 });
 
-function make(keys: Array<{ id: string; apiKey: string; keyName: string }>) {
+function make(keys: Array<{ id: string; apiKey: string; keyName: string }>, off: Array<{ id: string; apiKey: string; keyName: string; manual?: boolean }> = []) {
   const usage: Array<{ id: string; ok: boolean; exhausted?: boolean }> = [];
   const logs: Array<Record<string, unknown>> = [];
+  const healed: string[] = [];
   const fake = {
     getRotationPool: async () => keys,
-    getKeys: async () => keys.map((k) => ({ ...k, isActive: true, isPrimary: false, lastErrorMessage: null, exhaustedAt: null })),
+    getKeys: async () => [
+      ...keys.map((k) => ({ ...k, isActive: true, isPrimary: false, lastErrorMessage: null, exhaustedAt: null })),
+      ...off.map((k) => ({ ...k, isActive: false, isPrimary: false, lastErrorMessage: '403', exhaustedAt: k.manual ? null : new Date() })),
+    ],
+    getRawKeyWithName: async (id: string) => off.find((k) => k.id === id) ?? keys.find((k) => k.id === id),
+    markHealthy: async (id: string) => void healed.push(id),
     reportUsage: async (id: string, ok: boolean, o?: { exhausted?: boolean }) => void usage.push({ id, ok, exhausted: o?.exhausted }),
     logUsage: async (l: Record<string, unknown>) => void logs.push(l),
   };
-  return { svc: new AiProviderService(fake as never), usage, logs };
+  return { svc: new AiProviderService(fake as never), usage, logs, healed };
 }
 const K1 = { id: 'k1', apiKey: 'sk-or-v1-KEYONE1234567890', keyName: 'Key 1' };
 const K2 = { id: 'k2', apiKey: 'sk-or-v1-KEYTWO1234567890', keyName: 'Key 2' };
@@ -81,13 +96,60 @@ describe('provider against a mock OpenRouter', () => {
     expect(usage.every((u) => !u.exhausted)).toBe(true);
   });
 
-  it('401 -> key reported dead, next key is used', async () => {
+  it('401 + OpenRouter says the key is invalid -> key reported dead, next key is used', async () => {
+    keyStatus = (key) => (key === K1.apiKey ? { status: 401, body: { error: 'no auth' } } : { status: 200, body: { data: {} } });
     handler = ({ key }) => (key === K1.apiKey ? { status: 401, body: { error: `invalid api key ${K1.apiKey}` } } : { body: chat('ok2') });
     const { svc, usage, logs } = make([K1, K2]);
     const r = await svc.generate('q');
     expect(r.adminKeyId).toBe('k2');
     expect(usage.find((u) => u.id === 'k1')).toMatchObject({ ok: false, exhausted: true });
     expect(JSON.stringify(logs)).not.toContain('KEYONE1234567890'); // keys never reach the usage log
+  });
+
+  it('403 from a model while the key is VALID -> next model is tried and the key stays alive (the old bug)', async () => {
+    handler = ({ model }) => (model === 'm1:free' ? { status: 403, body: { error: { message: 'model refused' } } } : { body: chat('answered by m2') });
+    const { svc, usage } = make([K1]);
+    const r = await svc.generate('q');
+    expect(r.model).toBe('m2:free');
+    expect(usage.every((u) => !u.exhausted)).toBe(true);
+  });
+
+  it('403 on EVERY model but key valid -> failure message, key NOT switched off', async () => {
+    handler = () => ({ status: 403, body: { error: 'nope' } });
+    const { svc, usage } = make([K1]);
+    await expect(svc.generate('q')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(usage.length).toBe(1);
+    expect(usage[0]).toMatchObject({ ok: false, exhausted: false });
+  });
+
+  it('403 and /key unreachable (5xx) -> still not called dead', async () => {
+    keyStatus = () => ({ status: 503 });
+    handler = () => ({ status: 403, body: {} });
+    const { svc, usage } = make([K1]);
+    await expect(svc.generate('q')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(usage[0]).toMatchObject({ exhausted: false });
+  });
+
+  it('key spend limit reached -> key rests, not dead', async () => {
+    keyStatus = () => ({ status: 200, body: { data: { limit_remaining: 0 } } });
+    handler = () => ({ status: 402, body: {} });
+    const { svc, usage } = make([K1]);
+    await expect(svc.generate('q')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(usage[0]).toMatchObject({ exhausted: false });
+  });
+
+  it('reviveKeys: auto-disabled key that works again is switched on; manual-OFF and truly invalid stay off', async () => {
+    handler = () => ({ body: chat('OK') });
+    const OFF1 = { id: 'o1', apiKey: 'sk-or-v1-OFFONE1234567890', keyName: 'Was killed by 403' };
+    const OFF2 = { id: 'o2', apiKey: 'sk-or-v1-OFFTWO1234567890', keyName: 'Really invalid' };
+    const OFF3 = { id: 'o3', apiKey: 'sk-or-v1-OFFTHREE1234567890', keyName: 'Admin switched off', manual: true };
+    keyStatus = (key) => (key === OFF2.apiKey ? { status: 401 } : { status: 200, body: { data: {} } });
+    const orig = handler;
+    handler = ({ key }) => (key === OFF2.apiKey ? { status: 401, body: { error: 'invalid api key' } } : orig({ key, model: '', n: 0, path: '' }));
+    const { svc, healed } = make([], [OFF1, OFF2, OFF3]);
+    const r = await svc.reviveKeys();
+    expect(r).toEqual({ checked: 2, revived: 1, stillInvalid: 1 });
+    expect(healed).toEqual(['o1']);
   });
 
   it('every model 429 -> ServiceUnavailable and the key RESTS (not dead)', async () => {

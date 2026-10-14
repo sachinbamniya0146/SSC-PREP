@@ -92,7 +92,11 @@ const HEALTH_EVERY_MS = 60 * 60 * 1000; // NEW: model health check once an hour
 // NEW: OPENROUTER_BASE_URL lets tests (and a proxy) point at another host; default = real OpenRouter
 const openRouterBase = () => (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
 
-/** 401/403 = the key itself is wrong/revoked. 429 = only a rate limit — NEVER a dead key. */
+/**
+ * 401/402/403 are only SUSPECTS (Oct 15 2026 fix): OpenRouter answers 403 when ONE model refuses a request
+ * (moderation / region / provider policy) and 402 when a paid model has no credit — the key itself is fine.
+ * Such a status is verified against GET /key before a key is ever called dead. 429 = only a rate limit.
+ */
 function looksDead(status: number, bodyText: string): boolean {
   if (status === 401 || status === 403) return true;
   if (status === 402) return true; // no credit at all
@@ -103,7 +107,7 @@ function looksDead(status: number, bodyText: string): boolean {
 
 type CallOutcome =
   | { kind: 'ok'; content: string }
-  | { kind: 'dead'; detail: string }
+  | { kind: 'auth'; status: number; detail: string }
   | { kind: 'rate' }
   | { kind: 'nojson' }
   | { kind: 'transient'; detail: string }
@@ -121,12 +125,20 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
   private readonly modelHealth = new Map<string, ModelHealth>();
   private healthTimer: NodeJS.Timeout | null = null;
   private healthFirst: NodeJS.Timeout | null = null;
+  private reviveTimer: NodeJS.Timeout | null = null;
+  private reviveFirst: NodeJS.Timeout | null = null;
   private lastHealthAt: number | null = null;
   private seq = 0;
 
   constructor(private readonly adminApiKeys: AdminApiKeyService) {}
 
   onModuleInit() {
+    if ((process.env.AI_KEY_REVIVE || '').toLowerCase() !== 'off') {
+      this.reviveFirst = setTimeout(() => void this.reviveKeys(), 20 * 1000);
+      this.reviveFirst.unref?.();
+      this.reviveTimer = setInterval(() => void this.reviveKeys(), 15 * 60 * 1000);
+      this.reviveTimer.unref?.();
+    }
     if ((process.env.AI_MODEL_HEALTH || '').toLowerCase() === 'off') return;
     this.healthFirst = setTimeout(() => void this.runModelHealthCheck(), 2 * 60 * 1000);
     this.healthFirst.unref?.();
@@ -137,6 +149,8 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
   onModuleDestroy() {
     if (this.healthTimer) clearInterval(this.healthTimer);
     if (this.healthFirst) clearTimeout(this.healthFirst);
+    if (this.reviveTimer) clearInterval(this.reviveTimer);
+    if (this.reviveFirst) clearTimeout(this.reviveFirst);
   }
 
   // ---------------------------------------------------------------- gateway (optional OpenAI-compatible fallback)
@@ -297,8 +311,8 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
         if (r.kind === 'ok') {
           out.ok++;
           this.recordModel(model, true, null);
-        } else if (r.kind === 'dead') {
-          break; // the key itself is bad: tells us nothing about the model
+        } else if (r.kind === 'auth') {
+          continue; // a refusal tells us nothing certain about the model (and never about the key)
         } else if (r.kind === 'rate') {
           continue; // busy is not broken
         } else {
@@ -406,7 +420,7 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
     if (!gw) return { configured: false, ok: false, message: 'OPENAI_BASE_URL / OPENAI_API_KEY set nahi hai (optional).' };
     const r = await this.callWithRetry(`${gw.baseUrl}/chat/completions`, { 'Content-Type': 'application/json', Authorization: `Bearer ${gw.apiKey}` }, gw.model, 'Reply with exactly one word: OK', { maxTokens: 16, timeoutMs: 25_000 });
     if (r.kind === 'ok') return { configured: true, ok: true, message: 'Gateway chal raha hai ✅', model: gw.model };
-    const why = r.kind === 'dead' ? r.detail : r.kind === 'rate' ? 'rate limited (429)' : 'detail' in r ? r.detail : 'bad request';
+    const why = r.kind === 'rate' ? 'rate limited (429)' : 'detail' in r ? r.detail : 'bad request';
     return { configured: true, ok: false, message: redact(why) };
   }
 
@@ -434,6 +448,52 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
     if (r.reason === 'dead') return { ok: false, status: 'invalid', message: redact(r.detail || 'OpenRouter ne key accept nahi ki (galat ya band key).') };
     if (r.reason === 'rate_limited') return { ok: false, status: 'rate_limited', message: 'Key sahi hai par free models abhi busy hain — thodi der baad phir test karein.' };
     return { ok: false, status: 'error', message: redact(r.detail || 'Test fail hua — internet / OpenRouter check karein.') };
+  }
+
+  // ---------------------------------------------------------------- key verification + self-healing (NEW Oct 15 2026)
+
+  /** GET /key: is this key itself accepted by OpenRouter? Only a clear 401 means "invalid"; anything unclear is NOT dead. */
+  async verifyKey(apiKey: string): Promise<'valid' | 'invalid' | 'limit' | 'unknown'> {
+    try {
+      const res = await fetch(`${openRouterBase()}/key`, { method: 'GET', signal: AbortSignal.timeout(15_000), headers: { Authorization: `Bearer ${apiKey}` } });
+      if (res.status === 401) return 'invalid';
+      if (!res.ok) return 'unknown';
+      const data: any = await res.json().catch(() => null);
+      const left = data?.data?.limit_remaining;
+      return typeof left === 'number' && left <= 0 ? 'limit' : 'valid';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Keys that were switched off AUTOMATICALLY (exhaustedAt is set; keys an admin switched off by hand are left alone)
+   * get a real test; a key that works again is switched back on and waiting jobs resume at once.
+   * Runs 20 s after every start (so a push / restart heals keys killed by an old false "403 = dead key" verdict)
+   * and every 15 minutes.
+   */
+  async reviveKeys(): Promise<{ checked: number; revived: number; stillInvalid: number }> {
+    const out = { checked: 0, revived: 0, stillInvalid: 0 };
+    try {
+      const rows = (await this.adminApiKeys.getKeys('openrouter')) as unknown as Array<{ id: string; isActive: boolean; exhaustedAt: Date | null }>;
+      for (const k of rows.filter((x) => !x.isActive && x.exhaustedAt)) {
+        out.checked++;
+        try {
+          const raw = await this.adminApiKeys.getRawKeyWithName(k.id);
+          const t = await this.testKey(raw.apiKey, { keyId: k.id, keyName: raw.keyName });
+          if (t.ok || t.status === 'rate_limited') {
+            await this.adminApiKeys.markHealthy(k.id); // also wakes the workers (onKeysReady)
+            out.revived++;
+            this.logger.log(`Key "${raw.keyName}" works again -> switched back on.`);
+          } else if (t.status === 'invalid') out.stillInvalid++;
+        } catch (e) {
+          this.logger.warn(`key revive failed: ${redact((e as Error).message)}`);
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`key revive check failed: ${redact((e as Error).message)}`);
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------- low level
@@ -473,7 +533,7 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
       const text = await response.text().catch(() => '');
       if (!response.ok) {
         const detail = redact(`${response.status}: ${text.slice(0, 160)}`);
-        if (looksDead(response.status, text)) return { kind: 'dead', detail: `OpenRouter ne key reject ki (${response.status})` };
+        if (looksDead(response.status, text)) return { kind: 'auth', status: response.status, detail };
         if (response.status === 429) return { kind: 'rate' };
         if (response.status === 400 && opts.jsonResponse) return { kind: 'nojson' }; // model has no JSON mode
         if (isTransientStatus(response.status)) return { kind: 'transient', detail };
@@ -533,6 +593,7 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ content?: string; model?: string; reason?: 'dead' | 'rate_limited' | 'error'; detail?: string }> {
     let sawRateLimit = false;
     let lastDetail = '';
+    let verdict: 'valid' | 'invalid' | 'limit' | 'unknown' | null = null;
     for (const model of models) {
       opts.onModel?.(model);
       const r = await this.callWithRetry(`${openRouterBase()}/chat/completions`, this.openRouterHeaders(apiKey), model, prompt, opts);
@@ -540,7 +601,15 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
         this.recordModel(model, true, null);
         return { content: r.content, model };
       }
-      if (r.kind === 'dead') return { reason: 'dead', detail: r.detail };
+      if (r.kind === 'auth') {
+        // ask OpenRouter whether the KEY is really bad (once per call) — a 403 from one model must never kill a good key
+        if (verdict === null) verdict = await this.verifyKey(apiKey);
+        if (verdict === 'invalid') return { reason: 'dead', detail: `OpenRouter ne key reject ki (${r.status}) — key galat ya revoked hai` };
+        if (verdict === 'limit') return { reason: 'rate_limited', detail: undefined };
+        lastDetail = `model ne ${r.status} diya (key sahi hai, dusra model try kiya): ${r.detail}`;
+        this.recordModel(model, false, lastDetail);
+        continue;
+      }
       if (r.kind === 'rate') {
         sawRateLimit = true; // busy is not broken: no health penalty
         continue;

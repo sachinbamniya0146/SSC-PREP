@@ -63,7 +63,8 @@ export class AiProviderController {
   async testSaved(@Param('id') id: string) {
     const raw = await this.keys.getRawKeyWithName(id);
     const test = await this.ai.testKey(raw.apiKey, { keyId: id, keyName: raw.keyName });
-    if (test.ok) await this.keys.markHealthy(id);
+    // a key that is only busy (rate limited) is a WORKING key: it is switched on again too (Oct 15 2026)
+    if (test.ok || test.status === 'rate_limited') await this.keys.markHealthy(id);
     else await this.keys.markBroken(id, test.message);
     return test;
   }

@@ -119,6 +119,9 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
     }
     this.timer = setInterval(() => void this.tick(), TICK_MS);
     this.timer.unref?.();
+    // after every push / restart: unfinished jobs continue by themselves (no button, no admin action)
+    const boot = setTimeout(() => void this.wake(), 15_000);
+    boot.unref?.();
     // key added / switched on / passed a live test -> waiting jobs resume at once
     this.keys.onKeysReady(() => void this.wake());
   }

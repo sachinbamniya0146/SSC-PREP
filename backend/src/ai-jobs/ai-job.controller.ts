@@ -54,6 +54,11 @@ export class AiJobController {
     return this.ai.runModelHealthCheck();
   }
 
+  @Post('revive-keys')
+  reviveKeys() {
+    return this.ai.reviveKeys();
+  }
+
   @Post('undo')
   undo(@CurrentUser() user: { userId: string }, @Body() body: { changeIds?: string[]; itemIds?: string[]; jobId?: string }) {
     return this.jobs.undo({ changeIds: body?.changeIds, itemIds: body?.itemIds, jobId: body?.jobId }, user.userId);
