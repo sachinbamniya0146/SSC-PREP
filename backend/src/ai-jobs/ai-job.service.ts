@@ -436,7 +436,7 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
 
   // ------------------------------------------------------------------ counters / finish
 
-  async recount(jobId: string) {
+  async recount(jobId: string): Promise<Record<string, number>> {
     const g = await this.prisma.aiJobItem.groupBy({ by: ['status'], where: { jobId }, _count: { _all: true } });
     const c: Record<string, number> = {};
     for (const r of g) c[r.status] = r._count._all;
@@ -453,7 +453,8 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
         ...(calls ? { callsMade: { increment: calls } } : {}),
       },
     });
-    return { ...c, total, pending: (c.PENDING ?? 0) + (c.RUNNING ?? 0) };
+    const out: Record<string, number> = { ...c, total, pending: (c.PENDING ?? 0) + (c.RUNNING ?? 0) };
+    return out;
   }
 
   private async finalizeJob(jobId: string) {
