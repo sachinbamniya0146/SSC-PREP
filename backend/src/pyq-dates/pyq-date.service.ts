@@ -575,7 +575,13 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async applyDate(q: QuestionForRun, date: string, tier: Tier | null, mapId: string, extra: Record<string, unknown>) {
+    // NEW (Oct 15 2026): the OLD values go to AiChange so Admin -> AI can Undo this write (single + bulk)
+    const changes: Prisma.AiChangeCreateManyInput[] = [
+      { questionId: q.id, field: 'examDate', oldValue: { v: q.examDate ?? null }, newValue: { v: date }, source: 'PYQ_DATE' },
+    ];
+    if (tier && !q.examTier) changes.push({ questionId: q.id, field: 'examTier', oldValue: { v: q.examTier ?? null }, newValue: { v: tier }, source: 'PYQ_DATE' });
     await this.prisma.$transaction([
+      this.prisma.aiChange.createMany({ data: changes }),
       this.prisma.question.update({ where: { id: q.id }, data: { examDate: date, ...(tier && !q.examTier ? { examTier: tier } : {}) } }),
       this.prisma.pyqDateMap.update({
         where: { id: mapId },

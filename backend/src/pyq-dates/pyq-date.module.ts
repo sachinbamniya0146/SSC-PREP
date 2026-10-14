@@ -13,6 +13,6 @@ import { PyqExportService } from './pyq-export.service';
   imports: [PrismaModule, AiProviderModule, AdminApiKeyModule, BankModule],
   controllers: [PyqDateController, PyqExportController],
   providers: [PyqDateService, PyqDateSearchService, PyqExportService],
-  exports: [PyqDateService],
+  exports: [PyqDateService, PyqDateSearchService],
 })
 export class PyqDateModule {}

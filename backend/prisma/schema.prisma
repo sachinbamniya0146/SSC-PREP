@@ -1892,3 +1892,82 @@ model PyqDateConfig {
 
   @@map("pyq_date_configs")
 }
+
+// ================= CENTRAL AI JOB ENGINE (NEW Oct 15 2026) =================
+// One job = one AI task over many questions (solution / Hindi / chapter / answer-key / PYQ date).
+// Items are the per-question rows. AiChange keeps the OLD value of every field the AI wrote (-> Undo).
+model AiJob {
+  id           String    @id @default(uuid())
+  // PYQ_DATE_SHIFT | SOLUTION_GENERATE | HINDI_TRANSLATE | CHAPTER_TOPIC_CLASSIFY | ANSWER_KEY_VERIFY
+  type         String
+  title        String?
+  scopeJson    Json
+  // PENDING | RUNNING | PAUSED | DONE | FAILED | CANCELLED
+  status       String    @default("PENDING")
+  passes       Int       @default(5)
+  minAgree     Int       @default(3)
+  totalCount   Int       @default(0)
+  doneCount    Int       @default(0)
+  failedCount  Int       @default(0)
+  reviewCount  Int       @default(0)
+  callsMade    Int       @default(0)
+  createdBy    String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  lastError    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  items AiJobItem[]
+
+  @@index([status, createdAt])
+  @@map("ai_jobs")
+}
+
+model AiJobItem {
+  id           String    @id @default(uuid())
+  jobId        String
+  questionId   String
+  questionNo   Int?
+  // PENDING | RUNNING | DONE | FAILED | NEEDS_REVIEW | ACCEPTED | REJECTED | SKIPPED
+  status       String    @default("PENDING")
+  attempts     Int       @default(0)
+  passesDone   Int       @default(0)
+  agreeCount   Int       @default(0)
+  proposalJson Json?
+  passesJson   Json?
+  note         String?
+  lastError    String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  appliedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  job AiJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, questionId])
+  @@index([jobId, status])
+  @@index([questionId])
+  @@map("ai_job_items")
+}
+
+model AiChange {
+  id         String    @id @default(uuid())
+  jobId      String?
+  itemId     String?
+  questionId String
+  field      String
+  oldValue   Json      // { v: <previous value> }
+  newValue   Json      // { v: <value the AI wrote> }
+  source     String    @default("AI_JOB")
+  model      String?
+  appliedBy  String?
+  createdAt  DateTime  @default(now())
+  undoneAt   DateTime?
+  undoneBy   String?
+
+  @@index([jobId, undoneAt])
+  @@index([questionId, createdAt])
+  @@map("ai_changes")
+}

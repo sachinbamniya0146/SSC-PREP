@@ -10,6 +10,7 @@
     "prisma:migrate": "prisma migrate dev",
     "test": "jest --config test/jest-e2e.json --runInBand --forceExit --passWithNoTests",
     "test:watch": "jest --config test/jest-e2e.json --watch",
+    "test:unit": "jest --config jest.unit.config.json --runInBand --forceExit",
     "lint": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

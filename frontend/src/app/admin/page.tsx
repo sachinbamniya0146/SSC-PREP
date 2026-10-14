@@ -1024,6 +1024,11 @@ export default function AdminPage() {
                 API Keys
               </a>
             )}
+            {access.isAdmin && (
+              <a href="/admin/ai" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
+                AI Jobs
+              </a>
+            )}
             <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm hover:bg-muted">
               {theme === "dark" ? "☀️" : "🌙"}
             </button>
