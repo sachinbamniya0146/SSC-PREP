@@ -28,6 +28,24 @@ const ALERT_DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 export class AdminApiKeyService {
   constructor(private readonly prisma: PrismaService) {}
 
+  // NEW (Oct 14 2026) — "key daalte hi kaam shuru": workers that wait for AI keys (PYQ date mapping)
+  // register here and are woken the moment a key is added, switched on again or passes a live test.
+  private readonly readyListeners: Array<(provider: string) => void> = [];
+
+  onKeysReady(cb: (provider: string) => void) {
+    this.readyListeners.push(cb);
+  }
+
+  private emitKeysReady(provider: string) {
+    for (const cb of this.readyListeners) {
+      try {
+        cb(provider);
+      } catch {
+        /* a listener must never break key handling */
+      }
+    }
+  }
+
   async getKeys(provider?: string) {
     const where: Record<string, unknown> = {};
     if (provider) where.provider = provider;
@@ -135,6 +153,7 @@ export class AdminApiKeyService {
       select: { id: true, keyName: true, apiKey: true },
     });
     await this.autoResolveLowKeyAlerts(provider);
+    this.emitKeysReady(provider);
     return { id: created.id, keyName: created.keyName, number, apiKey: maskKey(created.apiKey) };
   }
 
@@ -154,7 +173,12 @@ export class AdminApiKeyService {
 
   /** a key that passed a live test is switched back on and its error marks are cleared */
   async markHealthy(id: string) {
-    await this.prisma.adminApiKey.update({ where: { id }, data: { isActive: true, exhaustedAt: null, failureCount: 0, lastErrorMessage: null } });
+    const k = await this.prisma.adminApiKey.update({
+      where: { id },
+      data: { isActive: true, exhaustedAt: null, failureCount: 0, lastErrorMessage: null },
+      select: { provider: true },
+    });
+    this.emitKeysReady(k.provider);
   }
 
   async markBroken(id: string, message: string) {
@@ -227,6 +251,7 @@ export class AdminApiKeyService {
 
       // Adding keys can resolve an existing low/empty-pool alert.
       await this.autoResolveLowKeyAlerts(input.provider);
+      this.emitKeysReady(input.provider);
     }
 
     return {
@@ -273,7 +298,10 @@ export class AdminApiKeyService {
         createdAt: true,
       },
     });
-    if (reactivating) await this.autoResolveLowKeyAlerts(existing.provider);
+    if (reactivating) {
+      await this.autoResolveLowKeyAlerts(existing.provider);
+      this.emitKeysReady(existing.provider);
+    }
     return { ...updated, apiKey: maskKey(updated.apiKey) };
   }
 

@@ -41,6 +41,27 @@ const FEATURE_LABEL: Record<string, string> = {
 const featureName = (f: string) => FEATURE_LABEL[f] ?? f;
 const when = (s: string | null) => (s ? new Date(s).toLocaleString() : "kabhi nahi");
 
+// NEW (Oct 14 2026): real-time status
+interface LiveKey { id: string; keyName: string; isActive: boolean; isPrimary: boolean; state: "working" | "resting" | "idle" | "off"; restSec: number; feature: string | null; model: string | null; runningSec: number; lastError: string | null }
+interface LiveEvent { at: number; keyName: string; feature: string; model: string | null; success: boolean; ms: number; error: string | null }
+interface LiveStatus { now: number; working: number; active: Array<{ keyName: string; feature: string; model: string | null; runningSec: number }>; keys: LiveKey[]; recent: LiveEvent[] }
+interface WorkerLive {
+  config: { autoRun: boolean };
+  worker: {
+    enabled: boolean; busy: boolean; lastMessage: string | null;
+    current: { questionNo: number; pass: number; passes: number; elapsedSec: number; stage?: "search" | "ai"; query?: string } | null;
+    run: { processed: number; mapped: number; review: number; notFound: number; failed: number; elapsedSec: number } | null;
+  };
+  totals: { queuePending: number; notQueued: number };
+  counts: Record<string, number>;
+}
+const STATE_UI: Record<string, { icon: string; text: string; cls: string }> = {
+  working: { icon: "🟢", text: "Kaam kar rahi hai", cls: "bg-emerald-500/15 text-emerald-700" },
+  resting: { icon: "😴", text: "Rest (rate limit)", cls: "bg-amber-500/15 text-amber-700" },
+  idle: { icon: "⚪", text: "Ready (kaam ka intezaar)", cls: "bg-sky-500/15 text-sky-700" },
+  off: { icon: "🔴", text: "OFF", cls: "bg-muted text-muted-foreground" },
+};
+
 interface Alert { id: string; severity: "INFO" | "WARNING" | "CRITICAL"; message: string; messageHindi: string | null }
 
 export default function AdminApiKeysPage() {
@@ -59,6 +80,9 @@ export default function AdminApiKeysPage() {
   const [recentTotal, setRecentTotal] = React.useState(0);
   const [logFeature, setLogFeature] = React.useState("");
   const [logKey, setLogKey] = React.useState("");
+  const [live, setLive] = React.useState<LiveStatus | null>(null);
+  const [wk, setWk] = React.useState<WorkerLive | null>(null);
+  const [liveErr, setLiveErr] = React.useState("");
 
   const load = React.useCallback(async () => {
     try {
@@ -82,6 +106,26 @@ export default function AdminApiKeysPage() {
   }, []);
 
   React.useEffect(() => { void load(); }, [load]);
+
+  // real-time status: keys every 3 s, PYQ worker every 6 s (paused while the tab is hidden)
+  const loadLive = React.useCallback(async () => {
+    try {
+      setLive(await api<LiveStatus>("/admin/ai/live"));
+      setLiveErr("");
+    } catch (e) {
+      setLiveErr((e as Error).message);
+    }
+  }, []);
+  const loadWorker = React.useCallback(async () => {
+    try { setWk(await api<WorkerLive>("/admin/pyq-dates/overview")); } catch { /* optional */ }
+  }, []);
+  React.useEffect(() => {
+    void loadLive();
+    void loadWorker();
+    const a = setInterval(() => { if (!document.hidden) void loadLive(); }, 3000);
+    const b = setInterval(() => { if (!document.hidden) void loadWorker(); }, 6000);
+    return () => { clearInterval(a); clearInterval(b); };
+  }, [loadLive, loadWorker]);
 
   const loadRecent = React.useCallback(async () => {
     const p = new URLSearchParams({ take: "40" });
@@ -108,8 +152,9 @@ export default function AdminApiKeysPage() {
       });
       setValue("");
       setNextNo(d.next);
-      setMsg({ ok: d.test.ok, text: `${d.key.keyName} add ho gayi — ${d.test.message}` });
+      setMsg({ ok: d.test.ok, text: `${d.key.keyName} add ho gayi — ${d.test.message}. Pending kaam turant shuru ho raha hai — neeche live status dekhein.` });
       await load();
+      setTimeout(() => { void loadLive(); void loadWorker(); }, 1500);
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
     } finally {
@@ -184,6 +229,69 @@ export default function AdminApiKeysPage() {
             </button>
           </div>
           {msg && <p className={`mt-3 rounded-lg border p-2 text-sm ${msg.ok ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700" : "border-red-500/40 bg-red-500/10 text-red-700"}`}>{msg.text}</p>}
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold">⚡ Live status <span className="ml-1 text-[11px] font-normal text-muted-foreground">(har 3 second me apne aap update)</span></h2>
+            <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${(live?.working ?? 0) > 0 ? "bg-emerald-500/15 text-emerald-700" : "bg-muted text-muted-foreground"}`}>
+              {(live?.working ?? 0) > 0 ? `${live!.working} AI call chal rahi` : "abhi koi call nahi"}
+            </span>
+          </div>
+          {liveErr && <p className="mt-2 text-xs text-red-700">Live status load nahi hua: {liveErr}</p>}
+
+          {wk && (
+            <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 text-xs">
+              <p className="font-semibold">
+                📅 PYQ date mapping: {!wk.worker.enabled ? "BAND (PYQ_DATE_WORKER=off)" : wk.worker.busy ? "🟢 CHAL RAHI" : "⚪ ruki hui / khaali"}
+                {" · "}queue me <b>{wk.totals.queuePending}</b>{wk.totals.notQueued > 0 ? ` (+${wk.totals.notQueued} abhi queue me aane baaki)` : ""}
+              </p>
+              {wk.worker.current ? (
+                <p className="mt-1">
+                  Abhi <b>Q#{wk.worker.current.questionNo}</b> · pass {wk.worker.current.pass}/{wk.worker.current.passes} · {wk.worker.current.stage === "ai" ? "🤖 AI evidence padh raha hai" : "🔍 internet search ho raha hai"} · {wk.worker.current.elapsedSec}s
+                  {wk.worker.current.query ? <span className="block truncate text-muted-foreground">search: {wk.worker.current.query}</span> : null}
+                </p>
+              ) : (
+                <p className="mt-1 text-muted-foreground">{wk.worker.lastMessage ?? "—"}</p>
+              )}
+              {wk.worker.run && (
+                <p className="mt-1 text-muted-foreground">Is run me: {wk.worker.run.processed} question · ✅ {wk.worker.run.mapped} date lagi · 👀 {wk.worker.run.review} review · ❔ {wk.worker.run.notFound} nahi mili · ❌ {wk.worker.run.failed} fail · {wk.worker.run.elapsedSec}s</p>
+              )}
+              <p className="mt-1"><a href="/admin/pyq-dates" className="text-primary underline">PYQ Date Mapping page →</a></p>
+            </div>
+          )}
+
+          <ul className="mt-3 space-y-2">
+            {(live?.keys ?? []).map((k) => {
+              const ui = STATE_UI[k.state] ?? STATE_UI.idle;
+              return (
+                <li key={k.id} className="rounded-lg border border-border p-2 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold">{k.keyName}</span>
+                    <span className={`rounded-full px-2 py-0.5 font-bold ${ui.cls}`}>{ui.icon} {ui.text}{k.state === "resting" ? ` · ${k.restSec}s` : ""}</span>
+                  </div>
+                  {k.state === "working" && <p className="mt-1">Kaam: <b>{featureName(k.feature ?? "GENERAL")}</b>{k.model ? <> · model <span className="font-mono">{k.model}</span></> : " · model chun raha…"} · {k.runningSec}s se</p>}
+                  {k.state === "resting" && <p className="mt-1 text-amber-700">Free limit lagi — {k.restSec}s baad apne aap phir use hogi (doosri key chal rahi hai).</p>}
+                  {k.state === "off" && k.lastError && <p className="mt-1 text-red-700">Band hone ki wajah: {k.lastError}</p>}
+                </li>
+              );
+            })}
+            {live && live.keys.length === 0 && <li className="text-xs text-muted-foreground">Koi key nahi — upar paste karein, kaam turant shuru ho jayega.</li>}
+          </ul>
+
+          {(live?.recent.length ?? 0) > 0 && (
+            <div className="mt-3">
+              <p className="mb-1 text-[11px] font-semibold text-muted-foreground">Abhi-abhi ki calls</p>
+              <ul className="max-h-48 space-y-1 overflow-y-auto text-[11px]">
+                {live!.recent.slice(0, 12).map((r, i) => (
+                  <li key={`${r.at}-${i}`} className={`rounded px-2 py-1 ${r.success ? "bg-emerald-500/5" : "bg-red-500/5"}`}>
+                    {r.success ? "✅" : "❌"} {new Date(r.at).toLocaleTimeString()} · <b>{featureName(r.feature)}</b> · {r.keyName} · <span className="font-mono">{r.model ?? "—"}</span> · {(r.ms / 1000).toFixed(1)}s
+                    {r.error && <span className="block text-amber-700">{r.error}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
 
         <section className="rounded-xl border border-border bg-card p-4">

@@ -11,6 +11,7 @@ import { AiProviderService } from './ai-provider.service';
 //   POST /admin/ai/keys/quick      { apiKey }  -> tests the key live, saves it as "OpenRouter Key N"
 //   POST /admin/ai/keys/:id/test               -> "Test key" button on a saved key
 //   GET  /admin/ai/keys/next-number            -> N for the "Add Key N" button
+//   GET  /admin/ai/live                        -> real-time key status (polled every 3 s by the screen)
 //   GET  /admin/ai/models                      -> the free models that are used right now
 @Controller('admin/ai')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,6 +25,12 @@ export class AiProviderController {
   @Get('keys/next-number')
   async nextNumber() {
     return { next: await this.keys.nextKeyNumber('openrouter') };
+  }
+
+  /** NEW (Oct 14 2026): real-time status — which key works on what right now, who is resting, last calls. */
+  @Get('live')
+  async live() {
+    return this.ai.getLiveStatus();
   }
 
   @Get('models')

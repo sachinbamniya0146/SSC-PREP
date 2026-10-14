@@ -38,6 +38,12 @@ import {
 export const PYQ_FEATURE = 'PYQ_DATE_MAPPING';
 const TICK_MS = 45_000;
 const STUCK_MS = 15 * 60 * 1000;
+// NEW (Oct 14 2026): one worker round now keeps going until the queue is empty (or this many questions,
+// or this much time) instead of doing 1-5 questions and then sleeping 45 s.
+const MAX_QUESTIONS_PER_RUN = 150;
+const MAX_RUN_MS = 25 * 60 * 1000;
+// keys busy (rate limit) -> look again after this many minutes (was 8)
+const BUSY_RETRY_MIN = 3;
 const STATUSES = ['PENDING', 'RUNNING', 'MAPPED', 'NEEDS_REVIEW', 'NOT_FOUND', 'FAILED', 'MANUAL'] as const;
 export type MapStatus = (typeof STATUSES)[number];
 
@@ -74,7 +80,12 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PyqDateService.name);
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
-  private current: { questionNo: number; questionId: string; pass: number; passes: number; startedAt: number } | null = null;
+  private current: { questionNo: number; questionId: string; pass: number; passes: number; startedAt: number; stage: 'search' | 'ai'; query?: string } | null = null;
+  /** live counters of the run that is going on now (or of the last one) — shown on the admin screen */
+  private run: { startedAt: number; finishedAt: number | null; processed: number; mapped: number; review: number; notFound: number; failed: number; trigger: string } | null = null;
+  private wakeAgain = false;
+  /** all keys were busy: the automatic rounds rest until this time (a new key / "run now" ends the rest at once) */
+  private pausedUntil = 0;
   private lastPruneAt = 0;
   private readonly touchedPapers = new Map<string, PaperKey>();
 
@@ -105,6 +116,30 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
     }
     this.timer = setInterval(() => void this.tick(false), TICK_MS);
     this.timer.unref?.();
+    // key added / switched on / passed a live test -> start working immediately, do not wait for the next round
+    this.keys.onKeysReady(() => void this.wake());
+  }
+
+  /**
+   * A usable AI key just appeared. Questions that were put back "for later" because every key was busy/missing
+   * are made due right now and a run is started at once.
+   */
+  async wake(): Promise<void> {
+    if ((process.env.PYQ_DATE_WORKER || '').toLowerCase() === 'off') return;
+    try {
+      this.pausedUntil = 0;
+      await this.prisma.pyqDateMap.updateMany({ where: { status: 'PENDING', nextRunAt: { gt: new Date() } }, data: { nextRunAt: new Date() } });
+      const pending = await this.prisma.pyqDateMap.count({ where: { status: 'PENDING' } });
+      const cfg = await this.getConfig();
+      if (pending === 0 && !cfg.autoRun) return;
+      if (this.busy) {
+        this.wakeAgain = true; // the current run may be about to give up because of the old key state
+        return;
+      }
+      this.kick();
+    } catch (e) {
+      this.logger.warn(`wake failed: ${(e as Error).message}`);
+    }
   }
 
   onModuleDestroy() {
@@ -150,18 +185,43 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
       return; // DB / migration not ready yet
     }
     if (!force && !cfg.autoRun) return;
+    if (!force && Date.now() < this.pausedUntil) return;
+    this.pausedUntil = 0;
     this.busy = true;
     let message = '';
+    const trigger = force ? (limitOverride ? 'manual (limit)' : 'manual') : 'auto';
+    this.run = { startedAt: Date.now(), finishedAt: null, processed: 0, mapped: 0, review: 0, notFound: 0, failed: 0, trigger };
     try {
       // stuck-run recovery (a crash while RUNNING)
       await this.prisma.pyqDateMap.updateMany({ where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - STUCK_MS) } }, data: { status: 'PENDING' } });
 
       let discovered = 0;
       if (cfg.autoRun) discovered = await this.discover(cfg.minAgeMinutes);
-      const res = await this.processBatch(limitOverride ?? cfg.batchSize);
-      message = res.message || (discovered ? `${discovered} naye PYQ queue me aaye.` : '');
-      if (res.processed > 0) message = `${res.processed} question process hue (${res.mapped} mapped, ${res.review} review, ${res.notFound} not found).`;
-      await this.flushPapers();
+
+      // keep going until the queue is empty, the keys are busy, or the per-run cap is reached
+      let lastRoundMessage = '';
+      for (;;) {
+        const res = await this.processBatch(limitOverride ?? cfg.batchSize);
+        this.run.processed += res.processed;
+        this.run.mapped += res.mapped;
+        this.run.review += res.review;
+        this.run.notFound += res.notFound;
+        this.run.failed += res.failed;
+        if (res.message) lastRoundMessage = res.message;
+        await this.flushPapers();
+        if (res.processed > 0) {
+          await this.writeProgress(`Chal raha: ${this.run.processed} question ho chuke (${this.run.mapped} date lagi, ${this.run.review} review, ${this.run.notFound} nahi mili).`);
+        }
+        if (res.processed === 0 || res.message) break; // nothing due / keys busy
+        if (limitOverride) break; // "run now" with an explicit limit = exactly one batch
+        if (this.run.processed >= MAX_QUESTIONS_PER_RUN || Date.now() - this.run.startedAt > MAX_RUN_MS) break;
+      }
+      if (this.run.processed > 0) {
+        message = `${this.run.processed} question process hue (${this.run.mapped} mapped, ${this.run.review} review, ${this.run.notFound} not found).`;
+        if (lastRoundMessage) message += ` ${lastRoundMessage}`;
+      } else {
+        message = lastRoundMessage || (discovered ? `${discovered} naye PYQ queue me aaye.` : '');
+      }
 
       if (Date.now() - this.lastPruneAt > 24 * 3600 * 1000) {
         this.lastPruneAt = Date.now();
@@ -173,11 +233,23 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.busy = false;
       this.current = null;
-      try {
-        await this.prisma.pyqDateConfig.update({ where: { id: 'default' }, data: { lastTickAt: new Date(), lastMessage: message || 'Koi kaam pending nahi.' } });
-      } catch {
-        /* ignore */
+      if (this.run) this.run.finishedAt = Date.now();
+      await this.writeProgress(message || 'Koi kaam pending nahi.', true);
+      if (this.wakeAgain) {
+        this.wakeAgain = false;
+        setTimeout(() => void this.wake(), 500);
       }
+    }
+  }
+
+  private async writeProgress(message: string, finished = false) {
+    try {
+      await this.prisma.pyqDateConfig.update({
+        where: { id: 'default' },
+        data: { lastMessage: message.slice(0, 500), ...(finished ? { lastTickAt: new Date() } : {}) },
+      });
+    } catch {
+      /* ignore */
     }
   }
 
@@ -208,8 +280,8 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async processBatch(limit: number): Promise<{ processed: number; mapped: number; review: number; notFound: number; message?: string }> {
-    const out = { processed: 0, mapped: 0, review: 0, notFound: 0, message: undefined as string | undefined };
+  private async processBatch(limit: number): Promise<{ processed: number; mapped: number; review: number; notFound: number; failed: number; message?: string }> {
+    const out = { processed: 0, mapped: 0, review: 0, notFound: 0, failed: 0, message: undefined as string | undefined };
     const pool = await this.keys.getRotationPool('openrouter');
     const pending = await this.prisma.pyqDateMap.count({ where: { status: 'PENDING', nextRunAt: { lte: new Date() } } });
     if (pending === 0) return out;
@@ -232,12 +304,14 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
       const r = await this.processOne(d.id);
       if (r.abort) {
         out.message = r.message;
+        if (!/Koi AI key nahi/.test(r.message ?? '')) this.pausedUntil = Date.now() + BUSY_RETRY_MIN * 60_000;
         break;
       }
       out.processed++;
       if (r.status === 'MAPPED') out.mapped++;
       else if (r.status === 'NEEDS_REVIEW') out.review++;
       else if (r.status === 'NOT_FOUND') out.notFound++;
+      else if (r.status === 'FAILED') out.failed++;
     }
     return out;
   }
@@ -311,8 +385,8 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
     const runStartedAt = Date.now();
 
     for (let i = 0; i < passesN; i++) {
-      this.current = { questionNo: q.questionNo, questionId: q.id, pass: i + 1, passes: passesN, startedAt: runStartedAt };
       const query = queries[i % queries.length];
+      this.current = { questionNo: q.questionNo, questionId: q.id, pass: i + 1, passes: passesN, startedAt: runStartedAt, stage: 'search', query: query.slice(0, 140) };
       const t0 = Date.now();
       const rec: PassRecord = {
         index: i + 1, query, verdict: 'no_results', examDate: null, year: null, tier: null, shift: null, quote: null, sourceUrl: null,
@@ -340,6 +414,7 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
+      this.current = { ...this.current, stage: 'ai' };
       try {
         const res = await this.ai.generate(this.buildPrompt(q, ev.text), { jsonResponse: true, maxTokens: 700, feature: PYQ_FEATURE, modelOffset: i });
         rec.model = res.model;
@@ -390,14 +465,16 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
         where: { id: mapId },
         data: {
           status: 'PENDING',
-          nextRunAt: new Date(Date.now() + (abort.noKeys ? 30 : 8) * 60_000),
+          nextRunAt: new Date(Date.now() + (abort.noKeys ? 30 : BUSY_RETRY_MIN) * 60_000),
           attempts: { decrement: 1 },
           lastError: abort.message.slice(0, 400),
           passesJson: passes as unknown as Prisma.InputJsonValue,
           passesDone: passes.length,
         },
       });
-      return { abort: true, message: `AI keys abhi busy/band hain — ${abort.noKeys ? '30' : '8'} minute baad dobara try hoga.` };
+      return { abort: true, message: abort.noKeys
+        ? 'Koi AI key nahi hai — key daalte hi kaam apne aap shuru ho jayega.'
+        : `AI keys abhi busy/band hain — ${BUSY_RETRY_MIN} minute baad dobara try hoga (nayi key daalte hi turant).` };
     }
 
     // ---- search engines blocked for every pass: retry later (3 tries), then FAILED
@@ -658,6 +735,9 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
         enabled: (process.env.PYQ_DATE_WORKER || '').toLowerCase() !== 'off',
         busy: this.busy,
         current: this.current ? { ...this.current, elapsedSec: Math.round((Date.now() - this.current.startedAt) / 1000) } : null,
+        run: this.run
+          ? { ...this.run, elapsedSec: Math.round(((this.run.finishedAt ?? Date.now()) - this.run.startedAt) / 1000) }
+          : null,
         lastTickAt: cfg.lastTickAt,
         lastMessage: cfg.lastMessage,
         avgSecondsPerQuestion: avgSec ? Math.round(avgSec) : null,

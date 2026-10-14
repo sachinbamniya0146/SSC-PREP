@@ -14,7 +14,8 @@ interface Overview {
   worker: {
     enabled: boolean; busy: boolean; lastTickAt: string | null; lastMessage: string | null;
     avgSecondsPerQuestion: number | null; etaMinutes: number | null;
-    current: { questionNo: number; pass: number; passes: number; elapsedSec: number } | null;
+    current: { questionNo: number; pass: number; passes: number; elapsedSec: number; stage?: "search" | "ai"; query?: string } | null;
+    run: { processed: number; mapped: number; review: number; notFound: number; failed: number; elapsedSec: number } | null;
   };
   totals: { pyqTotal: number; pyqWithDate: number; pyqWithoutDate: number; notQueued: number; queuePending: number };
   counts: Counts;
@@ -79,6 +80,7 @@ export default function AdminPyqDatesPage() {
   const [testQ, setTestQ] = React.useState("SSC CGL 2024 tier 1 exam date shift 1");
   const [testOut, setTestOut] = React.useState<string>("");
   const PAGE = 25;
+  const cfgLoaded = React.useRef(false);
 
   React.useEffect(() => {
     try {
@@ -92,7 +94,10 @@ export default function AdminPyqDatesPage() {
     try {
       const d = await api<Overview>("/admin/pyq-dates/overview");
       setOv(d);
-      setCfg({ minAgeMinutes: d.config.minAgeMinutes, batchSize: d.config.batchSize, passes: d.config.passes });
+      if (!cfgLoaded.current) {
+        cfgLoaded.current = true; // only the first time — later polls must not wipe what the admin is typing
+        setCfg({ minAgeMinutes: d.config.minAgeMinutes, batchSize: d.config.batchSize, passes: d.config.passes });
+      }
       setErr("");
     } catch (e) {
       setErr((e as Error).message);
@@ -122,10 +127,10 @@ export default function AdminPyqDatesPage() {
   }, [ok, loadOverview]);
   React.useEffect(() => { if (ok) void loadItems(); }, [ok, loadItems]);
 
-  // live refresh while the worker is busy (every 5 s), otherwise every 30 s
+  // live refresh while the worker is busy (every 3 s), otherwise every 15 s
   React.useEffect(() => {
     if (!ok) return;
-    const t = setInterval(() => { void loadOverview(); void loadItems(); }, ov?.worker.busy ? 5000 : 30000);
+    const t = setInterval(() => { void loadOverview(); void loadItems(); }, ov?.worker.busy ? 3000 : 15000);
     return () => clearInterval(t);
   }, [ok, ov?.worker.busy, loadOverview, loadItems]);
 
@@ -194,8 +199,12 @@ export default function AdminPyqDatesPage() {
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${ov?.worker.busy ? "bg-blue-500/15 text-blue-700" : "bg-muted text-muted-foreground"}`}>{!ov?.worker.enabled ? "BAND (env)" : ov?.worker.busy ? "CHAL RAHA" : "ARAAM"}</span>
             </div>
             <p className="mt-2 text-sm">
-              {ov?.worker.current ? <>Abhi: <b>Q#{ov.worker.current.questionNo}</b> — pass {ov.worker.current.pass}/{ov.worker.current.passes} ({ov.worker.current.elapsedSec}s)</> : "Abhi koi question process nahi ho raha."}
+              {ov?.worker.current ? <>Abhi: <b>Q#{ov.worker.current.questionNo}</b> — pass {ov.worker.current.pass}/{ov.worker.current.passes} · {ov.worker.current.stage === "ai" ? "🤖 AI evidence padh raha hai" : "🔍 internet search ho raha hai"} ({ov.worker.current.elapsedSec}s)</> : "Abhi koi question process nahi ho raha."}
             </p>
+            {ov?.worker.current?.query && <p className="mt-1 truncate text-[11px] text-muted-foreground">search: {ov.worker.current.query}</p>}
+            {ov?.worker.run && (
+              <p className="mt-1 text-xs">Is run me: <b>{ov.worker.run.processed}</b> question · ✅ {ov.worker.run.mapped} date lagi · 👀 {ov.worker.run.review} review · ❔ {ov.worker.run.notFound} nahi mili · ❌ {ov.worker.run.failed} fail · {ov.worker.run.elapsedSec}s</p>
+            )}
             <p className="mt-1 text-xs text-muted-foreground">Last round: {ago(ov?.worker.lastTickAt ?? null)} — {ov?.worker.lastMessage ?? "—"}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               Ek question ~{ov?.worker.avgSecondsPerQuestion ?? "?"} sec · baaki kaam ≈ {ov?.worker.etaMinutes != null ? `${ov.worker.etaMinutes} min` : "?"} (free keys ki limit mili to zyada).
@@ -204,7 +213,7 @@ export default function AdminPyqDatesPage() {
               <button onClick={() => act("Auto-run", () => api("/admin/pyq-dates/config", { method: "PUT", body: JSON.stringify({ autoRun: !ov?.config.autoRun }) }))} className={`rounded-lg px-3 py-2 text-xs font-bold ${ov?.config.autoRun ? "bg-emerald-600 text-white" : "border border-border"}`}>
                 {ov?.config.autoRun ? "Auto-run: ON (band karein)" : "Auto-run: OFF (chalu karein)"}
               </button>
-              <button onClick={() => act("Run now", () => post("run-now", { limit: 3 }))} className="rounded-lg border border-primary/40 px-3 py-2 text-xs font-semibold text-primary">▶️ Abhi chalao</button>
+              <button onClick={() => act("Run now", () => post("run-now", {}))} className="rounded-lg border border-primary/40 px-3 py-2 text-xs font-semibold text-primary">▶️ Abhi chalao (queue khatam hone tak)</button>
               <button onClick={() => act("Queue", () => post("enqueue", { scope: "unmapped", examId: examId || undefined, year: year ? Number(year) : undefined }))} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold">➕ Bina-date wale sab queue me ({examId || year ? "filter ke" : "sab"})</button>
               <button onClick={() => act("Retry", () => post("enqueue", { scope: "retry", statuses: ["FAILED", "NOT_FOUND"] }))} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold">🔁 Fail/Nahi-mili dobara</button>
               <button onClick={downloadLog} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold">⬇️ Status Excel</button>

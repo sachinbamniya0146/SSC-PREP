@@ -27,6 +27,27 @@ function rotateModels(list: string[], offset?: number): string[] {
   return [...list.slice(k), ...list.slice(0, k)];
 }
 
+/** NEW (Oct 14 2026): what the admin sees LIVE on Admin → API Keys. */
+export interface LiveCall {
+  id: number;
+  keyId: string | null;
+  keyName: string;
+  feature: string;
+  model: string | null;
+  startedAt: number;
+}
+export interface LiveEvent {
+  at: number;
+  keyId: string | null;
+  keyName: string;
+  feature: string;
+  model: string | null;
+  success: boolean;
+  ms: number;
+  error: string | null;
+}
+const MAX_EVENTS = 40;
+
 export interface KeyTestResult {
   ok: boolean;
   status: 'working' | 'invalid' | 'rate_limited' | 'error';
@@ -70,6 +91,9 @@ export class AiProviderService {
   private readonly logger = new Logger(AiProviderService.name);
   private modelsCache: { at: number; list: string[] } | null = null;
   private readonly cooldown = new Map<string, number>();
+  private readonly activeCalls = new Map<number, LiveCall>();
+  private readonly events: LiveEvent[] = [];
+  private seq = 0;
 
   constructor(private readonly adminApiKeys: AdminApiKeyService) {}
 
@@ -103,6 +127,65 @@ export class AiProviderService {
     return [...head, ...list.filter((m) => m !== env)];
   }
 
+  // ---------------------------------------------------------------- live status (NEW Oct 14 2026)
+
+  private beginCall(keyId: string | null, keyName: string, feature: string): LiveCall {
+    const call: LiveCall = { id: ++this.seq, keyId, keyName, feature, model: null, startedAt: Date.now() };
+    this.activeCalls.set(call.id, call);
+    return call;
+  }
+
+  private endCall(call: LiveCall, success: boolean, error?: string | null) {
+    this.activeCalls.delete(call.id);
+    this.events.unshift({
+      at: Date.now(),
+      keyId: call.keyId,
+      keyName: call.keyName,
+      feature: call.feature,
+      model: call.model,
+      success,
+      ms: Date.now() - call.startedAt,
+      error: error ? String(error).slice(0, 200) : null,
+    });
+    if (this.events.length > MAX_EVENTS) this.events.length = MAX_EVENTS;
+  }
+
+  /** Real-time picture for the admin screen: which key is working on what right now, which key is resting, last calls. */
+  async getLiveStatus() {
+    const now = Date.now();
+    let keys: Array<{ id: string; keyName: string; isActive: boolean; isPrimary: boolean; lastErrorMessage: string | null; exhaustedAt: Date | null }> = [];
+    try {
+      keys = (await this.adminApiKeys.getKeys('openrouter')) as typeof keys;
+    } catch {
+      /* DB hiccup: still return the in-memory part */
+    }
+    const active = Array.from(this.activeCalls.values());
+    return {
+      now,
+      working: active.length,
+      active: active.map((c) => ({ keyId: c.keyId, keyName: c.keyName, feature: c.feature, model: c.model, runningSec: Math.round((now - c.startedAt) / 1000) })),
+      keys: keys.map((k) => {
+        const call = active.find((c) => c.keyId === k.id);
+        const restUntil = this.cooldown.get(k.id) ?? 0;
+        const restSec = restUntil > now ? Math.ceil((restUntil - now) / 1000) : 0;
+        const state = !k.isActive ? 'off' : call ? 'working' : restSec > 0 ? 'resting' : 'idle';
+        return {
+          id: k.id,
+          keyName: k.keyName,
+          isActive: k.isActive,
+          isPrimary: k.isPrimary,
+          state,
+          restSec,
+          feature: call?.feature ?? null,
+          model: call?.model ?? null,
+          runningSec: call ? Math.round((now - call.startedAt) / 1000) : 0,
+          lastError: k.isActive ? null : k.lastErrorMessage,
+        };
+      }),
+      recent: this.events.slice(0, 25),
+    };
+  }
+
   /**
    * Generate a completion, preferring the caller's own OpenRouter key and falling back to
    * the admin key pool (free models only). A rate-limited key just rests for a minute and the
@@ -115,7 +198,9 @@ export class AiProviderService {
 
     if (opts.userApiKey) {
       const t0 = Date.now();
-      const result = await this.tryModels(opts.userApiKey, prompt, models, opts);
+      const live = this.beginCall(null, 'Student own key', feature);
+      const result = await this.tryModels(opts.userApiKey, prompt, models, { ...opts, onModel: (m) => { live.model = m; } });
+      this.endCall(live, !!result.content, result.content ? null : result.detail || result.reason);
       await this.adminApiKeys.logUsage({
         keyId: null,
         keyName: 'Student own key',
@@ -140,7 +225,9 @@ export class AiProviderService {
 
     for (const key of ordered) {
       const t0 = Date.now();
-      const result = await this.tryModels(key.apiKey, prompt, models, opts);
+      const live = this.beginCall(key.id, key.keyName, feature);
+      const result = await this.tryModels(key.apiKey, prompt, models, { ...opts, onModel: (m) => { live.model = m; } });
+      this.endCall(live, !!result.content, result.content ? null : result.detail || result.reason);
       const latencyMs = Date.now() - t0;
       if (result.content) {
         this.cooldown.delete(key.id);
@@ -163,7 +250,9 @@ export class AiProviderService {
     if (!key) return { ok: false, status: 'error', message: 'Key khaali hai.' };
     const models = await this.getFreeModels();
     const t0 = Date.now();
-    const r = await this.tryModels(key, 'Reply with exactly one word: OK', models, { maxTokens: 16 });
+    const live = this.beginCall(ctx?.keyId ?? null, ctx?.keyName ?? 'Key test', 'KEY_TEST');
+    const r = await this.tryModels(key, 'Reply with exactly one word: OK', models, { maxTokens: 16, onModel: (m) => { live.model = m; } });
+    this.endCall(live, !!r.content, r.content ? null : r.detail || r.reason);
     if (ctx?.keyName) {
       await this.adminApiKeys.logUsage({
         keyId: ctx.keyId ?? null,
@@ -190,11 +279,12 @@ export class AiProviderService {
     apiKey: string,
     prompt: string,
     models: string[],
-    opts: { jsonResponse?: boolean; maxTokens?: number },
+    opts: { jsonResponse?: boolean; maxTokens?: number; onModel?: (model: string) => void },
   ): Promise<{ content?: string; model?: string; reason?: 'dead' | 'rate_limited' | 'error'; detail?: string }> {
     let sawRateLimit = false;
     let lastDetail = '';
     for (const model of models) {
+      opts.onModel?.(model);
       for (const useJson of opts.jsonResponse ? [true, false] : [false]) {
         try {
           const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
