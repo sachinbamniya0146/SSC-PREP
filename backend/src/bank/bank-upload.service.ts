@@ -1336,6 +1336,23 @@ export class BankUploadService {
     return { published: r.count };
   }
 
+  // Oct 14 2026 — UNDO of "Publish": takes every live question of this upload back to Pending (students stop
+  // seeing them; nothing is deleted). Publish again any time.
+  async unpublishUploadBatch(id: string) {
+    const batch = await this.prisma.questionUploadBatch.findUnique({ where: { id }, select: { id: true } });
+    if (!batch) throw new BadRequestException('Upload batch not found');
+    const r = await this.prisma.question.updateMany({
+      where: { uploadBatchId: id, isApproved: true },
+      data: { isApproved: false, reviewStatus: 'PENDING' },
+    });
+    cacheClearPrefix('bank:subjects');
+    cacheClearPrefix('bank:chapters');
+    cacheClearPrefix('bank:meta');
+    cacheClearPrefix('bank:years');
+    cacheClearPrefix('bank:shifts');
+    return { unpublished: r.count };
+  }
+
   // NEW — a PYQ upload must carry a year; rows without one are (by the
   // codebase's definition) practice questions and will NOT appear in PYQ
   // pages. Adds a visible warning to the result so a mis-clicked

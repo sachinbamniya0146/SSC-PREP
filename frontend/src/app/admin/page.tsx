@@ -226,6 +226,9 @@ export default function AdminPage() {
     }[];
   };
   const [batches, setBatches] = React.useState<UploadBatchSummary[]>([]);
+  // Oct 14 2026: select uploads (or all) -> Publish / Unpublish (undo a mistaken publish) in one click
+  const [selectedBatchIds, setSelectedBatchIds] = React.useState<Set<string>>(new Set());
+  const [bulkBatchBusy, setBulkBatchBusy] = React.useState(false);
   const [batchesLoading, setBatchesLoading] = React.useState(false);
   const [batchesErr, setBatchesErr] = React.useState("");
   const [expandedBatchId, setExpandedBatchId] = React.useState<string | null>(null);
@@ -778,6 +781,53 @@ export default function AdminPage() {
       if (expandedBatchId === id) toggleBatchDetail(id).then(() => toggleBatchDetail(id));
     } catch (e) {
       setBatchesErr(e instanceof Error ? e.message : "Publish nahi hua");
+    }
+  }
+
+  async function bulkBatchAction(action: "publish" | "unpublish") {
+    const ids = Array.from(selectedBatchIds);
+    if (ids.length === 0) return;
+    const msg =
+      action === "publish"
+        ? `${ids.length} upload(s) ke sabhi pending questions PUBLISH (live) karein?`
+        : `${ids.length} upload(s) ke sabhi live questions UNPUBLISH karein? Students ko dikhna band ho jayega (delete nahi hoga, dobara publish kar sakte hain).`;
+    if (!confirm(msg)) return;
+    setBulkBatchBusy(true);
+    setBatchesErr("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches-bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ids }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setBatchesErr(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
+        return;
+      }
+      setInfo(`${d.questions ?? 0} question(s) ${action === "publish" ? "publish" : "unpublish"} hue (${d.done}/${d.uploads} uploads)${d.failed ? ` · ${d.failed} fail: ${d.errors?.[0]?.error ?? ""}` : ""}.`);
+      setSelectedBatchIds(new Set());
+      await loadBatches();
+    } catch (e) {
+      setBatchesErr(e instanceof Error ? e.message : "Action nahi hua");
+    } finally {
+      setBulkBatchBusy(false);
+    }
+  }
+
+  async function unpublishBatchHandler(id: string) {
+    if (!confirm("Is upload ke live questions UNPUBLISH karein? (students ko dikhna band, delete nahi)")) return;
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches/${id}/unpublish`, { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setBatchesErr(d?.message || `HTTP ${r.status}`);
+        return;
+      }
+      setInfo(`${d.unpublished ?? 0} question(s) unpublish ho gaye.`);
+      await loadBatches();
+    } catch (e) {
+      setBatchesErr(e instanceof Error ? e.message : "Unpublish nahi hua");
     }
   }
 
@@ -1412,10 +1462,41 @@ export default function AdminPage() {
             <p className="mt-2 text-sm text-muted-foreground">Abhi tak koi upload record nahi hai.</p>
           )}
           {batches.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 p-2 text-xs">
+              <label className="flex items-center gap-1 font-semibold">
+                <input
+                  type="checkbox"
+                  checked={batches.length > 0 && batches.every((b) => selectedBatchIds.has(b.id))}
+                  onChange={(e) => setSelectedBatchIds(e.target.checked ? new Set(batches.map((b) => b.id)) : new Set())}
+                />
+                Select all ({batches.length})
+              </label>
+              <span className="text-muted-foreground">{selectedBatchIds.size} selected</span>
+              <div className="ml-auto flex flex-wrap gap-1.5">
+                <button
+                  disabled={bulkBatchBusy || selectedBatchIds.size === 0}
+                  onClick={() => bulkBatchAction("publish")}
+                  className="rounded border border-emerald-500/50 bg-emerald-500/10 px-2 py-1 font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-400"
+                >
+                  ✅ Selected: Publish
+                </button>
+                <button
+                  disabled={bulkBatchBusy || selectedBatchIds.size === 0}
+                  onClick={() => bulkBatchAction("unpublish")}
+                  className="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 font-semibold text-amber-700 disabled:opacity-40 dark:text-amber-400"
+                  title="Galti se publish ho gaye the? Wapas Pending (students ko nahi dikhenge)"
+                >
+                  ↩️ Selected: Unpublish (undo)
+                </button>
+              </div>
+            </div>
+          )}
+          {batches.length > 0 && (
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-border text-xs text-muted-foreground">
                   <tr>
+                    <th className="px-2 py-2"></th>
                     <th className="px-3 py-2">Kab</th>
                     <th className="px-3 py-2">File</th>
                     <th className="px-3 py-2">Type</th>
@@ -1431,6 +1512,13 @@ export default function AdminPage() {
                   {batches.map((b) => (
                     <React.Fragment key={b.id}>
                       <tr className="border-b border-border last:border-0">
+                        <td className="px-2 py-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedBatchIds.has(b.id)}
+                            onChange={() => setSelectedBatchIds((prev) => { const n = new Set(prev); if (n.has(b.id)) n.delete(b.id); else n.add(b.id); return n; })}
+                          />
+                        </td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                           {new Date(b.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                         </td>
@@ -1489,7 +1577,7 @@ export default function AdminPage() {
                         </td>
                       </tr>
                       <tr className="border-b border-border last:border-0">
-                        <td colSpan={10} className="px-3 pb-3 pt-0">
+                        <td colSpan={11} className="px-3 pb-3 pt-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <button
                               onClick={() => toggleBatchDetail(b.id)}
@@ -1513,6 +1601,15 @@ export default function AdminPage() {
                                 ✅ Publish All ({b.pendingCount})
                               </button>
                             )}
+                            {(b.liveCount ?? 0) > 0 && (
+                              <button
+                                onClick={() => unpublishBatchHandler(b.id)}
+                                className="whitespace-nowrap rounded-lg border border-amber-500/40 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+                                title="Galti se publish hua? Is upload ke live questions wapas Pending (hidden) karein"
+                              >
+                                ↩️ Unpublish ({b.liveCount})
+                              </button>
+                            )}
                             <button
                               onClick={() => downloadBatchHandler(b.id, b.filename)}
                               className="whitespace-nowrap rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
@@ -1531,7 +1628,7 @@ export default function AdminPage() {
                       </tr>
                       {expandedBatchId === b.id && (
                         <tr className="border-b border-border last:border-0 bg-muted/20">
-                          <td colSpan={10} className="px-3 py-3">
+                          <td colSpan={11} className="px-3 py-3">
                             {!expandedBatchDetail ? (
                               <p className="text-xs text-muted-foreground">Loading...</p>
                             ) : (

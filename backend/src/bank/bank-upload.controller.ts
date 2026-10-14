@@ -437,6 +437,38 @@ export class BankUploadController {
     return this.uploadService.publishUploadBatch(id);
   }
 
+  // Oct 14 2026 — UNDO a mistaken publish: back to Pending (hidden from students, nothing deleted).
+  @Post('batches/:id/unpublish')
+  async unpublishBatch(@Param('id') id: string, @Req() req: any) {
+    await this.assertBatchAccess(req, id);
+    return this.uploadService.unpublishUploadBatch(id);
+  }
+
+  // Oct 14 2026 — many uploads at once (select-all in Upload History).
+  // body: { action: 'publish' | 'unpublish', ids: string[] }
+  @Post('batches-bulk')
+  async bulkBatches(@Body() body: any, @Req() req: any) {
+    const action = body?.action;
+    if (action !== 'publish' && action !== 'unpublish') throw new BadRequestException("action 'publish' ya 'unpublish' hona chahiye.");
+    const ids: string[] = Array.isArray(body?.ids) ? Array.from(new Set(body.ids.map(String))) : [];
+    if (ids.length === 0) throw new BadRequestException('Koi upload select nahi kiya.');
+    if (ids.length > 500) throw new BadRequestException('Ek baar me max 500 uploads.');
+    let questions = 0;
+    let done = 0;
+    const errors: { id: string; error: string }[] = [];
+    for (const id of ids) {
+      try {
+        await this.assertBatchAccess(req, id);
+        if (action === 'publish') questions += (await this.uploadService.publishUploadBatch(id)).published;
+        else questions += (await this.uploadService.unpublishUploadBatch(id)).unpublished;
+        done++;
+      } catch (e: any) {
+        if (errors.length < 20) errors.push({ id, error: e?.response?.message || e?.message || 'failed' });
+      }
+    }
+    return { action, uploads: ids.length, done, failed: ids.length - done, questions, errors };
+  }
+
   // NEW — delete only one subject's / chapter's / topic's / sub-topic's
   // questions out of an upload (the upload record itself stays).
   @Delete('batches/:id/questions')
