@@ -227,30 +227,68 @@ export default function DuplicateReviewPage() {
     }
   };
 
-  const bulk = async (action: Action, mode: "selected" | "all") => {
+  // Runs bulk-resolve again and again (the server handles ~40 s of work per call) until nothing is left.
+  // publish=true makes every kept NEW question live at once. `scopeAll` = every pending duplicate (Exact + Milte-julte).
+  const bulk = async (action: Action, mode: "selected" | "all", opts: { publish?: boolean; scopeAll?: boolean } = {}) => {
     const label = action === "KEEP_EXISTING" ? "purana rakho" : action === "KEEP_NEW" ? "naya rakho" : "dono rakho";
-    const count = mode === "selected" ? selected.size : total;
+    const pendingAll = (counts?.pending ?? total);
+    const count = mode === "selected" ? selected.size : opts.scopeAll ? pendingAll : total;
     if (count === 0) return;
-    const scope = mode === "selected" ? `${count} selected` : `is tab ke sabhi ${count}`;
-    if (!window.confirm(`${scope} duplicate par "${label}" lagana hai?`)) return;
+    const scope = mode === "selected" ? `${count} selected` : opts.scopeAll ? `sabhi ${count} pending` : `is tab ke sabhi ${count}`;
+    const extra = opts.publish ? " aur naye questions PUBLISH (live)" : "";
+    if (!window.confirm(`${scope} duplicate par "${label}"${extra} lagana hai?`)) return;
     setBulkBusy(true);
     setMsg(null);
+    let done = 0;
+    let failed = 0;
+    let firstErr = "";
+    const skipIds: string[] = [];
     try {
-      const body: Record<string, unknown> = { action };
-      if (mode === "selected") body.ids = Array.from(selected);
-      else { body.confirm = true; if (tab !== "RESOLVED") body.matchType = tab; if (batchId) body.batchId = batchId; }
-      const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/bulk-resolve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+      if (mode === "selected") {
+        // chunks of 300 so one request stays short
+        const ids = Array.from(selected);
+        for (let i = 0; i < ids.length; i += 300) {
+          const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/bulk-resolve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, ids: ids.slice(i, i + 300), publish: !!opts.publish }),
+          });
+          const d = await r.json().catch(() => null);
+          if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
+          done += d.done ?? 0;
+          failed += d.failed ?? 0;
+          if (!firstErr && d.errors?.[0]?.error) firstErr = d.errors[0].error;
+          setMsg({ type: "ok", text: `Ho raha hai… ${done} / ${ids.length}` });
+        }
+      } else {
+        for (let round = 0; round < 1000; round++) {
+          const body: Record<string, unknown> = { action, confirm: true, publish: !!opts.publish, skipIds };
+          if (!opts.scopeAll && tab !== "RESOLVED") body.matchType = tab;
+          if (batchId) body.batchId = batchId;
+          const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/bulk-resolve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json().catch(() => null);
+          if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
+          done += d.done ?? 0;
+          failed += d.failed ?? 0;
+          if (!firstErr && d.errors?.[0]?.error) firstErr = d.errors[0].error;
+          if (Array.isArray(d.failedIds)) skipIds.push(...d.failedIds);
+          setMsg({ type: "ok", text: `Ho raha hai… ${done} ho gaye, ${d.remaining ?? 0} baaki${failed ? `, ${failed} fail` : ""}` });
+          if (!d.remaining || (d.done ?? 0) === 0) break;
+        }
+      }
+      setMsg({
+        type: failed ? "err" : "ok",
+        text: `✅ ${done} duplicate resolve hue${opts.publish ? " (naye questions publish)" : ""}${failed ? `, ${failed} fail — pehla karan: ${firstErr}` : ""}.`,
       });
-      const d = await r.json().catch(() => null);
-      if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
-      setMsg({ type: d.failed ? "err" : "ok", text: `${d.done} duplicate resolve hue${d.failed ? `, ${d.failed} fail` : ""}${d.capped ? " (ek baar me max 2000 — dobara chalayein)" : ""}.` });
       setPage(0);
       await refreshAll(0);
     } catch (e) {
-      setMsg({ type: "err", text: e instanceof Error ? e.message : "Failed" });
+      setMsg({ type: "err", text: `${done} ho chuke, phir ruk gaya: ${e instanceof Error ? e.message : "Failed"}` });
+      await refreshAll(0);
     } finally {
       setBulkBusy(false);
     }
@@ -322,6 +360,22 @@ export default function DuplicateReviewPage() {
           <div className={`rounded-lg border p-3 text-sm ${msg.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10" : "border-red-500/40 bg-red-500/10"}`}>{msg.text}</div>
         )}
 
+        {(counts?.pending ?? 0) > 0 && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-primary/50 bg-primary/5 p-3">
+            <div className="min-w-[220px] flex-1 text-sm">
+              <div className="font-bold">⚡ Ek click: sabhi {counts?.pending} duplicates me NAYA (latest) rakho</div>
+              <div className="text-xs text-muted-foreground">Purana hide ho jayega (Question Manager se wapas aa sakta hai), naya question save + publish ho jayega. Exact aur Milte-julte dono.</div>
+            </div>
+            <button
+              disabled={bulkBusy}
+              onClick={() => bulk("KEEP_NEW", "all", { publish: true, scopeAll: true })}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-40"
+            >
+              {bulkBusy ? "Ho raha hai…" : "✅ Sab naya rakho + Publish"}
+            </button>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2">
           {tabBtn("EXACT", "Exact same", counts?.pendingExact)}
           {tabBtn("SIMILAR", "Milte-julte", counts?.pendingSimilar)}
@@ -342,6 +396,8 @@ export default function DuplicateReviewPage() {
             <span className="text-muted-foreground">{selected.size} selected</span>
             <div className="ml-auto flex flex-wrap gap-1.5">
               <button disabled={bulkBusy || selected.size === 0} onClick={() => bulk("KEEP_EXISTING", "selected")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: purana rakho</button>
+              <button disabled={bulkBusy || selected.size === 0} onClick={() => bulk("KEEP_NEW", "selected", { publish: true })} className="rounded border border-primary/50 bg-primary/10 px-2 py-1 font-semibold text-primary disabled:opacity-40">Selected: naya rakho + Publish</button>
+              <button disabled={bulkBusy || total === 0} onClick={() => bulk("KEEP_NEW", "all", { publish: true })} className="rounded border border-primary/50 bg-primary/10 px-2 py-1 font-semibold text-primary disabled:opacity-40">Is tab ke sabhi {total}: naya rakho + Publish</button>
               <button disabled={bulkBusy || selected.size === 0} onClick={() => bulk("KEEP_NEW", "selected")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: naya rakho</button>
               <button disabled={bulkBusy || selected.size === 0} onClick={() => bulk("KEEP_BOTH", "selected")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: dono rakho</button>
               <button disabled={bulkBusy || total === 0} onClick={() => bulk(tab === "SIMILAR" ? "KEEP_BOTH" : "KEEP_EXISTING", "all")} className="rounded border border-primary/50 bg-primary/10 px-2 py-1 font-semibold text-primary disabled:opacity-40">

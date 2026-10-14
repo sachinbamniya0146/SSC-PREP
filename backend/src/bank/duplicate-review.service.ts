@@ -36,7 +36,21 @@ const ACTION_TO_STATUS: Record<DuplicateAction, string> = {
   KEEP_BOTH: 'KEPT_BOTH',
 };
 
-const BULK_RESOLVE_MAX = 2000;
+const BULK_RESOLVE_MAX = 5000;
+// Oct 14 2026: one bulk request stops after this long (Cloudflare cuts requests at 100 s); the UI simply calls again for the rest.
+const BULK_TIME_BUDGET_MS = 40_000;
+const BULK_CONCURRENCY = 6;
+
+/** Work collected while many reviews are resolved, flushed ONCE at the end instead of after every review. */
+interface BulkCtx {
+  papers: Map<string, { examId: string; year: number; shift: string; paperCode: string | null; examDate: string | null }>;
+  audits: any[];
+}
+interface ResolveOpts {
+  /** keep-new / keep-both: make the surviving new question live at once */
+  publish?: boolean;
+  ctx?: BulkCtx;
+}
 const SCAN_GROUP_CHUNK = 200;
 
 export interface DuplicateListQuery {
@@ -147,7 +161,7 @@ export class DuplicateReviewService {
   }
 
   // --------------------------------------------------------------- resolve
-  async resolve(id: string, actionRaw: string, adminId: string) {
+  async resolve(id: string, actionRaw: string, adminId: string, opts: ResolveOpts = {}) {
     const action = this.parseAction(actionRaw);
     const review = await this.prisma.duplicateReview.findUnique({ where: { id } });
     if (!review) throw new NotFoundException('Ye duplicate review nahi mila. / Review not found.');
@@ -163,7 +177,7 @@ export class DuplicateReviewService {
     if (claim.count === 0) throw new ConflictException('Is duplicate par pehle hi decision ho chuka hai. / Already resolved.');
 
     try {
-      const detail = await this.apply(review, action, adminId);
+      const detail = await this.apply(review, action, adminId, opts);
       return { id, status: ACTION_TO_STATUS[action], ...detail };
     } catch (e) {
       // side effects failed: put the review back in the queue so nothing is lost
@@ -174,22 +188,30 @@ export class DuplicateReviewService {
     }
   }
 
-  /** Apply one decision to many reviews. Either explicit `ids`, or every PENDING review matching the filter (needs confirm). */
+  /**
+   * Apply one decision to many reviews. Either explicit `ids`, or every PENDING review matching the filter (needs confirm).
+   * Oct 14 2026: runs 6 at a time, rebuilds each PYQ mock / clears caches ONCE at the end, stops after ~40 s and reports
+   * `remaining` so the UI can call again until it is 0 (no more 100 s timeouts on thousands of duplicates).
+   * `publish` makes every kept NEW question live immediately. `skipIds` = reviews that already failed this run.
+   */
   async bulkResolve(
-    body: { ids?: string[]; matchType?: string; batchId?: string; action: string },
+    body: { ids?: string[]; matchType?: string; batchId?: string; action: string; publish?: boolean; skipIds?: string[] },
     adminId: string,
   ) {
     const action = this.parseAction(body.action);
+    const started = Date.now();
+    const skip = new Set((body.skipIds ?? []).map(String));
+    const baseWhere: any = { status: 'PENDING' };
+    const mt = String(body.matchType ?? '').toUpperCase();
+    if (mt === 'EXACT' || mt === 'SIMILAR') baseWhere.matchType = mt;
+    if (body.batchId) baseWhere.uploadBatchId = String(body.batchId);
+
     let ids: string[] = [];
     if (Array.isArray(body.ids) && body.ids.length) {
-      ids = Array.from(new Set(body.ids.map(String))).slice(0, BULK_RESOLVE_MAX);
+      ids = Array.from(new Set(body.ids.map(String))).filter((x) => !skip.has(x)).slice(0, BULK_RESOLVE_MAX);
     } else {
-      const where: any = { status: 'PENDING' };
-      const mt = String(body.matchType ?? '').toUpperCase();
-      if (mt === 'EXACT' || mt === 'SIMILAR') where.matchType = mt;
-      if (body.batchId) where.uploadBatchId = String(body.batchId);
       const found = await this.prisma.duplicateReview.findMany({
-        where,
+        where: { ...baseWhere, ...(skip.size ? { id: { notIn: Array.from(skip) } } : {}) },
         orderBy: { createdAt: 'asc' },
         take: BULK_RESOLVE_MAX,
         select: { id: true },
@@ -197,19 +219,63 @@ export class DuplicateReviewService {
       ids = found.map((f) => f.id);
     }
 
+    const ctx: BulkCtx = { papers: new Map(), audits: [] };
     let done = 0;
     let failed = 0;
+    let cursor = 0;
     const errors: { id: string; error: string }[] = [];
-    for (const id of ids) {
+    const failedIds: string[] = [];
+    const worker = async () => {
+      while (cursor < ids.length && Date.now() - started < BULK_TIME_BUDGET_MS) {
+        const id = ids[cursor++];
+        try {
+          await this.resolve(id, action, adminId, { publish: !!body.publish, ctx });
+          done++;
+        } catch (e) {
+          failed++;
+          failedIds.push(id);
+          if (errors.length < 20) errors.push({ id, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BULK_CONCURRENCY, Math.max(ids.length, 1)) }, () => worker()));
+    const attempted = Math.min(cursor, ids.length);
+    await this.flushBulk(ctx, adminId);
+
+    // how many are still waiting for this filter (not counting the ones that failed)
+    const stillPending = await this.prisma.duplicateReview.count({
+      where: { ...baseWhere, ...(skip.size || failedIds.length ? { id: { notIn: [...skip, ...failedIds] } } : {}) },
+    });
+    const remaining = Array.isArray(body.ids) && body.ids.length ? Math.max(ids.length - attempted, 0) : stillPending;
+    return { requested: ids.length, done, failed, failedIds, errors, remaining, capped: remaining > 0 };
+  }
+
+  /** One-time work after a bulk run: audit rows, caches, and each affected PYQ mock rebuilt once. */
+  private async flushBulk(ctx: BulkCtx, adminId: string) {
+    if (ctx.audits.length) {
       try {
-        await this.resolve(id, action, adminId);
-        done++;
-      } catch (e) {
-        failed++;
-        if (errors.length < 20) errors.push({ id, error: e instanceof Error ? e.message : String(e) });
+        await this.prisma.auditLog.createMany({ data: ctx.audits });
+      } catch {
+        /* audit is best effort */
       }
     }
-    return { requested: ids.length, done, failed, errors, capped: ids.length >= BULK_RESOLVE_MAX };
+    if (ctx.audits.length || ctx.papers.size) this.clearBankCaches();
+    for (const g of ctx.papers.values()) {
+      try {
+        await this.upload.upsertPyqMockForPaper(g.examId, g.year, g.shift, g.paperCode, g.examDate);
+      } catch {
+        /* mock refresh is best effort */
+      }
+    }
+    void adminId;
+  }
+
+  private clearBankCaches() {
+    cacheClearPrefix('bank:subjects');
+    cacheClearPrefix('bank:chapters');
+    cacheClearPrefix('bank:meta');
+    cacheClearPrefix('bank:years');
+    cacheClearPrefix('bank:shifts');
   }
 
   // ------------------------------------------------------------------ scan
@@ -311,17 +377,31 @@ export class DuplicateReviewService {
     throw new BadRequestException('action KEEP_EXISTING, KEEP_NEW ya KEEP_BOTH hona chahiye.');
   }
 
-  private async apply(review: any, action: DuplicateAction, adminId: string) {
+  private async apply(review: any, action: DuplicateAction, adminId: string, opts: ResolveOpts = {}) {
     const uploadMode = !!review.candidateJson && !review.candidateQuestionId;
     const out: { createdQuestionId?: string; hiddenQuestionId?: string; published?: boolean } = {};
+    const ctx = opts.ctx;
 
     if (uploadMode) {
       if (action === 'KEEP_EXISTING') return out; // the new row is simply dropped
-      const created = await this.upload.createFromReviewCandidate(review.candidateJson as any, adminId, review.uploadBatchId);
+      const created = await this.upload.createFromReviewCandidate(review.candidateJson as any, adminId, review.uploadBatchId, {
+        deferRefresh: !!ctx,
+        forcePublish: !!opts.publish,
+      });
       out.createdQuestionId = created.id;
       out.published = created.published;
+      if (ctx) {
+        ctx.audits.push({
+          userId: adminId,
+          action: 'QUESTION_CREATED_FROM_DUPLICATE_REVIEW',
+          targetEntity: 'Question',
+          entityId: created.id,
+          metadataJson: { via: 'duplicate-review-bulk' } as any,
+        });
+        if (created.paper) ctx.papers.set(`${created.paper.examId}|${created.paper.year}|${created.paper.shift}|${created.paper.paperCode ?? ''}`, created.paper);
+      }
       if (action === 'KEEP_NEW' && review.existingQuestionId) {
-        await this.hide(review.existingQuestionId, adminId, 'DUPLICATE_REVIEW_KEEP_NEW');
+        await this.hide(review.existingQuestionId, adminId, 'DUPLICATE_REVIEW_KEEP_NEW', ctx);
         out.hiddenQuestionId = review.existingQuestionId;
       }
       return out;
@@ -330,42 +410,51 @@ export class DuplicateReviewService {
     // scan mode: both questions already live
     if (action === 'KEEP_BOTH') return out;
     const loser = action === 'KEEP_EXISTING' ? review.candidateQuestionId : review.existingQuestionId;
+    const winner = action === 'KEEP_EXISTING' ? review.existingQuestionId : review.candidateQuestionId;
     if (loser) {
-      await this.hide(loser, adminId, action === 'KEEP_EXISTING' ? 'DUPLICATE_REVIEW_KEEP_A' : 'DUPLICATE_REVIEW_KEEP_B');
+      await this.hide(loser, adminId, action === 'KEEP_EXISTING' ? 'DUPLICATE_REVIEW_KEEP_A' : 'DUPLICATE_REVIEW_KEEP_B', ctx);
       out.hiddenQuestionId = loser;
+    }
+    if (opts.publish && winner) {
+      await this.prisma.question
+        .update({ where: { id: winner }, data: { isApproved: true, isActive: true, autoSuspended: false, reviewStatus: 'APPROVED' } })
+        .catch(() => undefined);
+      out.published = true;
     }
     return out;
   }
 
   /** Soft-remove: students stop seeing it, attempts/bookmarks stay intact, admin can restore it. */
-  private async hide(questionId: string, adminId: string, reason: string) {
+  private async hide(questionId: string, adminId: string, reason: string, ctx?: BulkCtx) {
     const q = await this.prisma.question.findUnique({
       where: { id: questionId },
       select: { id: true, isActive: true, examId: true, year: true, shift: true, paperCode: true, examDate: true },
     });
     if (!q || !q.isActive) return;
     await this.prisma.question.update({ where: { id: questionId }, data: { isActive: false } });
+    const audit = {
+      userId: adminId,
+      action: reason,
+      targetEntity: 'Question',
+      entityId: questionId,
+      metadataJson: { via: 'duplicate-review' } as any,
+    };
+    const paper = q.examId && q.year && q.shift ? { examId: q.examId, year: q.year, shift: q.shift, paperCode: q.paperCode ?? null, examDate: q.examDate ?? null } : null;
+    if (ctx) {
+      // bulk run: audit + cache clear + mock rebuild happen once, in flushBulk()
+      ctx.audits.push(audit);
+      if (paper) ctx.papers.set(`${paper.examId}|${paper.year}|${paper.shift}|${paper.paperCode ?? ''}`, paper);
+      return;
+    }
     try {
-      await this.prisma.auditLog.create({
-        data: {
-          userId: adminId,
-          action: reason,
-          targetEntity: 'Question',
-          entityId: questionId,
-          metadataJson: { via: 'duplicate-review' } as any,
-        },
-      });
+      await this.prisma.auditLog.create({ data: audit });
     } catch {
       /* audit is best effort */
     }
-    cacheClearPrefix('bank:subjects');
-    cacheClearPrefix('bank:chapters');
-    cacheClearPrefix('bank:meta');
-    cacheClearPrefix('bank:years');
-    cacheClearPrefix('bank:shifts');
-    if (q.examId && q.year && q.shift) {
+    this.clearBankCaches();
+    if (paper) {
       try {
-        await this.upload.upsertPyqMockForPaper(q.examId, q.year, q.shift, q.paperCode ?? null, q.examDate ?? null);
+        await this.upload.upsertPyqMockForPaper(paper.examId, paper.year, paper.shift, paper.paperCode, paper.examDate);
       } catch {
         /* mock refresh is best effort */
       }

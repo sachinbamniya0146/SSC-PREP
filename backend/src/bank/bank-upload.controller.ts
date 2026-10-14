@@ -151,8 +151,8 @@ export class BankUploadController {
     const errs: any[] = job.result?.errors ?? [];
     if (!job.headers || !errs.some((e) => Array.isArray(e.data))) throw new BadRequestException('Koi rejected row nahi hai.');
     const wb = XLSX.utils.book_new();
-    const aoa: any[][] = [[...job.headers, 'rejectReason', 'originalRow']];
-    for (const e of errs) if (Array.isArray(e.data)) aoa.push([...job.headers.map((_, i) => e.data[i] ?? ''), e.error, e.row]);
+    const aoa: any[][] = [[...job.headers, 'rejectReason', 'originalRow', 'problemColumn', 'howToFix']];
+    for (const e of errs) if (Array.isArray(e.data)) aoa.push([...job.headers.map((_, i) => e.data[i] ?? ''), e.error, e.row, e.field ?? '', e.fix ?? '']);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Rejected');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="rejected_${id}.xlsx"`);

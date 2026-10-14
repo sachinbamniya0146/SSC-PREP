@@ -305,7 +305,8 @@ export interface UploadResult {
   total: number;
   created: number;
   failed: number;
-  errors: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string; data?: any }[];
+  // Oct 13 2026: `field` = sheet column the problem is in, `fix` = how to correct it (Hinglish), added automatically by pushUploadError().
+  errors: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string; data?: any; field?: string; fix?: string }[];
   warnings: { row: number; message: string; questionPreview?: string }[];
   // Phase 3 (Sachin, Sep 2026) — id of the persisted QuestionUploadBatch
   // row for this upload, so the admin panel can deep-link straight from
@@ -359,6 +360,14 @@ export class DuplicateQuestionError extends Error {
     super(message);
     this.name = 'DuplicateQuestionError';
   }
+}
+
+/** A duplicate row waiting to be queued for review (queued in one batch — see flushDuplicateQueue()). */
+interface DupQueueItem {
+  err: DuplicateQuestionError;
+  rowNum: number;
+  preview?: string;
+  data: any;
 }
 
 /** A review row whose "existing" side is another row of the SAME upload that has no DB id yet. */
@@ -422,7 +431,45 @@ export class BankUploadService {
   // ------------------------------------------------------------------
   private readonly uploadJobs = new UploadJobStore();
 
+  /**
+   * Oct 13 2026 ("error format me acche details"): works out WHICH column is wrong and HOW to fix it
+   * from the error text, so every rejected row says e.g. "Column: correctAnswer — A/B/C/D likhein".
+   */
+  private explainUploadError(message: string, category: UploadErrorCategory): { field?: string; fix?: string } {
+    const m = String(message ?? '');
+    const ref = /\b(examId|subjectId|chapterId|topicId|subTopicId)\b/.exec(m);
+    if (/Missing required column: (\w+)/i.test(m)) {
+      const col = /Missing required column: (\w+)/i.exec(m)![1];
+      return { field: col, fix: `Sheet ki header row me "${col}" column nahi hai — template se header copy karke jodein.` };
+    }
+    if (category === 'MISSING_SOLUTION') {
+      return { field: 'explanation', fix: 'explanation (ya explanationHindi) column me solution likhein, phir sirf is row ko dobara upload karein.' };
+    }
+    if (/Invalid correctAnswer/i.test(m) || category === 'MISSING_ANSWER') {
+      return { field: 'correctAnswer', fix: 'correctAnswer me sirf A, B, C ya D likhein, aur wo option khali nahi hona chahiye.' };
+    }
+    if (/Invalid difficulty/i.test(m)) return { field: 'difficulty', fix: 'difficulty me EASY, MEDIUM ya HARD likhein (ya khali chhodein).' };
+    if (/questionText is empty/i.test(m)) return { field: 'questionText', fix: 'questionText khali hai — question likhein ya question image lagayein.' };
+    const opt = /Options? ([A-D](?:, [A-D])*) (?:is|are) empty/i.exec(m);
+    if (opt) return { field: opt[1].split(', ').map((k) => `option${k}`).join(', '), fix: 'Har option (A–D) me text, diagram ya image zaroori hai.' };
+    if (/belongs to (chapter|topic)/i.test(m)) {
+      return { field: ref?.[1], fix: 'Ye topic/sub-topic dusre chapter/topic ka hai — row me sahi parent wala id/naam likhein (Reference IDs sheet dekhein).' };
+    }
+    if (/not found in database/i.test(m)) {
+      return { field: ref?.[1], fix: `${ref?.[1] ?? 'Id'} ka naam/slug database se match nahi hua — Reference IDs sheet se sahi slug ya naam copy karein (spelling aur extra space check karein).` };
+    }
+    if (category === 'DUPLICATE') return { field: 'questionText', fix: 'Ye question bank me pehle se hai — Duplicate Review me purana/naya chunein.' };
+    if (category === 'MISSING_FIELD') return { fix: 'Zaroori column khali hai — row me khali cell bharein.' };
+    if (category === 'FORMAT') return { fix: 'Cell ki value ka format galat hai — upar likhi error ke hisaab se theek karein.' };
+    return { fix: 'Row ko dhyan se dekhein; samajh na aaye to Rejected rows file download karke ek-ek row theek karein.' };
+  }
+
   private pushUploadError(result: UploadResult, entry: UploadResult['errors'][number]): void {
+    if (!entry.field && !entry.fix) {
+      const x = this.explainUploadError(entry.error, entry.category);
+      if (x.field) entry.field = x.field;
+      if (x.fix) entry.fix = x.fix;
+    }
     result.errorSummary = result.errorSummary ?? {};
     result.errorSummary[entry.category] = (result.errorSummary[entry.category] ?? 0) + 1;
     if (result.errors.length < MAX_REPORTED_ERRORS) result.errors.push(entry);
@@ -2473,6 +2520,7 @@ export class BankUploadService {
     // where nearly all the wall-clock time was going.
     const toCommit: { rowNum: number; row: any[]; question: BulkUploadQuestion; data: any; published: boolean }[] = [];
     const pendingLinks: PendingDuplicateLink[] = [];
+    const dupQueue: DupQueueItem[] = [];
     let preparedCount = 0;
     for (const { rowNum, row, question } of parsedRows) {
       if (++preparedCount % 2000 === 0) await yieldToEventLoop();
@@ -2498,8 +2546,9 @@ export class BankUploadService {
         toCommit.push({ rowNum, row, question, data: prepared.data, published: prepared.published });
       } catch (error) {
         if (error instanceof DuplicateQuestionError) {
-          const queued = await this.routeDuplicateToReview(error, { adminId, uploadBatchId, rowNum, preview: this.extractQuestionPreview(row, headerMap), result, pendingLinks });
-          if (queued) continue;
+          // Oct 14 2026: duplicates are queued in ONE batch after this loop (was 2+ DB queries per duplicate row).
+          dupQueue.push({ err: error, rowNum, preview: this.extractQuestionPreview(row, headerMap), data: row });
+          continue;
         }
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
@@ -2511,6 +2560,11 @@ export class BankUploadService {
           data: row,
         });
       }
+    }
+
+    if (dupQueue.length) {
+      onProgress?.({ phase: 'DUPLICATES', processed: 0 });
+      await this.flushDuplicateQueue(dupQueue, { adminId, uploadBatchId, result, pendingLinks });
     }
 
     onProgress?.({ phase: 'SAVING', processed: 0, total: toCommit.length });
@@ -2679,6 +2733,7 @@ export class BankUploadService {
     // prepare synchronously (fast, in-memory, keeps in-file dedup correct),
     // then commit to the DB in concurrent chunks instead of one row at a time.
     const toCommit: { rowNum: number; row: BulkUploadQuestion; question: BulkUploadQuestion; data: any; published: boolean }[] = [];
+    const dupQueue: DupQueueItem[] = [];
     const pendingLinks: PendingDuplicateLink[] = [];
     for (const { rowNum, question } of validRows) {
       try {
@@ -2698,8 +2753,8 @@ export class BankUploadService {
         toCommit.push({ rowNum, row: question, question, data: prepared.data, published: prepared.published });
       } catch (error) {
         if (error instanceof DuplicateQuestionError) {
-          const queued = await this.routeDuplicateToReview(error, { adminId, uploadBatchId, rowNum, preview: this.previewFromQuestion(question), result, pendingLinks });
-          if (queued) continue;
+          dupQueue.push({ err: error, rowNum, preview: this.previewFromQuestion(question), data: question });
+          continue;
         }
         result.failed++;
         const message = error instanceof Error ? error.message : String(error);
@@ -2712,6 +2767,8 @@ export class BankUploadService {
         });
       }
     }
+
+    if (dupQueue.length) await this.flushDuplicateQueue(dupQueue, { adminId, uploadBatchId, result, pendingLinks });
 
     await this.commitQuestionsBatch(
       toCommit,
@@ -3895,6 +3952,162 @@ export class BankUploadService {
   }
 
   /**
+   * Oct 14 2026 (speed): queues MANY duplicate rows with a handful of queries instead of 2+ per row.
+   *  1 query per slice for already-queued/answered pairs, then createMany per slice.
+   * Rows whose "existing" side has no DB id yet (duplicate of another row of the same file) are
+   * created one by one, because their review id is needed for linkPendingDuplicateReviews().
+   * Same messages / counters as routeDuplicateToReview(); a row that cannot be queued is reported as a failed row.
+   */
+  private async flushDuplicateQueue(
+    items: DupQueueItem[],
+    ctx: { adminId: string; uploadBatchId?: string | null; result: UploadResult; pendingLinks: PendingDuplicateLink[] },
+  ): Promise<void> {
+    const { result } = ctx;
+    const reject = (it: DupQueueItem, msg?: string) => {
+      result.failed++;
+      const message = msg ?? it.err.message;
+      this.pushUploadError(result, {
+        row: it.rowNum,
+        error: message,
+        category: this.categorizeUploadError(message),
+        questionPreview: it.preview,
+        data: it.data,
+      });
+    };
+
+    const prepared = items.map((it) => {
+      const existing = it.err.existing;
+      const existingId: string | null = existing?.id && existing.id !== '(pending)' ? String(existing.id) : null;
+      const cmp = compareQuestions(it.err.question, existing);
+      return { it, existingId, cmp, searchHash: this.computeSearchHash(it.err.question) };
+    });
+
+    // pairs already waiting / already answered "keep old"
+    const priorByKey = new Map<string, { status: string; candidateJson: any }[]>();
+    const existingIds = Array.from(new Set(prepared.map((p) => p.existingId).filter((x): x is string => !!x)));
+    try {
+      for (const part of chunk(existingIds, 2000)) {
+        const rows = await this.prisma.duplicateReview.findMany({
+          where: { existingQuestionId: { in: part }, status: { in: ['PENDING', 'KEPT_EXISTING'] } },
+          select: { status: true, candidateJson: true, existingQuestionId: true, searchHash: true },
+        });
+        for (const r of rows) {
+          const key = `${r.existingQuestionId}|${r.searchHash}`;
+          const arr = priorByKey.get(key) ?? [];
+          arr.push({ status: r.status, candidateJson: r.candidateJson });
+          priorByKey.set(key, arr);
+        }
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[duplicate-review] could not read existing reviews, rejecting duplicates as before:', e instanceof Error ? e.message : e);
+      for (const p of prepared) reject(p.it);
+      return;
+    }
+
+    const toCreate: { data: any; p: (typeof prepared)[number] }[] = [];
+    const needLink: (typeof prepared)[number][] = [];
+    for (const p of prepared) {
+      const key = p.existingId ? `${p.existingId}|${p.searchHash}` : '';
+      let outcome: 'NEW' | 'ALREADY_PENDING' | 'ALREADY_DECIDED' = 'NEW';
+      if (key) {
+        const list = priorByKey.get(key) ?? [];
+        for (const r of list) {
+          if (r.candidateJson && compareQuestions(r.candidateJson, p.it.err.question).exact) {
+            outcome = r.status === 'PENDING' ? 'ALREADY_PENDING' : 'ALREADY_DECIDED';
+            break;
+          }
+        }
+      }
+      if (outcome !== 'NEW') {
+        result.reviewAlready = (result.reviewAlready ?? 0) + 1;
+        this.pushUploadWarning(result, {
+          row: p.it.rowNum,
+          message:
+            outcome === 'ALREADY_PENDING'
+              ? 'Ye duplicate pehle se Duplicate Review list me hai — dobara nahi jodha.'
+              : 'Is duplicate par admin pehle "purana rakho" decide kar chuka hai — skip kiya.',
+          questionPreview: p.it.preview,
+        });
+        continue;
+      }
+      // remember it so an identical row later in this same file is not queued twice
+      if (key) {
+        const arr = priorByKey.get(key) ?? [];
+        arr.push({ status: 'PENDING', candidateJson: this.duplicateSnapshot(p.it.err.question) });
+        priorByKey.set(key, arr);
+      }
+      const data = {
+        status: 'PENDING',
+        matchType: p.cmp.matchType,
+        differences: p.cmp.differences as any,
+        existingQuestionId: p.existingId,
+        candidateJson: this.duplicateSnapshot(p.it.err.question),
+        searchHash: p.searchHash,
+        uploadBatchId: ctx.uploadBatchId ?? null,
+        sourceRow: p.it.rowNum,
+        createdById: ctx.adminId ?? null,
+      };
+      if (p.existingId) toCreate.push({ data, p });
+      else needLink.push(p);
+    }
+
+    const noteQueued = (p: (typeof prepared)[number]) => {
+      result.queuedForReview = (result.queuedForReview ?? 0) + 1;
+      if (p.cmp.matchType === 'EXACT') result.queuedExact = (result.queuedExact ?? 0) + 1;
+      this.pushUploadWarning(result, {
+        row: p.it.rowNum,
+        message:
+          p.cmp.matchType === 'EXACT'
+            ? 'Exact duplicate (question, options, solution, shift sab same) — Duplicate Review me bheja. Wahan purana / naya / dono me se chunein.'
+            : `Same question, lekin ye details alag hain: ${p.cmp.differences.join(', ')} — Duplicate Review me bheja.`,
+        questionPreview: p.it.preview,
+      });
+    };
+
+    for (const part of chunk(toCreate, 200)) {
+      try {
+        await this.prisma.duplicateReview.createMany({ data: part.map((x) => x.data) });
+        for (const x of part) noteQueued(x.p);
+      } catch {
+        // one bad row spoils the bulk insert: nothing of this slice was saved, so retry row by row
+        for (const x of part) {
+          try {
+            await this.prisma.duplicateReview.create({ data: x.data });
+            noteQueued(x.p);
+          } catch (e) {
+            reject(x.p.it);
+          }
+        }
+      }
+      await yieldToEventLoop();
+    }
+
+    for (const p of needLink) {
+      try {
+        const row = await this.prisma.duplicateReview.create({
+          data: {
+            status: 'PENDING',
+            matchType: p.cmp.matchType,
+            differences: p.cmp.differences as any,
+            existingQuestionId: null,
+            candidateJson: this.duplicateSnapshot(p.it.err.question),
+            searchHash: p.searchHash,
+            uploadBatchId: ctx.uploadBatchId ?? null,
+            sourceRow: p.it.rowNum,
+            createdById: ctx.adminId ?? null,
+          },
+          select: { id: true },
+        });
+        ctx.pendingLinks.push({ reviewId: row.id, searchHash: p.searchHash, question: p.it.err.question });
+        noteQueued(p);
+      } catch {
+        reject(p.it);
+      }
+    }
+  }
+
+  /**
    * Bulk-loop helper: queue a duplicate row and record it in the upload result.
    * Returns false when queueing was not possible (for example the migration has
    * not run yet) — the caller then falls back to the old "failed: duplicate"
@@ -3971,7 +4184,15 @@ export class BankUploadService {
    * duplicate check (the admin has just decided it may exist). Used by
    * DuplicateReviewService when the admin keeps the new question.
    */
-  async createFromReviewCandidate(question: BulkUploadQuestion, adminId: string, uploadBatchId?: string | null): Promise<{ id: string; published: boolean }> {
+  async createFromReviewCandidate(
+    question: BulkUploadQuestion,
+    adminId: string,
+    uploadBatchId?: string | null,
+    // Oct 14 2026: bulk "Naya rakho" calls this thousands of times — `deferRefresh` skips the per-question
+    // audit row + cache clear + PYQ-mock rebuild (the caller does them ONCE at the end and uses `paper`),
+    // `forcePublish` makes the new question live at once (admin's explicit decision, like Publish All).
+    opts: { deferRefresh?: boolean; forcePublish?: boolean } = {},
+  ): Promise<{ id: string; published: boolean; paper?: { examId: string; year: number; shift: string; paperCode: string | null; examDate: string | null } }> {
     const hindiExempt = await this.loadHindiExemptSubjectIds();
     // the upload batch may have been deleted since the review was queued
     let batchId: string | null = uploadBatchId ?? null;
@@ -3980,7 +4201,19 @@ export class BankUploadService {
       if (!b) batchId = null;
     }
     const prepared = this.prepareQuestion(question, undefined, batchId, hindiExempt);
+    if (opts.forcePublish) {
+      prepared.data.isApproved = true;
+      prepared.data.isActive = true;
+      prepared.data.autoSuspended = false;
+      prepared.data.reviewStatus = 'APPROVED';
+      prepared.published = true;
+    }
     const created = await this.prisma.question.create({ data: prepared.data, select: { id: true } });
+    const paper =
+      question.examId && question.year && question.shift
+        ? { examId: question.examId, year: question.year, shift: question.shift, paperCode: question.paperCode ?? null, examDate: question.examDate ?? null }
+        : undefined;
+    if (opts.deferRefresh) return { id: created.id, published: prepared.published, paper };
     try {
       await this.prisma.auditLog.create({
         data: {
@@ -3999,14 +4232,14 @@ export class BankUploadService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
-    if (question.examId && question.year && question.shift) {
+    if (paper) {
       try {
-        await this.upsertPyqMockForPaper(question.examId, question.year, question.shift, question.paperCode ?? null, question.examDate ?? null);
+        await this.upsertPyqMockForPaper(paper.examId, paper.year, paper.shift, paper.paperCode, paper.examDate);
       } catch {
         /* the question is saved; the mock refreshes on the next upload */
       }
     }
-    return { id: created.id, published: prepared.published };
+    return { id: created.id, published: prepared.published, paper };
   }
 
   /**

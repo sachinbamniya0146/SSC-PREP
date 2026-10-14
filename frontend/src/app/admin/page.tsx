@@ -53,8 +53,10 @@ interface UploadResult {
   total: number;
   created: number;
   failed: number;
-  errors: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string }[];
-  warnings: { row: number; message: string; questionPreview?: string }[];
+  // Oct 14 2026: `field` = problem column, `fix` = how to correct it, `file` = which file (multi-file upload)
+  errors: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string; field?: string; fix?: string; file?: string }[];
+  warnings: { row: number; message: string; questionPreview?: string; file?: string }[];
+  uploadBatchId?: string;
   // Oct 1 2026 (huge uploads): only the first ~1000 failed rows are listed.
   errorsTruncated?: boolean;
   errorSummary?: Record<string, number>;
@@ -188,7 +190,13 @@ export default function AdminPage() {
   // had no working way to add questions in bulk. Fixed on the backend
   // (bank-upload.controller.ts + bank.module.ts) — this is the UI for it.
   const [uploadFormat, setUploadFormat] = React.useState<"excel" | "csv" | "json" | "text" | "word">("excel");
-  const [uploadFile, setUploadFile] = React.useState<File | null>(null);
+  // Oct 14 2026: many files at once (PYQ Excel etc.) — uploaded one after another so duplicates between files are caught too.
+  const [uploadFiles, setUploadFiles] = React.useState<File[]>([]);
+  const uploadFile: File | null = uploadFiles[0] ?? null;
+  const [fileStatuses, setFileStatuses] = React.useState<{ name: string; state: "wait" | "run" | "done" | "fail"; text?: string }[]>([]);
+  const [rejectedList, setRejectedList] = React.useState<{ name: string; url: string }[]>([]);
+  // after upload: every duplicate -> keep the NEW (latest) one, then publish — no clicking per question
+  const [autoLatest, setAutoLatest] = React.useState(true);
   const [uploading, setUploading] = React.useState(false);
   const [uploadResult, setUploadResult] = React.useState<UploadResult | null>(null);
   const [uploadJob, setUploadJob] = React.useState<UploadJobState | null>(null);
@@ -209,7 +217,7 @@ export default function AdminPage() {
     pyqCount?: number; practiceCount?: number; kind?: "empty" | "practice" | "pyq" | "mixed";
   };
   type UploadBatchDetail = UploadBatchSummary & {
-    errorsJson: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string }[] | null;
+    errorsJson: { row: number; error: string; category: UploadErrorCategory; questionPreview?: string; field?: string; fix?: string }[] | null;
     warningsJson: { row: number; message: string; questionPreview?: string }[] | null;
     breakdown?: {
       subjectId: string; subject: string | null; chapterId: string | null; chapter: string | null;
@@ -458,55 +466,117 @@ export default function AdminPage() {
     }
   }
 
+  // Which backend route a file goes to — decided from its extension so a mixed selection (xlsx + csv) just works.
+  function formatForFile(f: File): "excel" | "csv" | "json" | "text" | "word" {
+    const n = f.name.toLowerCase();
+    if (/\.(xlsx|xls)$/.test(n)) return "excel";
+    if (/\.csv$/.test(n)) return "csv";
+    if (/\.json$/.test(n)) return "json";
+    if (/\.txt$/.test(n)) return "text";
+    if (/\.docx$/.test(n)) return "word";
+    return uploadFormat;
+  }
+
+  // Uploads ONE file and returns its result (+ rejected-rows url). Throws with the real server message on failure.
+  async function uploadOneFile(file: File, kind: "practice" | "pyq"): Promise<{ result: UploadResult; rejectedUrl: string | null }> {
+    const fmt = formatForFile(file);
+    // JSON (text / SVG-code / image questions) runs as a background job too.
+    if (fmt === "json" || (checkOnly && (fmt === "excel" || fmt === "csv"))) {
+      return submitJsonJob(kind, file);
+    }
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("kind", kind);
+    formData.append("requireSolution", String(requireSolution));
+    if (kind === "practice") formData.append("isPracticeOnly", "true");
+    // Oct 1 2026: Excel/CSV run as a BACKGROUND job (any size, even 1 lakh
+    // rows) — the request returns at once and we poll for progress, so
+    // the browser/Cloudflare never time out on a long import.
+    const useAsync = fmt === "excel" || fmt === "csv";
+    if (useAsync) formData.append("async", "true");
+    const res = await fetchAuth(`${API_BASE}/bank/admin/upload/${fmt}`, { method: "POST", body: formData });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const m = (data as { message?: string | string[] } | null)?.message;
+      throw new Error((Array.isArray(m) ? m.join("; ") : m) || `Upload failed (HTTP ${res.status})`);
+    }
+    if (useAsync && (data as { async?: boolean } | null)?.async) {
+      const jobId = (data as { jobId: string }).jobId;
+      setUploadJob({ status: "RUNNING", phase: "QUEUED", processed: 0, total: 0, created: 0, failed: 0 });
+      const result = await pollUploadJob(jobId);
+      return { result: { ...result, uploadBatchId: result.uploadBatchId ?? jobId }, rejectedUrl: `${API_BASE}/bank/admin/upload/jobs/${jobId}/rejected` };
+    }
+    return { result: data as UploadResult, rejectedUrl: null };
+  }
+
+  // One file or many: files go one after another (a later file sees the questions of the earlier ones, so duplicates
+  // between files are found too). One bad file never stops the others.
   async function submitUpload(kind: "practice" | "pyq") {
-    if (!uploadFile) {
+    if (uploadFiles.length === 0) {
       setError("Pehle koi file select karein (Excel/CSV/JSON/Text/Word)");
       return;
     }
+    const files = uploadFiles.slice();
     setUploading(true);
     setError("");
+    setInfo("");
     setUploadResult(null);
     setUploadJob(null);
     setRejectedUrl(null);
+    setRejectedList([]);
+    const statuses = files.map((f) => ({ name: f.name, state: "wait" as "wait" | "run" | "done" | "fail", text: "" }));
+    setFileStatuses(statuses.slice());
+    const setSt = (i: number, state: "wait" | "run" | "done" | "fail", text = "") => {
+      statuses[i] = { ...statuses[i], state, text };
+      setFileStatuses(statuses.slice());
+    };
+    const merged: UploadResult = { success: true, total: 0, created: 0, failed: 0, errors: [], warnings: [], errorSummary: {}, queuedForReview: 0, queuedExact: 0, reviewAlready: 0, unaccounted: 0 };
+    const rejects: { name: string; url: string }[] = [];
+    const batchIds: string[] = [];
+    const multi = files.length > 1;
+    let failedFiles = 0;
     try {
-      // JSON (text / SVG-code / image questions) runs as a background job too.
-      if (uploadFormat === "json" || (checkOnly && (uploadFormat === "excel" || uploadFormat === "csv"))) {
-        await submitJsonJob(kind);
-        return;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setSt(i, "run", "chal raha hai…");
+        setUploadJob(null);
+        try {
+          const { result, rejectedUrl: rj } = await uploadOneFile(file, kind);
+          merged.total += result.total ?? 0;
+          merged.created += result.created ?? 0;
+          merged.failed += result.failed ?? 0;
+          merged.queuedForReview = (merged.queuedForReview ?? 0) + (result.queuedForReview ?? 0);
+          merged.queuedExact = (merged.queuedExact ?? 0) + (result.queuedExact ?? 0);
+          merged.reviewAlready = (merged.reviewAlready ?? 0) + (result.reviewAlready ?? 0);
+          merged.unaccounted = (merged.unaccounted ?? 0) + (result.unaccounted ?? 0);
+          if (result.errorsTruncated) merged.errorsTruncated = true;
+          for (const [k, v] of Object.entries(result.errorSummary ?? {})) merged.errorSummary![k] = (merged.errorSummary![k] ?? 0) + v;
+          if (!result.errorSummary) for (const e of result.errors ?? []) merged.errorSummary![e.category] = (merged.errorSummary![e.category] ?? 0) + 1;
+          for (const e of result.errors ?? []) merged.errors.push(multi ? { ...e, file: file.name } : e);
+          for (const w of result.warnings ?? []) merged.warnings.push(multi ? { ...w, file: file.name } : w);
+          if (rj && (result.errors?.length ?? 0) > 0) rejects.push({ name: file.name, url: rj });
+          if (result.uploadBatchId && !checkOnly) batchIds.push(result.uploadBatchId);
+          setSt(i, "done", `${result.created ?? 0} upload · ${result.failed ?? 0} fail · ${result.queuedForReview ?? 0} duplicate review me`);
+        } catch (err) {
+          failedFiles++;
+          const msg = err instanceof Error ? err.message : "Upload failed";
+          merged.errors.push({ row: 0, error: msg, category: "OTHER", questionPreview: `(poori file: ${file.name})`, field: "file", fix: "File ka format / header row / size dekhein, phir sirf is file ko dobara upload karein.", file: file.name });
+          merged.errorSummary!.OTHER = (merged.errorSummary!.OTHER ?? 0) + 1;
+          setSt(i, "fail", msg);
+        }
       }
-      const formData = new FormData();
-      formData.append("file", uploadFile);
-      formData.append("kind", kind);
-      formData.append("requireSolution", String(requireSolution));
-      if (kind === "practice") formData.append("isPracticeOnly", "true");
-      // Oct 1 2026: Excel/CSV run as a BACKGROUND job (any size, even 1 lakh
-      // rows) — the request returns at once and we poll for progress, so
-      // the browser/Cloudflare never time out on a long import.
-      const useAsync = uploadFormat === "excel" || uploadFormat === "csv";
-      if (useAsync) formData.append("async", "true");
-      const res = await fetchAuth(`${API_BASE}/bank/admin/upload/${uploadFormat}`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error((data as { message?: string } | null)?.message || `Upload failed (HTTP ${res.status})`);
-      }
-
-      let finalResult: UploadResult;
-      if (useAsync && (data as { async?: boolean } | null)?.async) {
-        const jobId = (data as { jobId: string }).jobId;
-        setRejectedUrl(`${API_BASE}/bank/admin/upload/jobs/${jobId}/rejected`);
-        setUploadJob({ status: "RUNNING", phase: "QUEUED", processed: 0, total: 0, created: 0, failed: 0 });
-        finalResult = await pollUploadJob(jobId);
-      } else {
-        finalResult = data as UploadResult;
-      }
-
-      setUploadResult(finalResult);
+      merged.success = merged.failed === 0 && failedFiles === 0;
+      setUploadResult(merged);
+      setRejectedList(rejects);
+      if (rejects.length === 1) setRejectedUrl(rejects[0].url);
       loadBatches(); // Phase 3 — refresh history so this upload shows up immediately
-      if (finalResult.created > 0) {
-        setInfo(`${finalResult.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye`);
+      if (merged.created > 0) {
+        setInfo(`${merged.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye${multi ? ` (${files.length - failedFiles}/${files.length} file)` : ""}`);
+      }
+      if (failedFiles > 0) setError(`${failedFiles} file fail hui — neeche file-wise reason aur error list dekhein.`);
+      // one click: every duplicate -> keep the NEW one, then publish everything of these uploads
+      if (autoLatest && !checkOnly && batchIds.length > 0 && ((merged.queuedForReview ?? 0) > 0 || merged.created > 0)) {
+        await latestAndPublish(batchIds);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -516,11 +586,46 @@ export default function AdminPage() {
     }
   }
 
+  // Duplicates of these uploads: keep the NEW (latest) question, hide the old one, publish — then publish the rest of the batch.
+  async function latestAndPublish(batchIds: string[]) {
+    let kept = 0;
+    let failed = 0;
+    let published = 0;
+    let firstErr = "";
+    try {
+      for (const batchId of batchIds) {
+        const skipIds: string[] = [];
+        for (let round = 0; round < 500; round++) {
+          setInfo(`Duplicates me naya (latest) rakh rahe hain… ${kept} ho gaye`);
+          const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/bulk-resolve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "KEEP_NEW", confirm: true, batchId, publish: true, skipIds }),
+          });
+          const d = await r.json().catch(() => null);
+          if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
+          kept += d.done ?? 0;
+          failed += d.failed ?? 0;
+          if (!firstErr && d.errors?.[0]?.error) firstErr = d.errors[0].error;
+          if (Array.isArray(d.failedIds)) skipIds.push(...d.failedIds);
+          if (!d.remaining || (d.done ?? 0) === 0) break;
+        }
+        const pr = await fetchAuth(`${API_BASE}/bank/admin/upload/batches/${batchId}/publish`, { method: "POST" });
+        const pd = await pr.json().catch(() => ({}));
+        if (pr.ok) published += pd.published ?? 0;
+      }
+      setInfo(`✅ ${kept} duplicate me naya rakha gaya, baaki ${published} pending question publish hue${failed ? ` · ⚠️ ${failed} duplicate fail (${firstErr})` : ""}.`);
+    } catch (e) {
+      setError(`Auto naya-rakho/publish rukk gaya: ${e instanceof Error ? e.message : "error"}. Duplicate Review page se baaki ek click me kar sakte hain.`);
+    } finally {
+      loadBatches();
+    }
+  }
+
   // JSON upload as a background job (images/SVG inside the JSON make it slow, so never one long request).
-  async function submitJsonJob(kind: "practice" | "pyq") {
-    if (!uploadFile) return;
+  async function submitJsonJob(kind: "practice" | "pyq", file: File): Promise<{ result: UploadResult; rejectedUrl: string | null }> {
     const fd = new FormData();
-    fd.append("file", uploadFile);
+    fd.append("file", file);
     fd.append("kind", kind);
     fd.append("requireSolution", String(requireSolution));
     fd.append("dryRun", String(checkOnly));
@@ -544,26 +649,24 @@ export default function AdminPage() {
       setUploadJob({ status: j.status, phase: j.status === "DONE" ? "FINALIZING" : "SAVING", processed: j.processed, total: j.total, created: j.created, failed: j.failed });
       if (j.status === "FAILED") throw new Error(j.fatalError || "Upload fail ho gaya");
       if (j.status === "DONE") {
-        if (j.hasRejected) setRejectedUrl(`${API_BASE}/bank/admin/upload/job/${started.id}/rejected`);
-        setUploadResult({ success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors, warnings: j.warnings, queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted } as UploadResult);
-        loadBatches();
+        const result = { success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors ?? [], warnings: j.warnings ?? [], queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted, uploadBatchId: j.uploadBatchId } as UploadResult;
         if (checkOnly) setInfo(`Sirf check hua (kuch save nahi hua): ${j.created} question upload ke liye tayyar, ${j.failed} reject.`);
-        else if (j.created > 0) setInfo(`${j.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye`);
-        return;
+        return { result, rejectedUrl: j.hasRejected ? `${API_BASE}/bank/admin/upload/job/${started.id}/rejected` : null };
       }
     }
   }
 
-  async function downloadRejectedRows() {
-    if (!rejectedUrl) return;
+  async function downloadRejectedRows(urlArg?: string, nameArg?: string) {
+    const target = urlArg ?? rejectedUrl;
+    if (!target) return;
     try {
-      const r = await fetchAuth(rejectedUrl);
+      const r = await fetchAuth(target);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const blob = await r.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `rejected_rows_${new Date().toISOString().slice(0, 10)}.${blob.type.includes("json") ? "json" : "xlsx"}`;
+      a.download = `rejected_${(nameArg ?? "rows").replace(/\.[a-z0-9]+$/i, "")}_${new Date().toISOString().slice(0, 10)}.${blob.type.includes("json") ? "json" : "xlsx"}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -607,9 +710,9 @@ export default function AdminPage() {
   function downloadErrorReport(result: UploadResult) {
     const escapeCsv = (v: string) => `"${v.replace(/"/g, '""')}"`;
     const lines = [
-      ["Row", "Category", "Question Preview", "Error"].map(escapeCsv).join(","),
+      ["File", "Row", "Category", "Problem Column", "Question Preview", "Error", "How to fix"].map(escapeCsv).join(","),
       ...result.errors.map((e) =>
-        [String(e.row), CATEGORY_LABEL[e.category] ?? e.category, e.questionPreview ?? "", e.error]
+        [e.file ?? "", String(e.row), CATEGORY_LABEL[e.category] ?? e.category, e.field ?? "", e.questionPreview ?? "", e.error, e.fix ?? ""]
           .map(escapeCsv)
           .join(","),
       ),
@@ -764,9 +867,9 @@ export default function AdminPage() {
     if (errors.length === 0) return;
     const escapeCsv = (v: string) => `"${v.replace(/"/g, '""')}"`;
     const lines = [
-      ["Row", "Category", "Question Preview", "Error"].map(escapeCsv).join(","),
+      ["Row", "Category", "Problem Column", "Question Preview", "Error", "How to fix"].map(escapeCsv).join(","),
       ...errors.map((e) =>
-        [String(e.row), CATEGORY_LABEL[e.category] ?? e.category, e.questionPreview ?? "", e.error]
+        [String(e.row), CATEGORY_LABEL[e.category] ?? e.category, e.field ?? "", e.questionPreview ?? "", e.error, e.fix ?? ""]
           .map(escapeCsv)
           .join(","),
       ),
@@ -1085,13 +1188,17 @@ export default function AdminPage() {
               </select>
             </div>
             <div className="flex-1 min-w-[220px]">
-              <label className="mb-1.5 block text-sm font-medium">Question File</label>
+              <label className="mb-1.5 block text-sm font-medium">Question File(s) — ek ya kai files ek saath chun sakte hain</label>
               <input
                 type="file"
+                multiple
                 accept=".xlsx,.xls,.csv,.json,.txt,.docx"
-                onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => { setUploadFiles(Array.from(e.target.files ?? [])); setFileStatuses([]); }}
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
               />
+              {uploadFiles.length > 1 && (
+                <p className="mt-1 text-xs text-muted-foreground">{uploadFiles.length} files chuni gayi — ek ke baad ek upload hongi (har file ka format uske extension se apne aap pata chalta hai).</p>
+              )}
             </div>
           </div>
 
@@ -1107,6 +1214,13 @@ export default function AdminPage() {
           <label className="mt-2 flex items-center gap-2 text-sm">
             <input type="checkbox" checked={checkOnly} onChange={(e) => setCheckOnly(e.target.checked)} />
             Sirf check karo — kuch save mat karo (pehle report dekhne ke liye)
+          </label>
+          <label className="mt-2 flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+            <input type="checkbox" className="mt-1" checked={autoLatest} onChange={(e) => setAutoLatest(e.target.checked)} />
+            <span>
+              ⚡ Upload ke baad duplicates me apne aap <b>naya (latest) rakho</b> (purana hide) aur sab <b>Publish</b> karo
+              <span className="block text-xs text-muted-foreground">Band karenge to duplicate Duplicate Review me aayenge, wahan bhi ek click me "sab naya rakho + publish" hai.</span>
+            </span>
           </label>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <button
@@ -1133,6 +1247,17 @@ export default function AdminPage() {
             </button>
           </div>
           {uploading && !uploadJob && <p className="mt-2 text-sm text-muted-foreground">Uploading file...</p>}
+          {fileStatuses.length > 1 && (
+            <ul className="mt-3 space-y-1 rounded-lg border border-border bg-background p-3 text-xs">
+              {fileStatuses.map((f, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-2">
+                  <span>{f.state === "done" ? "✅" : f.state === "fail" ? "❌" : f.state === "run" ? "⏳" : "🕒"}</span>
+                  <span className="font-medium">{f.name}</span>
+                  {f.text && <span className={f.state === "fail" ? "text-red-600" : "text-muted-foreground"}>{f.text}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
           {uploadJob && (
             <div className="mt-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
               <p className="font-semibold">⏳ {PHASE_LABEL[uploadJob.phase] ?? uploadJob.phase}</p>
@@ -1177,9 +1302,18 @@ export default function AdminPage() {
                     — row, category, question preview, exact error message
                     — so the admin can open it next to their spreadsheet
                     and fix every failed row without scrolling this panel. */}
-                {rejectedUrl && uploadResult.errors.length > 0 && (
+                {rejectedList.length > 1 && rejectedList.map((r) => (
                   <button
-                    onClick={downloadRejectedRows}
+                    key={r.url}
+                    onClick={() => downloadRejectedRows(r.url, r.name)}
+                    className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400"
+                  >
+                    📄 Rejected: {r.name}
+                  </button>
+                ))}
+                {rejectedUrl && rejectedList.length <= 1 && uploadResult.errors.length > 0 && (
+                  <button
+                    onClick={() => downloadRejectedRows()}
                     className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400"
                   >
                     📄 Rejected rows file (fix karke dobara upload)
@@ -1223,15 +1357,18 @@ export default function AdminPage() {
                     {uploadResult.errors.map((e, i) => (
                       <li key={i} className="rounded border border-red-500/20 bg-red-500/5 p-1.5">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-foreground">Row {e.row}</span>
+                          {e.file && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground">📄 {e.file}</span>}
+                          <span className="font-semibold text-foreground">{e.row > 0 ? `Row ${e.row}` : "Poori file"}</span>
                           <span className="rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
                             {CATEGORY_LABEL[e.category] ?? e.category}
                           </span>
+                          {e.field && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">Column: {e.field}</span>}
                         </div>
                         {e.questionPreview && (
                           <div className="mt-0.5 italic text-foreground/80">"{e.questionPreview}"</div>
                         )}
-                        <div className="mt-0.5">{e.error}</div>
+                        <div className="mt-0.5">❌ {e.error}</div>
+                        {e.fix && <div className="mt-0.5 text-emerald-700 dark:text-emerald-400">🛠️ Kaise theek karein: {e.fix}</div>}
                       </li>
                     ))}
                   </ul>
@@ -1243,6 +1380,7 @@ export default function AdminPage() {
                   <ul className="max-h-40 space-y-1.5 overflow-y-auto text-xs text-muted-foreground">
                     {uploadResult.warnings.map((w, i) => (
                       <li key={i} className="rounded border border-amber-500/20 bg-amber-500/5 p-1.5">
+                        {w.file && <span className="mr-1 rounded bg-muted px-1.5 py-0.5 text-[10px]">📄 {w.file}</span>}
                         <span className="font-semibold text-foreground">Row {w.row}</span>
                         {w.questionPreview && <span className="italic"> — "{w.questionPreview}"</span>}
                         <div className="mt-0.5">{w.message}</div>
@@ -1455,11 +1593,13 @@ export default function AdminPage() {
                                         <span className="rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
                                           {CATEGORY_LABEL[e.category] ?? e.category}
                                         </span>
+                                        {e.field && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">Column: {e.field}</span>}
                                       </div>
                                       {e.questionPreview && (
                                         <div className="mt-0.5 italic text-foreground/80">&quot;{e.questionPreview}&quot;</div>
                                       )}
-                                      <div className="mt-0.5">{e.error}</div>
+                                      <div className="mt-0.5">❌ {e.error}</div>
+                                      {e.fix && <div className="mt-0.5 text-emerald-700 dark:text-emerald-400">🛠️ Kaise theek karein: {e.fix}</div>}
                                     </li>
                                   ))}
                                 </ul>

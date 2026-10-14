@@ -57,14 +57,21 @@ export class DuplicateReviewController {
       throw new BadRequestException('Filter ke hisaab se sab par lagane ke liye confirm: true bhejein. / confirm: true required.');
     }
     return this.reviews.bulkResolve(
-      { ids: body?.ids, matchType: body?.matchType, batchId: body?.batchId, action: body?.action },
+      {
+        ids: body?.ids,
+        matchType: body?.matchType,
+        batchId: body?.batchId,
+        action: body?.action,
+        publish: body?.publish === true || body?.publish === 'true',
+        skipIds: Array.isArray(body?.skipIds) ? body.skipIds : undefined,
+      },
       this.adminId(req),
     );
   }
 
-  // POST /bank/admin/duplicates/:id/resolve   body: { action: KEEP_EXISTING | KEEP_NEW | KEEP_BOTH }
+  // POST /bank/admin/duplicates/:id/resolve   body: { action: KEEP_EXISTING | KEEP_NEW | KEEP_BOTH, publish?: boolean }
   @Post(':id/resolve')
   resolve(@Param('id') id: string, @Body() body: any, @Req() req: any) {
-    return this.reviews.resolve(id, body?.action, this.adminId(req));
+    return this.reviews.resolve(id, body?.action, this.adminId(req), { publish: body?.publish === true || body?.publish === 'true' });
   }
 }
