@@ -158,6 +158,8 @@ export default function DuplicateReviewPage() {
   const [msg, setMsg] = React.useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [scanBusy, setScanBusy] = React.useState(false);
   const [includeSimilar, setIncludeSimilar] = React.useState(false);
+  // NEW (Oct 14 2026): "Ho chuke" tab can be narrowed to what was decided, and every decision can be undone
+  const [resolvedFilter, setResolvedFilter] = React.useState<"" | "KEPT_NEW" | "KEPT_EXISTING" | "KEPT_BOTH">("");
   // ?batch=<uploadId> comes from the Upload History ("Duplicate review" column)
   const [batchId, setBatchId] = React.useState("");
   React.useEffect(() => {
@@ -181,11 +183,11 @@ export default function DuplicateReviewPage() {
     } catch { /* ignore */ }
   }, []);
 
-  const load = React.useCallback(async (p: number, t: Tab, batch: string = batchId) => {
+  const load = React.useCallback(async (p: number, t: Tab, batch: string = batchId, rf: string = resolvedFilter) => {
     setLoading(true);
     try {
       const qs = new URLSearchParams({ skip: String(p * PAGE), take: String(PAGE) });
-      if (t === "RESOLVED") qs.set("status", "RESOLVED");
+      if (t === "RESOLVED") { qs.set("status", "RESOLVED"); if (rf) qs.set("resolvedStatus", rf); }
       else { qs.set("status", "PENDING"); qs.set("matchType", t); }
       if (batch) qs.set("batchId", batch);
       const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates?${qs.toString()}`);
@@ -199,7 +201,7 @@ export default function DuplicateReviewPage() {
     } finally {
       setLoading(false);
     }
-  }, [batchId]);
+  }, [batchId, resolvedFilter]);
 
   React.useEffect(() => { if (authChecked) { loadCounts(); } }, [authChecked, loadCounts]);
   React.useEffect(() => { if (authChecked) { setPage(0); load(0, tab); } }, [authChecked, tab, load]);
@@ -294,6 +296,87 @@ export default function DuplicateReviewPage() {
     }
   };
 
+  // ---- UNDO (NEW Oct 14 2026): a resolved duplicate goes back to Pending — new question hidden, old one live again
+  const undoOne = async (id: string) => {
+    if (!window.confirm("Is decision ko undo karein? Naya question hide hoga, purana wapas live hoga, aur ye duplicate dobara Pending me aa jayega.")) return;
+    setBusyId(id);
+    setMsg(null);
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/${id}/undo`, { method: "POST" });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
+      setMsg({ type: "ok", text: `↩️ Undo ho gaya${d?.restoredQuestionId ? " — purana question wapas live" : ""}${d?.hiddenQuestionId ? " — naya question hide" : ""}. Ye duplicate ab Pending me hai.` });
+      await refreshAll(items.length === 1 && page > 0 ? page - 1 : page);
+      if (items.length === 1 && page > 0) setPage(page - 1);
+    } catch (e) {
+      setMsg({ type: "err", text: e instanceof Error ? e.message : "Undo failed" });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // runs bulk-undo again and again (server does ~40 s of work per call) until nothing is left
+  const undoBulk = async (mode: "selected" | "all") => {
+    const count = mode === "selected" ? selected.size : total;
+    if (count === 0) return;
+    const scope = mode === "selected" ? `${count} selected` : `is list ke sabhi ${count}`;
+    if (!window.confirm(`${scope} resolved duplicates UNDO karein?\nNaye questions hide honge, purane wapas live honge, aur ye sab dobara Pending me aayenge.`)) return;
+    setBulkBusy(true);
+    setMsg(null);
+    let done = 0;
+    let failed = 0;
+    let firstErr = "";
+    const skipIds: string[] = [];
+    try {
+      if (mode === "selected") {
+        const ids = Array.from(selected);
+        for (let i = 0; i < ids.length; i += 300) {
+          const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/bulk-undo`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: ids.slice(i, i + 300) }),
+          });
+          const d = await r.json().catch(() => null);
+          if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
+          done += d.done ?? 0;
+          failed += d.failed ?? 0;
+          if (!firstErr && d.errors?.[0]?.error) firstErr = d.errors[0].error;
+          setMsg({ type: "ok", text: `Undo ho raha hai… ${done} / ${ids.length}` });
+        }
+      } else {
+        for (let round = 0; round < 1000; round++) {
+          const body: Record<string, unknown> = { confirm: true, skipIds };
+          if (resolvedFilter) body.resolvedStatus = resolvedFilter;
+          if (batchId) body.batchId = batchId;
+          const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/bulk-undo`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json().catch(() => null);
+          if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
+          done += d.done ?? 0;
+          failed += d.failed ?? 0;
+          if (!firstErr && d.errors?.[0]?.error) firstErr = d.errors[0].error;
+          if (Array.isArray(d.failedIds)) skipIds.push(...d.failedIds);
+          setMsg({ type: "ok", text: `Undo ho raha hai… ${done} ho gaye, ${d.remaining ?? 0} baaki${failed ? `, ${failed} fail` : ""}` });
+          if (!d.remaining || (d.done ?? 0) === 0) break;
+        }
+      }
+      setMsg({
+        type: failed ? "err" : "ok",
+        text: `↩️ ${done} duplicate undo hue (ab Pending me hain)${failed ? `, ${failed} fail — pehla karan: ${firstErr}` : ""}.`,
+      });
+      setPage(0);
+      await refreshAll(0);
+    } catch (e) {
+      setMsg({ type: "err", text: `${done} undo ho chuke, phir ruk gaya: ${e instanceof Error ? e.message : "Failed"}` });
+      await refreshAll(0);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const scan = async () => {
     setScanBusy(true);
     setMsg(null);
@@ -376,6 +459,13 @@ export default function DuplicateReviewPage() {
           </div>
         )}
 
+        {(counts?.resolved ?? 0) > 0 && tab !== "RESOLVED" && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <span>Galti se decision/publish ho gaya? {counts?.resolved} resolved duplicates ko <b>Undo</b> kar sakte hain.</span>
+            <button onClick={() => setTab("RESOLVED")} className="rounded-lg border border-amber-500/60 px-3 py-1.5 text-xs font-bold text-amber-700 dark:text-amber-400">↩️ Ho chuke dekhein / Undo</button>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2">
           {tabBtn("EXACT", "Exact same", counts?.pendingExact)}
           {tabBtn("SIMILAR", "Milte-julte", counts?.pendingSimilar)}
@@ -389,6 +479,28 @@ export default function DuplicateReviewPage() {
             </button>
           </div>
         </div>
+
+        {tab === "RESOLVED" && (
+          <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-2 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="font-semibold">Kya decide hua tha:</span>
+              {([["", "Sab"], ["KEPT_NEW", "Naya rakha"], ["KEPT_EXISTING", "Purana rakha"], ["KEPT_BOTH", "Dono rakhe"]] as const).map(([v, l]) => (
+                <button key={v || "all"} onClick={() => setResolvedFilter(v)} className={`rounded border px-2 py-1 font-semibold ${resolvedFilter === v ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>{l}</button>
+              ))}
+            </div>
+            {items.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1"><input type="checkbox" checked={allOnPage} onChange={toggleAll} /> Page ke sab chunein</label>
+                <span className="text-muted-foreground">{selected.size} selected</span>
+                <div className="ml-auto flex flex-wrap gap-1.5">
+                  <button disabled={bulkBusy || selected.size === 0} onClick={() => undoBulk("selected")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">↩️ Selected: Undo</button>
+                  <button disabled={bulkBusy || total === 0} onClick={() => undoBulk("all")} className="rounded border border-amber-500/60 bg-amber-500/10 px-2 py-1 font-semibold text-amber-700 disabled:opacity-40 dark:text-amber-400">↩️ Is list ke sabhi {total}: Undo</button>
+                </div>
+              </div>
+            )}
+            <p className="text-[11px] text-muted-foreground">Undo = naya (publish hua) question hide, purana (hide hua) question wapas live, aur duplicate dobara Pending me — phir aap naya decision le sakte hain.</p>
+          </div>
+        )}
 
         {tab !== "RESOLVED" && items.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 p-2 text-xs">
@@ -424,7 +536,7 @@ export default function DuplicateReviewPage() {
           return (
             <section key={it.id} className="space-y-3 rounded-xl border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
-                {pending && tab !== "RESOLVED" && <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggle(it.id)} />}
+                {(pending ? tab !== "RESOLVED" : tab === "RESOLVED") && <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggle(it.id)} />}
                 <span className={`rounded px-2 py-0.5 text-xs font-bold ${it.matchType === "EXACT" ? "bg-red-500/15 text-red-600" : "bg-amber-500/15 text-amber-700"}`}>
                   {it.matchType === "EXACT" ? "EXACT SAME" : "MILTA-JULTA"}
                 </span>
@@ -439,6 +551,15 @@ export default function DuplicateReviewPage() {
                 <QuestionColumn title={leftTitle} q={it.left} diffs={diffs} missing={it.leftMissing} />
                 <QuestionColumn title={rightTitle} q={it.right} diffs={diffs} />
               </div>
+
+              {!pending && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button disabled={busy} onClick={() => undoOne(it.id)} className="rounded-lg border border-amber-500/60 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-700 disabled:opacity-40 dark:text-amber-400">
+                    ↩️ Undo (decision wapas lo)
+                  </button>
+                  {busyId === it.id && <span className="text-xs text-muted-foreground">Please wait…</span>}
+                </div>
+              )}
 
               {pending && (
                 <div className="flex flex-wrap gap-2">

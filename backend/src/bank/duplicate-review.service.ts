@@ -24,6 +24,12 @@ import { COMPARED_FIELDS, FIELD_LABELS, compareQuestions } from '../common/dupli
  *   KEEP_NEW       keep the new one only   (upload: save new + hide old · scan: hide side A)
  *   KEEP_BOTH      keep both               (upload: save new too · scan: nothing changes)
  *
+ * UNDO (Oct 14 2026)
+ *   undo()/bulkUndo() take a resolved review back to PENDING: the new question that was saved is hidden again,
+ *   the old question that was hidden is made live again. What was created/hidden is remembered inside
+ *   candidateJson._undo (upload mode); reviews resolved BEFORE this feature are re-discovered (same searchHash,
+ *   created right after resolvedAt, written to the audit log).
+ *
  * "Remove" always means HIDE (isActive=false), never a hard delete: students may
  * have attempted/bookmarked the question, and a hidden question can be restored
  * from the Question Manager (status "hidden").
@@ -59,6 +65,8 @@ export interface DuplicateListQuery {
   /** EXACT | SIMILAR */
   matchType?: string;
   batchId?: string;
+  /** with status=RESOLVED: only KEPT_NEW | KEPT_EXISTING | KEPT_BOTH */
+  resolvedStatus?: string;
   skip?: number;
   take?: number;
 }
@@ -98,7 +106,10 @@ export class DuplicateReviewService {
     const where: any = {};
     const st = String(q.status ?? 'PENDING').toUpperCase();
     if (st === 'PENDING') where.status = 'PENDING';
-    else if (st === 'RESOLVED') where.status = { not: 'PENDING' };
+    else if (st === 'RESOLVED') {
+      const rs = String(q.resolvedStatus ?? '').toUpperCase();
+      where.status = ['KEPT_NEW', 'KEPT_EXISTING', 'KEPT_BOTH'].includes(rs) ? rs : { not: 'PENDING' };
+    }
     const mt = String(q.matchType ?? '').toUpperCase();
     if (mt === 'EXACT' || mt === 'SIMILAR') where.matchType = mt;
     if (q.batchId) where.uploadBatchId = String(q.batchId);
@@ -107,7 +118,7 @@ export class DuplicateReviewService {
       this.prisma.duplicateReview.count({ where }),
       this.prisma.duplicateReview.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: st === 'PENDING' ? { createdAt: 'desc' } : { resolvedAt: 'desc' },
         skip,
         take,
       }),
@@ -149,6 +160,7 @@ export class DuplicateReviewService {
         uploadBatchId: r.uploadBatchId,
         createdAt: r.createdAt,
         resolvedAt: r.resolvedAt,
+        canUndo: r.status !== 'PENDING',
         // left = the question already in the bank (old / side A)
         // right = the new upload row (upload mode) or the second bank question (scan mode / side B)
         left,
@@ -178,6 +190,17 @@ export class DuplicateReviewService {
 
     try {
       const detail = await this.apply(review, action, adminId, opts);
+      // remember what this decision created / hid, so "Undo" is exact
+      if (review.candidateJson && !review.candidateQuestionId && (detail.createdQuestionId || detail.hiddenQuestionId)) {
+        const { _undo: _old, ...cand } = (review.candidateJson as any) ?? {};
+        void _old;
+        await this.prisma.duplicateReview
+          .update({
+            where: { id },
+            data: { candidateJson: { ...cand, _undo: { createdQuestionId: detail.createdQuestionId ?? null, hiddenQuestionId: detail.hiddenQuestionId ?? null } } as any },
+          })
+          .catch(() => undefined);
+      }
       return { id, status: ACTION_TO_STATUS[action], ...detail };
     } catch (e) {
       // side effects failed: put the review back in the queue so nothing is lost
@@ -247,6 +270,213 @@ export class DuplicateReviewService {
       where: { ...baseWhere, ...(skip.size || failedIds.length ? { id: { notIn: [...skip, ...failedIds] } } : {}) },
     });
     const remaining = Array.isArray(body.ids) && body.ids.length ? Math.max(ids.length - attempted, 0) : stillPending;
+    return { requested: ids.length, done, failed, failedIds, errors, remaining, capped: remaining > 0 };
+  }
+
+  // ------------------------------------------------------------------ undo (NEW Oct 14 2026)
+
+  /**
+   * Take ONE resolved review back to PENDING.
+   *   upload mode  KEPT_NEW / KEPT_BOTH : the question that was saved from the upload row is hidden again,
+   *                KEPT_NEW also makes the old (hidden) question live again
+   *   upload mode  KEPT_EXISTING        : nothing was saved, the review just goes back to the queue
+   *   scan mode    KEPT_EXISTING / KEPT_NEW : the question that was hidden becomes live again
+   *   scan mode    KEPT_BOTH            : nothing changed, review goes back to the queue
+   * If the saved question cannot be found, NOTHING is changed (the admin hides it by hand) — no half undo.
+   */
+  async undo(id: string, adminId: string, ctx?: BulkCtx) {
+    const review = await this.prisma.duplicateReview.findUnique({ where: { id } });
+    if (!review) throw new NotFoundException('Ye duplicate review nahi mila. / Review not found.');
+    if (review.status === 'PENDING') throw new ConflictException('Ye pehle se pending hai — undo ke liye kuch nahi. / Already pending.');
+
+    const uploadMode = !!review.candidateJson && !review.candidateQuestionId;
+    let createdId: string | null = null;
+    let restoreId: string | null = null;
+
+    if (uploadMode) {
+      if (review.status === 'KEPT_NEW' || review.status === 'KEPT_BOTH') {
+        createdId = await this.findCreatedQuestion(review);
+        if (!createdId) {
+          throw new BadRequestException('Is decision se bana naya question dhoondh nahi paaye — Question Manager me haath se hide karein. Kuch change nahi kiya.');
+        }
+      }
+      if (review.status === 'KEPT_NEW') restoreId = review.existingQuestionId ?? null;
+    } else if (review.status === 'KEPT_EXISTING') {
+      restoreId = review.candidateQuestionId ?? null;
+    } else if (review.status === 'KEPT_NEW') {
+      restoreId = review.existingQuestionId ?? null;
+    }
+
+    // claim atomically (double click / two admins)
+    const claim = await this.prisma.duplicateReview.updateMany({
+      where: { id, status: review.status },
+      data: { status: 'PENDING', resolvedById: null, resolvedAt: null },
+    });
+    if (claim.count === 0) throw new ConflictException('Is review par abhi kisi aur ne kaam kiya. / Changed meanwhile.');
+
+    try {
+      const out: { hiddenQuestionId?: string; restoredQuestionId?: string } = {};
+      if (createdId) {
+        await this.unpublishAndHide(createdId, adminId, ctx);
+        out.hiddenQuestionId = createdId;
+      }
+      if (restoreId) {
+        const restored = await this.restore(restoreId, adminId, ctx);
+        if (restored) out.restoredQuestionId = restoreId;
+      }
+      if (uploadMode) {
+        // forget the old undo info: the next decision writes a fresh one
+        const { _undo: _o, ...cand } = (review.candidateJson as any) ?? {};
+        void _o;
+        await this.prisma.duplicateReview.update({ where: { id }, data: { candidateJson: cand as any } }).catch(() => undefined);
+      }
+      return { id, status: 'PENDING', ...out };
+    } catch (e) {
+      await this.prisma.duplicateReview
+        .updateMany({ where: { id }, data: { status: review.status, resolvedById: review.resolvedById, resolvedAt: review.resolvedAt } })
+        .catch(() => undefined);
+      throw e;
+    }
+  }
+
+  /** The question that a KEPT_NEW / KEPT_BOTH upload decision saved. */
+  private async findCreatedQuestion(review: any): Promise<string | null> {
+    const remembered = (review.candidateJson as any)?._undo?.createdQuestionId;
+    if (remembered) {
+      const q = await this.prisma.question.findUnique({ where: { id: String(remembered) }, select: { id: true } });
+      return q ? q.id : null;
+    }
+    // resolved before undo existed: same searchHash, saved right after the decision
+    if (!review.searchHash || !review.resolvedAt) return null;
+    const from = new Date(review.resolvedAt.getTime() - 5_000);
+    const to = new Date(review.resolvedAt.getTime() + 30 * 60_000);
+    const rows = await this.prisma.question.findMany({
+      where: {
+        searchHash: review.searchHash,
+        createdAt: { gte: from, lte: to },
+        ...(review.existingQuestionId ? { id: { not: review.existingQuestionId } } : {}),
+        ...(review.uploadBatchId ? { uploadBatchId: review.uploadBatchId } : {}),
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 5,
+      select: { id: true },
+    });
+    if (rows.length === 0) return null;
+    // prefer the one the audit log says was created from a duplicate review
+    const audited = await this.prisma.auditLog.findMany({
+      where: { action: 'QUESTION_CREATED_FROM_DUPLICATE_REVIEW', entityId: { in: rows.map((r) => r.id) } },
+      select: { entityId: true },
+    });
+    const auditedIds = new Set(audited.map((a) => a.entityId));
+    return (rows.find((r) => auditedIds.has(r.id)) ?? rows[0]).id;
+  }
+
+  /** The "new" question goes back to where it was before the decision: not live, waiting (like Unpublish). */
+  private async unpublishAndHide(questionId: string, adminId: string, ctx?: BulkCtx) {
+    const q = await this.prisma.question.findUnique({
+      where: { id: questionId },
+      select: { id: true, examId: true, year: true, shift: true, paperCode: true, examDate: true },
+    });
+    if (!q) return;
+    await this.prisma.question.update({ where: { id: questionId }, data: { isActive: false, isApproved: false, reviewStatus: 'PENDING' } });
+    await this.afterVisibilityChange(q, questionId, adminId, 'DUPLICATE_REVIEW_UNDO_HIDE_NEW', ctx);
+  }
+
+  /** The old question that a decision hid is live again. Returns false if it does not exist any more. */
+  private async restore(questionId: string, adminId: string, ctx?: BulkCtx): Promise<boolean> {
+    const q = await this.prisma.question.findUnique({
+      where: { id: questionId },
+      select: { id: true, isActive: true, examId: true, year: true, shift: true, paperCode: true, examDate: true },
+    });
+    if (!q) return false;
+    if (q.isActive) return true;
+    await this.prisma.question.update({ where: { id: questionId }, data: { isActive: true } });
+    await this.afterVisibilityChange(q, questionId, adminId, 'DUPLICATE_REVIEW_UNDO_RESTORE_OLD', ctx);
+    return true;
+  }
+
+  private async afterVisibilityChange(
+    q: { examId: string | null; year: number | null; shift: string | null; paperCode: string | null; examDate: string | null },
+    questionId: string,
+    adminId: string,
+    action: string,
+    ctx?: BulkCtx,
+  ) {
+    const audit = { userId: adminId, action, targetEntity: 'Question', entityId: questionId, metadataJson: { via: 'duplicate-review-undo' } as any };
+    const paper = q.examId && q.year && q.shift ? { examId: q.examId, year: q.year, shift: q.shift, paperCode: q.paperCode ?? null, examDate: q.examDate ?? null } : null;
+    if (ctx) {
+      ctx.audits.push(audit);
+      if (paper) ctx.papers.set(`${paper.examId}|${paper.year}|${paper.shift}|${paper.paperCode ?? ''}`, paper);
+      return;
+    }
+    try {
+      await this.prisma.auditLog.create({ data: audit });
+    } catch {
+      /* audit is best effort */
+    }
+    this.clearBankCaches();
+    if (paper) {
+      try {
+        await this.upload.upsertPyqMockForPaper(paper.examId, paper.year, paper.shift, paper.paperCode, paper.examDate);
+      } catch {
+        /* mock refresh is best effort */
+      }
+    }
+  }
+
+  /**
+   * Undo many resolved reviews: explicit `ids`, or every resolved review matching the filter (needs confirm).
+   * Same shape as bulkResolve: 6 at a time, ~40 s per request, `remaining` tells the UI to call again.
+   * Undone reviews leave the RESOLVED list by themselves, so "call again until remaining = 0" just works.
+   */
+  async bulkUndo(body: { ids?: string[]; resolvedStatus?: string; batchId?: string; skipIds?: string[] }, adminId: string) {
+    const started = Date.now();
+    const skip = new Set((body.skipIds ?? []).map(String));
+    const baseWhere: any = { status: { not: 'PENDING' } };
+    const rs = String(body.resolvedStatus ?? '').toUpperCase();
+    if (['KEPT_NEW', 'KEPT_EXISTING', 'KEPT_BOTH'].includes(rs)) baseWhere.status = rs;
+    if (body.batchId) baseWhere.uploadBatchId = String(body.batchId);
+
+    let ids: string[] = [];
+    if (Array.isArray(body.ids) && body.ids.length) {
+      ids = Array.from(new Set(body.ids.map(String))).filter((x) => !skip.has(x)).slice(0, BULK_RESOLVE_MAX);
+    } else {
+      const found = await this.prisma.duplicateReview.findMany({
+        where: { ...baseWhere, ...(skip.size ? { id: { notIn: Array.from(skip) } } : {}) },
+        orderBy: { resolvedAt: 'desc' },
+        take: BULK_RESOLVE_MAX,
+        select: { id: true },
+      });
+      ids = found.map((f) => f.id);
+    }
+
+    const ctx: BulkCtx = { papers: new Map(), audits: [] };
+    let done = 0;
+    let failed = 0;
+    let cursor = 0;
+    const errors: { id: string; error: string }[] = [];
+    const failedIds: string[] = [];
+    const worker = async () => {
+      while (cursor < ids.length && Date.now() - started < BULK_TIME_BUDGET_MS) {
+        const id = ids[cursor++];
+        try {
+          await this.undo(id, adminId, ctx);
+          done++;
+        } catch (e) {
+          failed++;
+          failedIds.push(id);
+          if (errors.length < 20) errors.push({ id, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BULK_CONCURRENCY, Math.max(ids.length, 1)) }, () => worker()));
+    const attempted = Math.min(cursor, ids.length);
+    await this.flushBulk(ctx, adminId);
+
+    const stillResolved = await this.prisma.duplicateReview.count({
+      where: { ...baseWhere, ...(skip.size || failedIds.length ? { id: { notIn: [...skip, ...failedIds] } } : {}) },
+    });
+    const remaining = Array.isArray(body.ids) && body.ids.length ? Math.max(ids.length - attempted, 0) : stillResolved;
     return { requested: ids.length, done, failed, failedIds, errors, remaining, capped: remaining > 0 };
   }
 
@@ -384,7 +614,9 @@ export class DuplicateReviewService {
 
     if (uploadMode) {
       if (action === 'KEEP_EXISTING') return out; // the new row is simply dropped
-      const created = await this.upload.createFromReviewCandidate(review.candidateJson as any, adminId, review.uploadBatchId, {
+      const { _undo: _ignored, ...candidate } = (review.candidateJson as any) ?? {};
+      void _ignored;
+      const created = await this.upload.createFromReviewCandidate(candidate as any, adminId, review.uploadBatchId, {
         deferRefresh: !!ctx,
         forcePublish: !!opts.publish,
       });

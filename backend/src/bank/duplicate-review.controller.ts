@@ -34,6 +34,7 @@ export class DuplicateReviewController {
       status: q?.status,
       matchType: q?.matchType,
       batchId: q?.batchId,
+      resolvedStatus: q?.resolvedStatus,
       skip: q?.skip ? parseInt(q.skip, 10) || 0 : 0,
       take: q?.take ? parseInt(q.take, 10) || 20 : 20,
     });
@@ -67,6 +68,31 @@ export class DuplicateReviewController {
       },
       this.adminId(req),
     );
+  }
+
+  // POST /bank/admin/duplicates/bulk-undo   (NEW Oct 14 2026)
+  // body: { ids? }  OR  { resolvedStatus?: KEPT_NEW|KEPT_EXISTING|KEPT_BOTH, batchId?, confirm: true }
+  @Post('bulk-undo')
+  bulkUndo(@Body() body: any, @Req() req: any) {
+    const hasIds = Array.isArray(body?.ids) && body.ids.length > 0;
+    if (!hasIds && !body?.confirm) {
+      throw new BadRequestException('Filter ke hisaab se sab undo karne ke liye confirm: true bhejein. / confirm: true required.');
+    }
+    return this.reviews.bulkUndo(
+      {
+        ids: body?.ids,
+        resolvedStatus: body?.resolvedStatus,
+        batchId: body?.batchId,
+        skipIds: Array.isArray(body?.skipIds) ? body.skipIds : undefined,
+      },
+      this.adminId(req),
+    );
+  }
+
+  // POST /bank/admin/duplicates/:id/undo   -> a resolved review goes back to PENDING (new hidden, old live again)
+  @Post(':id/undo')
+  undo(@Param('id') id: string, @Req() req: any) {
+    return this.reviews.undo(id, this.adminId(req));
   }
 
   // POST /bank/admin/duplicates/:id/resolve   body: { action: KEEP_EXISTING | KEEP_NEW | KEEP_BOTH, publish?: boolean }
