@@ -155,6 +155,10 @@ export default function DuplicateReviewPage() {
   const [busyId, setBusyId] = React.useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = React.useState(false);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  // NEW (Oct 14 2026): "select all" across ALL pages (not only the 20 on screen).
+  // allMode = every duplicate matching the current tab/filter is selected; `excluded` = ones the admin un-ticked.
+  const [allMode, setAllMode] = React.useState(false);
+  const [excluded, setExcluded] = React.useState<Set<string>>(new Set());
   const [msg, setMsg] = React.useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [scanBusy, setScanBusy] = React.useState(false);
   const [includeSimilar, setIncludeSimilar] = React.useState(false);
@@ -206,6 +210,8 @@ export default function DuplicateReviewPage() {
   React.useEffect(() => { if (authChecked) { loadCounts(); } }, [authChecked, loadCounts]);
   React.useEffect(() => { if (authChecked) { setPage(0); load(0, tab); } }, [authChecked, tab, load]);
 
+  React.useEffect(() => { setAllMode(false); setExcluded(new Set()); setSelected(new Set()); }, [tab, resolvedFilter, batchId]);
+
   const refreshAll = async (p = page) => { await Promise.all([load(p, tab), loadCounts()]); };
 
   const resolveOne = async (id: string, action: Action) => {
@@ -234,7 +240,8 @@ export default function DuplicateReviewPage() {
   const bulk = async (action: Action, mode: "selected" | "all", opts: { publish?: boolean; scopeAll?: boolean } = {}) => {
     const label = action === "KEEP_EXISTING" ? "purana rakho" : action === "KEEP_NEW" ? "naya rakho" : "dono rakho";
     const pendingAll = (counts?.pending ?? total);
-    const count = mode === "selected" ? selected.size : opts.scopeAll ? pendingAll : total;
+    const effTotal = allMode ? Math.max(total - excluded.size, 0) : total;
+    const count = mode === "selected" ? selected.size : opts.scopeAll ? pendingAll : effTotal;
     if (count === 0) return;
     const scope = mode === "selected" ? `${count} selected` : opts.scopeAll ? `sabhi ${count} pending` : `is tab ke sabhi ${count}`;
     const extra = opts.publish ? " aur naye questions PUBLISH (live)" : "";
@@ -244,7 +251,8 @@ export default function DuplicateReviewPage() {
     let done = 0;
     let failed = 0;
     let firstErr = "";
-    const skipIds: string[] = [];
+    // un-ticked items of an "all pages" selection are never touched
+    const skipIds: string[] = mode === "all" && allMode && !opts.scopeAll ? Array.from(excluded) : [];
     try {
       if (mode === "selected") {
         // chunks of 300 so one request stays short
@@ -293,6 +301,8 @@ export default function DuplicateReviewPage() {
       await refreshAll(0);
     } finally {
       setBulkBusy(false);
+      setAllMode(false);
+      setExcluded(new Set());
     }
   };
 
@@ -317,7 +327,8 @@ export default function DuplicateReviewPage() {
 
   // runs bulk-undo again and again (server does ~40 s of work per call) until nothing is left
   const undoBulk = async (mode: "selected" | "all") => {
-    const count = mode === "selected" ? selected.size : total;
+    const effTotal = allMode ? Math.max(total - excluded.size, 0) : total;
+    const count = mode === "selected" ? selected.size : effTotal;
     if (count === 0) return;
     const scope = mode === "selected" ? `${count} selected` : `is list ke sabhi ${count}`;
     if (!window.confirm(`${scope} resolved duplicates UNDO karein?\nNaye questions hide honge, purane wapas live honge, aur ye sab dobara Pending me aayenge.`)) return;
@@ -326,7 +337,7 @@ export default function DuplicateReviewPage() {
     let done = 0;
     let failed = 0;
     let firstErr = "";
-    const skipIds: string[] = [];
+    const skipIds: string[] = mode === "all" && allMode ? Array.from(excluded) : [];
     try {
       if (mode === "selected") {
         const ids = Array.from(selected);
@@ -374,6 +385,8 @@ export default function DuplicateReviewPage() {
       await refreshAll(0);
     } finally {
       setBulkBusy(false);
+      setAllMode(false);
+      setExcluded(new Set());
     }
   };
 
@@ -398,9 +411,38 @@ export default function DuplicateReviewPage() {
     }
   };
 
-  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const allOnPage = items.length > 0 && items.every((i) => selected.has(i.id));
-  const toggleAll = () => setSelected(allOnPage ? new Set() : new Set(items.map((i) => i.id)));
+  const isChecked = (id: string) => (allMode ? !excluded.has(id) : selected.has(id));
+  const flip = (set: Set<string>, id: string) => { const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); return n; };
+  const toggle = (id: string) => { if (allMode) setExcluded((e) => flip(e, id)); else setSelected((x) => flip(x, id)); };
+  const allOnPage = items.length > 0 && items.every((i) => isChecked(i.id));
+  const toggleAll = () => {
+    if (allMode) {
+      // un-tick / re-tick the whole page inside an "all pages" selection
+      setExcluded((e) => { const n = new Set(e); for (const i of items) { if (allOnPage) n.add(i.id); else n.delete(i.id); } return n; });
+      return;
+    }
+    setSelected(allOnPage ? new Set() : new Set(items.map((i) => i.id)));
+  };
+  const selectedCount = allMode ? Math.max(total - excluded.size, 0) : selected.size;
+  // act on the selection: "all pages" selection goes through the server-side filter (with the un-ticked ones skipped)
+  const bulkSel = (action: Action, opts: { publish?: boolean } = {}) => (allMode ? bulk(action, "all", opts) : bulk(action, "selected", opts));
+  const undoSel = () => (allMode ? undoBulk("all") : undoBulk("selected"));
+  const selectBanner = (
+    <>
+      {!allMode && allOnPage && total > items.length && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-primary/40 bg-primary/10 px-2 py-1.5 text-xs">
+          Is page ke {items.length} chune gaye hain.
+          <button onClick={() => { setAllMode(true); setExcluded(new Set()); }} className="rounded bg-primary px-2 py-1 font-bold text-primary-foreground">Sabhi {total} chunein (saare pages)</button>
+        </div>
+      )}
+      {allMode && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-primary/40 bg-primary/10 px-2 py-1.5 text-xs">
+          ✅ Saare pages ke <b>{selectedCount}</b> chune gaye hain{excluded.size > 0 ? ` (${excluded.size} aapne hataye)` : ""}.
+          <button onClick={() => { setAllMode(false); setExcluded(new Set()); setSelected(new Set()); }} className="rounded border border-border px-2 py-1 font-semibold">Selection hatao</button>
+        </div>
+      )}
+    </>
+  );
   const pages = Math.max(1, Math.ceil(total / PAGE));
 
   if (!authChecked) return null;
@@ -491,31 +533,35 @@ export default function DuplicateReviewPage() {
             {items.length > 0 && (
               <div className="flex flex-wrap items-center gap-2">
                 <label className="flex items-center gap-1"><input type="checkbox" checked={allOnPage} onChange={toggleAll} /> Page ke sab chunein</label>
-                <span className="text-muted-foreground">{selected.size} selected</span>
+                <span className="text-muted-foreground">{selectedCount} selected</span>
                 <div className="ml-auto flex flex-wrap gap-1.5">
-                  <button disabled={bulkBusy || selected.size === 0} onClick={() => undoBulk("selected")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">↩️ Selected: Undo</button>
+                  <button disabled={bulkBusy || selectedCount === 0} onClick={undoSel} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">↩️ Selected ({selectedCount}): Undo</button>
                   <button disabled={bulkBusy || total === 0} onClick={() => undoBulk("all")} className="rounded border border-amber-500/60 bg-amber-500/10 px-2 py-1 font-semibold text-amber-700 disabled:opacity-40 dark:text-amber-400">↩️ Is list ke sabhi {total}: Undo</button>
                 </div>
               </div>
             )}
+            {selectBanner}
             <p className="text-[11px] text-muted-foreground">Undo = naya (publish hua) question hide, purana (hide hua) question wapas live, aur duplicate dobara Pending me — phir aap naya decision le sakte hain.</p>
           </div>
         )}
 
         {tab !== "RESOLVED" && items.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 p-2 text-xs">
+          <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-2 text-xs">
+          {selectBanner}
+          <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-1"><input type="checkbox" checked={allOnPage} onChange={toggleAll} /> Page ke sab chunein</label>
-            <span className="text-muted-foreground">{selected.size} selected</span>
+            <span className="text-muted-foreground">{selectedCount} selected</span>
             <div className="ml-auto flex flex-wrap gap-1.5">
-              <button disabled={bulkBusy || selected.size === 0} onClick={() => bulk("KEEP_EXISTING", "selected")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: purana rakho</button>
-              <button disabled={bulkBusy || selected.size === 0} onClick={() => bulk("KEEP_NEW", "selected", { publish: true })} className="rounded border border-primary/50 bg-primary/10 px-2 py-1 font-semibold text-primary disabled:opacity-40">Selected: naya rakho + Publish</button>
+              <button disabled={bulkBusy || selectedCount === 0} onClick={() => bulkSel("KEEP_EXISTING")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: purana rakho</button>
+              <button disabled={bulkBusy || selectedCount === 0} onClick={() => bulkSel("KEEP_NEW", { publish: true })} className="rounded border border-primary/50 bg-primary/10 px-2 py-1 font-semibold text-primary disabled:opacity-40">Selected ({selectedCount}): naya rakho + Publish</button>
               <button disabled={bulkBusy || total === 0} onClick={() => bulk("KEEP_NEW", "all", { publish: true })} className="rounded border border-primary/50 bg-primary/10 px-2 py-1 font-semibold text-primary disabled:opacity-40">Is tab ke sabhi {total}: naya rakho + Publish</button>
-              <button disabled={bulkBusy || selected.size === 0} onClick={() => bulk("KEEP_NEW", "selected")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: naya rakho</button>
-              <button disabled={bulkBusy || selected.size === 0} onClick={() => bulk("KEEP_BOTH", "selected")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: dono rakho</button>
+              <button disabled={bulkBusy || selectedCount === 0} onClick={() => bulkSel("KEEP_NEW")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: naya rakho</button>
+              <button disabled={bulkBusy || selectedCount === 0} onClick={() => bulkSel("KEEP_BOTH")} className="rounded border border-border px-2 py-1 font-semibold disabled:opacity-40">Selected: dono rakho</button>
               <button disabled={bulkBusy || total === 0} onClick={() => bulk(tab === "SIMILAR" ? "KEEP_BOTH" : "KEEP_EXISTING", "all")} className="rounded border border-primary/50 bg-primary/10 px-2 py-1 font-semibold text-primary disabled:opacity-40">
                 {tab === "SIMILAR" ? `Is tab ke sabhi ${total}: dono rakho` : `Is tab ke sabhi ${total}: purana rakho`}
               </button>
             </div>
+          </div>
           </div>
         )}
 
