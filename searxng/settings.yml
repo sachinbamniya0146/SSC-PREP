@@ -1,6 +1,15 @@
 # SSCPrepHub — self-hosted SearXNG (free, no API key, no daily limit).
 # Only reachable inside the docker network (no public port). JSON format is needed by the backend.
-use_default_settings: true
+# Small VPS (1 GB RAM): only a few light engines, generous timeouts, so one search does not starve the CPU.
+use_default_settings:
+  engines:
+    keep_only:
+      - duckduckgo
+      - bing
+      - google
+      - brave
+      - startpage
+      - mojeek
 general:
   instance_name: "ssc-search"
   enable_metrics: false
@@ -17,7 +26,7 @@ server:
   image_proxy: false
   public_instance: false
 outgoing:
-  request_timeout: 6.0
-  max_request_timeout: 10.0
-  pool_connections: 50
-  pool_maxsize: 20
+  request_timeout: 12.0
+  max_request_timeout: 18.0
+  pool_connections: 20
+  pool_maxsize: 10

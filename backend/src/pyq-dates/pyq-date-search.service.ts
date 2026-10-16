@@ -312,13 +312,13 @@ export class PyqDateSearchService {
   private apiEngines(query: string): Array<{ name: string; run: () => Promise<SearchHit[]> }> {
     const list: Array<{ name: string; run: () => Promise<SearchHit[]> }> = [];
     const names = configuredApiProviders();
-    const json = async (url: string, headers: Record<string, string> = {}): Promise<unknown> => {
-      const res = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { Accept: 'application/json', 'User-Agent': UA, ...headers } });
+    const json = async (url: string, headers: Record<string, string> = {}, timeoutMs = 12000): Promise<unknown> => {
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { Accept: 'application/json', 'User-Agent': UA, ...headers } });
       if (!res.ok) throw new Error(`api/${res.status}`);
       return res.json();
     };
     const defs: Record<string, () => Promise<SearchHit[]>> = {
-      searxng: async () => parseSearxJson(await json(`${String(process.env.SEARXNG_URL).trim().replace(/\/+$/, '')}/search?format=json&language=en-IN&q=${encodeURIComponent(query)}`)),
+      searxng: async () => parseSearxJson(await json(`${String(process.env.SEARXNG_URL).trim().replace(/\/+$/, '')}/search?format=json&language=en-IN&q=${encodeURIComponent(query)}`, {}, 25000)),
       brave: async () => parseBraveJson(await json(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=8&country=IN`, { 'X-Subscription-Token': String(process.env.BRAVE_SEARCH_API_KEY).trim() })),
       'google-cse': async () => parseGoogleCseJson(await json(`https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(String(process.env.GOOGLE_CSE_KEY).trim())}&cx=${encodeURIComponent(String(process.env.GOOGLE_CSE_CX).trim())}&num=8&gl=in&q=${encodeURIComponent(query)}`)),
     };

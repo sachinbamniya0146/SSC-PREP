@@ -90,6 +90,11 @@ services:
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:-ssc-searxng-local-secret-change-me}
       SEARXNG_BASE_URL: http://searxng:8080/
+      # tiny VPS: one worker, few threads
+      GRANIAN_WORKERS: "1"
+      GRANIAN_BLOCKING_THREADS: "2"
+      UWSGI_WORKERS: "1"
+      UWSGI_THREADS: "2"
     volumes:
       - ./searxng:/etc/searxng:rw
     cap_drop:
