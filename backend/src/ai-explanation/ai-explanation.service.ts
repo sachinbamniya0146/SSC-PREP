@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, BadRequestException, HttpException, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { AiProviderService } from '../ai-provider/ai-provider.service';
+import { RateWindow, SingleFlight, parseExplanation } from './ai-explanation.util';
 
 /** An AI-generated solution is saved permanently once this many DISTINCT students confirmed it. */
 export const AI_SOLUTION_VERIFY_THRESHOLD = 10;
@@ -48,6 +49,10 @@ export const AI_SOLUTION_REJECT_THRESHOLD = 5;
  */
 @Injectable()
 export class AIExplanationService {
+  /** A2: one generation per question at a time, and a student cannot burn the key pool (6 new generations / 10 min). */
+  private readonly flight = new SingleFlight<any>();
+  private readonly limiter = new RateWindow(6, 10 * 60_000);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiProvider: AiProviderService,
@@ -119,12 +124,14 @@ export class AIExplanationService {
     // Shared cache hit — this question's explanation was already generated
     // (by anyone, or shipped with the original PDF) and is served straight
     // from the DB, no API call.
-    if (question.explanation && question.explanationHindi) {
+    // A2: English text alone is enough to serve (Hindi may be empty) — an existing explanation is NEVER regenerated over.
+    if (question.explanation) {
+      const hi = question.explanationHindi ?? '';
       return {
         explanation: question.explanation,
-        explanationHindi: question.explanationHindi,
+        explanationHindi: hi,
         stepByStepSolution: question.explanation,
-        stepByStepSolutionHindi: question.explanationHindi,
+        stepByStepSolutionHindi: hi,
         keyConcepts: [],
         keyConceptsHindi: [],
         source: question.explanationSource,
@@ -135,8 +142,11 @@ export class AIExplanationService {
 
     // Nothing cached yet — generate it now and save it so every future
     // student (and this one, next time) gets it instantly from the DB.
+    if (!this.limiter.allow(userId)) {
+      throw new HttpException('Bahut zyada AI explanation requests — 10 minute baad dobara try karein.', 429);
+    }
     const personalKey = userOpenRouterKey ?? (await this.getUserOpenRouterKey(userId));
-    const generated = await this.generateAndSave(question, personalKey);
+    const generated = await this.flight.run(questionId, () => this.generateAndSave(question, personalKey, false));
     return { ...generated, cached: false, verification: await this.verificationStatus(questionId, userId, 'AI_GENERATED') };
   }
 
@@ -179,51 +189,43 @@ Respond ONLY as JSON, no markdown fences, in exactly this shape:
 }`;
   }
 
-  private parseGenerated(content: string): {
-    explanation: string;
-    explanationHindi: string;
-    keyConcepts: string[];
-    keyConceptsHindi: string[];
-  } {
-    try {
-      const cleaned = content.replace(/```json|```/g, '').trim();
-      const parsed = JSON.parse(cleaned);
-      if (parsed.explanation && parsed.explanationHindi) {
-        return {
-          explanation: String(parsed.explanation),
-          explanationHindi: String(parsed.explanationHindi),
-          keyConcepts: Array.isArray(parsed.keyConcepts) ? parsed.keyConcepts.map(String) : [],
-          keyConceptsHindi: Array.isArray(parsed.keyConceptsHindi) ? parsed.keyConceptsHindi.map(String) : [],
-        };
-      }
-    } catch {
-      // fall through to plain-text fallback below
-    }
-    // Model didn't return valid JSON — still save something useful rather
-    // than failing the whole request over a formatting slip.
-    return { explanation: content.trim(), explanationHindi: content.trim(), keyConcepts: [], keyConceptsHindi: [] };
-  }
-
   /** Calls the AI provider, saves the result onto the shared Question row, and returns it. */
   private async generateAndSave(
     question: { id: string; questionText: string; questionTextHindi?: string | null; optionsJson: unknown; correctAnswer: string; subject?: { name: string } | null; chapter?: { name: string } | null; difficulty?: string },
     userOpenRouterKey?: string,
+    overwrite = true,
   ) {
     const prompt = this.buildPrompt(question);
-    const result = await this.aiProvider.generate(prompt, { userApiKey: userOpenRouterKey, jsonResponse: true, feature: 'AI_EXPLANATION' });
-    const parsed = this.parseGenerated(result.content);
+    const result = await this.aiProvider.generate(prompt, { userApiKey: userOpenRouterKey, jsonResponse: true, feature: 'AI_EXPLANATION', maxTokens: 1800 });
+    const verdict = parseExplanation(result.content, question.correctAnswer);
+    if (!verdict.ok) {
+      // a bad / contradicting answer is never saved: the student just retries later
+      throw new ServiceUnavailableException(
+        verdict.reason === 'contradicts_key'
+          ? 'AI ka solution answer key se match nahi hua, isliye save nahi kiya. Thodi der baad dobara try karein.'
+          : 'AI se saaf explanation nahi mili. Thodi der baad dobara try karein.',
+      );
+    }
+    const parsed = verdict.value;
 
-    await this.prisma.question.update({
-      where: { id: question.id },
-      data: {
-        explanation: parsed.explanation,
-        explanationHindi: parsed.explanationHindi,
-        explanationSource: 'AI_GENERATED',
-        explanationModel: result.model,
-        explanationGeneratedAt: new Date(),
-        explanationVerifiedAt: null,
-      },
-    });
+    const data: Prisma.QuestionUncheckedUpdateManyInput = {
+      explanation: parsed.explanation,
+      explanationHindi: parsed.explanationHindi,
+      explanationSource: 'AI_GENERATED' as const,
+      explanationModel: result.model,
+      explanationGeneratedAt: new Date(),
+      explanationVerifiedAt: null,
+    };
+    if (overwrite) {
+      await this.prisma.question.update({ where: { id: question.id }, data });
+    } else {
+      // student path: only fills an EMPTY explanation (an admin / another student may have written one meanwhile)
+      const w = await this.prisma.question.updateMany({ where: { id: question.id, OR: [{ explanation: null }, { explanation: '' }] }, data });
+      if (w.count === 0) {
+        const cur = await this.prisma.question.findUnique({ where: { id: question.id }, select: { explanation: true, explanationHindi: true } });
+        return { explanation: cur?.explanation ?? parsed.explanation, explanationHindi: cur?.explanationHindi ?? '', stepByStepSolution: cur?.explanation ?? parsed.explanation, stepByStepSolutionHindi: cur?.explanationHindi ?? '', keyConcepts: [], keyConceptsHindi: [], source: 'AI_GENERATED' as const, generatedByKey: result.source, model: result.model };
+      }
+    }
     // brand-new AI text => earlier confirmations/disputes were about different text
     await this.prisma.explanationVote.deleteMany({ where: { questionId: question.id } });
 
@@ -291,7 +293,7 @@ Respond ONLY as JSON, no markdown fences, in exactly this shape:
       where: { id: questionId },
       select: { explanation: true, explanationHindi: true, explanationSource: true },
     });
-    return !!(question?.explanation && question?.explanationHindi &&
+    return !!(question?.explanation &&
       (question.explanationSource === 'AI_GENERATED' || question.explanationSource === 'HUMAN_VERIFIED' || question.explanationSource === 'COMMUNITY_VERIFIED'));
   }
 

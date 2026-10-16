@@ -41,7 +41,7 @@ export function detectTier(...texts: Array<string | null | undefined>): Tier | n
 // Dates
 // ---------------------------------------------------------------------------
 
-export function isValidIsoDate(s: unknown, minYear = 2010): s is string {
+export function isValidIsoDate(s: unknown, minYear = 2010, now: number = Date.now()): s is string {
   if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const y = +s.slice(0, 4);
   const m = +s.slice(5, 7);
@@ -49,7 +49,9 @@ export function isValidIsoDate(s: unknown, minYear = 2010): s is string {
   const maxYear = new Date().getUTCFullYear() + 1;
   if (y < minYear || y > maxYear) return false;
   const dt = new Date(Date.UTC(y, m - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+  if (!(dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d)) return false;
+  // A2: a PYQ was already held, so a date in the FUTURE is never real (a "scheduled exam" page or a typo). +1 day = IST tolerance.
+  return dt.getTime() <= now + 86_400_000;
 }
 
 /** Accepts "2025-09-12", "12-09-2025", "12/09/2025", "12 Sep 2025", "September 12, 2025" -> "2025-09-12" (null if unreadable). */

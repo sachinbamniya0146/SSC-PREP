@@ -45,7 +45,13 @@ docker image prune -af --filter "until=72h" > /dev/null 2>&1 || true
 
 # Wait for services to be healthy
 echo "⏳ Waiting for services to be healthy..."
-sleep 20
+sleep 10
+# A2: wait (max ~2 min) until Docker reports the backend healthy (DB + Redis answer); never fails the deploy by itself
+for i in $(seq 1 24); do
+    st=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ssc-backend 2>/dev/null || echo none)
+    if [ "$st" = "healthy" ] || [ "$st" = "none" ]; then echo "✅ Backend container: $st"; break; fi
+    sleep 5
+done
 
 # Run database migrations (if any)
 echo "🗄️ Running database migrations..."

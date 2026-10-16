@@ -148,6 +148,46 @@ export function parseBing(html: string): SearchHit[] {
   return hits;
 }
 
+// ---- official search APIs (A2): reliable from a VPS, unlike scraped HTML. All optional, configured by env. ----
+
+const asHits = (arr: unknown, t: string, u: string, sn: string): SearchHit[] =>
+  (Array.isArray(arr) ? arr : [])
+    .map((r: Record<string, unknown>) => ({ title: stripHtml(String(r?.[t] ?? '')).slice(0, 200), url: String(r?.[u] ?? ''), snippet: stripHtml(String(r?.[sn] ?? '')).slice(0, 500) }))
+    .filter((h) => /^https?:\/\//i.test(h.url) && !isPrivateHost((() => { try { return new URL(h.url).hostname; } catch { return 'localhost'; } })()));
+
+/** Brave Search API: { web: { results: [{ title, url, description }] } } */
+export function parseBraveJson(j: unknown): SearchHit[] {
+  return asHits((j as { web?: { results?: unknown } })?.web?.results, 'title', 'url', 'description');
+}
+/** Google Programmable Search: { items: [{ title, link, snippet }] } */
+export function parseGoogleCseJson(j: unknown): SearchHit[] {
+  return asHits((j as { items?: unknown })?.items, 'title', 'link', 'snippet');
+}
+/** SearXNG (self-hosted): { results: [{ title, url, content }] } */
+export function parseSearxJson(j: unknown): SearchHit[] {
+  return asHits((j as { results?: unknown })?.results, 'title', 'url', 'content');
+}
+
+/** which official providers are configured (names only — never the keys) */
+export function configuredApiProviders(env: NodeJS.ProcessEnv = process.env): string[] {
+  const out: string[] = [];
+  if ((env.BRAVE_SEARCH_API_KEY || '').trim()) out.push('brave');
+  if ((env.GOOGLE_CSE_KEY || '').trim() && (env.GOOGLE_CSE_CX || '').trim()) out.push('google-cse');
+  if (/^https?:\/\//i.test((env.SEARXNG_URL || '').trim())) out.push('searxng');
+  return out;
+}
+
+/** unlimited self-hosted SearXNG first, then the capped free APIs (Brave / Google CSE) */
+export const PROVIDER_ORDER = ['searxng', 'brave', 'google-cse'];
+export function orderProviders(names: string[]): string[] {
+  return [...names].sort((a, b) => PROVIDER_ORDER.indexOf(a) - PROVIDER_ORDER.indexOf(b));
+}
+/** an API answered "quota over / key refused" -> stop calling it for a while (saves the free quota, avoids useless retries) */
+export function isQuotaError(msg: string): boolean {
+  return /api\/(401|402|403|429)\b/.test(msg);
+}
+export const API_COOLDOWN_MS = 60 * 60 * 1000;
+
 /** true when the engine answered with a bot-check page instead of results */
 export function looksBlocked(html: string): boolean {
   const t = html.slice(0, 6000).toLowerCase();
@@ -266,7 +306,41 @@ export class PyqDateSearchService {
     return { status: res.status, text };
   }
 
-  /** web search with fallbacks: DuckDuckGo html -> DuckDuckGo lite -> Bing */
+  private apiBlockedUntil = new Map<string, number>();
+
+  /** official APIs first (when configured): they are not blocked on VPS IPs. Errors never contain the key. */
+  private apiEngines(query: string): Array<{ name: string; run: () => Promise<SearchHit[]> }> {
+    const list: Array<{ name: string; run: () => Promise<SearchHit[]> }> = [];
+    const names = configuredApiProviders();
+    const json = async (url: string, headers: Record<string, string> = {}): Promise<unknown> => {
+      const res = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { Accept: 'application/json', 'User-Agent': UA, ...headers } });
+      if (!res.ok) throw new Error(`api/${res.status}`);
+      return res.json();
+    };
+    const defs: Record<string, () => Promise<SearchHit[]>> = {
+      searxng: async () => parseSearxJson(await json(`${String(process.env.SEARXNG_URL).trim().replace(/\/+$/, '')}/search?format=json&language=en-IN&q=${encodeURIComponent(query)}`)),
+      brave: async () => parseBraveJson(await json(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=8&country=IN`, { 'X-Subscription-Token': String(process.env.BRAVE_SEARCH_API_KEY).trim() })),
+      'google-cse': async () => parseGoogleCseJson(await json(`https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(String(process.env.GOOGLE_CSE_KEY).trim())}&cx=${encodeURIComponent(String(process.env.GOOGLE_CSE_CX).trim())}&num=8&gl=in&q=${encodeURIComponent(query)}`)),
+    };
+    for (const n of orderProviders(names)) {
+      if ((this.apiBlockedUntil.get(n) ?? 0) > Date.now()) continue; // quota over -> skipped until cooldown ends
+      const run = defs[n];
+      list.push({
+        name: n,
+        run: async () => {
+          try {
+            return await run();
+          } catch (err) {
+            if (isQuotaError((err as Error)?.message || '')) this.apiBlockedUntil.set(n, Date.now() + API_COOLDOWN_MS);
+            throw err;
+          }
+        },
+      });
+    }
+    return list;
+  }
+
+  /** web search: official APIs (if configured) -> DuckDuckGo html -> DuckDuckGo lite -> Bing */
   async search(query: string): Promise<SearchOutcome> {
     const key = query.toLowerCase();
     const cached = this.searchCache.get(key);
@@ -275,6 +349,7 @@ export class PyqDateSearchService {
     const out = await this.schedule(async (): Promise<SearchOutcome> => {
       const errors: string[] = [];
       const engines: Array<{ name: string; run: () => Promise<SearchHit[]> }> = [
+        ...this.apiEngines(query),
         {
           name: 'duckduckgo',
           run: async () => {
@@ -428,6 +503,6 @@ export class PyqDateSearchService {
   /** admin "Test search" button: shows what the server can reach, without using any AI key */
   async diagnose(query: string) {
     const out = await this.search(query);
-    return { engine: out.engine, failed: out.failed, error: out.error ?? null, count: out.hits.length, hits: out.hits.slice(0, 6), normalizedQuery: normText(query) };
+    return { apiProviders: configuredApiProviders(), engine: out.engine, failed: out.failed, error: out.error ?? null, count: out.hits.length, hits: out.hits.slice(0, 6), normalizedQuery: normText(query) };
   }
 }

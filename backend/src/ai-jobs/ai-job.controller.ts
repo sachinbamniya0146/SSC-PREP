@@ -6,6 +6,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AiProviderService } from '../ai-provider/ai-provider.service';
 import { AiJobService, JobScopeDto } from './ai-job.service';
+import { AiOpsService } from './ai-ops.service';
 import { AiSystemCheckService } from './ai-system-check.service';
 
 // Admin: central AI job engine (NEW Oct 15 2026).  Route ORDER matters: fixed paths first, ":id" paths last.
@@ -27,6 +28,7 @@ export class AiJobController {
     private readonly jobs: AiJobService,
     private readonly check: AiSystemCheckService,
     private readonly ai: AiProviderService,
+    private readonly ops: AiOpsService,
   ) {}
 
   @Get('overview')
@@ -47,6 +49,36 @@ export class AiJobController {
   @Post('system-check')
   systemCheck() {
     return this.check.run();
+  }
+
+  /** per-feature / per-key / fail-reason numbers (7 days) */
+  @Get('stats')
+  stats(@Query('days') days?: string) {
+    return this.ops.stats(days ? Number(days) : 7);
+  }
+
+  /** key quota (GET /key) of every active key + the last clear problem message per key */
+  @Get('key-quota')
+  async keyQuota() {
+    const live = await this.ai.getLiveStatus();
+    const rows = await Promise.all(live.keys.filter((k) => k.isActive).map(async (k) => ({ id: k.id, keyName: k.keyName, info: await this.ai.getKeyInfo(k.id), problem: k.problem })));
+    return { keys: rows };
+  }
+
+  @Get('benchmark')
+  lastBenchmark() {
+    return { result: this.ops.getLastBenchmark() };
+  }
+
+  /** golden-set quality test (5 questions x 3 passes) */
+  @Post('benchmark')
+  benchmark() {
+    return this.ops.runBenchmark();
+  }
+
+  @Post('watchdog')
+  watchdog() {
+    return this.jobs.watchdog(true);
   }
 
   @Post('model-health')

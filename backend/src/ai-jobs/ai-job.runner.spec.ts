@@ -118,3 +118,41 @@ describe('CHAPTER_TOPIC_CLASSIFY', () => {
     expect((await runItem('CHAPTER_TOPIC_CLASSIFY', base({ chapters }), script([C('c1'), C('c2'), C('c1'), C('c2'), C('zzz')]).ask, o)).status).toBe('FAILED');
   });
 });
+
+describe('A2 quality gates in the runner', () => {
+  it('solution that ends on a DIFFERENT option than the key -> NEEDS_REVIEW, never written', async () => {
+    const bad = JSON.stringify({ answer: 'B', solution: 'We compute 480 x 25 / 100 = 120. Hence the correct answer is option C.' });
+    const r = await runItem('SOLUTION_GENERATE', base(), script([bad]).ask, o);
+    expect(r.status).toBe('NEEDS_REVIEW');
+    expect(r.proposal).toMatchObject({ kind: 'SOLUTION_KEY_MISMATCH', solutionSays: 'C' });
+  });
+  it('low confidence (below AI_MIN_CONFIDENCE) -> review instead of auto-write', async () => {
+    process.env.AI_MIN_CONFIDENCE = '0.8';
+    const r = await runItem('SOLUTION_GENERATE', base(), script([SOL('B'), SOL('B'), SOL('C'), SOL('B'), SOL('D')]).ask, o);
+    delete process.env.AI_MIN_CONFIDENCE;
+    expect(r.status).toBe('NEEDS_REVIEW');
+    expect(r.proposal).toMatchObject({ kind: 'LOW_CONFIDENCE' });
+    expect(r.confidence).toBe(0.75); // early stop after 3 agreeing of 4 votes
+  });
+  it('confidence is reported on a normal DONE', async () => {
+    const r = await runItem('SOLUTION_GENERATE', base(), script([SOL('B')]).ask, o);
+    expect(r.status).toBe('DONE');
+    expect(r.confidence).toBe(1);
+  });
+
+  const ctx = () => base({ hindiExempt: false });
+  const GEN = JSON.stringify({ questionHi: '480 का 25% क्या है?', optionsHi: ['100', '120', '140', '160'] });
+  const OK = JSON.stringify({ faithful: true });
+  const BT = (items: string[]) => JSON.stringify({ items });
+  it('Hindi back-translation that matches -> DONE', async () => {
+    const r = await runItem('HINDI_TRANSLATE', ctx(), script([GEN, BT(['What is 25% of 480?', '100', '120', '140', '160']), OK, OK, OK]).ask, o);
+    expect(r.status).toBe('DONE');
+    expect(r.passes.some((p) => p.stage === 'back-translate' && p.ok)).toBe(true);
+  });
+  it('Hindi back-translation that drifted -> NEEDS_REVIEW with the proposal kept for the admin', async () => {
+    const r = await runItem('HINDI_TRANSLATE', ctx(), script([GEN, BT(['The boy eats a ripe mango today', '999', '888', '777', '666']), OK, OK, OK]).ask, o);
+    expect(r.status).toBe('NEEDS_REVIEW');
+    expect(r.proposal?.questionTextHindi).toContain('480');
+    expect(r.note).toMatch(/wapas English/);
+  });
+});

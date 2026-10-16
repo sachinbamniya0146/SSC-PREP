@@ -3,6 +3,11 @@
 // provider in production and against a mock OpenRouter server in the tests.
 import {
   ANSWER_SCHEMA,
+  BACK_TRANSLATION_MIN,
+  backTranslationScore,
+  confidenceOf,
+  minConfidence,
+  solutionContradictsKey,
   HINDI_SCHEMA,
   JobType,
   SOLUTION_SCHEMA,
@@ -71,6 +76,8 @@ export interface RunResult {
   proposal: Record<string, unknown> | null;
   passes: PassRec[];
   agree: number;
+  /** 0..1 — how sure the passes were (agreement x coverage); shown to the admin, low values go to review */
+  confidence?: number;
 }
 
 export interface RunOpts {
@@ -151,16 +158,21 @@ async function solutionGenerate(q: QuestionCtx, ask: Ask, opts: RunOpts): Promis
   if (t.winner !== q.correctAnswer) {
     return { status: 'NEEDS_REVIEW', note: `AI ${t.count}/${passes.length} ne answer ${t.winner} diya, stored key ${q.correctAnswer} hai — solution tabhi lagega jab key sahi ho`, proposal: { kind: 'ANSWER_CONFLICT', aiAnswer: t.winner, storedAnswer: q.correctAnswer }, passes, agree: t.count };
   }
+  const conf = confidenceOf(t.count, t.total, passes.length);
+  if (conf < minConfidence()) return { status: 'NEEDS_REVIEW', note: `AI ka confidence kam hai (${Math.round(conf * 100)}%) — admin review chahiye`, proposal: { kind: 'LOW_CONFIDENCE', answer: t.winner, confidence: conf }, passes, agree: t.count, confidence: conf };
   const agreeing = sols.filter((s) => s.answer === t.winner);
   // prefer an agreeing pass that also has a Hindi solution; else the first agreeing one
   const best = (needHindi ? agreeing.find((s) => !isEmptyText(s.solutionHindi) && hindiRatio(s.solutionHindi as string) >= 0.4) : undefined) ?? agreeing[0];
+  // quality gate: the written solution must not END on a different option than the (agreed) answer key
+  const clash = solutionContradictsKey(best.solution, q.correctAnswer);
+  if (clash) return { status: 'NEEDS_REVIEW', note: `solution ke end me option ${clash} likha hai par answer ${q.correctAnswer} hai — solution aur key match nahi karte`, proposal: { kind: 'SOLUTION_KEY_MISMATCH', solutionSays: clash, storedAnswer: q.correctAnswer, explanation: best.solution.trim() }, passes, agree: t.count, confidence: conf };
   const proposal: Record<string, unknown> = { explanation: best.solution.trim(), answer: t.winner };
   let note = `${t.count}/${passes.length} pass agree (answer ${t.winner})`;
   if (needHindi) {
     if (best.solutionHindi && hindiRatio(best.solutionHindi) >= 0.4) proposal.explanationHindi = best.solutionHindi.trim();
     else note += ' · Hindi solution nahi aaya — HINDI_TRANSLATE job chalayein';
   }
-  return { status: 'DONE', note, proposal, passes, agree: t.count };
+  return { status: 'DONE', note, proposal, passes, agree: t.count, confidence: conf };
 }
 
 // ------------------------------------------------------------------ ANSWER_KEY_VERIFY
@@ -178,8 +190,9 @@ async function answerKeyVerify(q: QuestionCtx, ask: Ask, opts: RunOpts): Promise
   const t = tally(votes, opts.minAgree);
   if (t.total === 0) return { status: 'FAILED', note: 'koi bhi pass valid JSON nahi de paya', proposal: null, passes, agree: 0 };
   if (!t.accepted || !t.winner) return { status: 'NEEDS_REVIEW', note: `passes agree nahi hue (${JSON.stringify(t.counts)})`, proposal: { kind: 'PASSES_DISAGREE', counts: t.counts, storedAnswer: q.correctAnswer }, passes, agree: t.count };
-  if (t.winner === q.correctAnswer) return { status: 'DONE', note: `answer key sahi: ${t.count}/${passes.length} independent pass ne ${t.winner} diya`, proposal: { kind: 'KEY_OK', answer: t.winner, agree: t.count, of: passes.length }, passes, agree: t.count };
-  return { status: 'NEEDS_REVIEW', note: `answer key galat ho sakti hai: AI ${t.count}/${passes.length} = ${t.winner}, stored = ${q.correctAnswer}`, proposal: { kind: 'ANSWER_CHANGE', from: q.correctAnswer, to: t.winner, agree: t.count, of: passes.length }, passes, agree: t.count };
+  const conf = confidenceOf(t.count, t.total, passes.length);
+  if (t.winner === q.correctAnswer) return { status: 'DONE', note: `answer key sahi: ${t.count}/${passes.length} independent pass ne ${t.winner} diya`, proposal: { kind: 'KEY_OK', answer: t.winner, agree: t.count, of: passes.length }, passes, agree: t.count, confidence: conf };
+  return { status: 'NEEDS_REVIEW', note: `answer key galat ho sakti hai: AI ${t.count}/${passes.length} = ${t.winner}, stored = ${q.correctAnswer}`, proposal: { kind: 'ANSWER_CHANGE', from: q.correctAnswer, to: t.winner, agree: t.count, of: passes.length }, passes, agree: t.count, confidence: conf };
 }
 
 // ------------------------------------------------------------------ HINDI_TRANSLATE
@@ -249,6 +262,29 @@ async function hindiTranslate(q: QuestionCtx, ask: Ask, opts: RunOpts): Promise<
   }
   if (!gen) return { status: 'FAILED', note: 'valid Hindi translation nahi bana (format / Devanagari / numbers check fail)', proposal: null, passes, agree: 0 };
 
+  // quality gate: back-translate the Hindi to English and compare with the original (catches drift a proof-reader misses)
+  if (opts.passes >= 4) {
+    const parts: Array<{ en: string; hi: string }> = [];
+    if (need.question) parts.push({ en: q.questionText, hi: gen.questionHi! });
+    if (need.options) q.options.forEach((o, i) => parts.push({ en: o.text, hi: gen!.optionsHi![i] }));
+    if (need.solution) parts.push({ en: q.explanation ?? '', hi: gen.solutionHi! });
+    const hiBlock = parts.map((x, i) => `[${i + 1}] ${x.hi}`).join('\n');
+    opts.onStage?.('back-translate', passes.length + 1, opts.passes);
+    const bt = await askParsed<{ items: string[] }>(ask, ['Translate each numbered Hindi text below back into plain English. Keep numbers exactly.', hiBlock, `Reply with ONLY this JSON (no markdown): {"items": [${parts.map(() => '"<English>"').join(', ')}]}`].join('\n'), { type: 'object', props: { items: { type: 'array', items: { type: 'string', minLen: 1, maxLen: 4000 }, minItems: parts.length, maxItems: parts.length } } }, passes.length, 1500, 'back-translate');
+    if (bt.value) {
+      const scores = parts.map((x, i) => backTranslationScore(x.en, bt.value!.items[i]));
+      const worst = Math.min(...scores);
+      passes.push({ i: passes.length, stage: 'back-translate', ok: worst >= BACK_TRANSLATION_MIN, vote: null, extra: { minScore: worst } });
+      if (worst < BACK_TRANSLATION_MIN) {
+        const prop: Record<string, unknown> = {};
+        if (need.question) prop.questionTextHindi = gen.questionHi!.trim();
+        if (need.options) prop.optionsHi = gen.optionsHi!.map((x) => x.trim());
+        if (need.solution) prop.explanationHindi = gen.solutionHi!.trim();
+        return { status: 'NEEDS_REVIEW', note: `Hindi ko wapas English me badla to meaning match kam hai (${Math.round(worst * 100)}%) — review karein`, proposal: prop, passes, agree: 0, confidence: worst };
+      }
+    } else passes.push({ i: passes.length, stage: 'back-translate', ok: false, vote: null, error: bt.error }); // an unusable check never blocks, the proof-readers still decide
+  }
+
   // remaining passes: independent faithfulness checks (a different model each, via passIndex)
   const verifiers = Math.max(1, opts.passes - passes.length);
   const minAgree = Math.min(opts.minAgree, verifiers);
@@ -269,7 +305,7 @@ async function hindiTranslate(q: QuestionCtx, ask: Ask, opts: RunOpts): Promise<
   if (need.question) proposal.questionTextHindi = gen.questionHi!.trim();
   if (need.options) proposal.optionsHi = gen.optionsHi!.map((x) => x.trim());
   if (need.solution) proposal.explanationHindi = gen.solutionHi!.trim();
-  if (t.accepted && t.winner === 'ok') return { status: 'DONE', note: `${t.count}/${vp.length} proof-reader pass ne translation sahi maani`, proposal, passes, agree: t.count };
+  if (t.accepted && t.winner === 'ok') return { status: 'DONE', note: `${t.count}/${vp.length} proof-reader pass ne translation sahi maani`, proposal, passes, agree: t.count, confidence: confidenceOf(t.count, t.total, vp.length) };
   if (t.total === 0) return { status: 'FAILED', note: 'verification pass valid jawab nahi de paye', proposal: null, passes, agree: 0 };
   return { status: 'NEEDS_REVIEW', note: `translation par pass agree nahi hue (${JSON.stringify(t.counts)})`, proposal, passes, agree: t.count };
 }

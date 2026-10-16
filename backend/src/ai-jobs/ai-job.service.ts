@@ -5,8 +5,8 @@ import { AiProviderService } from '../ai-provider/ai-provider.service';
 import { AdminApiKeyService } from '../admin-api-keys/admin-api-keys.service';
 import { PyqDateService } from '../pyq-dates/pyq-date.service';
 import { isHindiExemptSubjectSlug } from '../common/question-visibility';
-import { redact } from '../ai-provider/ai-provider.util';
-import { JOB_FEATURE, JOB_LABEL, JOB_TYPES, JobType, estimateCalls, etaSeconds, isEmptyText, isJobType, minAgreeFor } from './ai-job.logic';
+import { pacedConcurrency, redact } from '../ai-provider/ai-provider.util';
+import { JOB_FEATURE, JOB_LABEL, JOB_TYPES, JobType, bootSummaryLine, estimateCalls, etaSeconds, isEmptyText, isJobType, isStuck, minAgreeFor } from './ai-job.logic';
 import { ProviderBusyError, QuestionCtx, RunResult, TaxonomyChapter, runItem } from './ai-job.runner';
 
 // ============================================================================================================
@@ -20,6 +20,9 @@ const TICK_MS = 5000;
 const CLAIM_MAX = 4; // items worked on in parallel (also limited by the number of ready keys)
 const BUSY_REST_MS = 45_000;
 const UNDO_CHUNK = 1500;
+const STUCK_ITEM_MS = 12 * 60_000; // an item RUNNING this long has no live worker behind it
+const WATCHDOG_EVERY_MS = 60_000;
+const BUSY_WEDGE_MS = 40 * 60_000; // a tick that never returns for this long is considered wedged
 
 export interface JobScopeDto {
   examId?: string;
@@ -82,6 +85,10 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AiJobService.name);
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
+  private busySince = 0;
+  private lastWatchdogAt = 0;
+  private watchdogFixed = 0;
+  private bootReport: { at: string; line: string; requeuedItems: number; requeuedJobs: number; resumable: number; keysActive: number; keysRevived: number } | null = null;
   private wakeAgain = false;
   private pausedUntil = 0;
   private lastTickAt = 0;
@@ -114,6 +121,33 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
       const items = await this.prisma.aiJobItem.updateMany({ where: { status: 'RUNNING', job: { type: { not: 'PYQ_DATE_SHIFT' } } }, data: { status: 'PENDING' } });
       const jobs = await this.prisma.aiJob.updateMany({ where: { status: 'RUNNING', type: { not: 'PYQ_DATE_SHIFT' } }, data: { status: 'PENDING' } });
       if (items.count || jobs.count) this.logger.log(`Re-queued ${jobs.count} AI job(s) / ${items.count} item(s) interrupted by the restart.`);
+      const resumable = await this.prisma.aiJob.count({ where: { status: { in: ['PENDING', 'RUNNING'] } } });
+      let keysActive = 0;
+      try {
+        keysActive = (await this.keys.getRotationPool('openrouter')).length;
+      } catch {
+        /* DB hiccup: report 0 */
+      }
+      const r = { requeuedItems: items.count, requeuedJobs: jobs.count, resumable, keysActive, keysRevived: 0 };
+      this.bootReport = { at: new Date().toISOString(), line: bootSummaryLine(r), ...r };
+      this.logger.log(`AI BOOT REPORT: ${this.bootReport.line}`);
+      // 25 s after boot the provider has had its first key-revive run: record how many keys it healed
+      const later = setTimeout(() => {
+        void (async () => {
+          try {
+            const now = (await this.keys.getRotationPool('openrouter')).length;
+            if (this.bootReport && now > this.bootReport.keysActive) {
+              this.bootReport.keysRevived = now - this.bootReport.keysActive;
+              this.bootReport.keysActive = now;
+              this.bootReport.line = bootSummaryLine(this.bootReport);
+              this.logger.log(`AI BOOT REPORT (updated): ${this.bootReport.line}`);
+            }
+          } catch {
+            /* ignore */
+          }
+        })();
+      }, 30_000);
+      later.unref?.();
     } catch (e) {
       this.logger.warn(`AI job start-up check failed (is the migration applied?): ${redact((e as Error).message)}`);
     }
@@ -143,11 +177,18 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
   // ------------------------------------------------------------------ worker loop
 
   async tick(): Promise<void> {
-    if (this.busy || !this.workerEnabled()) return;
+    if (!this.workerEnabled()) return;
+    if (this.busy && this.busySince && Date.now() - this.busySince > BUSY_WEDGE_MS) {
+      this.logger.warn('AI worker tick was stuck for 40 min — released by the watchdog.');
+      this.busy = false;
+    }
+    if (this.busy) return;
     if (Date.now() < this.pausedUntil) return;
     this.busy = true;
+    this.busySince = Date.now();
     this.lastTickAt = Date.now();
     try {
+      await this.watchdog();
       await this.syncDelegated();
       for (let guard = 0; guard < 500; guard++) {
         const job = await this.prisma.aiJob.findFirst({ where: { status: { in: ['PENDING', 'RUNNING'] }, type: { not: 'PYQ_DATE_SHIFT' } }, orderBy: { createdAt: 'asc' } });
@@ -160,11 +201,49 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(this.lastMessage);
     } finally {
       this.busy = false;
+      this.busySince = 0;
       if (this.wakeAgain) {
         this.wakeAgain = false;
         setTimeout(() => void this.tick(), 50);
       }
     }
+  }
+
+  /**
+   * Watchdog (A2): every ~60 s. Items RUNNING for > 12 min (lost promise / crashed call) go back to PENDING (or FAILED after 3 attempts);
+   * a RUNNING job with no unfinished items is finalised. Never touches PYQ_DATE_SHIFT (its own worker owns those).
+   */
+  async watchdog(force = false): Promise<{ requeued: number; failed: number; finalized: number }> {
+    const out = { requeued: 0, failed: 0, finalized: 0 };
+    const now = Date.now();
+    if (!force && now - this.lastWatchdogAt < WATCHDOG_EVERY_MS) return out;
+    this.lastWatchdogAt = now;
+    try {
+      const live = new Set(Array.from(this.current.values()).map((c) => c.itemId));
+      const old = await this.prisma.aiJobItem.findMany({ where: { status: 'RUNNING', startedAt: { lt: new Date(now - STUCK_ITEM_MS) }, job: { type: { not: 'PYQ_DATE_SHIFT' } } }, select: { id: true, jobId: true, status: true, startedAt: true, attempts: true }, take: 200 });
+      for (const it of old) {
+        if (live.has(it.id) || !isStuck({ status: it.status, startedAtMs: it.startedAt?.getTime() ?? null, nowMs: now, maxMs: STUCK_ITEM_MS })) continue;
+        const retry = it.attempts < 3;
+        const r = await this.prisma.aiJobItem.updateMany({ where: { id: it.id, status: 'RUNNING' }, data: retry ? { status: 'PENDING', lastError: 'watchdog: item atak gaya tha, dobara line me' } : { status: 'FAILED', finishedAt: new Date(), lastError: 'watchdog: baar baar atak gaya', note: 'baar baar atak gaya' } });
+        if (r.count) {
+          if (retry) out.requeued++;
+          else out.failed++;
+        }
+      }
+      const jobs = await this.prisma.aiJob.findMany({ where: { status: 'RUNNING', type: { not: 'PYQ_DATE_SHIFT' } }, select: { id: true }, take: 50 });
+      for (const j of jobs) {
+        const open = await this.prisma.aiJobItem.count({ where: { jobId: j.id, status: { in: ['PENDING', 'RUNNING'] } } });
+        if (open === 0) {
+          await this.finalizeJob(j.id);
+          out.finalized++;
+        }
+      }
+      this.watchdogFixed += out.requeued + out.failed + out.finalized;
+      if (out.requeued || out.failed || out.finalized) this.logger.warn(`AI watchdog: ${out.requeued} item requeued, ${out.failed} failed, ${out.finalized} job finalised`);
+    } catch (e) {
+      this.logger.warn(`AI watchdog failed: ${redact((e as Error).message)}`);
+    }
+    return out;
   }
 
   /** works on ONE job until it is finished, paused, cancelled or the keys are busy */
@@ -189,7 +268,7 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
         return 'rest';
       }
 
-      const concurrency = Math.max(1, Math.min(CLAIM_MAX, gw ? CLAIM_MAX : avail.ready));
+      const concurrency = pacedConcurrency(CLAIM_MAX, avail.ready, gw);
       const candidates = await this.prisma.aiJobItem.findMany({ where: { jobId, status: 'PENDING' }, orderBy: { createdAt: 'asc' }, take: concurrency, select: { id: true } });
       const claimed: string[] = [];
       for (const c of candidates) {
@@ -333,7 +412,8 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** the result of the passes becomes either a DB write (with undo log), a review entry, or a final status */
-  private async settle(jobId: string, type: JobType, itemId: string, questionId: string, r: RunResult, model: string | null) {
+  private async settle(jobId: string, type: JobType, itemId: string, questionId: string, r0: RunResult, model: string | null) {
+    const r: RunResult = r0.confidence !== undefined ? { ...r0, note: `${r0.note} · confidence ${Math.round(r0.confidence * 100)}%` } : r0;
     if (r.status !== 'DONE' || !r.proposal) {
       await this.finishItem(itemId, r.status, r.note, r.proposal, r.passes, r.agree);
       return;
@@ -793,6 +873,22 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
     return { level: 'green', icon: '🟢', text: live.working > 0 ? 'AI chal raha hai' : 'AI ready hai' };
   }
 
+  /** tiny, secret-free snapshot for GET /health */
+  async healthSnapshot(): Promise<{ worker: 'on' | 'off' | 'stalled'; lastTickSecAgo: number | null; keysActive: number; pendingJobs: number; boot: string | null }> {
+    let keysActive = 0;
+    let pendingJobs = 0;
+    try {
+      keysActive = (await this.keys.getRotationPool('openrouter')).length;
+      pendingJobs = await this.prisma.aiJob.count({ where: { status: { in: ['PENDING', 'RUNNING'] } } });
+    } catch {
+      /* DB problem is reported by the DB check itself */
+    }
+    const ago = this.lastTickAt ? Math.round((Date.now() - this.lastTickAt) / 1000) : null;
+    // the tick runs every 5 s; > 3 min of silence without a long-running tick means the loop is dead
+    const worker = !this.workerEnabled() ? 'off' : this.busy ? 'on' : ago !== null && ago > 180 ? 'stalled' : 'on';
+    return { worker, lastTickSecAgo: ago, keysActive, pendingJobs, boot: this.bootReport?.line ?? null };
+  }
+
   async overview() {
     const [live, jobs, cfg] = await Promise.all([
       this.ai.getLiveStatus(),
@@ -816,7 +912,8 @@ export class AiJobService implements OnModuleInit, OnModuleDestroy {
     return {
       now,
       health: this.health(live, cfg?.lastMessage ?? null),
-      worker: { enabled: this.workerEnabled(), busy: this.busy, lastTickAt: this.lastTickAt || null, lastMessage: this.lastMessage, restSec: Math.max(0, Math.ceil((this.pausedUntil - now) / 1000)) },
+      boot: this.bootReport,
+      worker: { enabled: this.workerEnabled(), busy: this.busy, watchdogFixed: this.watchdogFixed, lastTickAt: this.lastTickAt || null, lastMessage: this.lastMessage, restSec: Math.max(0, Math.ceil((this.pausedUntil - now) / 1000)) },
       jobs: rows,
       live,
     };

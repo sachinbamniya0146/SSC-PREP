@@ -4,10 +4,16 @@ import {
   MAX_RESPONSE_CHARS,
   MAX_RETRIES,
   ModelHealth,
+  KeyProblem,
   applyModelOutcome,
+  callDeadlineMs,
+  classifyKeyProblem,
   clampTokens,
   isTransientStatus,
+  keyProblemMessage,
   orderKeysByCooldown,
+  promptHash,
+  rankModels,
   redact,
   retryDelayMs,
   rotateModels,
@@ -36,6 +42,8 @@ export interface AiGenerateOptions {
   timeoutMs?: number;
   /** NEW (Oct 15 2026): free-text label of what is being worked on, shown in the live status ("Q#123 · pass 2/5"). */
   note?: string;
+  /** NEW (A2): identical prompt + model answered within this many ms is served from memory (0/undefined = no cache) */
+  cacheTtlMs?: number;
 }
 
 /** NEW (Oct 14 2026): what the admin sees LIVE on Admin → API Keys. */
@@ -195,7 +203,7 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
 
   /** NEW: same list, but models that failed 3 times in a row are skipped for 30 minutes. */
   async getUsableModels(): Promise<string[]> {
-    return usableModels(await this.getFreeModels(), this.modelHealth, Date.now());
+    return rankModels(usableModels(await this.getFreeModels(), this.modelHealth, Date.now()), this.modelHealth);
   }
 
   // ---------------------------------------------------------------- live status (NEW Oct 14 2026)
@@ -267,6 +275,7 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
           note: call?.note ?? null,
           runningSec: call ? Math.round((now - call.startedAt) / 1000) : 0,
           lastError: k.isActive ? null : k.lastErrorMessage,
+          problem: this.keyProblems.get(k.id)?.message ?? null,
         };
       }),
       gateway: gw ? { configured: true, model: gw.model } : { configured: false, model: null },
@@ -285,14 +294,55 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
         ok: h.ok,
         fail: h.fail,
         successRate: h.ok + h.fail > 0 ? Math.round((h.ok / (h.ok + h.fail)) * 100) : null,
+        avgMs: h.avgMs ?? null,
         skippedForSec: h.skipUntil > now ? Math.ceil((h.skipUntil - now) / 1000) : 0,
         lastError: h.lastError,
       }))
       .sort((a, b) => (b.successRate ?? -1) - (a.successRate ?? -1));
   }
 
-  private recordModel(model: string, ok: boolean, error: string | null) {
-    this.modelHealth.set(model, applyModelOutcome(this.modelHealth.get(model), ok, error, Date.now()));
+  private recordModel(model: string, ok: boolean, error: string | null, ms?: number) {
+    this.modelHealth.set(model, applyModelOutcome(this.modelHealth.get(model), ok, error, Date.now(), ms));
+  }
+
+  // ---------------------------------------------------------------- small answer cache + live key quota (NEW A2)
+
+  private readonly cache = new Map<string, { at: number; content: string; model: string }>();
+  private readonly keyInfoCache = new Map<string, { at: number; info: { usage: number | null; limit: number | null; remaining: number | null; isFree: boolean | null } }>();
+
+  private cacheGet(model: string, prompt: string, ttl?: number): { content: string; model: string } | null {
+    if (!ttl || ttl <= 0) return null;
+    const hit = this.cache.get(promptHash('*', prompt));
+    return hit && Date.now() - hit.at < ttl ? { content: hit.content, model: hit.model } : null;
+  }
+  private cachePut(prompt: string, content: string, model: string, ttl?: number) {
+    if (!ttl || ttl <= 0) return;
+    if (this.cache.size > 300) this.cache.delete(this.cache.keys().next().value as string);
+    this.cache.set(promptHash('*', prompt), { at: Date.now(), content, model });
+  }
+
+  /** GET /key — real usage / limit of ONE key (cached 60 s). Never returns the key itself. */
+  async getKeyInfo(keyId: string): Promise<{ usage: number | null; limit: number | null; remaining: number | null; isFree: boolean | null } | null> {
+    const hit = this.keyInfoCache.get(keyId);
+    if (hit && Date.now() - hit.at < 60_000) return hit.info;
+    try {
+      const raw = await this.adminApiKeys.getRawKeyWithName(keyId);
+      const res = await fetch(`${openRouterBase()}/key`, { signal: AbortSignal.timeout(12_000), headers: { Authorization: `Bearer ${raw.apiKey}` } });
+      if (!res.ok) return null;
+      const d = ((await res.json().catch(() => null)) as { data?: Record<string, unknown> } | null)?.data;
+      const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+      const info = { usage: num(d?.usage), limit: num(d?.limit), remaining: num(d?.limit_remaining), isFree: typeof d?.is_free_tier === 'boolean' ? d.is_free_tier : null };
+      this.keyInfoCache.set(keyId, { at: Date.now(), info });
+      return info;
+    } catch {
+      return null;
+    }
+  }
+
+  /** last verdict of each key's most recent failure, for the admin screen (message already redacted) */
+  private readonly keyProblems = new Map<string, { at: number; problem: KeyProblem; message: string }>();
+  getKeyProblems() {
+    return Object.fromEntries(Array.from(this.keyProblems.entries()).map(([id, v]) => [id, v]));
   }
 
   /** Hourly: one tiny real request per top free model with ONE ready key. Models that fail are skipped for a while. */
@@ -306,11 +356,12 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
       this.lastHealthAt = now;
       const models = (await this.getFreeModels()).slice(0, 6);
       for (const model of models) {
+        const tm = Date.now();
         const r = await this.callOnce(`${openRouterBase()}/chat/completions`, this.openRouterHeaders(key.apiKey), model, 'Reply with exactly one word: OK', { maxTokens: 8, timeoutMs: 20_000 });
         out.checked++;
         if (r.kind === 'ok') {
           out.ok++;
-          this.recordModel(model, true, null);
+          this.recordModel(model, true, null, Date.now() - tm);
         } else if (r.kind === 'auth') {
           continue; // a refusal tells us nothing certain about the model (and never about the key)
         } else if (r.kind === 'rate') {
@@ -340,7 +391,11 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
   async generate(prompt: string, opts: AiGenerateOptions = {}): Promise<AiGenerateResult> {
     const provider = opts.provider ?? 'openrouter';
     const feature = (opts.feature || 'GENERAL').toUpperCase();
+    const cached = this.cacheGet('*', prompt, opts.cacheTtlMs);
+    if (cached) return { content: cached.content, model: cached.model, source: 'ADMIN_KEY' };
     const models = rotateModels(await this.getUsableModels(), opts.modelOffset);
+    const deadlineAt = Date.now() + callDeadlineMs();
+    opts = { ...opts, deadlineAt } as AiGenerateOptions & { deadlineAt: number };
 
     if (opts.userApiKey) {
       const t0 = Date.now();
@@ -356,7 +411,10 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
         errorMessage: result.content ? null : redact(result.detail || result.reason || 'failed'),
         latencyMs: Date.now() - t0,
       });
-      if (result.content) return { content: result.content, model: result.model!, source: 'USER_KEY' };
+      if (result.content) {
+        this.cachePut(prompt, result.content, result.model!, opts.cacheTtlMs);
+        return { content: result.content, model: result.model!, source: 'USER_KEY' };
+      }
       this.logger.warn('User-supplied OpenRouter key failed on all free models; falling back to admin pool.');
     }
 
@@ -372,6 +430,7 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
     const ordered = orderKeysByCooldown(pool, this.cooldown, now);
 
     for (const key of ordered) {
+      if (Date.now() >= deadlineAt) break; // overall deadline: never hang a worker on a slow chain of keys/models
       const t0 = Date.now();
       const live = this.beginCall(key.id, key.keyName, feature, opts.note);
       const result = await this.tryModels(key.apiKey, prompt, models, { ...opts, onModel: (m) => { live.model = m; } });
@@ -381,10 +440,12 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
         this.cooldown.delete(key.id);
         await this.adminApiKeys.reportUsage(key.id, true);
         await this.adminApiKeys.logUsage({ keyId: key.id, keyName: key.keyName, feature, model: result.model, success: true, latencyMs });
+        this.cachePut(prompt, result.content, result.model!, opts.cacheTtlMs);
         return { content: result.content, model: result.model!, source: 'ADMIN_KEY', adminKeyId: key.id, adminKeyName: key.keyName };
       }
       if (result.reason === 'rate_limited') this.cooldown.set(key.id, Date.now() + KEY_COOLDOWN_MS);
-      const errorMessage = redact(result.detail || (result.reason === 'dead' ? 'OpenRouter ne key reject ki (invalid / no credit)' : 'free models abhi busy (rate limit) — thodi der baad dobara chalegi'));
+      if (result.problem) this.keyProblems.set(key.id, { at: Date.now(), problem: result.problem, message: keyProblemMessage(result.problem, key.keyName) });
+      const errorMessage = redact(result.problem ? keyProblemMessage(result.problem, key.keyName) : result.detail || (result.reason === 'dead' ? 'OpenRouter ne key reject ki (invalid / no credit)' : 'free models abhi busy (rate limit) — thodi der baad dobara chalegi'));
       await this.adminApiKeys.reportUsage(key.id, false, { exhausted: result.reason === 'dead', errorMessage });
       await this.adminApiKeys.logUsage({ keyId: key.id, keyName: key.keyName, feature, model: null, success: false, errorMessage, latencyMs });
     }
@@ -589,34 +650,42 @@ export class AiProviderService implements OnModuleInit, OnModuleDestroy {
     apiKey: string,
     prompt: string,
     models: string[],
-    opts: { jsonResponse?: boolean; maxTokens?: number; timeoutMs?: number; onModel?: (model: string) => void },
-  ): Promise<{ content?: string; model?: string; reason?: 'dead' | 'rate_limited' | 'error'; detail?: string }> {
+    opts: { jsonResponse?: boolean; maxTokens?: number; timeoutMs?: number; onModel?: (model: string) => void; deadlineAt?: number },
+  ): Promise<{ content?: string; model?: string; reason?: 'dead' | 'rate_limited' | 'error'; detail?: string; problem?: KeyProblem }> {
     let sawRateLimit = false;
     let lastDetail = '';
     let verdict: 'valid' | 'invalid' | 'limit' | 'unknown' | null = null;
+    let problem: KeyProblem | undefined;
     for (const model of models) {
+      if (opts.deadlineAt && Date.now() >= opts.deadlineAt) {
+        lastDetail = lastDetail || 'time limit (deadline) — baaki models try nahi kiye';
+        break;
+      }
       opts.onModel?.(model);
+      const tm = Date.now();
       const r = await this.callWithRetry(`${openRouterBase()}/chat/completions`, this.openRouterHeaders(apiKey), model, prompt, opts);
       if (r.kind === 'ok') {
-        this.recordModel(model, true, null);
+        this.recordModel(model, true, null, Date.now() - tm);
         return { content: r.content, model };
       }
       if (r.kind === 'auth') {
         // ask OpenRouter whether the KEY is really bad (once per call) — a 403 from one model must never kill a good key
         if (verdict === null) verdict = await this.verifyKey(apiKey);
-        if (verdict === 'invalid') return { reason: 'dead', detail: `OpenRouter ne key reject ki (${r.status}) — key galat ya revoked hai` };
-        if (verdict === 'limit') return { reason: 'rate_limited', detail: undefined };
+        problem = classifyKeyProblem(r.status, r.detail, verdict);
+        if (verdict === 'invalid') return { reason: 'dead', detail: `OpenRouter ne key reject ki (${r.status}) — key galat ya revoked hai`, problem };
+        if (verdict === 'limit') return { reason: 'rate_limited', detail: undefined, problem };
         lastDetail = `model ne ${r.status} diya (key sahi hai, dusra model try kiya): ${r.detail}`;
         this.recordModel(model, false, lastDetail);
         continue;
       }
       if (r.kind === 'rate') {
         sawRateLimit = true; // busy is not broken: no health penalty
+        problem = problem ?? 'rate_limit';
         continue;
       }
       lastDetail = 'detail' in r ? r.detail : 'bad request';
       this.recordModel(model, false, lastDetail);
     }
-    return { reason: sawRateLimit ? 'rate_limited' : 'error', detail: sawRateLimit ? undefined : lastDetail };
+    return { reason: sawRateLimit ? 'rate_limited' : 'error', detail: sawRateLimit ? undefined : lastDetail, problem: sawRateLimit ? 'rate_limit' : problem };
   }
 }

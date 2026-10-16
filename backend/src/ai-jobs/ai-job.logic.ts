@@ -259,3 +259,79 @@ export function fmtDuration(sec: number | null): string {
   if (m < 90) return `${m} min`;
   return `${(m / 60).toFixed(1)} ghante`;
 }
+
+// ------------------------------------------------------------------ quality gates (NEW Oct 15 2026, A2)
+
+/** share of VALID passes that agreed with the winner, scaled down when many passes were invalid (0..1) */
+export function confidenceOf(agree: number, validVotes: number, passesPlanned: number): number {
+  if (agree <= 0 || validVotes <= 0 || passesPlanned <= 0) return 0;
+  const agreement = agree / validVotes;
+  const coverage = Math.min(1, validVotes / Math.min(passesPlanned, 3)); // at least 3 valid votes = full coverage
+  return Math.round(agreement * coverage * 100) / 100;
+}
+
+/** results below this confidence go to review instead of being written (env AI_MIN_CONFIDENCE, default 0.6 = 3/5) */
+export function minConfidence(): number {
+  const n = Number(process.env.AI_MIN_CONFIDENCE);
+  return Number.isFinite(n) && n > 0 && n <= 1 ? n : 0.6;
+}
+
+/**
+ * Does the written solution END on a different option than the answer key?
+ * Looks at final statements ("answer is B", "Correct option: (C)", "उत्तर: D", "Hence, option A") in the last ~300 chars.
+ * Returns the contradicting letter, or null when the solution is consistent / does not name an option.
+ */
+export function solutionContradictsKey(solution: string, key: string): string | null {
+  const k = normalizeLetter(key);
+  if (!k) return null;
+  const tail = String(solution ?? '').slice(-300);
+  const re = /(?:answer|ans\.?|correct\s+(?:option|answer|choice)|option|उत्तर|सही\s+(?:विकल्प|उत्तर))\s*(?:is|=|:|-|–|है|होगा)?\s*[\s(\[]*\(?([A-Da-d])\)?(?![A-Za-z])/g;
+  const found: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(tail))) found.push(m[1].toUpperCase());
+  if (!found.length) return null;
+  const last = found[found.length - 1];
+  return last !== k ? last : null;
+}
+
+const STOP = new Set(['the', 'a', 'an', 'of', 'in', 'on', 'is', 'are', 'was', 'were', 'to', 'and', 'or', 'for', 'by', 'with', 'that', 'this', 'it', 'as', 'at', 'be', 'from', 'which', 'what', 'who', 'has', 'have', 'had']);
+function contentWords(s: string): string[] {
+  return (String(s ?? '').toLowerCase().match(/[a-z]{3,}|\d+(?:\.\d+)?/g) ?? []).filter((w) => !STOP.has(w));
+}
+
+/**
+ * Hindi back-translation check: the Hindi was translated BACK to English by the model; how much of the original's
+ * meaning-bearing words (words + numbers) survived? 0..1. Needs ≥2 content words in the original, else 1 (nothing to compare).
+ */
+export function backTranslationScore(original: string, back: string): number {
+  const o = contentWords(original);
+  if (o.length < 2) return 1;
+  const b = new Set(contentWords(back));
+  const uniq = Array.from(new Set(o));
+  const hit = uniq.filter((w) => b.has(w) || Array.from(b).some((x) => x.length >= 5 && w.length >= 5 && (x.startsWith(w.slice(0, 5)) || w.startsWith(x.slice(0, 5))))).length;
+  return Math.round((hit / uniq.length) * 100) / 100;
+}
+
+export const BACK_TRANSLATION_MIN = 0.4;
+
+// ------------------------------------------------------------------ watchdog
+
+export interface StuckCheck {
+  status: string;
+  startedAtMs: number | null;
+  nowMs: number;
+  maxMs: number;
+}
+/** an item that has been RUNNING longer than maxMs has no live worker behind it (crashed call / lost promise) */
+export function isStuck(c: StuckCheck): boolean {
+  return c.status === 'RUNNING' && c.startedAtMs !== null && c.nowMs - c.startedAtMs > c.maxMs;
+}
+
+/** Hindi: one-line text for the boot report */
+export function bootSummaryLine(r: { requeuedItems: number; requeuedJobs: number; resumable: number; keysActive: number; keysRevived: number }): string {
+  const parts = [`${r.keysActive} key active`];
+  if (r.keysRevived) parts.push(`${r.keysRevived} key wapas ON`);
+  if (r.requeuedJobs || r.requeuedItems) parts.push(`${r.requeuedJobs} job / ${r.requeuedItems} item restart se wapas line me`);
+  parts.push(r.resumable ? `${r.resumable} job khud chalu ho rahe hain` : 'koi pending job nahi');
+  return parts.join(' · ');
+}

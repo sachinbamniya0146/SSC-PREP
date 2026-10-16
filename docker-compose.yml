@@ -63,6 +63,34 @@ services:
       retries: 20
       start_period: 30s
 
+  # Free self-hosted web search for PYQ date mapping (no API key, no daily cap). Internal only.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: ssc-searxng
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-ssc-searxng-local-secret-change-me}
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -79,11 +107,19 @@ services:
       # Only Docker-internal hostnames stay here — these are NOT secrets
       REDIS_HOST: redis
       MEILISEARCH_HOST: http://meilisearch:7700
+      SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/ssc_prep_hub?schema=public&connection_limit=20
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./files:/app/files
+    # A2: Docker now knows if the API really answers (DB check inside /health). start_period covers boot + migrations.
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 8s
+      retries: 4
+      start_period: 60s
     depends_on:
       postgres:
         condition: service_healthy

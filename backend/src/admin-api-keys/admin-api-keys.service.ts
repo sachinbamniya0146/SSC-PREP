@@ -1,3 +1,4 @@
+import { redact } from '../ai-provider/ai-provider.util';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -390,7 +391,9 @@ export class AdminApiKeyService {
       where: {
         type,
         isResolved: false,
-        createdAt: { gte: new Date(Date.now() - ALERT_DEDUPE_WINDOW_MS) },
+        // A2: while an alert of this type is still UNRESOLVED it is not raised again for 24 h (a reminder only after that);
+        // adding / re-enabling a key resolves it automatically (autoResolveLowKeyAlerts).
+        createdAt: { gte: new Date(Date.now() - Math.max(ALERT_DEDUPE_WINDOW_MS, 24 * 60 * 60 * 1000)) },
         metadataJson: { path: ['provider'], equals: provider },
       },
     });
@@ -411,7 +414,7 @@ export class AdminApiKeyService {
         severity,
         message,
         messageHindi,
-        metadataJson: { provider, activeCount, lastError: lastError?.slice(0, 300) },
+        metadataJson: { provider, activeCount, lastError: lastError ? redact(lastError).slice(0, 300) : undefined },
       },
     });
   }

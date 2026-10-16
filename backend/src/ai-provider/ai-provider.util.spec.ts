@@ -42,3 +42,39 @@ describe('provider helpers', () => {
     expect(h.consecFail).toBe(0);
   });
 });
+
+import { classifyKeyProblem, keyProblemMessage, pacedConcurrency, promptHash, rankModels, successScore, callDeadlineMs, applyModelOutcome as aom } from './ai-provider.util';
+
+describe('A2 routing + key verdicts', () => {
+  it('rank: better success + faster first, unknown in the middle', () => {
+    const h = new Map<string, ReturnType<typeof newHealth>>();
+    h.set('bad', { ...newHealth(), ok: 1, fail: 9 });
+    h.set('good', { ...newHealth(), ok: 40, fail: 1, avgMs: 2000 });
+    expect(rankModels(['bad', 'new', 'good'], h)).toEqual(['good', 'new', 'bad']);
+    expect(successScore(undefined)).toBe(0.5);
+  });
+  it('latency average', () => {
+    const a = aom(undefined, true, null, 1, 1000);
+    expect(aom(a, true, null, 2, 2000).avgMs).toBe(1300);
+  });
+  it('classifyKeyProblem', () => {
+    expect(classifyKeyProblem(401, '', 'invalid')).toBe('invalid');
+    expect(classifyKeyProblem(403, 'blocked', 'valid')).toBe('forbidden_model');
+    expect(classifyKeyProblem(402, '', 'valid')).toBe('no_credit');
+    expect(classifyKeyProblem(429, 'free-models-per-day', 'valid')).toBe('daily_limit');
+    expect(classifyKeyProblem(429, 'slow down', 'valid')).toBe('rate_limit');
+    expect(classifyKeyProblem(500, '', 'unknown')).toBe('unknown');
+  });
+  it('messages never leak a key', () => {
+    expect(keyProblemMessage('invalid', 'sk-or-v1-abcdefghijkl')).not.toContain('abcdefghijkl');
+  });
+  it('pacing, deadline, hash', () => {
+    expect(pacedConcurrency(4, 2, false)).toBe(2);
+    expect(pacedConcurrency(4, 0, false)).toBe(1);
+    expect(pacedConcurrency(4, 0, true)).toBe(4);
+    delete process.env.AI_CALL_DEADLINE_MS;
+    expect(callDeadlineMs()).toBe(150000);
+    process.env.AI_CALL_DEADLINE_MS = '2000'; expect(callDeadlineMs()).toBe(2000); delete process.env.AI_CALL_DEADLINE_MS;
+    expect(promptHash('m', 'a')).not.toBe(promptHash('m', 'b'));
+  });
+});

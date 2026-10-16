@@ -186,14 +186,16 @@ describe('provider against a mock OpenRouter', () => {
     await expect(svc.generate('q')).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
-  it('a model that keeps failing is skipped afterwards', async () => {
+  it('a model that keeps failing is demoted (ranked last) and not tried first any more', async () => {
     handler = ({ model }) => (model === 'm1:free' ? { status: 404, body: { error: 'gone' } } : { body: chat('ok') });
     const { svc } = make([K1]);
     for (let i = 0; i < 3; i++) await svc.generate('q');
     hits = [];
     await svc.generate('q');
-    expect(hits.map((h) => h.model)).toEqual(['m2:free']); // m1 skipped now
-    expect(svc.getModelStats().find((m) => m.model === 'm1:free')?.skippedForSec).toBeGreaterThan(0);
+    expect(hits.map((h) => h.model)).toEqual(['m2:free']); // m1 is ranked behind m2 now (A2 smart routing)
+    const stats = svc.getModelStats();
+    expect(stats[0].model).toBe('m2:free');
+    expect(stats.find((m) => m.model === 'm1:free')?.successRate).toBe(0);
   });
 
   it('no keys at all -> clear error; with gateway env -> gateway answers', async () => {
@@ -262,5 +264,64 @@ describe('job runner on top of the real provider (mock server)', () => {
     await expect(runItem('SOLUTION_GENERATE', q(), async (p) => {
       try { return (await svc.generate(p, {})).content; } catch (e) { if (e instanceof ServiceUnavailableException) throw new ProviderBusyError(); throw e; }
     }, { passes: 5, minAgree: 3 })).rejects.toBeInstanceOf(ProviderBusyError);
+  });
+});
+
+describe('A2: deadline, key verdicts, cache, quota', () => {
+  it('overall deadline stops a slow failing chain early (fewer attempts than the full 2 keys x 2 models x 3 tries)', async () => {
+    process.env.AI_CALL_DEADLINE_MS = '1000';
+    handler = () => ({ status: 500, body: { error: 'boom' }, delayMs: 300 });
+    const { svc } = make([K1, K2]);
+    await expect(svc.generate('q')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(hits.length).toBeLessThan(12); // without a deadline: 12 provider hits
+    expect(hits.length).toBeGreaterThanOrEqual(3);
+    delete process.env.AI_CALL_DEADLINE_MS;
+  });
+
+  it('403 from a model while GET /key says valid -> key NOT killed, clear "model refused" message, never contains the key', async () => {
+    handler = ({ model }) => (model === 'm1:free' ? { status: 403, body: { error: 'moderation' } } : { body: chat('ok') });
+    const { svc, usage } = make([K1]);
+    const r = await svc.generate('q');
+    expect(r.model).toBe('m2:free');
+    expect(usage.every((u) => !u.exhausted)).toBe(true);
+  });
+
+  it('401 + GET /key invalid -> key marked dead with a clear admin message (no key in it)', async () => {
+    handler = () => ({ status: 401, body: { error: 'no auth' } });
+    keyStatus = () => ({ status: 401 });
+    const { svc, usage, logs } = make([K1]);
+    await expect(svc.generate('q')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(usage[0]).toMatchObject({ id: 'k1', ok: false, exhausted: true });
+    const msg = String(logs[0].errorMessage);
+    expect(msg).toContain('Key 1');
+    expect(msg).toContain('401');
+    expect(msg).not.toContain('KEYONE1234567890');
+    expect(JSON.stringify(svc.getKeyProblems())).not.toContain('KEYONE1234567890');
+  });
+
+  it('cacheTtlMs: identical prompt is answered from memory (no second provider hit)', async () => {
+    handler = () => ({ body: chat('cached-answer') });
+    const { svc } = make([K1]);
+    await svc.generate('same prompt', { cacheTtlMs: 60_000 });
+    const before = hits.length;
+    const r = await svc.generate('same prompt', { cacheTtlMs: 60_000 });
+    expect(r.content).toBe('cached-answer');
+    expect(hits.length).toBe(before);
+    await svc.generate('other prompt', { cacheTtlMs: 60_000 });
+    expect(hits.length).toBe(before + 1);
+  });
+
+  it('getKeyInfo reads real usage/limit from GET /key and never returns the key', async () => {
+    keyStatus = () => ({ status: 200, body: { data: { usage: 1.5, limit: 10, limit_remaining: 8.5, is_free_tier: false } } });
+    const { svc } = make([K1]);
+    const info = await svc.getKeyInfo('k1');
+    expect(info).toEqual({ usage: 1.5, limit: 10, remaining: 8.5, isFree: false });
+  });
+
+  it('model latency is recorded and shown in stats', async () => {
+    handler = () => ({ body: chat('ok'), delayMs: 30 });
+    const { svc } = make([K1]);
+    await svc.generate('q');
+    expect(svc.getModelStats()[0].avgMs).toBeGreaterThan(0);
   });
 });

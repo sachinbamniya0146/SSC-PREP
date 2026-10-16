@@ -97,3 +97,55 @@ describe('date-in-evidence rule (existing) and shift normaliser (existing)', () 
     expect(normalizeShift('Day 2 Batch B')).toBe('Day 2 Batch B');
   });
 });
+
+import { BACK_TRANSLATION_MIN, backTranslationScore, bootSummaryLine, confidenceOf, isStuck, minConfidence, solutionContradictsKey } from './ai-job.logic';
+
+describe('A2 quality gates', () => {
+  it('confidenceOf', () => {
+    expect(confidenceOf(3, 3, 5)).toBe(1);
+    expect(confidenceOf(3, 5, 5)).toBe(0.6);
+    expect(confidenceOf(2, 2, 5)).toBe(0.67);
+    expect(confidenceOf(0, 3, 5)).toBe(0);
+  });
+  it('minConfidence default + env', () => {
+    delete process.env.AI_MIN_CONFIDENCE;
+    expect(minConfidence()).toBe(0.6);
+    process.env.AI_MIN_CONFIDENCE = '0.8';
+    expect(minConfidence()).toBe(0.8);
+    process.env.AI_MIN_CONFIDENCE = 'x';
+    expect(minConfidence()).toBe(0.6);
+    delete process.env.AI_MIN_CONFIDENCE;
+  });
+  it('solutionContradictsKey', () => {
+    expect(solutionContradictsKey('Speed = 60. Hence the answer is B.', 'B')).toBeNull();
+    expect(solutionContradictsKey('Speed = 60. Hence the answer is (C).', 'B')).toBe('C');
+    expect(solutionContradictsKey('So correct option: d', 'D')).toBeNull();
+    expect(solutionContradictsKey('उत्तर: A है', 'B')).toBe('A');
+    expect(solutionContradictsKey('No letter named at the end', 'B')).toBeNull();
+    expect(solutionContradictsKey('anything', 'zzz')).toBeNull();
+  });
+  it('backTranslationScore', () => {
+    expect(backTranslationScore('The capital of France is Paris', 'Paris is the capital city of France')).toBeGreaterThanOrEqual(0.8);
+    expect(backTranslationScore('A train travels 120 km in 2 hours', 'The boy eats mango')).toBeLessThan(BACK_TRANSLATION_MIN);
+    expect(backTranslationScore('120', 'x')).toBe(1);
+  });
+  it('isStuck + bootSummaryLine', () => {
+    expect(isStuck({ status: 'RUNNING', startedAtMs: 0, nowMs: 700000, maxMs: 600000 })).toBe(true);
+    expect(isStuck({ status: 'RUNNING', startedAtMs: 100000, nowMs: 200000, maxMs: 600000 })).toBe(false);
+    expect(isStuck({ status: 'PENDING', startedAtMs: 0, nowMs: 700000, maxMs: 600000 })).toBe(false);
+    expect(bootSummaryLine({ requeuedItems: 2, requeuedJobs: 1, resumable: 1, keysActive: 3, keysRevived: 1 })).toContain('3 key active');
+  });
+});
+
+import { classifyFailReason, GOLDEN_SET } from './ai-ops.service';
+describe('ai-ops', () => {
+  it('classifyFailReason', () => {
+    expect(classifyFailReason('timeout')).toBe('Timeout');
+    expect(classifyFailReason('429: slow down')).toBe('Rate limit / busy (429)');
+    expect(classifyFailReason('Key "x" OpenRouter ne reject ki (401)')).toBe('Key invalid (401)');
+    expect(classifyFailReason('zzz')).toBe('Other');
+  });
+  it('golden set is well-formed', () => {
+    for (const g of GOLDEN_SET) { expect(g.options).toHaveLength(4); expect('ABCD').toContain(g.answer); }
+  });
+});

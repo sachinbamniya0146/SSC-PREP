@@ -10,7 +10,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
-interface LiveKey { id: string; keyName: string; isActive: boolean; state: "working" | "resting" | "idle" | "off"; restSec: number; feature: string | null; model: string | null; note: string | null; runningSec: number; lastError: string | null }
+interface LiveKey { id: string; keyName: string; isActive: boolean; state: "working" | "resting" | "idle" | "off"; restSec: number; feature: string | null; model: string | null; note: string | null; runningSec: number; lastError: string | null; problem?: string | null }
 interface LiveEvent { at: number; keyName: string; feature: string; model: string | null; success: boolean; ms: number; error: string | null }
 interface JobRow {
   id: string; type: string; label: string; title: string | null; status: string; passes: number; minAgree: number; total: number; done: number; failed: number; review: number; calls: number;
@@ -19,13 +19,17 @@ interface JobRow {
 }
 interface Overview {
   health: { level: string; icon: string; text: string };
-  worker: { enabled: boolean; busy: boolean; lastMessage: string | null; restSec: number };
+  boot?: { at: string; line: string } | null;
+  worker: { enabled: boolean; busy: boolean; lastMessage: string | null; restSec: number; watchdogFixed?: number };
   jobs: JobRow[];
-  live: { keys: LiveKey[]; recent: LiveEvent[]; gateway: { configured: boolean; model: string | null }; models: Array<{ model: string; successRate: number | null; skippedForSec: number }> };
+  live: { keys: LiveKey[]; recent: LiveEvent[]; gateway: { configured: boolean; model: string | null }; models: Array<{ model: string; successRate: number | null; avgMs?: number | null; skippedForSec: number }> };
 }
 interface Meta { exams: Array<{ id: string; name: string }>; subjects: Array<{ id: string; name: string }>; chapters: Array<{ id: string; name: string; subjectId: string }> }
 interface Estimate { questions: number; willProcess: number; passes: number; calls: number; avgSecPerCall: number; concurrency: number; etaSec: number | null; note: string; keys: { active: number; ready: number } }
 interface Item { id: string; questionNo: number | null; status: string; note: string | null; lastError: string | null; agree: number; passesDone: number; proposal: Record<string, unknown> | null; passes: Array<{ i: number; stage: string; ok: boolean; vote: string | null; error?: string }> | null; question: string }
+interface Stats { days: number; features: Array<{ name: string; ok: number; fail: number; successPct: number | null; avgMs: number | null }>; keys: Array<{ name: string; ok: number; fail: number; successPct: number | null }>; failReasons: Array<{ reason: string; count: number }> }
+interface Quota { keys: Array<{ id: string; keyName: string; info: { usage: number | null; limit: number | null; remaining: number | null; isFree: boolean | null } | null; problem: string | null }> }
+interface Bench { at: string; total: number; correct: number; accuracyPct: number; avgSec: number; verdict: string; message: string; rows: Array<{ q: string; expected: string; got: string | null; ok: boolean; sec: number }> }
 interface Step { id: string; name: string; ok: boolean | null; detail: string; fix: string | null; ms: number }
 
 const TYPES: Array<{ v: string; t: string; hint: string }> = [
@@ -55,6 +59,10 @@ export default function AdminAiPage() {
   const [steps, setSteps] = React.useState<Step[] | null>(null);
   const [checking, setChecking] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [stats, setStats] = React.useState<Stats | null>(null);
+  const [quota, setQuota] = React.useState<Quota | null>(null);
+  const [bench, setBench] = React.useState<Bench | null>(null);
+  const [benching, setBenching] = React.useState(false);
 
   React.useEffect(() => {
     try { const u = JSON.parse(localStorage.getItem("ssc_user") || "null"); if (u?.role !== "ADMIN") { router.replace("/admin"); return; } } catch { router.replace("/dashboard"); return; }
@@ -72,6 +80,17 @@ export default function AdminAiPage() {
   React.useEffect(() => { if (!ok) return; void load(); api<Meta>("/admin/ai-jobs/scope-meta").then(setMeta).catch(() => undefined); }, [ok, load]);
   React.useEffect(() => { if (!ok) return; const t = setInterval(() => { void load(); void loadItems(); }, 3000); return () => clearInterval(t); }, [ok, load, loadItems]);
   React.useEffect(() => { void loadItems(); }, [loadItems]);
+
+  const loadStats = React.useCallback(async () => {
+    try { setStats(await api<Stats>("/admin/ai-jobs/stats?days=7")); } catch { /* optional panel */ }
+    try { setQuota(await api<Quota>("/admin/ai-jobs/key-quota")); } catch { /* optional panel */ }
+  }, []);
+  React.useEffect(() => { if (!ok) return; void loadStats(); api<{ result: Bench | null }>("/admin/ai-jobs/benchmark").then((r) => setBench(r.result)).catch(() => undefined); const t = setInterval(() => void loadStats(), 30000); return () => clearInterval(t); }, [ok, loadStats]);
+  async function runBench() {
+    setBenching(true);
+    try { setBench((await api<Bench>("/admin/ai-jobs/benchmark", { method: "POST", body: JSON.stringify({}) }))); } catch (e) { setMsg({ ok: false, text: `Benchmark: ${(e as Error).message}` }); }
+    setBenching(false);
+  }
 
   const post = (path: string, body: unknown = {}) => api<Record<string, unknown>>(`/admin/ai-jobs${path}`, { method: "POST", body: JSON.stringify(body) });
   const act = async (label: string, fn: () => Promise<unknown>) => {
@@ -120,6 +139,7 @@ export default function AdminAiPage() {
       {err && <p className="rounded-lg bg-red-500/10 p-2 text-red-700">{err}</p>}
       {msg && <p className={`rounded-lg p-2 ${msg.ok ? "bg-emerald-500/10 text-emerald-700" : "bg-red-500/10 text-red-700"}`}>{msg.text}</p>}
       {ov && !ov.worker.enabled && <p className="rounded-lg bg-amber-500/10 p-2 text-amber-700">Worker band hai (AI_JOB_WORKER=off) — jobs nahi chalengi.</p>}
+      {ov?.boot && <p className="text-xs text-muted-foreground">🔁 Last start: {ov.boot.line}{ov.worker.watchdogFixed ? ` · watchdog ne ${ov.worker.watchdogFixed} atke kaam theek kiye` : ""}</p>}
       {ov?.worker.lastMessage && <p className="text-xs text-muted-foreground">Worker: {ov.worker.lastMessage}{ov.worker.restSec > 0 ? ` (rest ${ov.worker.restSec}s)` : ""}</p>}
 
       {steps && (
@@ -143,12 +163,29 @@ export default function AdminAiPage() {
               <div className="font-medium">{k.keyName} · {KEY_UI[k.state]}{k.state === "resting" ? ` (${k.restSec}s)` : ""}</div>
               {k.state === "working" && <div className="text-xs">{k.note || k.feature} · {k.model ?? "model…"} · {k.runningSec}s se</div>}
               {k.lastError && <div className="text-xs text-red-700">{k.lastError}</div>}
+              {k.problem && <div className="text-xs text-amber-700">{k.problem}</div>}
+              {(() => { const q = quota?.keys.find((x) => x.id === k.id)?.info; return q ? <div className="text-xs text-muted-foreground">Quota: used ${q.usage ?? "—"}{q.limit !== null ? ` / limit $${q.limit}` : ""}{q.remaining !== null ? ` · bacha $${q.remaining}` : ""}{q.isFree ? " · free tier" : ""}</div> : null; })()}
             </div>
           ))}
           {ov && ov.live.keys.length === 0 && <p className="text-red-700">Koi key nahi — API Keys me daalein.</p>}
         </div>
         {ov?.live.gateway.configured && <p className="text-xs">Gateway fallback: ✅ {ov.live.gateway.model}</p>}
-        {(ov?.live.models.length ?? 0) > 0 && <p className="text-xs text-muted-foreground">Models: {ov!.live.models.slice(0, 5).map((m) => `${m.model.split("/").pop()} ${m.successRate ?? "–"}%${m.skippedForSec ? " (skip)" : ""}`).join(" · ")}</p>}
+        {(ov?.live.models.length ?? 0) > 0 && <p className="text-xs text-muted-foreground">Models: {ov!.live.models.slice(0, 5).map((m) => `${m.model.split("/").pop()} ${m.successRate ?? "–"}%${m.avgMs ? ` ${(m.avgMs / 1000).toFixed(1)}s` : ""}${m.skippedForSec ? " (skip)" : ""}`).join(" · ")}</p>}
+      </section>
+
+      <section className="space-y-2 rounded-xl border border-border p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="font-semibold">Quality + stats (7 din)</h2>
+          <button disabled={benching} onClick={runBench} className="ml-auto rounded-lg border border-border px-3 py-1 hover:bg-muted disabled:opacity-50">{benching ? "Benchmark chal raha…" : "🎯 Quality benchmark (5 sawal)"}</button>
+        </div>
+        {bench && <div className={`rounded-lg p-2 ${bench.verdict === "good" ? "bg-emerald-500/10" : bench.verdict === "weak" ? "bg-amber-500/10" : "bg-red-500/10"}`}>
+          <b>{bench.correct}/{bench.total} sahi ({bench.accuracyPct}%)</b> · avg {bench.avgSec}s · {new Date(bench.at).toLocaleString()}<br /><span className="text-xs">{bench.message}</span>
+        </div>}
+        {stats && <div className="grid gap-3 sm:grid-cols-2">
+          <div><div className="text-xs font-medium">Feature-wise</div>{stats.features.slice(0, 10).map((x) => <div key={x.name} className="text-xs">{x.name}: ✅{x.ok} ❌{x.fail} ({x.successPct ?? "–"}%){x.avgMs ? ` · ${(x.avgMs / 1000).toFixed(1)}s` : ""}</div>)}</div>
+          <div><div className="text-xs font-medium">Key-wise</div>{stats.keys.slice(0, 10).map((x) => <div key={x.name} className="text-xs">{x.name}: ✅{x.ok} ❌{x.fail} ({x.successPct ?? "–"}%)</div>)}</div>
+          <div className="sm:col-span-2"><div className="text-xs font-medium">Fail kyun hue</div>{stats.failReasons.length === 0 ? <div className="text-xs text-muted-foreground">Koi fail nahi 🎉</div> : stats.failReasons.map((x) => <div key={x.reason} className="text-xs">{x.reason}: {x.count}</div>)}</div>
+        </div>}
       </section>
 
       <section className="space-y-2 rounded-xl border border-border p-3">
