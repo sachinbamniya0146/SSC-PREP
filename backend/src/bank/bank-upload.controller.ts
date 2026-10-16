@@ -35,6 +35,9 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { Department } from '../common/decorators/department.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { BankUploadService } from './bank-upload.service';
+import { PracticeTemplateService } from './practice-template.service';
+import { BankUploadJobService } from './bank-upload-job.service';
+import { headersHaveIdColumn } from './bank-template';
 import { TaxonomyImportService } from './taxonomy-import.service';
 import { parseQuestionKind } from '../common/question-visibility';
 import { S3Service } from '../s3/s3.service';
@@ -52,7 +55,33 @@ export class BankUploadController {
     private readonly taxonomyImportService: TaxonomyImportService,
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
+    private readonly practiceTemplate: PracticeTemplateService,
+    private readonly jobService: BankUploadJobService,
   ) {}
+
+  /**
+   * Oct 15 2026 (Task B): a sheet with an `id` column (e.g. a Manage-Questions export that was edited) goes through the
+   * job service, which UPDATES rows that carry an id instead of creating duplicates. Other sheets keep the old path.
+   */
+  private startViaJobIfIdColumn(file: any, req: any, body: any): { async: true; viaJobService: true; jobId: string } | null {
+    try {
+      const wb = XLSX.read(file.buffer, { type: 'buffer', sheetRows: 1 });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const head = (XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][])[0] ?? [];
+      if (!headersHaveIdColumn(head)) return null;
+    } catch {
+      return null; // unreadable here -> the old path reports the real error
+    }
+    const job = this.jobService.start({
+      buffer: file.buffer,
+      filename: file.originalname,
+      adminId: this.adminId(req),
+      isPracticeOnly: this.isPracticeOnlyFlag(body),
+      requireSolution: body?.requireSolution !== 'false',
+      dryRun: false,
+    });
+    return { async: true, viaJobService: true, jobId: job.id };
+  }
 
   private adminId(req: any): string {
     return req.user?.userId ?? req.user?.id;
@@ -179,6 +208,8 @@ export class BankUploadController {
     this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls) is required');
     if (this.isAsyncFlag(body)) {
+      const viaJob = this.startViaJobIfIdColumn(file, req, body);
+      if (viaJob) return viaJob;
       return this.guard(() =>
         this.uploadService.startBackgroundUpload('EXCEL', file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body), (r) => this.afterUpload(r, body), body?.requireSolution !== 'false'),
       );
@@ -197,6 +228,8 @@ export class BankUploadController {
     this.assertUploadDepartment(req, this.isPracticeOnlyFlag(body));
     if (!file) throw new BadRequestException('Multipart field "file" (.csv) is required');
     if (this.isAsyncFlag(body)) {
+      const viaJob = this.startViaJobIfIdColumn(file, req, body);
+      if (viaJob) return viaJob;
       return this.guard(() =>
         this.uploadService.startBackgroundUpload('CSV', file.buffer, this.adminId(req), file.originalname, this.isPracticeOnlyFlag(body), (r) => this.afterUpload(r, body), body?.requireSolution !== 'false'),
       );
@@ -297,6 +330,15 @@ export class BankUploadController {
   }
 
   // NEW (Sep 29 2026) — one-click diagnosis of image storage. Does a real
+  // NEW (Oct 15 2026): practice-question Excel template — dropdowns, Hinglish hints, examples, instructions, live reference IDs.
+  @Get('template/practice')
+  async practiceTemplateFile(@Res() res: Response) {
+    const buffer = await this.practiceTemplate.build();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="practice-questions-template.xlsx"');
+    res.send(buffer);
+  }
+
   // write -> read -> delete round trip against R2/S3 (or local disk when S3 is
   // not configured) and returns plain-language hints for whatever is missing.
   @Get('storage-health')

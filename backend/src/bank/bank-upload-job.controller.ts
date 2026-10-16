@@ -32,6 +32,7 @@ export class BankUploadJobController {
       queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted,
       errors: j.errors, warnings: j.warnings, uploadBatchId: j.uploadBatchId, fatalError: j.fatalError,
       hasRejected: j.rejectedRows.length > 0, kind: j.kind,
+      updated: j.updated, unchanged: j.unchanged, preview: j.preview,
     };
   }
 

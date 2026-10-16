@@ -12,6 +12,7 @@ import { BankUploadJobService } from './bank-upload-job.service';
 import { QuestionEditController } from './question-edit.controller';
 import { QuestionEditService } from './question-edit.service';
 import { DuplicateReviewController } from './duplicate-review.controller';
+import { PracticeTemplateService } from './practice-template.service';
 import { DuplicateReviewService } from './duplicate-review.service';
 import { AiProviderModule } from '../ai-provider/ai-provider.module';
 import { WeakTopicModule } from '../weak-topics/weak-topic.module';
@@ -26,7 +27,7 @@ import { WeakTopicModule } from '../weak-topics/weak-topic.module';
 @Module({
   imports: [AiProviderModule, WeakTopicModule],
   controllers: [BankController, BankUploadController, BankUploadJobController, BankAdminController, QuestionEditController, DuplicateReviewController],
-  providers: [BankService, QuestionBankPracticeService, BankUploadService, BankUploadJobService, TaxonomyImportService, BankAdminService, QuestionEditService, DuplicateReviewService],
+  providers: [BankService, QuestionBankPracticeService, BankUploadService, BankUploadJobService, TaxonomyImportService, BankAdminService, QuestionEditService, DuplicateReviewService, PracticeTemplateService],
   exports: [BankService, QuestionBankPracticeService, BankUploadService, TaxonomyImportService, BankAdminService, QuestionEditService],
 })
 export class BankModule {}

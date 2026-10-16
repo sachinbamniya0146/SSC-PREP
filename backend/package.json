@@ -48,6 +48,7 @@
     "ioredis": "^5.11.1",
     "joi": "^18.2.3",
     "jsonwebtoken": "^9.0.2",
+    "jszip": "^3.10.1",
     "mammoth": "^1.12.1",
     "meilisearch": "^0.60.0",
     "nodemailer": "^9.0.3",
@@ -66,7 +67,6 @@
   "devDependencies": {
     "@nestjs/testing": "^11.1.28",
     "@types/bcrypt": "^5.0.2",
-    "@types/web-push": "^3.6.4",
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
@@ -75,6 +75,7 @@
     "@types/node": "^20.11.0",
     "@types/nodemailer": "^8.0.1",
     "@types/supertest": "^7.2.1",
+    "@types/web-push": "^3.6.4",
     "@typescript-eslint/eslint-plugin": "^8.65.0",
     "@typescript-eslint/parser": "^8.65.0",
     "eslint": "^10.8.0",

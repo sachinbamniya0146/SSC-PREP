@@ -65,6 +65,10 @@ interface UploadResult {
   queuedExact?: number;
   reviewAlready?: number;
   unaccounted?: number;
+  // Oct 15 2026 (Task B): rows with an `id` UPDATE that question; check-only runs show a row-by-row preview
+  updated?: number;
+  unchanged?: number;
+  preview?: Array<{ row: number; action: "NEW" | "UPDATE" | "SAME"; changes?: string[]; text?: string }>;
 }
 
 interface UploadJobState {
@@ -409,6 +413,29 @@ export default function AdminPage() {
     }
   }
 
+  // Oct 15 2026 (Task B): practice-question Excel template with dropdowns + Hinglish hints + examples
+  async function downloadPracticeTemplate() {
+    setTemplateDownloading(true);
+    setError("");
+    try {
+      const res = await fetchAuth(`${API_BASE}/bank/admin/upload/template/practice`);
+      if (!res.ok) throw new Error(`Template download fail (HTTP ${res.status})`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "practice-questions-template.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Template download fail");
+    } finally {
+      setTemplateDownloading(false);
+    }
+  }
+
   // Full question-bank export — same auth-header-needed reasoning as
   // downloadTemplate() above (GET /bank/admin/upload/export is ADMIN/
   // MODERATOR-only). Defaults to Excel since that's the easiest to skim;
@@ -503,6 +530,11 @@ export default function AdminPage() {
       const m = (data as { message?: string | string[] } | null)?.message;
       throw new Error((Array.isArray(m) ? m.join("; ") : m) || `Upload failed (HTTP ${res.status})`);
     }
+    if (useAsync && (data as { viaJobService?: boolean } | null)?.viaJobService) {
+      // sheet with an `id` column: handled by the job service (updates by ID)
+      setUploadJob({ status: "RUNNING", phase: "CHECKING", processed: 0, total: 0, created: 0, failed: 0 });
+      return pollJobService((data as { jobId: string }).jobId, 0);
+    }
     if (useAsync && (data as { async?: boolean } | null)?.async) {
       const jobId = (data as { jobId: string }).jobId;
       setUploadJob({ status: "RUNNING", phase: "QUEUED", processed: 0, total: 0, created: 0, failed: 0 });
@@ -549,6 +581,9 @@ export default function AdminPage() {
           merged.created += result.created ?? 0;
           merged.failed += result.failed ?? 0;
           merged.queuedForReview = (merged.queuedForReview ?? 0) + (result.queuedForReview ?? 0);
+          merged.updated = (merged.updated ?? 0) + (result.updated ?? 0);
+          merged.unchanged = (merged.unchanged ?? 0) + (result.unchanged ?? 0);
+          if (result.preview?.length) merged.preview = [...(merged.preview ?? []), ...result.preview].slice(0, 300);
           merged.queuedExact = (merged.queuedExact ?? 0) + (result.queuedExact ?? 0);
           merged.reviewAlready = (merged.reviewAlready ?? 0) + (result.reviewAlready ?? 0);
           merged.unaccounted = (merged.unaccounted ?? 0) + (result.unaccounted ?? 0);
@@ -635,6 +670,11 @@ export default function AdminPage() {
     const res = await fetchAuth(`${API_BASE}/bank/admin/upload/job/start`, { method: "POST", body: fd });
     const started = await res.json().catch(() => null);
     if (!res.ok) throw new Error(started?.message || `Upload failed (HTTP ${res.status})`);
+    return pollJobService(started.id, started.total);
+  }
+
+  async function pollJobService(jobId: string, total: number): Promise<{ result: UploadResult; rejectedUrl: string | null }> {
+    const started = { id: jobId, total };
     setUploadJob({ status: "RUNNING", phase: "CHECKING", processed: 0, total: started.total, created: 0, failed: 0 });
     let netFails = 0;
     for (;;) {
@@ -652,8 +692,8 @@ export default function AdminPage() {
       setUploadJob({ status: j.status, phase: j.status === "DONE" ? "FINALIZING" : "SAVING", processed: j.processed, total: j.total, created: j.created, failed: j.failed });
       if (j.status === "FAILED") throw new Error(j.fatalError || "Upload fail ho gaya");
       if (j.status === "DONE") {
-        const result = { success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors ?? [], warnings: j.warnings ?? [], queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted, uploadBatchId: j.uploadBatchId } as UploadResult;
-        if (checkOnly) setInfo(`Sirf check hua (kuch save nahi hua): ${j.created} question upload ke liye tayyar, ${j.failed} reject.`);
+        const result = { success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors ?? [], warnings: j.warnings ?? [], queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted, uploadBatchId: j.uploadBatchId, updated: j.updated, unchanged: j.unchanged, preview: j.preview } as UploadResult;
+        if (checkOnly) setInfo(`Sirf check hua (kuch save nahi hua): ${j.created} naye, ${j.updated ?? 0} update hone layak, ${j.unchanged ?? 0} jaise ke taise, ${j.failed} reject.`);
         return { result, rejectedUrl: j.hasRejected ? `${API_BASE}/bank/admin/upload/job/${started.id}/rejected` : null };
       }
     }
@@ -1208,6 +1248,14 @@ export default function AdminPage() {
               </button>
             ))}
             <button
+              onClick={downloadPracticeTemplate}
+              disabled={templateDownloading}
+              className="rounded-lg border border-primary/50 bg-primary/10 px-3 py-1.5 text-xs font-semibold hover:bg-primary/20 disabled:opacity-50"
+              title="Dropdown + Hinglish hints + examples wala practice-question Excel"
+            >
+              ⭐ Practice Excel Template (dropdown)
+            </button>
+            <button
               onClick={downloadBankExport}
               disabled={bankExportDownloading}
               className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/10 disabled:opacity-50 dark:text-emerald-400"
@@ -1336,7 +1384,12 @@ export default function AdminPage() {
               <div className="flex flex-wrap items-center gap-4">
                 <span>Total: <strong>{uploadResult.total}</strong></span>
                 <span className="text-emerald-600 dark:text-emerald-400">Created: <strong>{uploadResult.created}</strong></span>
+                {(uploadResult.updated ?? 0) > 0 && <span className="text-sky-600 dark:text-sky-400">{checkOnly ? "Update hongi" : "Updated"}: <strong>{uploadResult.updated}</strong></span>}
+                {(uploadResult.unchanged ?? 0) > 0 && <span className="text-muted-foreground">Jaisi thi waisi: <strong>{uploadResult.unchanged}</strong></span>}
                 <span className="text-red-600 dark:text-red-400">Failed: <strong>{uploadResult.failed}</strong></span>
+                {uploadResult.uploadBatchId && !checkOnly && (
+                  <a href="/admin/questions/manage" className="rounded-lg border border-border px-2 py-1 text-xs font-semibold hover:bg-muted">📋 Questions dekhein</a>
+                )}
                 {(uploadResult.reviewAlready ?? 0) > 0 && (
                   <span className="text-xs text-muted-foreground" title="Pehle se Duplicate Review me the ya aap pehle 'purana rakho' decide kar chuke the">+{uploadResult.reviewAlready} pehle se review me / skip</span>
                 )}
@@ -1347,6 +1400,21 @@ export default function AdminPage() {
                   <a href="/admin/questions/duplicates" className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
                     🧬 {uploadResult.queuedForReview} duplicate Review me gaye{(uploadResult.queuedExact ?? 0) > 0 ? ` (${uploadResult.queuedExact} exact same)` : ""} — purana / naya / dono chunne ke liye kholein →
                   </a>
+                )}
+                {(uploadResult.preview?.length ?? 0) > 0 && (
+                  <details className="w-full rounded-lg border border-border p-2 text-xs" open={checkOnly}>
+                    <summary className="cursor-pointer font-semibold">👁 Preview — row-by-row kya hoga (pehli {uploadResult.preview!.length})</summary>
+                    <div className="mt-2 max-h-64 overflow-auto">
+                      {uploadResult.preview!.map((p) => (
+                        <div key={`${p.action}-${p.row}`} className="border-b border-border/50 py-1">
+                          <span className={p.action === "NEW" ? "text-emerald-600" : p.action === "UPDATE" ? "text-sky-600" : "text-muted-foreground"}>
+                            {p.action === "NEW" ? "➕ Naya" : p.action === "UPDATE" ? "✏️ Update" : "＝ Same"}
+                          </span>{" "}
+                          row {p.row}{p.changes?.length ? ` · badlega: ${p.changes.join(", ")}` : ""}{p.text ? ` · ${p.text}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                 )}
                 {uploadResult.errorsTruncated && (
                   <span className="w-full text-xs text-amber-600">
