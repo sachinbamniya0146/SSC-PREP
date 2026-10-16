@@ -40,6 +40,10 @@ else
   $COMPOSE up -d --no-build --no-deps --force-recreate backend frontend
 fi
 
+# free self-hosted search (SearXNG) for PYQ dates: started if missing, never blocks the deploy.
+# If it cannot start, search falls back to DuckDuckGo/Bing automatically.
+docker compose up -d searxng || echo "⚠️ searxng start failed — PYQ search uses DuckDuckGo/Bing fallback"
+
 # keep the disk tidy: drop unused images older than 3 days (the running ones are never touched)
 docker image prune -af --filter "until=72h" > /dev/null 2>&1 || true
 
