@@ -12,6 +12,11 @@ cd /opt/ssc-prep-hub
 #    reading a file that git has just replaced under it.
 if [ -z "${DEPLOY_SYNCED:-}" ]; then
   echo "📥 Pulling latest code from GitHub..."
+  # The SearXNG container re-owns ./searxng to its own user; give it back so git can overwrite settings.yml
+  if [ -d searxng ] && find searxng ! -user "$(id -un)" 2>/dev/null | grep -q .; then
+    sudo -n chown -R "$(id -u):$(id -g)" searxng 2>/dev/null \
+      || docker run --rm -v "$PWD/searxng:/s" alpine chown -R "$(id -u):$(id -g)" /s >/dev/null 2>&1 || true
+  fi
   git remote set-url origin https://github.com/sachinbamniya0146/SSC-PREP.git
   git fetch origin
   git reset --hard origin/main
@@ -42,7 +47,7 @@ fi
 
 # free self-hosted search (SearXNG) for PYQ dates: started if missing, never blocks the deploy.
 # If it cannot start, search falls back to DuckDuckGo/Bing automatically.
-docker compose up -d searxng || echo "⚠️ searxng start failed — PYQ search uses DuckDuckGo/Bing fallback"
+docker compose up -d searxng && docker compose restart searxng || echo "⚠️ searxng start failed — PYQ search uses DuckDuckGo/Bing fallback"
 
 # keep the disk tidy: drop unused images older than 3 days (the running ones are never touched)
 docker image prune -af --filter "until=72h" > /dev/null 2>&1 || true
