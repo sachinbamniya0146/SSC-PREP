@@ -1,5 +1,7 @@
 # Build on GitHub (fast, 7 GB RAM) -> push images to GHCR -> the VPS only pulls + restarts (about a minute).
-# The 1 GB VPS never compiles Next.js / TypeScript any more.
+# The VPS never compiles Next.js / TypeScript any more.
+# Images are built for BOTH linux/amd64 (old x86 VPS) and linux/arm64 (Oracle Ampere A1), so the same tag runs on either.
+# arm64 is built with QEMU emulation on the x86 runner, so a build takes longer (hence the 90 min timeout).
 name: Deploy to Production
 
 on:
@@ -16,12 +18,15 @@ jobs:
   build-backend:
     name: Build backend image
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -33,7 +38,7 @@ jobs:
         with:
           context: ./backend
           push: true
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/sachinbamniya0146/ssc-prep-backend:${{ github.sha }}
             ghcr.io/sachinbamniya0146/ssc-prep-backend:latest
@@ -45,7 +50,7 @@ jobs:
   build-frontend:
     name: Build frontend image
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -74,6 +79,9 @@ jobs:
           fi
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -85,7 +93,7 @@ jobs:
         with:
           context: ./frontend
           push: true
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/sachinbamniya0146/ssc-prep-frontend:${{ github.sha }}
             ghcr.io/sachinbamniya0146/ssc-prep-frontend:latest
