@@ -10,7 +10,7 @@ import { createHash } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 import { cacheClearPrefix } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, QuestionKind } from '../common/question-visibility';
-import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
+import { dedupeAndCapPaperRows } from '../common/pyq-paper';
 import { normalizeShiftOrUndefined } from '../common/shift';
 import { compareQuestions } from '../common/duplicate-compare';
 import { buildZip } from '../common/zip';
@@ -832,7 +832,7 @@ export class BankUploadService {
     // appears on /mocks immediately — no separate admin action needed.
     try {
       await this.autoCreatePyqMocksForBatch(batchId);
-    } catch (e) {
+    } catch {
       // Never let mock auto-creation fail the upload itself — the
       // questions are already safely saved at this point; worst case the
       // admin creates/fixes the mock manually via the coverage tools.
@@ -993,7 +993,7 @@ export class BankUploadService {
     // Word-upload path is a separate finalize step so it needs its own call.
     try {
       await this.autoCreatePyqMocksForBatch(batch.id);
-    } catch (e) {
+    } catch {
       // Never let mock auto-creation fail the upload itself.
     }
     return batch.id;
@@ -4092,7 +4092,7 @@ export class BankUploadService {
           try {
             await this.prisma.duplicateReview.create({ data: x.data });
             noteQueued(x.p);
-          } catch (e) {
+          } catch {
             reject(x.p.it);
           }
         }

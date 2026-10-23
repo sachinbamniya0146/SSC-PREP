@@ -124,13 +124,19 @@ jobs:
         env:
           PRODUCTION_ENV: ${{ secrets.PRODUCTION_ENV }}
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
-            cd /opt/ssc-prep-hub &&
+          # The secret travels over stdin (never inside the command string), so quotes / $ / newlines in it are safe.
+          printf '%s' "$PRODUCTION_ENV" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} '
+            set -e
+            cd /opt/ssc-prep-hub
             if [ ! -f .env ]; then
-              echo 'Creating .env from template...'
-              printf '%s' \"$PRODUCTION_ENV\" > .env
+              echo "Creating .env from the PRODUCTION_ENV secret..."
+              cat > .env
+              chmod 600 .env
+            else
+              cat > /dev/null
+              echo ".env already exists - leaving it untouched"
             fi
-          "
+          '
 
       # Lets the server pull the private images. Uses the GHCR_PULL_TOKEN secret (a PAT with read:packages) if you
       # added one, otherwise this run's own token.
@@ -141,14 +147,46 @@ jobs:
           printf '%s' "$PULL_TOKEN" | ssh -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
             "docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin"
 
-      # The server's checkout is synced HERE (before deploy.sh starts), so the very first run after this change never
+      # The server's checkout is synced HERE (before deploy.sh starts), so the very first run after a change never
       # executes an old deploy.sh that git replaces halfway through.
+      #
+      # ROOT-CAUSE FIX (error: unable to unlink old 'searxng/settings.yml': Permission denied):
+      # the SearXNG container chowns the bind-mounted ./searxng folder to its own user, so the normal server user can
+      # no longer overwrite searxng/settings.yml and `git reset --hard` dies. The ownership is now handed back to the
+      # deploy user BEFORE git touches anything (the old fix lived inside deploy.sh, which only runs AFTER the reset).
       - name: Deploy
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_REPO: ${{ github.repository }}
         run: |
           for attempt in 1 2 3; do
-            echo "🚀 Deploy attempt $attempt/3 (image tag ${{ github.sha }})"
-            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-              "cd /opt/ssc-prep-hub && git remote set-url origin https://github.com/${{ github.repository }}.git && git fetch origin && git reset --hard origin/main && chmod +x deploy.sh && IMAGE_TAG=${{ github.sha }} ./deploy.sh"; then
+            echo "🚀 Deploy attempt $attempt/3 (image tag $DEPLOY_SHA)"
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+                 "$DEPLOY_TARGET" "DEPLOY_SHA='$DEPLOY_SHA' DEPLOY_REPO='$DEPLOY_REPO' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          cd /opt/ssc-prep-hub
+
+          # 1) give ./searxng back to the deploy user (the SearXNG container re-owns it on every start)
+          if [ -d searxng ] && [ -n "$(find searxng ! -user "$(id -un)" -print -quit 2>/dev/null)" ]; then
+            echo "🔧 Fixing ownership of ./searxng (owned by the container user)"
+            ME="$(id -u):$(id -g)"
+            sudo -n chown -R "$ME" searxng 2>/dev/null \
+              || docker run --rm -v "$PWD/searxng:/s" alpine chown -R "$ME" /s 2>/dev/null \
+              || docker run --rm --entrypoint chown -v "$PWD/searxng:/s" searxng/searxng:latest -R "$ME" /s
+          fi
+
+          # 2) sync the checkout to the exact commit that was built (falls back to origin/main)
+          git remote set-url origin "https://github.com/${DEPLOY_REPO}.git"
+          git fetch --prune origin main
+          if git cat-file -e "${DEPLOY_SHA}^{commit}" 2>/dev/null; then TARGET="$DEPLOY_SHA"; else TARGET="origin/main"; fi
+          git reset --hard "$TARGET"
+
+          # 3) deploy (checkout is already synced, so deploy.sh must not sync again)
+          chmod +x deploy.sh
+          DEPLOY_SYNCED=1 IMAGE_TAG="$DEPLOY_SHA" ./deploy.sh < /dev/null
+          REMOTE
+            then
               echo "✅ Deployed"; exit 0
             fi
             [ "$attempt" -lt 3 ] && { echo "⚠️ failed, retrying in 30s"; sleep 30; }

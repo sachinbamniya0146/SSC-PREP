@@ -169,7 +169,10 @@ export class BankUploadController {
   // Progress / result of a background (async) import — poll every ~2 s.
   @Get('jobs/:id')
   getUploadJob(@Param('id') id: string, @Req() req: any) {
-    const { headers: _h, ...rest } = this.uploadService.getUploadJob(id, this.adminId(req));
+    const job = this.uploadService.getUploadJob(id, this.adminId(req));
+    // strip the (large) row headers from the polling payload
+    const rest: Omit<typeof job, 'headers'> & { headers?: unknown } = { ...job };
+    delete rest.headers;
     return { ...rest, hasRejected: (rest.result?.errors?.length ?? 0) > 0 };
   }
 

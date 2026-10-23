@@ -53,7 +53,7 @@ export function parseExcelOffThread(buffer: Buffer, xlsxPath?: string): Promise<
     let resolved = '';
     try {
       resolved = xlsxPath || require.resolve('xlsx');
-    } catch (e) {
+    } catch {
       return reject(new Error('xlsx module not found'));
     }
     // Own copy of the bytes: the multer buffer may share a pooled ArrayBuffer.

@@ -8,17 +8,29 @@ echo "🚀 Starting deployment..."
 
 cd /opt/ssc-prep-hub
 
-# 1) Sync the repo (compose files, nginx config, scripts). The script then restarts itself so bash never keeps
-#    reading a file that git has just replaced under it.
+# The SearXNG container re-owns the bind-mounted ./searxng folder to its own user on every start, after which git
+# (running as the normal deploy user) cannot overwrite searxng/settings.yml ("unable to unlink ... Permission denied").
+# This hands the folder back. NOTE: `find | grep -q` is avoided on purpose - with `pipefail` it can report a false
+# "nothing to fix" (SIGPIPE) and skip the repair.
+fix_searxng_perms() {
+  [ -d searxng ] || return 0
+  [ -n "$(find searxng ! -user "$(id -un)" -print -quit 2>/dev/null)" ] || return 0
+  echo "🔧 Fixing ownership of ./searxng"
+  local me="$(id -u):$(id -g)"
+  sudo -n chown -R "$me" searxng 2>/dev/null \
+    || docker run --rm -v "$PWD/searxng:/s" alpine chown -R "$me" /s 2>/dev/null \
+    || docker run --rm --entrypoint chown -v "$PWD/searxng:/s" searxng/searxng:latest -R "$me" /s \
+    || echo "⚠️ could not fix ./searxng ownership - git may fail to overwrite searxng/settings.yml"
+}
+
+# 1) Sync the repo (compose files, nginx config, scripts). GitHub Actions already syncs the checkout and sets
+#    DEPLOY_SYNCED=1; for a manual run on the server this does the same sync, then restarts the script so bash never
+#    keeps reading a file that git has just replaced under it.
 if [ -z "${DEPLOY_SYNCED:-}" ]; then
   echo "📥 Pulling latest code from GitHub..."
-  # The SearXNG container re-owns ./searxng to its own user; give it back so git can overwrite settings.yml
-  if [ -d searxng ] && find searxng ! -user "$(id -un)" 2>/dev/null | grep -q .; then
-    sudo -n chown -R "$(id -u):$(id -g)" searxng 2>/dev/null \
-      || docker run --rm -v "$PWD/searxng:/s" alpine chown -R "$(id -u):$(id -g)" /s >/dev/null 2>&1 || true
-  fi
+  fix_searxng_perms
   git remote set-url origin https://github.com/sachinbamniya0146/SSC-PREP.git
-  git fetch origin
+  git fetch --prune origin main
   git reset --hard origin/main
   export DEPLOY_SYNCED=1
   exec bash ./deploy.sh "$@"
@@ -127,17 +139,21 @@ else
     echo "⚠️ SSL certificates not found - run certbot to configure HTTPS"
 fi
 
-# Test auth endpoints (only if SSL is configured)
-if [ -f /etc/letsencrypt/live/sscprephub.in/fullchain.pem ]; then
+# Optional admin-login smoke test. It only runs when ADMIN_EMAIL / ADMIN_PASSWORD are exported on the server and jq
+# exists, and it can NEVER fail the deploy (under `set -euo pipefail` an unset variable or a 401 used to abort here).
+if [ -f /etc/letsencrypt/live/sscprephub.in/fullchain.pem ] && [ -n "${ADMIN_EMAIL:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ] && command -v jq >/dev/null 2>&1; then
     echo "🔐 Testing auth endpoints..."
-    ADMIN_TEST=$(curl -sf -X POST https://sscprephub.in/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"'$ADMIN_EMAIL'","password":"'$ADMIN_PASSWORD'","platform":"WEB"}' | jq -r '.user.role // empty')
+    ADMIN_TEST="$(curl -s --max-time 20 -X POST https://sscprephub.in/api/v1/auth/login \
+        -H "Content-Type: application/json" \
+        -d "$(jq -nc --arg e "$ADMIN_EMAIL" --arg p "$ADMIN_PASSWORD" '{email:$e,password:$p,platform:"WEB"}')" \
+        | jq -r '.user.role // empty' 2>/dev/null || true)"
     if [ "$ADMIN_TEST" = "ADMIN" ]; then
         echo "✅ Admin login test passed"
     else
         echo "⚠️ Admin login test failed (check credentials)"
     fi
 else
-    echo "⚠️ Skipping auth tests - SSL not configured yet"
+    echo "ℹ️ Skipping admin login test (ADMIN_EMAIL/ADMIN_PASSWORD not set, jq missing, or SSL not configured)"
 fi
 
 echo "🎉 Deployment completed successfully!"
