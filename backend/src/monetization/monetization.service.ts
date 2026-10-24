@@ -22,13 +22,15 @@
 //      documents (HMAC-SHA256 of `timestamp + rawBody`, base64-encoded,
 //      compared with crypto.timingSafeEqual to avoid timing side-channels)
 //      instead of the ad-hoc pipe-joined hash PayU used.
-import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReferralService } from '../referral/referral.service';
 import * as crypto from 'crypto';
 import { istDateKey } from '../gamification/gamification.service';
 import { computeRevisionState } from '../vocab/vocab-revision.util';
 import { VOCAB_UNLOCK_ALL_PRICE_INR, VOCAB_WORD_UNLOCK_PRICE_INR, skipFeeForStreak } from '../vocab/vocab-messages';
+import { grantOrExtendSubscription } from './subscription.util';
 
 interface CashfreeConfig {
   appId: string;
@@ -39,10 +41,29 @@ interface CashfreeConfig {
   env: 'TEST' | 'PRODUCTION';
 }
 
+type OrderInput = {
+  planId?: string;
+  mockTemplateId?: string;
+  chapterId?: string;
+  vocabWordId?: string;
+  vocabSubscription?: boolean;
+  vocabUnlockAll?: boolean;
+  vocabRevisionSkip?: boolean;
+  couponCode?: string;
+};
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+// Chapter-PDF price used to be a bare `1` in two places (order + fulfilment).
+const CHAPTER_PDF_PRICE_INR = Number(process.env.CHAPTER_PDF_PRICE_INR) > 0 ? Number(process.env.CHAPTER_PDF_PRICE_INR) : 1;
+const RECONCILE_EVERY_MS = 5 * 60 * 1000;
+const ORDER_TTL_MINUTES = 30;
+
 @Injectable()
-export class MonetizationService {
+export class MonetizationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MonetizationService.name);
   private cf: CashfreeConfig;
+  private timer: NodeJS.Timeout | null = null;
+  private reconciling = false;
 
   constructor(
     private prisma: PrismaService,
@@ -52,31 +73,15 @@ export class MonetizationService {
     @Inject(forwardRef(() => ReferralService))
     private referralService: ReferralService,
   ) {
-    // BUGFIX (Session — "Authentication Failed" on every purchase attempt):
-    // Cashfree's own API returns exactly {"message":"authentication Failed",
-    // "type":"authentication_error"} whenever x-client-id / x-client-secret
-    // don't match what it expects. Two real-world causes were found here:
-    //   1. process.env values copied from the dashboard/.env file can carry
-    //      a trailing newline or space (very common when pasted via some
-    //      terminals / Docker env files) — Cashfree treats the header value
-    //      byte-for-byte, so "abc123\n" !== "abc123" and auth fails even
-    //      though the key "looks" right. .trim() below removes this class
-    //      of bug entirely.
-    //   2. CASHFREE_ENV not set to PRODUCTION while PRODUCTION keys were
-    //      generated (or the reverse: TEST keys with CASHFREE_ENV=PRODUCTION)
-    //      — a TEST key sent to api.cashfree.com, or a PRODUCTION key sent
-    //      to sandbox.cashfree.com, is ALWAYS "authentication Failed". See
-    //      the explicit error in cfFetch() below which now calls this out
-    //      by name instead of surfacing Cashfree's generic message.
+    // Credentials are trimmed (a trailing newline copied from a dashboard /
+    // .env file is the #1 cause of Cashfree's "authentication Failed").
+    // CASHFREE_ENV must match the key type: TEST keys -> TEST, live keys ->
+    // PRODUCTION. Missing credentials in production abort boot on purpose.
     const appId = (process.env.CASHFREE_APP_ID || '').trim();
     const secretKey = (process.env.CASHFREE_SECRET_KEY || '').trim();
-    const env: 'TEST' | 'PRODUCTION' = process.env.CASHFREE_ENV === 'PRODUCTION' ? 'PRODUCTION' : 'TEST';
+    const env: 'TEST' | 'PRODUCTION' = (process.env.CASHFREE_ENV || '').trim().toUpperCase() === 'PRODUCTION' ? 'PRODUCTION' : 'TEST';
 
     if ((!appId || !secretKey) && process.env.NODE_ENV === 'production') {
-      // Fail LOUDLY at boot rather than silently accepting payments with no
-      // (or fake) credentials — the exact failure mode the old hardcoded
-      // PayU fallback secret allowed. Better a crashed deploy than a
-      // payment gateway nobody actually configured.
       throw new Error(
         'CASHFREE_APP_ID and CASHFREE_SECRET_KEY must be set in production. Refusing to start with no real payment credentials.',
       );
@@ -90,14 +95,78 @@ export class MonetizationService {
     this.cf = {
       appId,
       secretKey,
-      // Cashfree's webhook secret is normally the same secret key used for
-      // API calls, but they let you configure a distinct one per webhook
-      // endpoint in the dashboard — support that without requiring it.
       webhookSecret: (process.env.CASHFREE_WEBHOOK_SECRET || secretKey).trim(),
       apiVersion: '2023-08-01',
       baseUrl: env === 'PRODUCTION' ? 'https://api.cashfree.com' : 'https://sandbox.cashfree.com',
       env,
     };
+  }
+
+  // ---- Background upkeep: settle missed webhooks + expire lapsed plans ----
+  onModuleInit() {
+    if (process.env.PAYMENT_RECONCILER === 'off') return;
+    // First run shortly after boot (catches payments that landed while the
+    // server was down/redeploying), then every 5 minutes.
+    setTimeout(() => void this.upkeep(), 20_000).unref?.();
+    this.timer = setInterval(() => void this.upkeep(), RECONCILE_EVERY_MS);
+    this.timer.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  private async upkeep() {
+    if (this.reconciling) return;
+    this.reconciling = true;
+    try {
+      await this.expireLapsedSubscriptions();
+      await this.reconcilePendingPayments();
+    } catch (e) {
+      this.logger.error(`payment upkeep failed: ${(e as Error)?.message}`);
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  /** ACTIVE rows whose end date passed -> EXPIRED (keeps admin counts/reports honest). */
+  async expireLapsedSubscriptions() {
+    const r = await this.prisma.subscription.updateMany({
+      where: { status: 'ACTIVE', endsAt: { lte: new Date() } },
+      data: { status: 'EXPIRED' },
+    });
+    if (r.count > 0) this.logger.log(`Expired ${r.count} lapsed subscription(s)`);
+    return r.count;
+  }
+
+  /**
+   * Safety net for the case the browser never came back to /payment/success
+   * (tab closed, phone died) AND the webhook was missed/misconfigured: ask
+   * Cashfree about every PENDING payment from the last 48h and settle it.
+   * Money was taken -> access is granted; order expired -> marked FAILED.
+   */
+  async reconcilePendingPayments() {
+    if (!this.cf.appId || !this.cf.secretKey) return { checked: 0, fulfilled: 0 };
+    const rows = await this.prisma.payment.findMany({
+      where: {
+        status: 'PENDING',
+        gatewayOrderId: { startsWith: 'SSC_' },
+        createdAt: { gte: new Date(Date.now() - 48 * 3600_000), lte: new Date(Date.now() - 2 * 60_000) },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+    });
+    let fulfilled = 0;
+    for (const p of rows) {
+      try {
+        const r = await this.settleFromGateway(p);
+        if (r.state === 'PAID') fulfilled++;
+      } catch (e) {
+        this.logger.warn(`reconcile ${p.gatewayOrderId}: ${(e as Error)?.message}`);
+      }
+    }
+    if (fulfilled > 0) this.logger.log(`Reconciler fulfilled ${fulfilled} payment(s) the webhook missed`);
+    return { checked: rows.length, fulfilled };
   }
 
   // ---- Plans ----
@@ -106,117 +175,152 @@ export class MonetizationService {
   }
 
   async mySubscription(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    // Same rule checkPremiumAccess() uses elsewhere: ADMIN is always premium.
+    if (user?.role === 'ADMIN') return { active: true, admin: true };
+
+    const now = new Date();
     const sub = await this.prisma.subscription.findFirst({
-      where: { userId, status: 'ACTIVE' },
+      where: { userId, status: 'ACTIVE', endsAt: { gt: now } },
       orderBy: { endsAt: 'desc' },
       include: { plan: true },
     });
-    if (!sub) return { active: false };
-    const now = new Date();
-    if (sub.endsAt < now) {
-      await this.prisma.subscription.update({ where: { id: sub.id }, data: { status: 'EXPIRED' } });
-      return { active: false };
+    if (!sub) {
+      // Close any lapsed ACTIVE rows lazily so the UI/admin never see "ACTIVE" past its end date.
+      await this.prisma.subscription.updateMany({
+        where: { userId, status: 'ACTIVE', endsAt: { lte: now } },
+        data: { status: 'EXPIRED' },
+      });
+      const last = await this.prisma.subscription.findFirst({
+        where: { userId },
+        orderBy: { endsAt: 'desc' },
+        include: { plan: true },
+      });
+      return { active: false, lastPlan: last?.plan ?? null, lastEndedAt: last?.endsAt ?? null };
     }
-    return { active: true, plan: sub.plan, endsAt: sub.endsAt };
+    const daysLeft = Math.max(0, Math.ceil((sub.endsAt.getTime() - now.getTime()) / 86_400_000));
+    return {
+      active: true,
+      plan: sub.plan,
+      startsAt: sub.startsAt,
+      endsAt: sub.endsAt,
+      daysLeft,
+      expiringSoon: daysLeft <= 7,
+    };
   }
 
   // ---- Coupons ----
-  async validateCoupon(code: string, amountInr: number) {
-    const c = await this.prisma.coupon.findUnique({ where: { code: code.trim().toUpperCase() } });
+  /**
+   * Validates a coupon and returns the discount. `userId` (when known) also
+   * enforces ONE redemption per user per coupon — before, a single student
+   * could burn a multi-use coupon (e.g. maxUses 100) on repeat purchases.
+   */
+  async validateCoupon(code: string, amountInr: number, userId?: string) {
+    const normalized = String(code || '').trim().toUpperCase();
+    if (!normalized) throw new BadRequestException('Enter a coupon code');
+    const amount = Number(amountInr);
+    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Invalid amount');
+
+    const c = await this.prisma.coupon.findUnique({ where: { code: normalized } });
     if (!c) throw new NotFoundException('Invalid coupon code');
     if (!c.isActive) throw new BadRequestException('Coupon is inactive');
     if (c.expiresAt && c.expiresAt < new Date()) throw new BadRequestException('Coupon expired');
     if (c.maxUses > 0 && c.usesCount >= c.maxUses) throw new BadRequestException('Coupon usage limit reached');
+
+    if (userId) {
+      const used = await this.prisma.payment.count({
+        where: { userId, status: 'SUCCESS', metadataJson: { path: ['couponCode'], equals: c.code } },
+      });
+      if (used > 0) throw new BadRequestException('You have already used this coupon');
+    }
+
     let discount = 0;
     if (c.discountPct) {
-      discount = Math.round((amountInr * c.discountPct) / 100 * 100) / 100;
+      discount = round2((amount * Math.min(c.discountPct, 100)) / 100);
     } else if (c.discountInr) {
-      discount = Math.min(c.discountInr, amountInr);
+      discount = Math.min(c.discountInr, amount);
     }
-    const final = Math.max(Math.round((amountInr - discount) * 100) / 100, 0);
+    discount = Math.min(discount, amount);
+    const final = Math.max(round2(amount - discount), 0);
     return { code: c.code, description: c.description, discountPct: c.discountPct, discountInr: c.discountInr, discount, finalAmountInr: final };
   }
 
   // ---- Cashfree API helper ----
   // Every server-to-server Cashfree call goes through here so credential
-  // headers and error handling live in exactly one place.
+  // headers, timeout and error handling live in exactly one place.
   private async cfFetch(path: string, init: { method: 'GET' | 'POST'; body?: any }) {
     if (!this.cf.appId || !this.cf.secretKey) {
       throw new BadRequestException('Payments are not configured on this server yet (missing Cashfree credentials).');
     }
-    const res = await fetch(`${this.cf.baseUrl}${path}`, {
-      method: init.method,
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        'x-api-version': this.cf.apiVersion,
-        'x-client-id': this.cf.appId,
-        'x-client-secret': this.cf.secretKey,
-      },
-      body: init.body ? JSON.stringify(init.body) : undefined,
-    });
-    const json = await res.json().catch(() => ({}));
+    let res: Response;
+    try {
+      res = await fetch(`${this.cf.baseUrl}${path}`, {
+        method: init.method,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'x-api-version': this.cf.apiVersion,
+          'x-client-id': this.cf.appId,
+          'x-client-secret': this.cf.secretKey,
+        },
+        body: init.body ? JSON.stringify(init.body) : undefined,
+        // A hung gateway must not hang the request (and a DB connection) forever.
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (e) {
+      this.logger.error(`Cashfree ${init.method} ${path} network error: ${(e as Error)?.message}`);
+      throw new BadRequestException('Payment gateway is not reachable right now. Please try again in a minute.');
+    }
+    const json: any = await res.json().catch(() => ({}));
     if (!res.ok) {
       this.logger.error(`Cashfree ${init.method} ${path} → ${res.status}: ${JSON.stringify(json)}`);
-      // BUGFIX: Cashfree's own "authentication Failed" (type:
-      // authentication_error) means the x-client-id/x-client-secret this
-      // server sent were rejected — it is NEVER a user-side problem, so log
-      // the real diagnosis loudly (visible in `docker compose logs backend`)
-      // instead of leaving Sachin to guess why every purchase fails. The two
-      // causes seen in practice: (a) CASHFREE_APP_ID/CASHFREE_SECRET_KEY in
-      // the server's .env don't match the CASHFREE_ENV mode (TEST keys with
-      // CASHFREE_ENV=PRODUCTION, or PRODUCTION keys with CASHFREE_ENV unset
-      // — which defaults to TEST/sandbox); (b) a stray trailing space/newline
-      // in the .env value (now defended against separately via .trim() in
-      // the constructor, but old running processes need a restart to pick
-      // up a fixed .env).
       if (json?.type === 'authentication_error' || res.status === 401) {
         this.logger.error(
           `Cashfree rejected our credentials (env=${this.cf.env}, appId=${this.cf.appId ? this.cf.appId.slice(0, 6) + '…' : '(empty)'}). ` +
-            `Check on the server: (1) CASHFREE_APP_ID / CASHFREE_SECRET_KEY in .env are copied exactly from the Cashfree ` +
-            `Merchant Dashboard with no extra space/newline, and (2) CASHFREE_ENV matches the key type — ` +
-            `TEST keys need CASHFREE_ENV unset or "TEST"; LIVE/PRODUCTION keys need CASHFREE_ENV=PRODUCTION. ` +
-            `After fixing .env, restart the backend container (env vars are only read at process boot).`,
+            `Check: (1) CASHFREE_APP_ID / CASHFREE_SECRET_KEY copied exactly (no space/newline), (2) CASHFREE_ENV matches the key type ` +
+            `(TEST keys -> unset/"TEST", live keys -> "PRODUCTION"). Restart the backend after fixing .env.`,
         );
-        throw new BadRequestException(
-          'Payment gateway rejected our server credentials. Please try again in a bit — our team has been notified.',
-        );
+        throw new BadRequestException('Payment gateway rejected our server credentials. Please try again in a bit — our team has been notified.');
       }
       throw new BadRequestException(json?.message || `Cashfree request failed (${res.status})`);
     }
     return json;
   }
 
-  // ---- Cashfree order creation ----
-  async createOrder(userId: string, input: { planId?: string; mockTemplateId?: string; chapterId?: string; vocabWordId?: string; vocabSubscription?: boolean; vocabUnlockAll?: boolean; vocabRevisionSkip?: boolean; couponCode?: string }) {
+  // ---- Order creation ----
+  async createOrder(userId: string, input: OrderInput) {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, fullName: true, phone: true } });
     if (!user) throw new NotFoundException('User not found');
 
-    const orderId = `SSC_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const orderId = `SSC_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;
 
-    // Amount is ALWAYS computed here, server-side, from planId/chapterId/
-    // mockTemplateId looked up fresh from the DB — the browser never gets a
-    // chance to influence what gets charged, regardless of which gateway
-    // sits behind this.
+    // Amount is ALWAYS computed here, server-side, from rows looked up fresh
+    // from the DB — the browser never influences what gets charged.
     let amountInr = 0;
     let productInfo = '';
     let planName: string | undefined;
     let chapterName: string | undefined;
     let mockTitle: string | undefined;
     let discount = 0;
+    let originalAmountInr = 0;
     let metadata: Record<string, any> = { kind: '' };
 
     if (input.planId) {
       const plan = await this.prisma.plan.findUnique({ where: { id: input.planId } });
       if (!plan || !plan.isActive) throw new BadRequestException('Plan not found');
-      const { finalAmountInr, discount: disc } = input.couponCode
-        ? await this.validateCoupon(input.couponCode, plan.priceInr)
-        : { finalAmountInr: plan.priceInr, discount: 0 };
-      amountInr = finalAmountInr;
-      discount = disc;
+      originalAmountInr = plan.priceInr;
+      let couponCode: string | null = null;
+      if (input.couponCode && input.couponCode.trim()) {
+        const v = await this.validateCoupon(input.couponCode, plan.priceInr, userId);
+        amountInr = v.finalAmountInr;
+        discount = v.discount;
+        couponCode = v.code; // canonical (upper-case) code — fulfil() looks the coupon up by this
+      } else {
+        amountInr = plan.priceInr;
+      }
       productInfo = `SSC Prep Hub - ${plan.name}`;
       planName = plan.name;
-      metadata = { kind: 'PLAN', planId: plan.id, planName: plan.name, discount, couponCode: input.couponCode || null };
+      metadata = { kind: 'PLAN', planId: plan.id, planName: plan.name, durationMonths: plan.durationMonths, originalAmountInr, discount, couponCode };
     } else if (input.chapterId) {
       const chapter = await this.prisma.chapter.findUnique({ where: { id: input.chapterId } });
       if (!chapter) throw new BadRequestException('Chapter not found');
@@ -224,22 +328,20 @@ export class MonetizationService {
         where: { userId_chapterId: { userId, chapterId: input.chapterId } },
       });
       if (existing) throw new BadRequestException('Chapter already purchased');
-      amountInr = 1;
+      amountInr = CHAPTER_PDF_PRICE_INR;
+      originalAmountInr = amountInr;
       productInfo = `SSC Prep Hub - Chapter PDF: ${chapter.name}`;
       chapterName = chapter.name;
-      metadata = { kind: 'CHAPTER', chapterId: chapter.id };
+      metadata = { kind: 'CHAPTER', chapterId: chapter.id, chapterName: chapter.name };
     } else if (input.mockTemplateId) {
       const tpl = await this.prisma.testTemplate.findUnique({ where: { id: input.mockTemplateId } });
       if (!tpl) throw new BadRequestException('Mock template not found');
-      const price = tpl.isPremium ? (tpl.priceInr ?? 0) : 0;
-      amountInr = price;
+      amountInr = tpl.isPremium ? (tpl.priceInr ?? 0) : 0;
+      originalAmountInr = amountInr;
       productInfo = `SSC Prep Hub - Mock Test: ${tpl.title}`;
       mockTitle = tpl.title;
-      metadata = { kind: 'MOCK', mockTemplateId: tpl.id };
+      metadata = { kind: 'MOCK', mockTemplateId: tpl.id, mockTitle: tpl.title };
     } else if (input.vocabWordId) {
-      // "force unlock karne ke liye 10 rs dene honge" — Vocabulary Mastery's
-      // pay-to-skip-ahead option (see VocabService — unlock is otherwise
-      // strictly sequential, gated on mastering the previous word at 95%+).
       const word = await this.prisma.vocabWord.findUnique({ where: { id: input.vocabWordId } });
       if (!word) throw new BadRequestException('Word not found');
       const existing = await this.prisma.vocabWordProgress.findUnique({
@@ -248,59 +350,66 @@ export class MonetizationService {
       if (existing?.masteredAt || existing?.forceUnlocked) {
         throw new BadRequestException('Ye word already unlocked hai');
       }
-      // Sep 29 2026: force-unlock is now Rs 2 per word (was Rs 10).
       amountInr = VOCAB_WORD_UNLOCK_PRICE_INR;
+      originalAmountInr = amountInr;
       productInfo = `SSC Prep Hub - Unlock Word: ${word.word}`;
       metadata = { kind: 'VOCAB_WORD', vocabWordId: word.id, vocabWord: word.word };
     } else if (input.vocabSubscription) {
-      // "ye vocab ka alag subscription rahe... students ko subscriptions me
-      // dikhe kab end ho raha hai" — ₹10/month, unlocks every word for the
-      // subscription's duration (see VocabService.loadWordsWithProgress()).
-      // Renewing early just EXTENDS from the current expiry (or from now,
-      // if it already lapsed) rather than restarting from today, so a
-      // student never loses paid-for days by renewing a few days early.
+      // ₹10 / 30 days. Renewing early extends from the current expiry.
       amountInr = 10;
+      originalAmountInr = amountInr;
       productInfo = 'SSC Prep Hub - Vocabulary Mastery Monthly Subscription';
       metadata = { kind: 'VOCAB_SUBSCRIPTION' };
     } else if (input.vocabUnlockAll) {
-      // Rs 100 — unlock EVERY vocabulary word at once (one-time). The UI shows
-      // the bilingual "read first, don't waste money" warning before this call.
       const state = await this.prisma.vocabUserState.findUnique({ where: { userId } });
       if (state?.allUnlockedAt) throw new BadRequestException('Saare words pehle se unlock hain');
       amountInr = VOCAB_UNLOCK_ALL_PRICE_INR;
+      originalAmountInr = amountInr;
       productInfo = 'SSC Prep Hub - Vocabulary: Unlock All Words';
       metadata = { kind: 'VOCAB_UNLOCK_ALL' };
     } else if (input.vocabRevisionSkip) {
-      // Escalating pay-to-skip for today's daily revision. The fee is derived
-      // ONLY from the server-side skip streak — never from the client.
       const st = await computeRevisionState(this.prisma, userId);
       if (st.doneToday) throw new BadRequestException('Aaj ki revision already ho chuki hai / skip ho chuki hai');
       if (!st.due) throw new BadRequestException('Abhi revision pending nahi hai — skip karne ki zaroorat nahi');
       amountInr = skipFeeForStreak(st.skipStreak);
+      originalAmountInr = amountInr;
       productInfo = `SSC Prep Hub - Vocabulary: skip today's revision (skip #${st.skipStreak + 1})`;
       metadata = { kind: 'VOCAB_REVISION_SKIP', dateKey: st.dateKey, skipNumber: st.skipStreak + 1 };
     } else {
       throw new BadRequestException('Provide planId, mockTemplateId, chapterId, vocabWordId, vocabSubscription, vocabUnlockAll or vocabRevisionSkip');
     }
 
+    amountInr = round2(amountInr);
+
     if (amountInr <= 0) {
+      // A 100%-off coupon on a PLAN is a legitimate "free activation": there is
+      // nothing to charge, so skip the gateway and fulfil immediately. (Before,
+      // this threw "item is free" and made 100% coupons unusable.)
+      if (metadata.kind === 'PLAN' && metadata.couponCode) {
+        const payment = await this.prisma.payment.create({
+          data: { userId, gatewayOrderId: `FREE_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`, amountInr: 0, status: 'PENDING', metadataJson: metadata } as any,
+        });
+        await this.fulfill(payment, payment.gatewayOrderId);
+        return { free: true, orderId: payment.gatewayOrderId, amountInr: 0, planName, discount };
+      }
       throw new BadRequestException('This item is free — no payment order needed');
     }
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    // Cashfree appends the real order_id when it substitutes {order_id} —
-    // guaranteed present on return regardless of payment outcome, so
-    // /payment/success can always look up the right Payment row.
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
     const returnUrl = `${frontendUrl}/payment/success?order_id={order_id}`;
-    const notifyUrl = process.env.CASHFREE_WEBHOOK_URL || `${process.env.BACKEND_PUBLIC_URL || ''}/api/v1/payments/webhook`;
+    // Cashfree rejects a relative / non-https notify_url, which used to make
+    // order creation fail when BACKEND_PUBLIC_URL was unset. Only send it when
+    // it is a real absolute URL; otherwise verify + the reconciler still settle.
+    const rawNotify = process.env.CASHFREE_WEBHOOK_URL || (process.env.BACKEND_PUBLIC_URL ? `${process.env.BACKEND_PUBLIC_URL.replace(/\/+$/, '')}/api/v1/payments/webhook` : '');
+    const notifyUrl = /^https:\/\//i.test(rawNotify) ? rawNotify : '';
+    if (!notifyUrl) {
+      this.logger.warn('No https CASHFREE_WEBHOOK_URL / BACKEND_PUBLIC_URL — creating order WITHOUT webhook (verify + reconciler will settle it).');
+    }
+    if (this.cf.env === 'PRODUCTION' && !/^https:\/\//i.test(frontendUrl)) {
+      this.logger.error(`FRONTEND_URL (${frontendUrl}) is not https — Cashfree PRODUCTION will reject the return_url.`);
+    }
 
-    // Cashfree requires a 10-digit customer phone. Real user phones are
-    // preferred; the sandbox test number is only used as a last resort so
-    // checkout doesn't hard-fail for a user record with no phone on file —
-    // this should be tightened to a hard requirement before go-live if
-    // phone collection at signup isn't already mandatory.
-    const customerPhone = (user.phone || '').replace(/\D/g, '').slice(-10) || '9999999999';
-
+    const customerPhone = (user.phone || '').replace(/\D/g, '').slice(-10);
     const order = await this.cfFetch('/pg/orders', {
       method: 'POST',
       body: {
@@ -311,13 +420,14 @@ export class MonetizationService {
           customer_id: userId,
           customer_name: user.fullName || 'User',
           customer_email: user.email,
-          customer_phone: customerPhone,
+          customer_phone: customerPhone.length === 10 ? customerPhone : '9999999999',
         },
         order_meta: {
           return_url: returnUrl,
-          notify_url: notifyUrl,
+          ...(notifyUrl ? { notify_url: notifyUrl } : {}),
         },
-        order_note: productInfo,
+        order_expiry_time: new Date(Date.now() + ORDER_TTL_MINUTES * 60_000).toISOString(),
+        order_note: productInfo.slice(0, 200),
       },
     });
 
@@ -325,25 +435,16 @@ export class MonetizationService {
       throw new BadRequestException('Cashfree did not return a payment session — please try again');
     }
 
-    // Create payment record. gatewayOrderId/gatewayPaymentId hold
-    // Cashfree's order_id / cf_payment_id (renamed from the old
-    // razorpayOrderId/razorpayPaymentId leftover names — see
-    // migration 20260914100000_rename_payment_gateway_fields).
     await this.prisma.payment.create({
-      data: {
-        userId,
-        gatewayOrderId: orderId,
-        amountInr,
-        status: 'PENDING',
-        metadataJson: metadata,
-      } as any,
+      data: { userId, gatewayOrderId: orderId, amountInr, status: 'PENDING', metadataJson: metadata } as any,
     });
 
     return {
       orderId,
       paymentSessionId: order.payment_session_id,
       amountInr,
-      cashfreeEnv: this.cf.env, // "sandbox" vs "production" — frontend SDK needs this to know which mode to load
+      originalAmountInr,
+      cashfreeEnv: this.cf.env,
       planName,
       chapterName,
       mockTitle,
@@ -351,87 +452,91 @@ export class MonetizationService {
     };
   }
 
-  // Verify + capture payment. Called by the frontend right after the user
-  // lands back on /payment/success — but note it does NOT trust anything
-  // the frontend says about whether the payment succeeded. It only uses
-  // the frontend-supplied orderId to know WHICH order to check, then asks
-  // Cashfree's server directly for the authoritative status.
-  async verifyPayment(userId: string, input: { orderId: string }) {
-    const payment = await this.prisma.payment.findUnique({ where: { gatewayOrderId: input.orderId } });
-    if (!payment) throw new NotFoundException('Order not found');
-    if (payment.userId !== userId) throw new BadRequestException('Order belongs to another user');
+  /** One-click renewal of the plan the user last had (used by the "Renew" button). */
+  async renewOrder(userId: string, couponCode?: string) {
+    const last = await this.prisma.subscription.findFirst({
+      where: { userId },
+      orderBy: { endsAt: 'desc' },
+      include: { plan: true },
+    });
+    if (!last) throw new BadRequestException('No previous plan found — please choose a plan.');
+    if (!last.plan?.isActive) throw new BadRequestException('Your previous plan is no longer on sale — please choose a plan.');
+    return this.createOrder(userId, { planId: last.planId, couponCode });
+  }
 
-    // FIX Error #5 (CRITICAL, carried forward from the PayU version): both
-    // the browser (verify) and Cashfree's server (webhook) can confirm the
-    // same payment, and a page refresh/retry could call verify twice —
-    // fulfill() itself is also idempotent (atomic claim below), but
-    // short-circuiting here avoids an extra round-trip to Cashfree on an
-    // already-settled order.
-    if (payment.status === 'SUCCESS') return { ok: true, duplicate: true };
+  /**
+   * Asks Cashfree for the authoritative state of one of OUR orders and
+   * settles the local Payment row accordingly. Shared by the browser verify
+   * call and the background reconciler so both behave identically.
+   */
+  private async settleFromGateway(payment: any): Promise<{ state: 'PAID' | 'PENDING' | 'FAILED'; status?: string }> {
+    const order = await this.cfFetch(`/pg/orders/${encodeURIComponent(payment.gatewayOrderId)}`, { method: 'GET' });
+    const orderStatus = String(order.order_status || '').toUpperCase(); // PAID | ACTIVE | EXPIRED | TERMINATED | ...
 
-    const order = await this.cfFetch(`/pg/orders/${encodeURIComponent(input.orderId)}`, { method: 'GET' });
-    const orderStatus = order.order_status as string; // PAID | ACTIVE | EXPIRED | TERMINATED
-
-    if (orderStatus === 'ACTIVE') {
-      // Payment attempt still in progress (e.g. UPI collect awaiting
-      // approval) — not a failure, just not resolved yet. Frontend should
-      // poll again rather than treat this as an error.
-      return { ok: false, pending: true, message: 'Payment is still processing' };
-    }
+    if (orderStatus === 'ACTIVE') return { state: 'PENDING', status: orderStatus };
 
     if (orderStatus !== 'PAID') {
-      await this.prisma.payment.update({ where: { id: payment.id }, data: { status: 'FAILED' } });
-      throw new BadRequestException(`Payment ${orderStatus?.toLowerCase() || 'failed'}`);
+      await this.prisma.payment.updateMany({
+        where: { id: payment.id, status: { not: 'SUCCESS' } },
+        data: { status: 'FAILED' },
+      });
+      return { state: 'FAILED', status: orderStatus };
     }
 
-    // Order is genuinely PAID per Cashfree's own server — now fetch the
-    // actual payment transaction id for our records (best-effort; the
-    // order being PAID is already sufficient to fulfill even if this
-    // secondary call has a hiccup).
-    let cfPaymentId = input.orderId;
+    // Defence in depth: the order we created must have been for exactly the
+    // amount we expect. Never grant access for a mismatched amount.
+    const paid = Number(order.order_amount);
+    if (Number.isFinite(paid) && Math.abs(paid - payment.amountInr) > 0.01) {
+      this.logger.error(`Amount mismatch on ${payment.gatewayOrderId}: gateway=${paid} expected=${payment.amountInr} — NOT fulfilling.`);
+      throw new BadRequestException('Payment amount mismatch — please contact support with your order id.');
+    }
+
+    let cfPaymentId = payment.gatewayOrderId;
     try {
-      const payments = await this.cfFetch(`/pg/orders/${encodeURIComponent(input.orderId)}/payments`, { method: 'GET' });
+      const payments = await this.cfFetch(`/pg/orders/${encodeURIComponent(payment.gatewayOrderId)}/payments`, { method: 'GET' });
       const successful = Array.isArray(payments) ? payments.find((p: any) => p.payment_status === 'SUCCESS') : null;
       if (successful?.cf_payment_id) cfPaymentId = String(successful.cf_payment_id);
     } catch (e) {
-      this.logger.warn(`Could not fetch payment list for order ${input.orderId}, proceeding with order-level PAID status: ${e}`);
+      this.logger.warn(`Could not fetch payment list for ${payment.gatewayOrderId}; using order-level PAID: ${e}`);
     }
 
     await this.fulfill(payment, cfPaymentId);
-    return { ok: true };
+    return { state: 'PAID', status: orderStatus };
   }
 
-  // Cashfree webhook (server-confirmed payments) — the reliable path;
-  // verifyPayment() above is the fast/optimistic path for when the user is
-  // actively watching the browser. Either one alone is enough to fulfill;
-  // fulfill()'s atomic claim (see its own comment) makes it safe for both
-  // to fire for the same order.
-  //
-  // rawBody/signature/timestamp come from the controller — see
-  // MonetizationController.webhook() for how the raw bytes are captured.
+  // Verify + capture payment. Called by the frontend right after the user
+  // lands back on /payment/success. It only uses the frontend-supplied
+  // orderId to know WHICH order to check, then asks Cashfree's server.
+  async verifyPayment(userId: string, input: { orderId: string }) {
+    if (!input?.orderId || typeof input.orderId !== 'string') throw new BadRequestException('orderId is required');
+    const payment = await this.prisma.payment.findUnique({ where: { gatewayOrderId: input.orderId } });
+    if (!payment) throw new NotFoundException('Order not found');
+    if (payment.userId !== userId) throw new BadRequestException('Order belongs to another user');
+    if (payment.status === 'SUCCESS') return { ok: true, duplicate: true, kind: (payment.metadataJson as any)?.kind ?? null };
+
+    const r = await this.settleFromGateway(payment);
+    if (r.state === 'PENDING') return { ok: false, pending: true, message: 'Payment is still processing' };
+    if (r.state === 'FAILED') throw new BadRequestException(`Payment ${(r.status || 'failed').toLowerCase()}`);
+    return { ok: true, kind: (payment.metadataJson as any)?.kind ?? null };
+  }
+
+  // Cashfree webhook — the reliable path; verifyPayment() is the optimistic
+  // one for when the user is watching the browser. fulfil() is idempotent so
+  // both (and the reconciler) can fire for the same order.
   async handleWebhook(rawBody: Buffer, signature: string | undefined, timestamp: string | undefined, parsedBody: any) {
     if (!signature || !timestamp) {
       return { ok: true, ignored: true, reason: 'missing_signature_headers' };
     }
     if (!this.cf.webhookSecret) {
-      this.logger.error('Cashfree webhook received but CASHFREE_WEBHOOK_SECRET is not configured — rejecting.');
+      this.logger.error('Cashfree webhook received but no webhook secret is configured — rejecting.');
       return { ok: true, ignored: true, reason: 'webhook_not_configured' };
     }
 
-    // Cashfree's documented algorithm exactly: base64(HMAC-SHA256(secret,
-    // timestamp + rawBody)). MUST use the raw bytes as received, not the
-    // re-serialized parsed JSON — re-serializing can reorder keys/change
-    // whitespace and silently break the signature match.
-    const expected = crypto
-      .createHmac('sha256', this.cf.webhookSecret)
-      .update(timestamp + rawBody.toString('utf-8'))
-      .digest('base64');
-
+    // base64(HMAC-SHA256(secret, timestamp + rawBody)) over the EXACT bytes received.
+    const expected = crypto.createHmac('sha256', this.cf.webhookSecret).update(timestamp + rawBody.toString('utf-8')).digest('base64');
     const expectedBuf = Buffer.from(expected);
     const gotBuf = Buffer.from(signature);
-    const validSignature =
-      expectedBuf.length === gotBuf.length && crypto.timingSafeEqual(expectedBuf, gotBuf);
-
+    const validSignature = expectedBuf.length === gotBuf.length && crypto.timingSafeEqual(expectedBuf, gotBuf);
     if (!validSignature) {
       this.logger.warn('Cashfree webhook signature mismatch — ignoring (possible spoofed request).');
       return { ok: true, ignored: true, reason: 'invalid_signature' };
@@ -449,11 +554,20 @@ export class MonetizationService {
     if (payment.status === 'SUCCESS') return { ok: true, duplicate: true };
 
     if (eventType === 'PAYMENT_SUCCESS_WEBHOOK' && paymentStatus === 'SUCCESS') {
+      const paidAmount = Number(parsedBody?.data?.payment?.payment_amount ?? parsedBody?.data?.order?.order_amount);
+      if (Number.isFinite(paidAmount) && Math.abs(paidAmount - payment.amountInr) > 0.01) {
+        this.logger.error(`Webhook amount mismatch on ${orderId}: got ${paidAmount}, expected ${payment.amountInr} — NOT fulfilling.`);
+        return { ok: true, ignored: true, reason: 'amount_mismatch' };
+      }
+      // If this throws the HTTP response is a 5xx, so Cashfree retries the
+      // webhook — a transient DB error no longer leaves a paid order unfulfilled.
       await this.fulfill(payment, String(cfPaymentId || orderId));
       return { ok: true, fulfilled: true, kind: (payment.metadataJson as any)?.kind ?? null };
     }
 
     if (eventType === 'PAYMENT_FAILED_WEBHOOK' || eventType === 'PAYMENT_USER_DROPPED_WEBHOOK') {
+      // Not final: the same order can still be retried and paid, and a later
+      // success webhook / verify will fulfil it (fulfil claims `status != SUCCESS`).
       await this.prisma.payment.updateMany({
         where: { gatewayOrderId: orderId, status: { not: 'SUCCESS' } },
         data: { status: 'FAILED' },
@@ -465,222 +579,169 @@ export class MonetizationService {
   }
 
   /**
-   * Shared fulfillment: Payment PENDING → Subscription / ChapterPurchase / MockAccess.
-   *
-   * FIX Error #5 follow-up (CRITICAL — race condition in the "fix"):
-   * The previous version of this method wrote `status: 'SUCCESS'` as its
-   * SECOND-TO-LAST step, AFTER already creating the subscription / chapter
-   * purchase / mock credits / referral payout. verifyPayment() and
-   * handleWebhook() each read `payment.status` via a separate `findUnique`
-   * BEFORE calling fulfill(). If the browser's verify call and PayU's
-   * webhook land close together (the exact scenario Error #5 describes —
-   * that's the whole reason this guard exists), BOTH reads can happen
-   * while status is still PENDING, so both callers pass the `=== 'SUCCESS'`
-   * check and both run this method fully, double-granting everything
-   * before either write finishes. The per-request check alone cannot
-   * close this window — only an atomic, conditional write can.
-   *
-   * Fix: CLAIM the row first, with a single atomic conditional UPDATE
-   * (`status: { not: 'SUCCESS' }` in the WHERE clause). Postgres executes
-   * that as one atomic statement, so if two requests race, only one of
-   * them can ever see `count === 1`; the other sees `count === 0` and
-   * exits immediately without granting anything twice.
-   */
-  /**
-   * Referral commission is a side effect of a payment. If it ever throws (DB hiccup, missing plan row, ...) the
-   * student's purchase has already been granted above and the Payment row is already SUCCESS — so a referral error
-   * must never turn a paid purchase into a failed API call (which also made the gateway retry the webhook).
+   * Referral commission is a side effect of a payment. A referral error must
+   * never turn an already-granted purchase into a failed API call.
    */
   private async safeReferral(userId: string, payment: { id: string; amountInr: number }): Promise<void> {
+    if (!(payment.amountInr > 0)) return; // free activation earns no commission
     try {
       await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(`[referral] onPaidPurchase failed for payment ${payment.id}:`, (e as Error)?.message);
+      this.logger.error(`[referral] onPaidPurchase failed for payment ${payment.id}: ${(e as Error)?.message}`);
     }
   }
 
+  /**
+   * Shared fulfilment: Payment PENDING -> Subscription / ChapterPurchase / MockAccess / Vocab.
+   *
+   * ATOMIC: the "claim" (status -> SUCCESS) and every grant happen inside ONE
+   * database transaction. Previously the claim was committed first and the
+   * grants ran afterwards, so any error in between (missing plan row, DB blip)
+   * left a payment marked SUCCESS with NOTHING granted — and since status was
+   * already SUCCESS, no retry could ever repair it. Now a failure rolls the
+   * claim back too, the payment stays PENDING, and the webhook retry /
+   * reconciler fulfils it properly.
+   *
+   * The conditional UPDATE (`status != SUCCESS`) is still what makes a
+   * browser-verify + webhook race safe: exactly one caller sees count === 1.
+   */
   private async fulfill(payment: any, gatewayPaymentId: string) {
-    const claim = await this.prisma.payment.updateMany({
-      where: { id: payment.id, status: { not: 'SUCCESS' } },
-      data: {
-        gatewayPaymentId,
-        status: 'SUCCESS',
-        invoiceUrl: `https://sscprephub.in/invoice/${payment.id}`,
-      },
-    });
-    if (claim.count === 0) {
-      // Someone else (the other of browser-verify / webhook) already
-      // claimed and fulfilled this payment. Do not grant anything again.
-      return;
-    }
-
-    const userId = payment.userId;
     const meta = (payment.metadataJson as any) || {};
 
-    if (meta.kind === 'PLAN') {
-      const plan = await this.prisma.plan.findUnique({ where: { id: meta.planId } });
-      if (!plan) throw new BadRequestException('Plan missing');
-      
-      // Cancel any existing active subscription
-      await this.prisma.subscription.updateMany({
-        where: { userId, status: 'ACTIVE' },
-        data: { status: 'CANCELLED' },
-      });
-
-      const endsAt = new Date();
-      endsAt.setMonth(endsAt.getMonth() + plan.durationMonths);
-      
-      await this.prisma.subscription.create({
-        data: { userId, planId: plan.id, status: 'ACTIVE', startsAt: new Date(), endsAt },
-      });
-
-      // FIX Error #7: referral.service.ts's onPaidPurchase() was fully
-      // implemented but never called from anywhere — referrers never
-      // received their promised free subscription. Trigger it here, right
-      // after a successful PLAN purchase is recorded.
-      //
-      // REFER & EARN (Sep 2026): onPaidPurchase() now also credits a cash
-      // commission to the referrer's wallet, so every payment kind that can
-      // legitimately be a referred user's FIRST/Nth paid purchase must call
-      // it — not just PLAN. It's a no-op if the buyer wasn't referred by
-      // anyone, so calling it unconditionally for every fulfilled payment is
-      // safe (see referral.service.ts#onPaidPurchase's early-return).
-      await this.safeReferral(userId, payment);
-    } else if (meta.kind === 'CHAPTER') {
-      await this.prisma.chapterPurchase.upsert({
-        where: { userId_chapterId: { userId, chapterId: meta.chapterId } },
-        create: { userId, chapterId: meta.chapterId, amountInr: 1, status: 'SUCCESS' },
-        update: { status: 'SUCCESS' },
-      });
-      await this.safeReferral(userId, payment);
-    } else if (meta.kind === 'MOCK') {
-      await this.prisma.mockAccess.upsert({
-        where: { userId_testTemplateId: { userId, testTemplateId: meta.mockTemplateId } },
-        create: { userId, testTemplateId: meta.mockTemplateId, paidPacksPurchased: 1 },
-        update: { paidPacksPurchased: { increment: 1 } },
-      });
-      await this.safeReferral(userId, payment);
-    } else if (meta.kind === 'VOCAB_WORD') {
-      await this.prisma.vocabWordPurchase.upsert({
-        where: { userId_wordId: { userId, wordId: meta.vocabWordId } },
-        create: { userId, wordId: meta.vocabWordId, amountInr: payment.amountInr, status: 'SUCCESS' },
-        update: { status: 'SUCCESS' },
-      });
-      await this.prisma.vocabWordProgress.upsert({
-        where: { userId_wordId: { userId, wordId: meta.vocabWordId } },
-        create: { userId, wordId: meta.vocabWordId, forceUnlocked: true },
-        update: { forceUnlocked: true },
-      });
-      await this.safeReferral(userId, payment);
-    } else if (meta.kind === 'VOCAB_UNLOCK_ALL') {
-      await this.prisma.vocabUserState.upsert({
-        where: { userId },
-        create: { userId, allUnlockedAt: new Date() },
-        update: { allUnlockedAt: new Date() },
-      });
-      await this.safeReferral(userId, payment);
-    } else if (meta.kind === 'VOCAB_REVISION_SKIP') {
-      const dateKey = meta.dateKey || istDateKey(new Date());
-      const already = await this.prisma.vocabRevisionSession.findFirst({
-        where: { userId, dateKey, status: 'SKIPPED' },
-        select: { id: true },
-      });
-      if (!already) {
-        const now = new Date();
-        await this.prisma.vocabRevisionSession.create({
+    const done = await this.prisma.$transaction(
+      async (tx) => {
+        const claim = await tx.payment.updateMany({
+          where: { id: payment.id, status: { not: 'SUCCESS' } },
           data: {
-            userId,
-            dateKey,
-            status: 'SKIPPED',
-            wordIds: [],
-            questionIds: [],
-            skipFeeInr: payment.amountInr,
-            expiresAt: now,
-            completedAt: now,
+            gatewayPaymentId,
+            status: 'SUCCESS',
+            invoiceUrl: `${(process.env.FRONTEND_URL || 'https://sscprephub.in').replace(/\/+$/, '')}/invoice/${payment.id}`,
           },
         });
-        await this.prisma.vocabUserState.upsert({
+        if (claim.count === 0) return false; // the other path already fulfilled it
+
+        await this.grant(tx, payment, meta);
+        await this.consumeCoupon(tx, payment, meta);
+
+        await tx.auditLog.create({
+          data: {
+            userId: payment.userId,
+            action: 'INVOICE_GENERATED',
+            targetEntity: 'Payment',
+            entityId: payment.id,
+            metadataJson: { kind: meta.kind, planId: meta.planId, amountInr: payment.amountInr, couponCode: meta.couponCode ?? null },
+          },
+        });
+        return true;
+      },
+      { timeout: 20_000, maxWait: 10_000 },
+    );
+
+    if (done) await this.safeReferral(payment.userId, payment);
+  }
+
+  /** Grants what the payment bought. Runs inside fulfil()'s transaction. */
+  private async grant(tx: Prisma.TransactionClient, payment: any, meta: any) {
+    const userId: string = payment.userId;
+
+    switch (meta.kind) {
+      case 'PLAN': {
+        const plan = await tx.plan.findUnique({ where: { id: meta.planId } });
+        if (!plan) throw new BadRequestException('Plan missing'); // rolls everything back
+        const g = await grantOrExtendSubscription(tx as any, { userId, planId: plan.id, months: plan.durationMonths });
+        await tx.payment.update({ where: { id: payment.id }, data: { subscriptionId: g.subscription.id } });
+        return;
+      }
+      case 'CHAPTER':
+        await tx.chapterPurchase.upsert({
+          where: { userId_chapterId: { userId, chapterId: meta.chapterId } },
+          create: { userId, chapterId: meta.chapterId, amountInr: payment.amountInr, status: 'SUCCESS' },
+          update: { status: 'SUCCESS' },
+        });
+        return;
+      case 'MOCK':
+        await tx.mockAccess.upsert({
+          where: { userId_testTemplateId: { userId, testTemplateId: meta.mockTemplateId } },
+          create: { userId, testTemplateId: meta.mockTemplateId, paidPacksPurchased: 1 },
+          update: { paidPacksPurchased: { increment: 1 } },
+        });
+        return;
+      case 'VOCAB_WORD':
+        await tx.vocabWordPurchase.upsert({
+          where: { userId_wordId: { userId, wordId: meta.vocabWordId } },
+          create: { userId, wordId: meta.vocabWordId, amountInr: payment.amountInr, status: 'SUCCESS' },
+          update: { status: 'SUCCESS' },
+        });
+        await tx.vocabWordProgress.upsert({
+          where: { userId_wordId: { userId, wordId: meta.vocabWordId } },
+          create: { userId, wordId: meta.vocabWordId, forceUnlocked: true },
+          update: { forceUnlocked: true },
+        });
+        return;
+      case 'VOCAB_UNLOCK_ALL':
+        await tx.vocabUserState.upsert({
+          where: { userId },
+          create: { userId, allUnlockedAt: new Date() },
+          update: { allUnlockedAt: new Date() },
+        });
+        return;
+      case 'VOCAB_REVISION_SKIP': {
+        const dateKey = meta.dateKey || istDateKey(new Date());
+        const already = await tx.vocabRevisionSession.findFirst({ where: { userId, dateKey, status: 'SKIPPED' }, select: { id: true } });
+        if (already) return;
+        const now = new Date();
+        await tx.vocabRevisionSession.create({
+          data: { userId, dateKey, status: 'SKIPPED', wordIds: [], questionIds: [], skipFeeInr: payment.amountInr, expiresAt: now, completedAt: now },
+        });
+        await tx.vocabUserState.upsert({
           where: { userId },
           create: { userId, skipStreak: 1, lastSkipDateKey: dateKey, totalSkipPaidInr: payment.amountInr },
-          update: {
-            skipStreak: { increment: 1 },
-            lastSkipDateKey: dateKey,
-            totalSkipPaidInr: { increment: payment.amountInr },
-          },
+          update: { skipStreak: { increment: 1 }, lastSkipDateKey: dateKey, totalSkipPaidInr: { increment: payment.amountInr } },
         });
+        return;
       }
-      await this.safeReferral(userId, payment);
-    } else if (meta.kind === 'VOCAB_SUBSCRIPTION') {
-      const existing = await this.prisma.vocabSubscription.findUnique({ where: { userId } });
-      const base = existing && existing.expiresAt > new Date() ? existing.expiresAt : new Date();
-      const expiresAt = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
-      await this.prisma.vocabSubscription.upsert({
-        where: { userId },
-        create: { userId, expiresAt, amountInr: payment.amountInr, status: 'SUCCESS' },
-        update: { expiresAt, amountInr: payment.amountInr, status: 'SUCCESS' },
-      });
-      await this.safeReferral(userId, payment);
-    }
-
-    // consume coupon if any.
-    //
-    // BUGFIX (bonus grep, item a — check happens once, the actual grant
-    // isn't atomically protected against a race, same root cause as the
-    // checkIn() double-XP bug fixed earlier): maxUses was only checked in
-    // validateCoupon() at ORDER-CREATION time. If two orders for the same
-    // single-use coupon (maxUses: 1) were created concurrently — two tabs,
-    // or two different users racing a limited promo code — both could pass
-    // validation while usesCount was still 0, both complete real PayU
-    // payments, and both land here incrementing usesCount past maxUses.
-    // The coupon's own limit was silently bypassed by the race window
-    // between "check" and "increment".
-    //
-    // Both payments are already genuinely captured by PayU at this point,
-    // so we can't refuse to grant what was actually paid for — the fix is
-    // to atomically re-check maxUses at the moment of consuming it (same
-    // conditional-updateMany pattern already used just above for the
-    // Payment row's SUCCESS claim) and flag the overage for admin
-    // visibility via the audit log, instead of silently letting usesCount
-    // drift past its stated limit with no record of it happening.
-    if (meta.couponCode) {
-      const coupon = await this.prisma.coupon.findUnique({ where: { code: meta.couponCode } });
-      if (coupon) {
-        const claim = await this.prisma.coupon.updateMany({
-          where: {
-            code: meta.couponCode,
-            OR: [{ maxUses: { lte: 0 } }, { usesCount: { lt: coupon.maxUses } }],
-          },
-          data: { usesCount: { increment: 1 } },
+      case 'VOCAB_SUBSCRIPTION': {
+        const existing = await tx.vocabSubscription.findUnique({ where: { userId } });
+        const base = existing && existing.expiresAt > new Date() ? existing.expiresAt : new Date();
+        const expiresAt = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
+        await tx.vocabSubscription.upsert({
+          where: { userId },
+          create: { userId, expiresAt, amountInr: payment.amountInr, status: 'SUCCESS' },
+          update: { expiresAt, amountInr: payment.amountInr, status: 'SUCCESS' },
         });
-        if (claim.count === 0) {
-          // Coupon's maxUses was already exhausted by a racing/earlier
-          // redemption — this purchase still goes through (already paid),
-          // but log it so finance/admin can see the coupon was
-          // over-redeemed rather than the limit silently not applying.
-          await this.prisma.auditLog.create({
-            data: {
-              userId,
-              action: 'COUPON_OVER_REDEEMED',
-              targetEntity: 'Coupon',
-              entityId: coupon.id,
-              metadataJson: { code: meta.couponCode, maxUses: coupon.maxUses, paymentId: payment.id },
-            },
-          });
-        }
+        return;
       }
+      default:
+        // Unknown kind: fail loudly (rolls back) instead of silently taking money for nothing.
+        throw new BadRequestException(`Unknown payment kind "${meta.kind}" on payment ${payment.id}`);
     }
+  }
 
-    // Log invoice generation
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'INVOICE_GENERATED',
-        targetEntity: 'Payment',
-        entityId: payment.id,
-        metadataJson: { planId: meta.planId, amountInr: payment.amountInr, couponCode: meta.couponCode },
-      },
+  /**
+   * maxUses is only checked at order time, so two concurrent orders can both
+   * pass. Re-check atomically here; the purchase stays valid (already paid)
+   * but an over-redemption is logged for the admin.
+   */
+  private async consumeCoupon(tx: Prisma.TransactionClient, payment: any, meta: any) {
+    if (!meta.couponCode) return;
+    const code = String(meta.couponCode).trim().toUpperCase();
+    const coupon = await tx.coupon.findUnique({ where: { code } });
+    if (!coupon) return;
+    const claim = await tx.coupon.updateMany({
+      where: { code, OR: [{ maxUses: { lte: 0 } }, { usesCount: { lt: coupon.maxUses } }] },
+      data: { usesCount: { increment: 1 } },
     });
+    if (claim.count === 0) {
+      await tx.auditLog.create({
+        data: {
+          userId: payment.userId,
+          action: 'COUPON_OVER_REDEEMED',
+          targetEntity: 'Coupon',
+          entityId: coupon.id,
+          metadataJson: { code, maxUses: coupon.maxUses, paymentId: payment.id },
+        },
+      });
+    }
   }
 
   // ---- Chapter purchases ----
@@ -692,38 +753,80 @@ export class MonetizationService {
     return rows.map((r) => ({ chapterId: r.chapterId, chapterName: r.chapter?.name, amountInr: r.amountInr, purchasedAt: r.createdAt }));
   }
 
-  // ---- Auto-pay / Recurring subscriptions ----
-  async enableAutoPay(userId: string, subscriptionId: string) {
-    const sub = await this.prisma.subscription.findUnique({
-      where: { id: subscriptionId, userId },
-      include: { plan: true },
-    });
-    if (!sub || sub.status !== 'ACTIVE') throw new BadRequestException('No active subscription found');
-    
-    // Store auto-pay preference (could add to subscription model or user preferences)
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'AUTOPAY_ENABLED',
-        targetEntity: 'Subscription',
-        entityId: subscriptionId,
-        metadataJson: { planId: sub.planId },
-      },
-    });
-    
-    return { ok: true, message: 'Auto-pay enabled. Will renew automatically before expiry.' };
+  // ---- Payment history + invoices ----
+  private describe(meta: any): string {
+    switch (meta?.kind) {
+      case 'PLAN': return meta.planName || 'Premium plan';
+      case 'CHAPTER': return `Chapter PDF${meta.chapterName ? `: ${meta.chapterName}` : ''}`;
+      case 'MOCK': return `Mock test${meta.mockTitle ? `: ${meta.mockTitle}` : ''}`;
+      case 'VOCAB_WORD': return `Vocabulary word unlock${meta.vocabWord ? `: ${meta.vocabWord}` : ''}`;
+      case 'VOCAB_UNLOCK_ALL': return 'Vocabulary: unlock all words';
+      case 'VOCAB_SUBSCRIPTION': return 'Vocabulary monthly subscription';
+      case 'VOCAB_REVISION_SKIP': return 'Vocabulary revision skip';
+      default: return 'SSC Prep Hub purchase';
+    }
   }
 
-  async disableAutoPay(userId: string, subscriptionId: string) {
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'AUTOPAY_DISABLED',
-        targetEntity: 'Subscription',
-        entityId: subscriptionId,
-      },
+  async paymentHistory(userId: string) {
+    const rows = await this.prisma.payment.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
     });
-    
-    return { ok: true, message: 'Auto-pay disabled.' };
+    return rows.map((p) => {
+      const m = (p.metadataJson as any) || {};
+      return {
+        id: p.id,
+        orderId: p.gatewayOrderId,
+        title: this.describe(m),
+        kind: m.kind ?? null,
+        amountInr: p.amountInr,
+        discount: m.discount ?? 0,
+        couponCode: m.couponCode ?? null,
+        status: p.status,
+        createdAt: p.createdAt,
+        canInvoice: p.status === 'SUCCESS',
+      };
+    });
+  }
+
+  async invoice(userId: string, paymentId: string) {
+    const p = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: { user: { select: { fullName: true, email: true, phone: true } }, subscription: { include: { plan: true } } },
+    });
+    if (!p || p.userId !== userId) throw new NotFoundException('Invoice not found');
+    if (p.status !== 'SUCCESS') throw new BadRequestException('Invoice is available only for successful payments');
+    const m = (p.metadataJson as any) || {};
+    const d = p.createdAt;
+    return {
+      invoiceNo: `INV-${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}-${p.id.slice(0, 8).toUpperCase()}`,
+      date: d,
+      orderId: p.gatewayOrderId,
+      transactionId: p.gatewayPaymentId,
+      customer: { name: p.user.fullName, email: p.user.email, phone: p.user.phone },
+      item: this.describe(m),
+      kind: m.kind ?? null,
+      listPriceInr: m.originalAmountInr ?? p.amountInr + (m.discount ?? 0),
+      discountInr: m.discount ?? 0,
+      couponCode: m.couponCode ?? null,
+      paidInr: p.amountInr,
+      validFrom: p.subscription?.startsAt ?? null,
+      validUntil: p.subscription?.endsAt ?? null,
+      seller: 'SSC Prep Hub',
+    };
+  }
+
+  // ---- Auto-pay ----
+  // Honest status: true recurring debit needs Cashfree Subscriptions (UPI
+  // AutoPay / eMandate) which is not integrated. The old endpoints only wrote
+  // an audit-log row while telling the user "will renew automatically" — and
+  // nothing ever renewed. They now say so; one-click renewal is /payments/renew.
+  async enableAutoPay(_userId: string, _subscriptionId: string) {
+    throw new BadRequestException('Auto-renew is not available yet. Use "Renew now" to extend your plan in one click — your remaining days are always kept.');
+  }
+
+  async disableAutoPay(_userId: string, _subscriptionId: string) {
+    return { ok: true, message: 'Auto-renew is not enabled for your account.' };
   }
 }

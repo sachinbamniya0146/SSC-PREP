@@ -1,9 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { fetchAuth, API_BASE } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { fetchAuth, API_BASE } from "@/lib/api";
+import { startCashfreeCheckout } from "@/lib/vocab-pay";
+import { useT } from "@/lib/i18n";
 
 type Plan = {
   id: string;
@@ -15,186 +17,166 @@ type Plan = {
 
 type Subscription = {
   active: boolean;
+  admin?: boolean;
   plan?: Plan;
+  startsAt?: string;
   endsAt?: string;
+  daysLeft?: number;
+  expiringSoon?: boolean;
+  lastPlan?: Plan | null;
+  lastEndedAt?: string | null;
 };
 
 type CouponValidation = {
   code: string;
-  description: string;
-  discountPct?: number;
-  discountInr?: number;
+  description?: string | null;
   discount: number;
   finalAmountInr: number;
 };
 
-// Cashfree JS SDK (v3) — loaded once from their CDN and cached on `window`,
-// same approach their own docs use for a plain script-tag integration (no
-// extra npm dependency to install/pin). Loading it dynamically, only when
-// the user is actually about to pay, keeps it off the initial page weight.
-let cashfreeSdkPromise: Promise<any> | null = null;
-function loadCashfreeSdk(): Promise<any> {
-  if (typeof window === "undefined") return Promise.resolve(null);
-  if ((window as any).Cashfree) return Promise.resolve((window as any).Cashfree);
-  if (cashfreeSdkPromise) return cashfreeSdkPromise;
-  cashfreeSdkPromise = new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
-    script.async = true;
-    script.onload = () => resolve((window as any).Cashfree);
-    script.onerror = () => reject(new Error("Failed to load Cashfree SDK — check your connection and try again"));
-    document.body.appendChild(script);
-  });
-  return cashfreeSdkPromise;
+const inr = (n: number) => `₹${(Math.round(n * 100) / 100).toLocaleString("en-IN", { minimumFractionDigits: n % 1 ? 2 : 0 })}`;
+const fmtDate = (d?: string | null) =>
+  d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
+const durationLabel = (m: number) => (m === 1 ? "1 Month" : m % 12 === 0 ? `${m / 12} Year${m / 12 > 1 ? "s" : ""}` : `${m} Months`);
+
+function addMonthsClamped(from: Date, months: number): Date {
+  const d = new Date(from.getTime());
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + months);
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, last));
+  return d;
 }
 
 export default function PremiumPage() {
+  const tr = useT();
   const router = useRouter();
   const [plans, setPlans] = React.useState<Plan[]>([]);
   const [subscription, setSubscription] = React.useState<Subscription | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
   const [selectedPlan, setSelectedPlan] = React.useState<Plan | null>(null);
   const [couponCode, setCouponCode] = React.useState("");
   const [couponResult, setCouponResult] = React.useState<CouponValidation | null>(null);
   const [couponError, setCouponError] = React.useState("");
+  const [couponBusy, setCouponBusy] = React.useState(false);
   const [processing, setProcessing] = React.useState(false);
   const [error, setError] = React.useState("");
-  const [success, setSuccess] = React.useState("");
-  // BUG FIX: if the user already has an active subscription, buying another
-  // plan does NOT extend it — backend's fulfill() cancels the current
-  // subscription and starts the new one from today (see monetization.service.ts),
-  // so any remaining paid days are silently lost. Require explicit confirmation
-  // before letting an already-premium user proceed to payment.
-  const [confirmReplace, setConfirmReplace] = React.useState(false);
 
-
-  React.useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const loadData = React.useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
     try {
       const [plansRes, subRes] = await Promise.all([
         fetchAuth(`${API_BASE}/payments/plans`),
         fetchAuth(`${API_BASE}/payments/subscription`),
       ]);
-      if (!plansRes.ok || !subRes.ok) {
-        throw new Error("Failed to load plans");
-      }
-      const plansData = await plansRes.json();
-      const subData = await subRes.json();
-      setPlans(plansData.filter((p: Plan) => p.isActive));
-      setSubscription(subData);
-    } catch (e) {
-      console.error(e);
-      setError("Failed to load plans. Please refresh the page.");
+      if (!plansRes.ok || !subRes.ok) throw new Error("load failed");
+      const plansData: Plan[] = await plansRes.json();
+      setPlans(plansData.filter((p) => p.isActive).sort((a, b) => a.durationMonths - b.durationMonths));
+      setSubscription(await subRes.json());
+    } catch {
+      setLoadError(tr("Plans load nahi ho paye. Page refresh karke dobara try karein.", "Plans load nahi ho paye. Page refresh karke dobara try karein."));
     } finally {
       setLoading(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleSelectPlan = (plan: Plan) => {
+  React.useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Price per month → used for the "best value" badge and per-month hint.
+  const perMonth = (p: Plan) => p.priceInr / Math.max(1, p.durationMonths);
+  const bestValueId = React.useMemo(() => {
+    if (plans.length < 2) return null;
+    return [...plans].sort((a, b) => perMonth(a) - perMonth(b))[0]?.id ?? null;
+  }, [plans]);
+
+  const selectPlan = (plan: Plan) => {
     setSelectedPlan(plan);
     setCouponCode("");
     setCouponResult(null);
     setCouponError("");
-    setConfirmReplace(false);
     setError("");
-    setSuccess("");
   };
 
-  const validateCoupon = async () => {
+  const applyCoupon = async () => {
     if (!selectedPlan || !couponCode.trim()) {
-      setCouponError("Enter a coupon code");
+      setCouponError(tr("Coupon code daalein", "Coupon code daalein"));
       return;
     }
+    setCouponBusy(true);
     setCouponError("");
     try {
       const res = await fetchAuth(`${API_BASE}/payments/coupon/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: couponCode, amountInr: selectedPlan.priceInr }),
+        body: JSON.stringify({ code: couponCode.trim(), amountInr: selectedPlan.priceInr }),
       });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Invalid coupon");
-      }
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Invalid coupon");
       setCouponResult(data);
     } catch (e: any) {
-      setCouponError(e.message);
+      setCouponError(e.message || "Invalid coupon");
       setCouponResult(null);
+    } finally {
+      setCouponBusy(false);
     }
   };
 
-  // Creates the order server-side (amount is computed there, never trusted
-  // from the browser — see monetization.service.ts createOrder()), then
-  // immediately opens Cashfree's hosted checkout with the returned
-  // payment_session_id. Unlike the old PayU flow, no payment secret or
-  // hash ever reaches the browser — the session id is a short-lived,
-  // single-use opaque token.
   const payNow = async () => {
-    if (!selectedPlan) return;
-    if (subscription?.active && !confirmReplace) {
-      setError("Please confirm you understand your current plan will be replaced before proceeding.");
-      return;
-    }
+    if (!selectedPlan || processing) return;
     setProcessing(true);
     setError("");
     try {
-      const res = await fetchAuth(`${API_BASE}/payments/order`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          planId: selectedPlan.id,
-          couponCode: couponResult?.code || undefined,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Failed to create order");
+      const r = await startCashfreeCheckout({ planId: selectedPlan.id, couponCode: couponResult?.code });
+      if (r.free && r.orderId) {
+        // 100%-off coupon: nothing to pay, plan is already active.
+        router.push(`/payment/success?order_id=${encodeURIComponent(r.orderId)}`);
+        return;
       }
-      const order = await res.json();
-
-      const Cashfree = await loadCashfreeSdk();
-      if (!Cashfree) throw new Error("Payment SDK failed to load");
-      const cashfree = Cashfree({ mode: order.cashfreeEnv === "PRODUCTION" ? "production" : "sandbox" });
-      // redirectTarget "_self" takes the whole tab to Cashfree's hosted
-      // page and back to our return_url (configured server-side) once
-      // done — simplest and most compatible option across devices/browsers.
-      await cashfree.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: "_self" });
+      // Otherwise the tab is being redirected to Cashfree; keep the button locked.
     } catch (e: any) {
-      setError(e.message || "Payment failed to start");
+      setError(e?.message || "Payment start nahi ho paya");
       setProcessing(false);
     }
   };
 
-  const formatPrice = (price: number) => {
-    return `₹${price.toFixed(2)}`;
-  };
+  const finalPrice = selectedPlan ? (couponResult ? couponResult.finalAmountInr : selectedPlan.priceInr) : 0;
+  const hasActive = !!subscription?.active && !subscription.admin && !!subscription.endsAt;
+  // What the user will actually get: stacks after the current expiry.
+  const newEndsAt = React.useMemo(() => {
+    if (!selectedPlan) return null;
+    const base = hasActive ? new Date(subscription!.endsAt!) : new Date();
+    return addMonthsClamped(base, selectedPlan.durationMonths);
+  }, [selectedPlan, hasActive, subscription]);
 
-  const formatDuration = (months: number) => {
-    if (months === 1) return "1 Month";
-    if (months === 6) return "6 Months";
-    if (months === 12) return "12 Months";
-    if (months === 24) return "24 Months";
-    return `${months} Months`;
-  };
+  const header = (
+    <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
+      <div className="mx-auto flex max-w-4xl items-center justify-between">
+        <h1 className="text-xl font-bold">{tr("Premium", "Premium")}</h1>
+        <div className="flex items-center gap-4 text-sm">
+          <Link href="/premium/history" className="text-muted-foreground hover:text-foreground">
+            {tr("Payment history", "Payment history")}
+          </Link>
+          <Link href="/dashboard" className="text-muted-foreground hover:text-foreground">
+            ← Dashboard
+          </Link>
+        </div>
+      </div>
+    </header>
+  );
 
   if (loading) {
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-          <div className="mx-auto max-w-4xl flex items-center justify-between">
-            <h1 className="text-xl font-bold">Premium Upgrade</h1>
-            <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground">
-              ← Dashboard
-            </Link>
-          </div>
-        </header>
+        {header}
         <main className="mx-auto max-w-4xl px-4 py-10">
           <div className="flex items-center justify-center py-20">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+            <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-primary" />
           </div>
         </main>
       </div>
@@ -203,201 +185,220 @@ export default function PremiumPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto max-w-4xl flex items-center justify-between">
-          <h1 className="text-xl font-bold">Premium Upgrade</h1>
-          <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground">
-            ← Dashboard
-          </Link>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-4xl px-4 py-10">
-        {/* Current Subscription */}
-        {subscription?.active && subscription.plan && (
-          <div className="mb-8 p-4 rounded-lg border bg-green-50 border-green-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-semibold text-green-800">Active Subscription</p>
-                <p className="text-sm text-green-700">
-                  {subscription.plan.name} • Expires {new Date(subscription.endsAt!).toLocaleDateString()}
-                </p>
-              </div>
-              <span className="px-3 py-1 rounded-full bg-green-100 text-green-800 text-sm font-medium">
-                Premium Active
-              </span>
-            </div>
+      {header}
+      <main className="mx-auto max-w-4xl px-4 py-8">
+        {loadError && (
+          <div className="mb-6 flex items-center justify-between rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <span>{loadError}</span>
+            <button onClick={loadData} className="rounded-md border border-red-300 px-3 py-1 font-medium hover:bg-red-100">
+              Retry
+            </button>
           </div>
         )}
 
-        {subscription?.active && !subscription.plan && (
-          <div className="mb-8 p-4 rounded-lg border bg-green-50 border-green-200">
-            <p className="font-semibold text-green-800">Admin / Premium Active</p>
+        {/* Current status */}
+        {subscription?.active && subscription.admin && (
+          <div className="mb-8 rounded-lg border border-green-200 bg-green-50 p-4">
+            <p className="font-semibold text-green-800">Admin — full premium access</p>
+          </div>
+        )}
+
+        {hasActive && subscription?.plan && (
+          <div
+            className={`mb-8 rounded-xl border p-5 ${
+              subscription.expiringSoon ? "border-amber-300 bg-amber-50" : "border-green-200 bg-green-50"
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className={`font-semibold ${subscription.expiringSoon ? "text-amber-900" : "text-green-800"}`}>
+                  {subscription.plan.name}
+                </p>
+                <p className={`text-sm ${subscription.expiringSoon ? "text-amber-800" : "text-green-700"}`}>
+                  {tr("Valid until", "Valid until")} <strong>{fmtDate(subscription.endsAt)}</strong> ·{" "}
+                  {subscription.daysLeft} {tr("days left", "din baaki")}
+                </p>
+              </div>
+              <button
+                onClick={() => selectPlan(subscription.plan!)}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                {tr("Renew / extend", "Renew / extend karein")}
+              </button>
+            </div>
+            {subscription.expiringSoon && (
+              <p className="mt-2 text-sm text-amber-800">
+                {tr(
+                  "Aapka plan jaldi khatam ho raha hai — abhi renew karein, baaki bacha hua time add ho jayega.",
+                  "Aapka plan jaldi khatam ho raha hai — abhi renew karein, baaki bacha hua time add ho jayega.",
+                )}
+              </p>
+            )}
           </div>
         )}
 
         {!subscription?.active && (
-          <div className="mb-8 p-4 rounded-lg border bg-amber-50 border-amber-200">
-            <p className="font-semibold text-amber-800">Free Tier</p>
+          <div className="mb-8 rounded-xl border border-amber-200 bg-amber-50 p-5">
+            <p className="font-semibold text-amber-800">
+              {subscription?.lastEndedAt ? tr("Your plan has expired", "Aapka plan khatam ho chuka hai") : "Free Tier"}
+            </p>
             <p className="text-sm text-amber-700">
-              You have access to 3 free practice sets per subject/chapter. Upgrade for unlimited access.
+              {subscription?.lastEndedAt
+                ? `${tr("Expired on", "Khatam hua")} ${fmtDate(subscription.lastEndedAt)}. `
+                : ""}
+              {tr(
+                "Free me har subject/chapter ke 3 practice sets milte hain. Unlimited access ke liye plan lein.",
+                "Free me har subject/chapter ke 3 practice sets milte hain. Unlimited access ke liye plan lein.",
+              )}
             </p>
           </div>
         )}
 
         {/* Plans */}
         <section className="mb-8">
-          <h2 className="text-2xl font-bold mb-6">Choose Your Plan</h2>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            {plans.map((plan) => (
-              <div
-                key={plan.id}
-                onClick={() => handleSelectPlan(plan)}
-                className={`relative p-4 rounded-lg border cursor-pointer transition-all ${
-                  selectedPlan?.id === plan.id
-                    ? "border-primary bg-primary/5 shadow-lg"
-                    : "border-border hover:border-primary/50 hover:shadow-md"
-                }`}
-              >
-                {selectedPlan?.id === plan.id && (
-                  <div className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs">
-                    ✓
-                  </div>
-                )}
-                <div className="text-center">
+          <h2 className="mb-5 text-2xl font-bold">{tr("Choose your plan", "Apna plan chunein")}</h2>
+          {plans.length === 0 && !loadError && <p className="text-sm text-muted-foreground">No plans are available right now.</p>}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {plans.map((plan) => {
+              const selected = selectedPlan?.id === plan.id;
+              return (
+                <button
+                  key={plan.id}
+                  type="button"
+                  onClick={() => selectPlan(plan)}
+                  aria-pressed={selected}
+                  className={`relative rounded-xl border p-4 text-center transition-all ${
+                    selected ? "border-primary bg-primary/5 shadow-lg" : "border-border hover:border-primary/50 hover:shadow-md"
+                  }`}
+                >
+                  {bestValueId === plan.id && (
+                    <span className="absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-foreground">
+                      Best value
+                    </span>
+                  )}
                   <h3 className="font-semibold">{plan.name}</h3>
-                  <p className="text-3xl font-bold my-2">{formatPrice(plan.priceInr)}</p>
-                  <p className="text-sm text-muted-foreground">{formatDuration(plan.durationMonths)}</p>
-                </div>
-              </div>
-            ))}
+                  <p className="my-2 text-3xl font-bold">{inr(plan.priceInr)}</p>
+                  <p className="text-sm text-muted-foreground">{durationLabel(plan.durationMonths)}</p>
+                  {plan.durationMonths > 1 && (
+                    <p className="mt-1 text-xs text-muted-foreground">≈ {inr(perMonth(plan))} / month</p>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </section>
 
-        {/* Coupon & Payment */}
+        {/* Checkout */}
         {selectedPlan && (
-          <section className="mb-8 p-6 rounded-lg border bg-card">
-            <h3 className="text-xl font-bold mb-4">{selectedPlan.name}</h3>
-            
+          <section className="mb-10 rounded-xl border bg-card p-6">
+            <h3 className="mb-4 text-xl font-bold">{selectedPlan.name}</h3>
+
             <div className="mb-4">
-              <label className="block text-sm font-medium mb-2">Coupon Code (Optional)</label>
+              <label className="mb-2 block text-sm font-medium">{tr("Coupon code (optional)", "Coupon code (optional)")}</label>
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={couponCode}
                   onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => e.key === "Enter" && !couponResult && applyCoupon()}
                   placeholder="Enter coupon code"
-                  className="flex-1 px-4 py-2 border border-input rounded-lg bg-background"
+                  className="flex-1 rounded-lg border border-input bg-background px-4 py-2"
                   disabled={!!couponResult}
                 />
                 {couponResult ? (
                   <button
-                    onClick={() => { setCouponCode(""); setCouponResult(null); }}
-                    className="px-4 py-2 border border-input rounded-lg bg-background hover:bg-muted"
+                    onClick={() => {
+                      setCouponCode("");
+                      setCouponResult(null);
+                    }}
+                    className="rounded-lg border border-input bg-background px-4 py-2 hover:bg-muted"
                   >
                     Remove
                   </button>
                 ) : (
                   <button
-                    onClick={validateCoupon}
-                    disabled={!couponCode.trim() || processing}
-                    className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50"
+                    onClick={applyCoupon}
+                    disabled={!couponCode.trim() || couponBusy || processing}
+                    className="rounded-lg bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                   >
-                    Apply
+                    {couponBusy ? "…" : "Apply"}
                   </button>
                 )}
               </div>
-              {couponError && <p className="text-sm text-red-600 mt-1">{couponError}</p>}
+              {couponError && <p className="mt-1 text-sm text-red-600">{couponError}</p>}
               {couponResult && (
-                <div className="mt-2 p-3 rounded-lg bg-green-50 border border-green-200">
-                  <p className="text-sm text-green-800">
-                    <strong>{couponResult.code}</strong> applied: {couponResult.description}
-                  </p>
-                  <p className="text-sm text-green-800">
-                    Discount: {formatPrice(couponResult.discount)} → Pay: <strong>{formatPrice(couponResult.finalAmountInr)}</strong>
-                  </p>
+                <div className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+                  <strong>{couponResult.code}</strong> applied{couponResult.description ? `: ${couponResult.description}` : ""} — you save{" "}
+                  <strong>{inr(couponResult.discount)}</strong>
                 </div>
               )}
             </div>
 
-            <div className="text-right text-lg font-semibold mb-4">
-              Total: {couponResult ? formatPrice(couponResult.finalAmountInr) : formatPrice(selectedPlan.priceInr)}
-            </div>
-
-            {/* BUG FIX: warn active subscribers before they lose remaining paid days */}
-            {subscription?.active && (
-              <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
-                <p className="text-sm text-amber-800 font-medium">
-                  You already have an active plan{subscription.endsAt ? ` (expires ${new Date(subscription.endsAt).toLocaleDateString()})` : ""}.
-                </p>
-                <p className="text-sm text-amber-700 mt-1">
-                  Buying a new plan replaces your current one starting today — any remaining days on your
-                  current plan will not be added or refunded.
-                </p>
-                <label className="flex items-center gap-2 mt-2 text-sm text-amber-900">
-                  <input
-                    type="checkbox"
-                    checked={confirmReplace}
-                    onChange={(e) => setConfirmReplace(e.target.checked)}
-                  />
-                  I understand my current plan will be replaced, not extended.
-                </label>
+            {/* Order summary */}
+            <div className="mb-4 space-y-1 rounded-lg bg-muted/50 p-4 text-sm">
+              <div className="flex justify-between">
+                <span>{selectedPlan.name}</span>
+                <span>{inr(selectedPlan.priceInr)}</span>
               </div>
-            )}
+              {couponResult && (
+                <div className="flex justify-between text-green-700">
+                  <span>Coupon ({couponResult.code})</span>
+                  <span>− {inr(couponResult.discount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between border-t border-border pt-2 text-lg font-semibold">
+                <span>Total</span>
+                <span>{finalPrice <= 0 ? "FREE" : inr(finalPrice)}</span>
+              </div>
+              {newEndsAt && (
+                <p className="pt-2 text-xs text-muted-foreground">
+                  {hasActive
+                    ? tr(
+                        `Aapka bacha hua time safe rahega — naya plan ${fmtDate(subscription!.endsAt)} ke baad add hoga. Nayi expiry: `,
+                        `Aapka bacha hua time safe rahega — naya plan ${fmtDate(subscription!.endsAt)} ke baad add hoga. Nayi expiry: `,
+                      )
+                    : tr("Premium abhi se active hoga, expiry: ", "Premium abhi se active hoga, expiry: ")}
+                  <strong>{fmtDate(newEndsAt.toISOString())}</strong>
+                </p>
+              )}
+            </div>
 
             <button
               onClick={payNow}
-              disabled={processing || (!!subscription?.active && !confirmReplace)}
-              className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 disabled:opacity-50"
+              disabled={processing}
+              className="w-full rounded-lg bg-primary py-3 font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {processing ? "Opening secure checkout…" : "Pay Securely via Cashfree"}
+              {processing
+                ? tr("Opening secure checkout…", "Secure checkout khul raha hai…")
+                : finalPrice <= 0
+                  ? tr("Activate for free", "Free me activate karein")
+                  : `${tr("Pay", "Pay")} ${inr(finalPrice)} ${tr("securely", "securely")}`}
             </button>
-            <p className="mt-2 text-xs text-center text-muted-foreground">
-              🔒 You&apos;ll be taken to Cashfree&apos;s secure payment page (cards, UPI, netbanking, wallets). We never see or store your card/UPI details.
+            <p className="mt-2 text-center text-xs text-muted-foreground">
+              🔒 Cards, UPI, netbanking, wallets — powered by Cashfree. Hum aapka card/UPI detail kabhi store nahi karte.
             </p>
 
-            {error && (
-              <div className="mt-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
-                {error}
-              </div>
-            )}
-
-            {success && (
-              <div className="mt-4 p-3 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm">
-                {success}
-              </div>
-            )}
+            {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
           </section>
         )}
 
         {/* Features */}
         <section>
-          <h2 className="text-2xl font-bold mb-6">Premium Features</h2>
+          <h2 className="mb-5 text-2xl font-bold">{tr("What you get", "Premium me kya milta hai")}</h2>
           <div className="grid gap-4 md:grid-cols-3">
-            <div className="p-4 rounded-lg border bg-card">
-              <h4 className="font-semibold mb-2">Unlimited Practice</h4>
-              <p className="text-sm text-muted-foreground">No limits on question bank practice sets per subject/chapter</p>
-            </div>
-            <div className="p-4 rounded-lg border bg-card">
-              <h4 className="font-semibold mb-2">All Mock Tests</h4>
-              <p className="text-sm text-muted-foreground">Access to all 60+ premium mock tests with detailed analytics</p>
-            </div>
-            <div className="p-4 rounded-lg border bg-card">
-              <h4 className="font-semibold mb-2">Chapter PDFs</h4>
-              <p className="text-sm text-muted-foreground">Download all chapter PDFs and answer keys</p>
-            </div>
-            <div className="p-4 rounded-lg border bg-card">
-              <h4 className="font-semibold mb-2">Weak Areas Practice</h4>
-              <p className="text-sm text-muted-foreground">AI-generated practice from your mistakes</p>
-            </div>
-            <div className="p-4 rounded-lg border bg-card">
-              <h4 className="font-semibold mb-2">Progress Analytics</h4>
-              <p className="text-sm text-muted-foreground">Detailed performance tracking and recommendations</p>
-            </div>
-            <div className="p-4 rounded-lg border bg-card">
-              <h4 className="font-semibold mb-2">Priority Support</h4>
-              <p className="text-sm text-muted-foreground">Faster response times and dedicated help</p>
-            </div>
+            {[
+              ["Unlimited Practice", "Question bank practice sets par koi limit nahi"],
+              ["All Mock Tests", "Saare premium mocks, detailed analytics ke saath"],
+              ["Chapter PDFs", "Saare chapter PDFs aur answer keys download karein"],
+              ["Weak Areas Practice", "Aapki galtiyon se bani targeted practice"],
+              ["Progress Analytics", "Topic-wise performance tracking aur recommendations"],
+              ["Priority Support", "Tez response aur dedicated help"],
+            ].map(([t, d]) => (
+              <div key={t} className="rounded-lg border bg-card p-4">
+                <h4 className="mb-1 font-semibold">{t}</h4>
+                <p className="text-sm text-muted-foreground">{d}</p>
+              </div>
+            ))}
           </div>
         </section>
       </main>

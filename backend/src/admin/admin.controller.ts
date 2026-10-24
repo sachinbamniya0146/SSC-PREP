@@ -1,3 +1,4 @@
+import { grantOrExtendSubscription } from '../monetization/subscription.util';
 import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Patch, Delete, BadRequestException, NotFoundException } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -298,32 +299,21 @@ export class AdminController {
     const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
     if (!plan || !plan.isActive) throw new BadRequestException('Plan not found or inactive');
 
-    // Cancel any existing active subscription
-    await this.prisma.subscription.updateMany({
-      where: { userId, status: 'ACTIVE' },
-      data: { status: 'CANCELLED' },
+    // Extends instead of replacing: remaining paid days are never destroyed.
+    const grant = await grantOrExtendSubscription(this.prisma as any, {
+      userId,
+      planId: plan.id,
+      months: plan.durationMonths,
     });
-
-    const endsAt = new Date();
-    endsAt.setMonth(endsAt.getMonth() + plan.durationMonths);
-
-    const sub = await this.prisma.subscription.create({
-      data: {
-        userId,
-        planId: plan.id,
-        status: 'ACTIVE',
-        startsAt: new Date(),
-        endsAt,
-      },
-    });
+    const sub = grant.subscription;
 
     await this.auditLogService.log({
       action: 'SUBSCRIPTION_GRANTED_BY_ADMIN',
       targetEntity: 'Subscription',
       entityId: sub.id,
-      metadataJson: { userId, planId: plan.id, durationMonths: plan.durationMonths },
+      metadataJson: { userId, planId: plan.id, durationMonths: plan.durationMonths, extended: grant.extended },
     });
-    return { ok: true, subscription: sub };
+    return { ok: true, subscription: sub, extended: grant.extended };
   }
 
   @Post('subscriptions/bulk')
@@ -339,22 +329,10 @@ export class AdminController {
         continue;
       }
 
-      await this.prisma.subscription.updateMany({
-        where: { userId: user.id, status: 'ACTIVE' },
-        data: { status: 'CANCELLED' },
-      });
-
-      const endsAt = new Date();
-      endsAt.setMonth(endsAt.getMonth() + plan.durationMonths);
-
-      await this.prisma.subscription.create({
-        data: {
-          userId: user.id,
-          planId: plan.id,
-          status: 'ACTIVE',
-          startsAt: new Date(),
-          endsAt,
-        },
+      await grantOrExtendSubscription(this.prisma as any, {
+        userId: user.id,
+        planId: plan.id,
+        months: plan.durationMonths,
       });
 
       await this.auditLogService.log({

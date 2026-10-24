@@ -817,6 +817,9 @@ model Payment {
   subscription Subscription? @relation(fields: [subscriptionId], references: [id])
   referralEarning ReferralEarning?
 
+  // History page (userId, newest first) and the PENDING reconciler (status, age).
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
   @@map("payments")
 }
 

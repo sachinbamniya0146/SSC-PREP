@@ -1,3 +1,4 @@
+import { grantOrExtendSubscription } from '../monetization/subscription.util';
 import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { randomBytes } from 'crypto';
@@ -219,11 +220,8 @@ export class ReferralService {
         });
         const plan = await this.prisma.plan.findFirst({ where: { isActive: true } });
         if (plan) {
-          const now = new Date();
-          const ends = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
-          await this.prisma.subscription.create({
-            data: { userId: referrerId, planId: plan.id, status: 'ACTIVE', startsAt: now, endsAt: ends },
-          });
+          // Appends 30 days after any running plan (never overwrites paid time).
+          await grantOrExtendSubscription(this.prisma as any, { userId: referrerId, planId: plan.id, days: 30 });
         }
       }
     }
@@ -239,20 +237,10 @@ export class ReferralService {
         where: { userId: referrerId, action: 'REFERRAL_6MO_UPGRADE_GRANTED' },
       });
       if (!alreadyGranted) {
-        // Cancel any existing active subscription and grant a fresh 6-month one,
-        // same pattern monetization.service.ts uses for a real plan purchase.
-        await this.prisma.subscription.updateMany({
-          where: { userId: referrerId, status: 'ACTIVE' },
-          data: { status: 'CANCELLED' },
-        });
-        const now = new Date();
-        const ends = new Date(now);
-        ends.setMonth(ends.getMonth() + 6);
         const plan = await this.prisma.plan.findFirst({ where: { isActive: true }, orderBy: { priceInr: 'desc' } });
         if (plan) {
-          await this.prisma.subscription.create({
-            data: { userId: referrerId, planId: plan.id, status: 'ACTIVE', startsAt: now, endsAt: ends },
-          });
+          // 6 months appended to whatever the referrer already has.
+          await grantOrExtendSubscription(this.prisma as any, { userId: referrerId, planId: plan.id, months: 6 });
           await this.prisma.auditLog.create({
             data: {
               userId: referrerId,

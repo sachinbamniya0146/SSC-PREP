@@ -94,6 +94,9 @@ function PaymentSuccessContent() {
             <Link href="/premium" className="inline-block w-full py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90">
               View Subscription
             </Link>
+            <Link href="/premium/history" className="mt-3 block text-sm font-medium text-primary hover:underline">
+              View payment history &amp; invoice
+            </Link>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <Link href="/vocabulary" className="rounded-lg border border-border py-2.5 text-sm font-semibold hover:border-primary">📖 Vocabulary</Link>
               <Link href="/question-bank-practice" className="rounded-lg border border-border py-2.5 text-sm font-semibold hover:border-primary">✍️ Practice</Link>

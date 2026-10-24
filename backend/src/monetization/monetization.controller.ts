@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Req, Param, ParseUUIDPipe } from '@nestjs/common';
 import type { Request } from 'express';
 import { MonetizationService } from './monetization.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -24,8 +24,28 @@ export class MonetizationController {
   }
 
   @Post('coupon/validate')
-  validateCoupon(@Body() body: { code: string; amountInr: number }) {
-    return this.service.validateCoupon(body.code, body.amountInr);
+  validateCoupon(
+    @CurrentUser() user: { userId: string },
+    @Body() body: { code: string; amountInr: number },
+  ) {
+    // userId lets the service reject a coupon this user already redeemed.
+    return this.service.validateCoupon(body.code, body.amountInr, user.userId);
+  }
+
+  @Get('history')
+  history(@CurrentUser() user: { userId: string }) {
+    return this.service.paymentHistory(user.userId);
+  }
+
+  @Get('invoice/:id')
+  invoice(@CurrentUser() user: { userId: string }, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.invoice(user.userId, id);
+  }
+
+  // One-click renewal of the plan the user last had; remaining days are kept.
+  @Post('renew')
+  renew(@CurrentUser() user: { userId: string }, @Body() body: { couponCode?: string }) {
+    return this.service.renewOrder(user.userId, body?.couponCode);
   }
 
   @Post('order')

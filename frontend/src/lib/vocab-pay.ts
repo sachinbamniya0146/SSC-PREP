@@ -31,10 +31,17 @@ export type PayProduct =
   | { vocabUnlockAll: true }
   | { vocabRevisionSkip: true }
   | { vocabSubscription: true }
-  | { planId: string };
+  | { planId: string; couponCode?: string }
+  | { chapterId: string }
+  | { mockTemplateId: string };
 
-/** Creates the order and hands off to Cashfree checkout (redirects the tab). Throws on failure. */
-export async function startCashfreeCheckout(product: PayProduct): Promise<void> {
+/**
+ * Creates the order and hands off to Cashfree checkout (redirects the tab).
+ * Resolves with `{ free: true, orderId }` when a 100%-off coupon made the order
+ * free (nothing to pay — access is already granted); otherwise the page is
+ * redirected to Cashfree and this never resolves meaningfully. Throws on failure.
+ */
+export async function startCashfreeCheckout(product: PayProduct): Promise<{ free: boolean; orderId?: string }> {
   const res = await fetchAuth(`${API_BASE}/payments/order`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -45,8 +52,10 @@ export async function startCashfreeCheckout(product: PayProduct): Promise<void> 
     throw new Error(d?.message || "Order create nahi hua");
   }
   const order = await res.json();
+  if (order.free) return { free: true, orderId: order.orderId };
   const Cashfree = await loadCashfreeSdk();
   if (!Cashfree) throw new Error("Payment SDK load nahi hua");
   const cashfree = Cashfree({ mode: order.cashfreeEnv === "PRODUCTION" ? "production" : "sandbox" });
   await cashfree.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: "_self" });
+  return { free: false, orderId: order.orderId };
 }
