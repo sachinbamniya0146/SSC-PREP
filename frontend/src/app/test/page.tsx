@@ -32,6 +32,9 @@ type UgQ = {
   questionImageUrl?: string | null;
   options: { key: string; text: string; textHi?: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null; imageUrl?: string | null }[];
   chapter: string;
+  // CBT section name (from the mock paper blueprint), used for the section tabs
+  section?: string | null;
+  questionNo?: number | string | null;
   examName?: string | null;
   year?: number | null;
   shift?: string | null;
@@ -103,9 +106,9 @@ const paletteBg: Record<QStatus, string> = {
   "not-visited": "bg-muted text-muted-foreground border-border",
   answered: "bg-success text-success-foreground border-success",
   "not-answered": "bg-danger text-danger-foreground border-danger",
-  marked: "bg-primary text-primary-foreground border-primary",
+  marked: "bg-accent text-accent-foreground border-accent",
   "answered-marked":
-    "bg-primary text-primary-foreground border-success ring-2 ring-success",
+    "bg-success text-success-foreground border-accent ring-2 ring-accent",
 };
 
 const legendItems = [
@@ -120,6 +123,76 @@ function formatSec(total: number) {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+// Paper API sends Hindi options as a separate `optionsHi` list; merge them into the option objects.
+function mergeHiOptions(options: any, hi: any): UgQ["options"] {
+  const base: UgQ["options"] = Array.isArray(options) ? options : [];
+  if (!Array.isArray(hi)) return base;
+  return base.map((o) => {
+    if (o.textHi) return o;
+    const h = hi.find((x: any) => x && String(x.key).toUpperCase() === String(o.key).toUpperCase());
+    return h?.text ? { ...o, textHi: h.text } : o;
+  });
+}
+
+type StatusCounts = { notVisited: number; notAnswered: number; answered: number; marked: number; answeredMarked: number };
+
+// Question palette (shared by the desktop sidebar and the mobile drawer). Plain component, no hooks.
+function PaletteBody({
+  items,
+  idx,
+  statusOf,
+  counts,
+  onJump,
+  cols,
+}: {
+  items: { x: UgQ; i: number }[];
+  idx: number;
+  statusOf: (qid: string) => QStatus;
+  counts: StatusCounts;
+  onJump: (i: number) => void;
+  cols: string;
+}) {
+  const legendCounts: Record<QStatus, number> = {
+    "not-visited": counts.notVisited,
+    answered: counts.answered,
+    "not-answered": counts.notAnswered,
+    marked: counts.marked,
+    "answered-marked": counts.answeredMarked,
+  };
+  return (
+    <>
+      <div className={`mt-3 grid gap-1.5 ${cols}`}>
+        {items.map(({ x, i }) => {
+          const st = statusOf(x.id);
+          return (
+            <button
+              key={x.id}
+              onClick={() => onJump(i)}
+              aria-label={`Question ${i + 1}: ${STATUS_LABEL[st]}`}
+              aria-current={i === idx ? "true" : undefined}
+              className={`relative flex h-9 w-full items-center justify-center rounded-md border text-xs font-bold transition ${paletteBg[st]} ${i === idx ? "ring-2 ring-offset-2 ring-offset-background ring-[hsl(var(--ring))]" : ""}`}
+            >
+              {i + 1}
+              {(st === "marked" || st === "answered-marked") && (
+                <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-background bg-accent" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-1.5 border-t border-border pt-3">
+        {legendItems.map((l) => (
+          <div key={l.s} className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span className={`h-3.5 w-3.5 shrink-0 rounded border ${paletteBg[l.s as QStatus]}`} />
+            <span className="min-w-0 flex-1">{l.label}</span>
+            <span className="font-bold text-foreground">{legendCounts[l.s as QStatus]}</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
 }
 
 // Simple ring component for results
@@ -186,6 +259,11 @@ export default function TestPage() {
   // (checked and set synchronously, before any await) makes every submit
   // tap after the first a no-op until the in-flight one finishes.
   const submittingRef = React.useRef(false);
+  // UI mirror of submittingRef (disables the Submit buttons + shows the "submitting" overlay)
+  const [submitBusy, setSubmitBusy] = React.useState(false);
+  // true once we are navigating to /results/[id] — keeps the overlay up (no flash of the exam screen)
+  const navigatingRef = React.useRef(false);
+  const [helpOpen, setHelpOpen] = React.useState(false);
   // Offline-safe submit: true while the final submit is queued on the device waiting for internet.
   const [offlinePending, setOfflinePending] = React.useState(false);
   const [online, setOnline] = React.useState(true);
@@ -371,6 +449,27 @@ export default function TestPage() {
           return;
         }
 
+        // Sectional / Question-Bank-Practice / "retry wrong" sets are stashed in sessionStorage by the page
+        // that launched this one — show their real size instead of the generic fallback numbers.
+        try {
+          const raw = sessionStorage.getItem("ssc_sectional_set");
+          if (raw) {
+            const sd = JSON.parse(raw);
+            const sq: any[] = Array.isArray(sd?.questions) ? sd.questions : [];
+            if (sq.length > 0) {
+              setPreMeta({
+                title: sd?.title || "Practice Test",
+                durationMinutes: Math.max(1, Math.round(sq.length * 0.5)),
+                totalQuestions: sq.length,
+                totalMarks: sq.reduce((a: number, x: any) => a + (x?.marks ?? 1), 0) || sq.length,
+              });
+              return;
+            }
+          }
+        } catch {
+          /* ignore — fall through to the generic numbers */
+        }
+
         if (chapId) {
           setPreMeta({ title: "Chapter-wise Practice", durationMinutes: 15, totalQuestions: 25, totalMarks: 25 });
           return;
@@ -508,12 +607,14 @@ export default function TestPage() {
           ? paper.sections.flatMap((s: any) =>
               (s.questions || []).map((qq: any) => ({
                 id: qq.id,
+                section: s.name || null,
+                questionNo: qq.questionNo ?? null,
                 questionText: qq.questionText,
                 questionTextHindi: qq.questionTextHindi,
                 questionDiagramType: qq.questionDiagramType,
                 questionDiagramLabels: qq.questionDiagramLabels,
                 questionImageUrl: qq.questionImageUrl,
-                options: qq.options,
+                options: mergeHiOptions(qq.options, qq.optionsHi),
                 chapter: qq.chapter || "",
                 examName: qq.examName,
                 year: qq.year,
@@ -712,53 +813,78 @@ export default function TestPage() {
     };
   }, [answers, attemptId, phase]);
 
-  // ---- v4 §31 — keyboard shortcuts (real exam feel) ----
+  // ---- keyboard shortcuts (real CBT feel) ----
+  // A-D / Alt+1-4 choose · Space or → save & next · ← / Shift+Space previous · M mark & next · C clear · P palette · ? help
   React.useEffect(() => {
-    if (phase !== "exam" || paused) return;
+    if (phase !== "exam" || paused || reviewOpen || offlinePending) return;
     const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+      const q = questions[idx];
       if (e.altKey && ["1", "2", "3", "4"].includes(e.key)) {
         e.preventDefault();
-        const q = questions[idx];
         if (q) chooseOption(q.id, String.fromCharCode(64 + Number(e.key)));
         return;
       }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === " " && !e.shiftKey) {
         e.preventDefault();
         saveAndNext();
         return;
       }
-      if (e.key === " " && e.shiftKey) {
+      if ((e.key === " " && e.shiftKey) || e.key === "ArrowLeft") {
         e.preventDefault();
         if (idx > 0) markVisited(idx - 1, questions[idx - 1].id);
         return;
       }
-      if (e.key.toLowerCase() === "p") {
-        setPaletteOpen((p) => !p);
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        if (idx < questions.length - 1) markVisited(idx + 1, questions[idx + 1].id);
         return;
       }
-      if (e.key === "Escape") setPaletteOpen(false);
+      const k = e.key.toLowerCase();
+      if (q && ["a", "b", "c", "d"].includes(k) && q.options.some((o) => (o.key || "").toUpperCase() === k.toUpperCase())) {
+        chooseOption(q.id, k.toUpperCase());
+        return;
+      }
+      if (k === "m") { markAndNext(); return; }
+      if (k === "c") { clearAnswer(); return; }
+      if (k === "p") { setPaletteOpen((p) => !p); return; }
+      if (e.key === "?") { setHelpOpen((p) => !p); return; }
+      if (e.key === "Escape") { setPaletteOpen(false); setHelpOpen(false); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, paused, idx, questions, answers, status]);
+  }, [phase, paused, reviewOpen, offlinePending, idx, questions, answers, status]);
 
+  // Status of one question for the palette (derived — never stale vs answers/visited).
+  const statusOf = (qid: string): QStatus => status[qid] ?? (visited[qid] ? "not-answered" : "not-visited");
+
+  const goNext = () => {
+    if (idx < questions.length - 1) markVisited(idx + 1, questions[idx + 1].id);
+    else setReviewOpen(true);
+  };
+
+  // Toggle the review flag on the current question (keeps the answer).
   const markForReview = () => {
     const q = questions[idx];
     if (!q) return;
-    setStatus((p) => ({
-      ...p,
-      [q.id]:
-        answers[q.id]
-          ? "answered-marked"
-          : p[q.id] === "marked" || p[q.id] === "answered-marked"
-            ? answers[q.id] ? "answered-marked" : "not-answered"
-            : "marked",
-      // toggle: if already marked, unmark
-      ...(p[q.id] === "marked" || p[q.id] === "answered-marked"
-        ? { [q.id]: answers[q.id] ? "answered" : "not-answered" }
-        : {}),
-    }));
+    setStatus((p) => {
+      const isMarked = p[q.id] === "marked" || p[q.id] === "answered-marked";
+      const has = !!answers[q.id];
+      return { ...p, [q.id]: isMarked ? (has ? "answered" : "not-answered") : has ? "answered-marked" : "marked" };
+    });
+  };
+
+  // "Mark for Review & Next" (SSC CBT button): flag it for review and move on.
+  const markAndNext = () => {
+    const q = questions[idx];
+    if (!q) return;
+    setVisited((p) => ({ ...p, [q.id]: true }));
+    setStatus((p) => ({ ...p, [q.id]: answers[q.id] ? "answered-marked" : "marked" }));
+    goNext();
   };
 
   const clearAnswer = () => {
@@ -776,18 +902,35 @@ export default function TestPage() {
     );
   };
 
+  // "Save & Next": BUGFIX — a question with NO answer used to turn green ("answered") here. It now only counts as
+  // answered when an option is actually selected; otherwise it stays "not answered" (or "marked" if flagged).
   const saveAndNext = () => {
     const q = questions[idx];
     if (q) {
       setVisited((p) => ({ ...p, [q.id]: true }));
       setStatus((p) => {
         const cur = p[q.id];
-        if (cur === "not-answered" || !cur) return { ...p, [q.id]: "answered" };
-        return p;
+        if (answers[q.id]) return { ...p, [q.id]: cur === "answered-marked" || cur === "marked" ? "answered-marked" : "answered" };
+        if (cur === "marked") return p;
+        return { ...p, [q.id]: "not-answered" };
       });
     }
-    if (idx < questions.length - 1) markVisited(idx + 1, questions[idx + 1].id);
-    else setReviewOpen(true);
+    goNext();
+  };
+
+  // Practice results → "retry the questions I got wrong" (optionally + skipped), as a fresh practice set.
+  const retryWrong = (includeSkipped: boolean) => {
+    const pick = questions.filter((q) => (includeSkipped ? !result[q.id]?.correct : !!result[q.id] && !result[q.id].correct));
+    if (pick.length === 0) return;
+    try {
+      sessionStorage.setItem(
+        "ssc_sectional_set",
+        JSON.stringify({ title: includeSkipped ? "Retry — wrong + skipped" : "Retry — wrong answers", questions: pick.map((q) => ({ ...q, section: null })) }),
+      );
+      window.location.href = "/test";
+    } catch {
+      /* storage blocked — ignore */
+    }
   };
 
   // ---- Submit ----
@@ -797,6 +940,7 @@ export default function TestPage() {
     // never both pass the check.
     if (submittingRef.current) return;
     submittingRef.current = true;
+    setSubmitBusy(true);
     try {
     const qs = questions;
     setRunning(false);
@@ -880,61 +1024,13 @@ export default function TestPage() {
         sessionStorage.removeItem("ssc_active_attempt");
         clearDraft(activeAttempt);
 
-        // Single source of truth for the results screen: the same
-        // attemptDetail() data the /results/[attemptId] page already uses,
-        // with correctAnswer/isCorrect/marks/negativeMarks per question —
-        // no client-side re-derivation, no extra recording calls.
-        const dr = await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}`, {
-          headers: getAuthHeaders(),
-        });
-        // BUGFIX: previously `.catch(() => null)` swallowed a failed fetch
-        // and silently rendered a blank results screen. Submit already
-        // succeeded at this point (or was already-submitted) — the score
-        // IS safely recorded server-side — so on a failed/erroring detail
-        // fetch, send the student to the dedicated /results/[attemptId]
-        // page (which does its own fetch/retry) instead of showing a
-        // broken in-place screen with no data.
-        if (!dr.ok) {
-          window.location.href = `/results/${activeAttempt}`;
-          return;
-        }
-        const detail = await dr.json().catch(() => null);
-        if (!detail || !Array.isArray(detail.questions)) {
-          window.location.href = `/results/${activeAttempt}`;
-          return;
-        }
-        const res: { [qid: string]: Attempt } = {};
-        const expl: typeof explanations = {};
-        let score = 0;
-        if (detail && Array.isArray(detail.questions)) {
-          for (const q of detail.questions) {
-            // BUGFIX: explanation/correctAnswer captured for EVERY question
-            // here (answered or skipped) — previously this whole block was
-            // skipped for unattempted questions, so they never got a
-            // correctAnswer or explanation on the results screen either.
-            expl[q.questionId] = {
-              correctAnswer: String(q.correctAnswer ?? "").trim().toUpperCase(),
-              explanation: q.explanation ?? null,
-              explanationHindi: q.explanationHindi ?? null,
-              explanationSource: q.explanationSource ?? null,
-            };
-            if (!q.selectedOption) continue; // unattempted — no score delta, no `result` entry
-            const delta = q.isCorrect ? (q.marks ?? 2) : -(q.negativeMarks ?? 0.5);
-            res[q.questionId] = {
-              correct: !!q.isCorrect,
-              correctAnswer: String(q.correctAnswer ?? "").trim().toUpperCase(),
-              selectedOption: q.selectedOption,
-              scoreDelta: delta,
-              explanation: q.explanation ?? null,
-              explanationHindi: q.explanationHindi ?? null,
-              explanationSource: q.explanationSource ?? null,
-            };
-            score += delta;
-          }
-        }
-        setResult(res);
-        setExplanations(expl);
-        setFinalScore(typeof detail?.score === "number" ? detail.score : score);
+        // The server has scored the attempt. /results/[attemptId] is the single full-analytics screen
+        // (rank, percentile, topper compare, subject/chapter charts, time analysis, wrong-only retry),
+        // so go there directly instead of rendering a second, thinner copy here.
+        navigatingRef.current = true;
+        stayInExam = true; // skip the in-place results phase in `finally`
+        window.location.href = `/results/${activeAttempt}`;
+        return;
       } catch {
         // BUGFIX: this used to silently swallow ANY exception in the block
         // above (including a genuine network failure on the submit POST
@@ -1095,6 +1191,7 @@ export default function TestPage() {
       // a failed authoritative submit, an exception, or normal completion)
       // — otherwise a genuine failure would permanently lock out Submit.
       submittingRef.current = false;
+      if (!navigatingRef.current) setSubmitBusy(false);
     }
   };
 
@@ -1415,7 +1512,13 @@ export default function TestPage() {
               <p className="mt-1 text-xs text-muted-foreground">Take another test, or review your mistakes below.</p>
             </div>
             <div className="flex gap-2">
-              <a href="/test" className="btn btn-primary">New Test →</a>
+              {wrong > 0 && (
+                <button onClick={() => retryWrong(false)} className="btn btn-primary">↻ Retry wrong ({wrong})</button>
+              )}
+              {wrong + skipped > 0 && skipped > 0 && (
+                <button onClick={() => retryWrong(true)} className="btn btn-outline">↻ Wrong + skipped ({wrong + skipped})</button>
+              )}
+              <a href="/test" className="btn btn-outline">New Test →</a>
               <a href="/question-bank" className="btn btn-outline">Question Bank</a>
             </div>
           </div>
@@ -1588,6 +1691,40 @@ export default function TestPage() {
 
   // ============ EXAM SCREEN ============
   const q = questions[idx];
+  const tally = (list: UgQ[]): StatusCounts => {
+    const c: StatusCounts = { notVisited: 0, notAnswered: 0, answered: 0, marked: 0, answeredMarked: 0 };
+    for (const x of list) {
+      const st = statusOf(x.id);
+      if (st === "not-visited") c.notVisited++;
+      else if (st === "not-answered") c.notAnswered++;
+      else if (st === "answered") c.answered++;
+      else if (st === "marked") c.marked++;
+      else c.answeredMarked++;
+    }
+    return c;
+  };
+  const allCounts = tally(questions);
+  const sectionNames = Array.from(new Set(questions.map((x) => x.section || ""))).filter(Boolean);
+  const hasSections = sectionNames.length > 1;
+  const curSection = q?.section || "";
+  const paletteItems = questions.map((x, i) => ({ x, i })).filter(({ x }) => !hasSections || (x.section || "") === curSection);
+  const paletteCounts = hasSections ? tally(paletteItems.map((p) => p.x)) : allCounts;
+  const jumpToSection = (name: string) => {
+    const first = questions.findIndex((x) => x.section === name);
+    if (first >= 0) markVisited(first, questions[first].id);
+  };
+  const unansweredFirst = () => {
+    const i = questions.findIndex((x) => {
+      const st = statusOf(x.id);
+      return st === "not-visited" || st === "not-answered" || st === "marked";
+    });
+    if (i >= 0) {
+      markVisited(i, questions[i].id);
+      setReviewOpen(false);
+    }
+  };
+  const lowTime = timeLeft > 0 && timeLeft <= 300;
+  const unansweredTotal = allCounts.notVisited + allCounts.notAnswered + allCounts.marked;
 
   return (
     <div ref={screenRef} className="min-h-screen bg-muted/40 text-foreground">
@@ -1642,19 +1779,61 @@ export default function TestPage() {
               <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-bold text-success">
                 +{questions[0]?.marks ?? 1} / −{questions[0]?.negativeMarks ?? 0.25}
               </span>
-              <p className="text-[11px] text-muted-foreground">Candidate · Practice</p>
+              <p className="text-[11px] text-muted-foreground">{isExamMode ? "Candidate · Mock Exam" : "Candidate · Practice"}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={togglePause} className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted sm:px-3">
-              {paused ? "▶ Resume" : "⏸ Pause"}
+            <button onClick={() => setHelpOpen(true)} className="hidden rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted lg:inline-flex" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
+              ⌨
             </button>
-            <div className={`rounded-lg border px-3 py-1 font-mono text-sm font-bold sm:px-4 sm:py-1.5 sm:text-base ${timelineColor} ${paused ? "opacity-50" : ""}`}>
+            {/* Pause is practice-only: in a server-authoritative exam the server clock keeps running, so a client pause would be misleading. */}
+            {!isExamMode && (
+              <button onClick={togglePause} className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted sm:px-3">
+                {paused ? "▶ Resume" : "⏸ Pause"}
+              </button>
+            )}
+            <div
+              role="timer"
+              aria-label="Time left"
+              className={`rounded-lg border px-3 py-1 font-mono text-sm font-bold tabular-nums sm:px-4 sm:py-1.5 sm:text-base ${timelineColor} ${paused ? "opacity-50" : ""} ${timeLeft > 0 && timeLeft <= 60 ? "animate-pulse" : ""}`}
+            >
               {formatSec(timeLeft)}
             </div>
           </div>
         </div>
+        {hasSections && (
+          <div className="mx-auto max-w-7xl overflow-x-auto px-3 pb-2 sm:px-4" role="tablist" aria-label="Sections">
+            <div className="flex w-max gap-2">
+              {sectionNames.map((name) => {
+                const list = questions.filter((x) => x.section === name);
+                const c = tally(list);
+                const active = name === curSection;
+                return (
+                  <button
+                    key={name}
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => jumpToSection(name)}
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                      active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    <span className="max-w-[10rem] truncate">{name}</span>
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] ${active ? "bg-primary-foreground/20" : "bg-muted"}`}>
+                      {c.answered + c.answeredMarked}/{list.length}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {lowTime && (
+          <div className="bg-warning/15 px-3 py-1 text-center text-[11px] font-semibold text-warning" role="status">
+            {timeLeft <= 60 ? tr("Less than 1 minute left!", "1 minute se kam bacha hai!") : tr("Last 5 minutes — review your marked questions.", "Last 5 minutes — marked questions check karo.")}
+          </div>
+        )}
       </div>
 
       <div className="mx-auto flex max-w-7xl gap-6 px-2 py-3 pb-28 sm:px-4 sm:py-6 lg:pb-6" style={{ zoom: zoom / 100 }}>
@@ -1697,10 +1876,12 @@ export default function TestPage() {
                       key={o.key}
                       onClick={() => chooseOption(q.id, o.key)}
                       className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm transition ${
-                        active ? "border-primary bg-primary text-white shadow-md" : "border-border bg-card hover:bg-muted"
+                        active ? "border-primary bg-primary text-primary-foreground shadow-md" : "border-border bg-card hover:bg-muted"
                       }`}
+                      role="radio"
+                      aria-checked={active}
                     >
-                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${active ? "border-white bg-white text-primary" : "border-border"}`}>
+                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${active ? "border-primary-foreground bg-primary-foreground text-primary" : "border-border"}`}>
                         {o.key}
                       </span>
                       <span className="min-w-0 flex-1">
@@ -1718,7 +1899,7 @@ export default function TestPage() {
                           <>
                             <span>{o.text}</span>
                             {o.textHi && (
-                              <span className="ml-3 border-l-2 border-border pl-3 font-hindi text-muted-foreground">
+                              <span className={`mt-1 block border-l-2 pl-3 font-hindi ${active ? "border-primary-foreground/50 text-primary-foreground/90" : "border-border text-muted-foreground"}`}>
                                 {o.textHi}
                               </span>
                             )}
@@ -1732,10 +1913,13 @@ export default function TestPage() {
 
               {/* Action row */}
               <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-border pt-5">
-                <button onClick={markForReview} className="btn bg-primary/10 text-primary hover:bg-primary/20">
-                  ⚑ Mark for Review
+                <button onClick={markAndNext} className="btn bg-primary/10 text-primary hover:bg-primary/20" title="Mark for review & go to next (M)">
+                  ⚑ Mark for Review &amp; Next
                 </button>
-                <button onClick={clearAnswer} className="btn btn-outline">Clear Response</button>
+                <button onClick={markForReview} className="btn btn-outline" aria-pressed={statusOf(q.id) === "marked" || statusOf(q.id) === "answered-marked"}>
+                  {statusOf(q.id) === "marked" || statusOf(q.id) === "answered-marked" ? "⚑ Unmark" : "⚑ Mark"}
+                </button>
+                <button onClick={clearAnswer} className="btn btn-outline" title="Clear response (C)">Clear Response</button>
                 {/* Report button available mid-test too (not just on the
                     results screen) — a student shouldn't have to finish and
                     submit the whole test just to flag a question that's
@@ -1839,47 +2023,18 @@ export default function TestPage() {
 
         {/* QUESTION PALETTE SIDEBAR */}
         <aside className="hidden w-72 shrink-0 lg:block">
-          <div className="card p-4">
-            <h3 className="text-sm font-bold">Question Palette</h3>
-            {/* palette grid */}
-            <div className="mt-3 grid grid-cols-5 gap-1.5">
-              {questions.map((qq, i) => {
-                const st: QStatus =
-                  (status[qq.id] as QStatus | undefined) ??
-                  (visited[qq.id] ? "not-answered" : "not-visited");
-                return (
-                  <button
-                    key={qq.id}
-                    onClick={() => markVisited(i, qq.id)}
-                    className={`flex h-9 w-9 items-center justify-center rounded-md border text-xs font-bold ${paletteBg[st]} ${i === idx ? "ring-2 ring-offset-1 ring-[hsl(var(--ring))]" : ""}`}
-                  >
-                    {i === idx ? "▶" : i + 1}
-                  </button>
-                );
-              })}
+          <div className="card sticky top-28 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-bold">Question Palette</h3>
+              {hasSections && (
+                <span className="max-w-[10rem] truncate rounded bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{curSection}</span>
+              )}
             </div>
-
-            {/* legend */}
-            <div className="mt-4 space-y-1.5 border-t border-border pt-3">
-              {legendItems.map((l) => (
-                <div key={l.s} className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span className={`h-3.5 w-3.5 rounded border ${paletteBg[l.s as QStatus].split(" ").slice(0, 2).join(" ")}`} />
-                  {l.label}
-                </div>
-              ))}
-              <p className="pt-1 text-[10px] italic">Answered + Marked for Review still counts as answered for scoring.</p>
+            <div className="max-h-[52vh] overflow-y-auto pr-0.5">
+              <PaletteBody items={paletteItems} idx={idx} statusOf={statusOf} counts={paletteCounts} onJump={(i) => markVisited(i, questions[i].id)} cols="grid-cols-5" />
             </div>
-
-            {/* live per-section analysis */}
-            <div className="mt-4 border-t border-border pt-3">
-              <p className="text-xs font-bold text-muted-foreground">LIVE ANALYSIS</p>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-center text-xs">
-                <div className="rounded-lg bg-success/10 p-2"><div className="text-base font-extrabold text-success">{countOf(status, "answered") + countOf(status, "answered-marked")}</div><div className="text-muted-foreground">Answered</div></div>
-                <div className="rounded-lg bg-danger/10 p-2"><div className="text-base font-extrabold text-danger">{countOf(status, "not-answered")}</div><div className="text-muted-foreground">Not Answered</div></div>
-              </div>
-            </div>
-
-            <button onClick={() => setReviewOpen(true)} className="btn btn-primary mt-4 w-full">
+            <p className="pt-2 text-[10px] italic text-muted-foreground">Answered + Marked for Review still counts as answered for scoring.</p>
+            <button onClick={() => setReviewOpen(true)} disabled={submitBusy} className="btn btn-primary mt-4 w-full disabled:opacity-50">
               Submit Test
             </button>
             <p className="mt-2 text-center text-[10px] text-muted-foreground">⚠️ Auto-submits at 00:00</p>
@@ -1900,90 +2055,152 @@ export default function TestPage() {
 
       {/* MOBILE QUESTION PALETTE DRAWER */}
       {paletteOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Question palette">
           <div className="absolute inset-0 bg-black/50" onClick={() => setPaletteOpen(false)} />
-          <div className="absolute bottom-0 left-0 right-0 max-h-[80vh] overflow-y-auto rounded-t-2xl border-t border-border bg-background p-4 pb-6">
+          <div className="absolute bottom-0 left-0 right-0 max-h-[85vh] overflow-y-auto rounded-t-2xl border-t border-border bg-background p-4 pb-6">
             <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-muted" />
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold">Question Palette</h3>
               <button onClick={() => setPaletteOpen(false)} className="rounded-lg border border-border px-2.5 py-1 text-xs">✕ Close</button>
             </div>
-            {/* palette grid */}
-            <div className="mt-3 grid grid-cols-6 gap-1.5">
-              {questions.map((qq, i) => {
-                const st: QStatus =
-                  (status[qq.id] as QStatus | undefined) ??
-                  (visited[qq.id] ? "not-answered" : "not-visited");
-                return (
+            {hasSections && (
+              <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                {sectionNames.map((name) => (
                   <button
-                    key={qq.id}
-                    onClick={() => { markVisited(i, qq.id); setPaletteOpen(false); }}
-                    className={`flex h-10 w-full items-center justify-center rounded-md border text-xs font-bold ${paletteBg[st]} ${i === idx ? "ring-2 ring-offset-1 ring-[hsl(var(--ring))]" : ""}`}
+                    key={name}
+                    onClick={() => jumpToSection(name)}
+                    className={`shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold ${name === curSection ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
                   >
-                    {i === idx ? "▶" : i + 1}
+                    {name}
                   </button>
-                );
-              })}
-            </div>
-            {/* legend */}
-            <div className="mt-4 space-y-1.5 border-t border-border pt-3">
-              {legendItems.map((l) => (
-                <div key={l.s} className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span className={`h-3.5 w-3.5 rounded border ${paletteBg[l.s as QStatus].split(" ").slice(0, 2).join(" ")}`} />
-                  {l.label}
-                </div>
-              ))}
-            </div>
-            {/* live per-section analysis */}
-            <div className="mt-4 grid grid-cols-2 gap-2 text-center text-xs">
-              <div className="rounded-lg bg-success/10 p-2"><div className="text-base font-extrabold text-success">{countOf(status, "answered") + countOf(status, "answered-marked")}</div><div className="text-muted-foreground">Answered</div></div>
-              <div className="rounded-lg bg-danger/10 p-2"><div className="text-base font-extrabold text-danger">{countOf(status, "not-answered")}</div><div className="text-muted-foreground">Not Answered</div></div>
-            </div>
-            <button onClick={() => { setReviewOpen(true); setPaletteOpen(false); }} className="btn btn-primary mt-4 w-full">
+                ))}
+              </div>
+            )}
+            <PaletteBody items={paletteItems} idx={idx} statusOf={statusOf} counts={paletteCounts} onJump={(i) => { markVisited(i, questions[i].id); setPaletteOpen(false); }} cols="grid-cols-6" />
+            <button onClick={() => { setReviewOpen(true); setPaletteOpen(false); }} disabled={submitBusy} className="btn btn-primary mt-4 w-full disabled:opacity-50">
               Submit Test
             </button>
           </div>
         </div>
       )}
 
-      {/* REVIEW BEFORE SUBMIT MODAL */}
+      {/* PAUSED (practice only) */}
+      {paused && !isExamMode && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/95 p-6 backdrop-blur">
+          <div className="card max-w-sm p-6 text-center">
+            <div className="text-4xl">⏸</div>
+            <h2 className="mt-3 text-lg font-bold">{tr("Test paused", "Test pause hai")}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{tr("The timer is stopped. Questions are hidden until you resume.", "Timer ruka hua hai. Resume karne tak questions chhupe hain.")}</p>
+            <button onClick={togglePause} className="btn btn-primary mt-4 w-full">▶ Resume</button>
+          </div>
+        </div>
+      )}
+
+      {/* KEYBOARD SHORTCUTS */}
+      {helpOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setHelpOpen(false)} role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+          <div className="card w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-extrabold">⌨ {tr("Keyboard shortcuts", "Keyboard shortcuts")}</h2>
+              <button onClick={() => setHelpOpen(false)} className="rounded-lg border border-border px-2.5 py-1 text-xs">✕</button>
+            </div>
+            <dl className="mt-4 space-y-2 text-sm">
+              {[
+                ["A – D  /  Alt+1–4", "Select option"],
+                ["Space  /  →", "Save & Next"],
+                ["←  /  Shift+Space", "Previous question"],
+                ["M", "Mark for review & Next"],
+                ["C", "Clear response"],
+                ["P", "Question palette"],
+                ["?", "This help"],
+              ].map(([k, v]) => (
+                <div key={k} className="flex items-center justify-between gap-3">
+                  <dt><kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">{k}</kbd></dt>
+                  <dd className="text-muted-foreground">{v}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      )}
+
+      {/* REVIEW BEFORE SUBMIT MODAL (section-wise summary, like the real CBT) */}
       {reviewOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="card w-full max-w-lg p-6">
-            <h2 className="text-lg font-extrabold">Review test before submit</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Once submitted you cannot change your answers.
-            </p>
-            <div className="mt-4 overflow-hidden rounded-xl border border-border">
-              <table className="w-full text-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Review before submit">
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="card max-h-[90vh] w-full max-w-2xl overflow-y-auto p-5 sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-extrabold">Review test before submit</h2>
+                <p className="mt-1 text-xs text-muted-foreground">Once submitted you cannot change your answers.</p>
+              </div>
+              <div className={`rounded-lg border px-3 py-1 font-mono text-sm font-bold tabular-nums ${timelineColor}`}>{formatSec(timeLeft)}</div>
+            </div>
+            <div className="mt-4 overflow-x-auto rounded-xl border border-border">
+              <table className="w-full min-w-[420px] text-sm">
                 <thead>
                   <tr className="bg-muted/60 text-left text-xs text-muted-foreground">
                     <th className="px-3 py-2 font-semibold">Section</th>
+                    <th className="px-3 py-2 text-right font-semibold">Qs</th>
                     <th className="px-3 py-2 text-right font-semibold">Answered</th>
                     <th className="px-3 py-2 text-right font-semibold">Not Answered</th>
                     <th className="px-3 py-2 text-right font-semibold">Marked</th>
-                    <th className="px-3 py-2 text-right font-semibold">Visited</th>
+                    <th className="px-3 py-2 text-right font-semibold">Not Visited</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-t border-border">
-                    <td className="px-3 py-2 font-medium">Full Paper ({questions.length} Qs)</td>
-                    <td className="px-3 py-2 text-right">{countOf(status, "answered") + countOf(status, "answered-marked")}</td>
-                    <td className="px-3 py-2 text-right">{countOf(status, "not-answered")}</td>
-                    <td className="px-3 py-2 text-right">{countOf(status, "marked")}</td>
-                    <td className="px-3 py-2 text-right">{Object.keys(visited).length}</td>
-                  </tr>
-                  <tr className="border-t border-border bg-muted/30 text-xs text-muted-foreground">
-                    <td className="px-3 py-2 font-semibold" colSpan={5}>Total: {questions.length} questions</td>
-                  </tr>
+                  {(hasSections ? sectionNames : [""]).map((name) => {
+                    const list = hasSections ? questions.filter((x) => x.section === name) : questions;
+                    const c = tally(list);
+                    return (
+                      <tr key={name || "all"} className="border-t border-border">
+                        <td className="max-w-[10rem] truncate px-3 py-2 font-medium">{name || "Full Paper"}</td>
+                        <td className="px-3 py-2 text-right">{list.length}</td>
+                        <td className="px-3 py-2 text-right font-semibold text-success">{c.answered + c.answeredMarked}</td>
+                        <td className="px-3 py-2 text-right font-semibold text-danger">{c.notAnswered + c.marked}</td>
+                        <td className="px-3 py-2 text-right">{c.marked + c.answeredMarked}</td>
+                        <td className="px-3 py-2 text-right text-muted-foreground">{c.notVisited}</td>
+                      </tr>
+                    );
+                  })}
+                  {hasSections && (
+                    <tr className="border-t border-border bg-muted/30 text-xs font-semibold">
+                      <td className="px-3 py-2">Total</td>
+                      <td className="px-3 py-2 text-right">{questions.length}</td>
+                      <td className="px-3 py-2 text-right text-success">{allCounts.answered + allCounts.answeredMarked}</td>
+                      <td className="px-3 py-2 text-right text-danger">{allCounts.notAnswered + allCounts.marked}</td>
+                      <td className="px-3 py-2 text-right">{allCounts.marked + allCounts.answeredMarked}</td>
+                      <td className="px-3 py-2 text-right">{allCounts.notVisited}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
-            <div className="mt-6 flex gap-3">
-              <button onClick={() => setReviewOpen(false)} className="btn btn-outline flex-1">Cancel</button>
-              <button onClick={submitTest} className="btn btn-primary flex-1">Submit Test</button>
+            {unansweredTotal > 0 && (
+              <p className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                {tr(`${unansweredTotal} question(s) are still unanswered.`, `${unansweredTotal} question abhi unanswered hain.`)}
+              </p>
+            )}
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+              <button onClick={() => setReviewOpen(false)} className="btn btn-outline flex-1">Back to test</button>
+              {unansweredTotal > 0 && (
+                <button onClick={unansweredFirst} className="btn btn-outline flex-1">Go to first unanswered</button>
+              )}
+              <button onClick={submitTest} disabled={submitBusy} className="btn btn-primary flex-1 disabled:opacity-50">
+                {submitBusy ? "Submitting…" : "Submit Test"}
+              </button>
             </div>
           </motion.div>
+        </div>
+      )}
+
+      {/* SUBMITTING */}
+      {submitBusy && !offlinePending && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/90 p-6 backdrop-blur" role="status" aria-live="polite">
+          <div className="card max-w-xs p-6 text-center">
+            <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" />
+            <p className="mt-3 text-sm font-semibold">{tr("Submitting your test…", "Test submit ho raha hai…")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{tr("Please don't close this page.", "Page band mat karna.")}</p>
+          </div>
         </div>
       )}
     </div>

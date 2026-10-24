@@ -8,6 +8,7 @@ import DiagramVenn from "@/components/DiagramVenn";
 import WeakTopicPractice from "@/components/WeakTopicPractice";
 import SubjectChapterAnalysis from "@/components/SubjectChapterAnalysis";
 import SolutionVerify from "@/components/SolutionVerify";
+import { ScoreHero, ScoreComparison, TimeAnalysis, SubjectBars, RetryPanel } from "@/components/ResultsInsights";
 import { StemMedia, QFigure, RichText } from "@/components/QuestionMedia";
 import { useT } from "@/lib/i18n";
 import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang, type ReviewLang } from "@/components/SolutionPanel";
@@ -184,6 +185,14 @@ export default function AttemptReviewPage() {
   const subTopics = Array.from(subTopicMap.entries())
     .map(([name, v]) => ({ name, ...v, acc: v.total ? Math.round((v.correct / v.total) * 100) : 0 }))
     .sort((a, b) => a.acc - b.acc);
+  // Jump to a question in the review list (switches the filter back to "all" first so the anchor exists).
+  const jumpTo = (i: number) => {
+    setFilter("all");
+    window.setTimeout(() => {
+      document.getElementById(`q-${i}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+  };
+  const totalTimeSec = questions.reduce((a, q) => a + (q.timeSpentSeconds || 0), 0);
   const filtered =
     filter === "wrong" ? questions.filter((q) => !q.isCorrect && !q.isSkipped)
     : filter === "skipped" ? questions.filter((q) => q.isSkipped)
@@ -208,12 +217,20 @@ export default function AttemptReviewPage() {
           {tpl.title} · {fmt(detail.submittedAt)}
         </p>
 
-        {/* Summary cluster */}
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryCard label="Score" value={`${detail.score}`} sub={`/ ${maxScore} (${pct}%)`} tone="primary" />
-          <SummaryCard label="Rank" value={detail.rank ? `#${detail.rank}` : "—"} sub="in this test" tone="rank" />
-          <SummaryCard label="Percentile" value={detail.percentile != null ? `${detail.percentile}%` : "—"} sub="vs all attempts" tone="rank" />
-          <SummaryCard label="Accuracy" value={`${detail.accuracyPercent}%`} sub="on attempted" tone="primary" />
+        {/* Summary: score ring, rank, percentile, accuracy, time */}
+        <div className="mt-6">
+          <ScoreHero
+            title={tpl.title}
+            score={detail.score}
+            max={maxScore}
+            rank={detail.rank}
+            percentile={detail.percentile}
+            accuracy={detail.accuracyPercent}
+            correct={detail.totalCorrect}
+            wrong={detail.totalWrong}
+            skipped={detail.totalSkipped}
+            totalTimeSec={totalTimeSec}
+          />
         </div>
 
         {/* Study-Plan test verdict: chapters <90% are un-marked as weak (Sep 29 2026) */}
@@ -237,27 +254,23 @@ export default function AttemptReviewPage() {
         {/* What to do next: weak topics of THIS test (wrong + skipped) with custom practice */}
         <WeakTopicPractice className="mt-4" attemptId={String(params.attemptId)} />
 
-        {/* Topper benchmark + pacing (v6 §6) */}
-        {detail.topper?.score != null && (
-          <div className="card mt-4 flex flex-wrap items-center justify-between gap-3 border-primary/20 bg-primary/5 p-5">
-            <div className="flex items-center gap-3">
-              <span className="text-2xl">🏆</span>
-              <div>
-                <p className="text-sm font-semibold">Topper Benchmark</p>
-                <p className="text-xs text-muted-foreground">
-                  Best score in this test: <b>{detail.topper.score}</b>
-                  {detail.topper.accuracyPercent != null && <> · top accuracy {detail.topper.accuracyPercent}%</>}
-                </p>
-              </div>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-muted-foreground">Your gap to topper</p>
-              <p className="text-lg font-bold text-primary">
-                {Math.max(0, Number((Number(detail.topper.score) - detail.score).toFixed(1)))} marks
-              </p>
-            </div>
-          </div>
-        )}
+        {/* You vs average vs cut-off vs topper */}
+        <div className="mt-4">
+          <ScoreComparison
+            score={detail.score}
+            max={maxScore}
+            avgScore={stats && stats.attempts > 0 ? Number(stats.avgScore) : null}
+            cutoffScore={stats && stats.attempts > 0 ? Number(stats.cutoffScore) : null}
+            hasEnoughData={!!stats?.hasEnoughData}
+            topperScore={detail.topper?.score ?? null}
+            attempts={stats?.attempts}
+          />
+        </div>
+
+        {/* Practice only the mistakes of this attempt */}
+        <div className="mt-4">
+          <RetryPanel questions={questions} />
+        </div>
 
         {/* v6 §6 — real stats: cutoff (P90, data-driven) + top-5 toppers */}
         {stats && stats.attempts > 0 && (
@@ -317,19 +330,10 @@ export default function AttemptReviewPage() {
           </div>
         )}
 
-        {/* Correct / wrong / skipped bar */}
-        <div className="card mt-4 p-5">
-          <div className="flex h-3 w-full overflow-hidden rounded-full">
-            <div className="bg-success" style={{ width: `${(detail.totalCorrect / Math.max(questions.length, 1)) * 100}%` }} />
-            <div className="bg-danger" style={{ width: `${(detail.totalWrong / Math.max(questions.length, 1)) * 100}%` }} />
-            <div className="bg-muted" style={{ width: `${(detail.totalSkipped / Math.max(questions.length, 1)) * 100}%` }} />
-          </div>
-          <div className="mt-3 flex flex-wrap gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-success" /> {detail.totalCorrect} correct</span>
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-danger" /> {detail.totalWrong} wrong</span>
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-muted" /> {detail.totalSkipped} skipped</span>
-            <span className="ml-auto">⏱ avg {fmtTime(Math.round(questions.reduce((s, q) => s + (q.timeSpentSeconds || 0), 0) / Math.max(questions.length, 1)))}/Q</span>
-          </div>
+        {/* Time per question + subject-wise bars */}
+        <div className="mt-4 space-y-4">
+          <TimeAnalysis questions={questions} onJump={jumpTo} />
+          <SubjectBars questions={questions} />
         </div>
 
         {/* Subject-wise analysis -> tap a subject for its chapters -> tap a chapter for topics / sub-topics */}
@@ -413,13 +417,15 @@ export default function AttemptReviewPage() {
             {questions.map((q, i) => {
               const cls = q.isSkipped ? "bg-muted text-muted-foreground" : q.isCorrect ? "bg-success text-white" : "bg-danger text-white";
               return (
-                <a
+                <button
                   key={q.questionId}
-                  href={`#q-${i}`}
+                  type="button"
+                  onClick={() => jumpTo(i)}
+                  aria-label={`Go to question ${i + 1}`}
                   className={`flex h-8 items-center justify-center rounded-md text-xs font-bold ${cls}`}
                 >
                   {i + 1}
-                </a>
+                </button>
               );
             })}
           </div>
@@ -430,16 +436,6 @@ export default function AttemptReviewPage() {
 }
 
 // ---- Sub-components ----
-function SummaryCard({ label, value, sub, tone }: { label: string; value: string; sub: string; tone: "primary" | "rank" }) {
-  return (
-    <div className="card p-5">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`mt-1 text-3xl font-bold ${tone === "rank" ? "text-amber-500" : "text-primary"}`}>{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
-    </div>
-  );
-}
-
 // Shape returned by GET /ai-explanation/questions/:id — same contract the
 // review page already uses (see frontend/src/app/review/page.tsx).
 type AIExplanation = {
