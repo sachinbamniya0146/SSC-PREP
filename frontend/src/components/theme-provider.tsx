@@ -22,13 +22,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const toggleTheme = () => {
     setTheme((prev) => {
       const next = prev === "dark" ? "light" : "dark";
-      localStorage.setItem("theme", next);
-      document.documentElement.classList.toggle("dark", next === "dark");
+      try { localStorage.setItem("theme", next); } catch { /* ignore */ }
+      const root = document.documentElement;
+      root.classList.add("theme-anim");
+      root.classList.toggle("dark", next === "dark");
+      window.setTimeout(() => root.classList.remove("theme-anim"), 280);
       return next;
     });
   };
 
-  const queryClient = new QueryClient();
+  const [queryClient] = React.useState(() => new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, staleTime: 30_000 } } }));
 
   return (
     <QueryClientProvider client={queryClient}>

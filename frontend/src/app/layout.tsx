@@ -12,6 +12,7 @@ import SessionSync from "@/components/SessionSync";
 import OfflineSubmitSync from "@/components/OfflineSubmitSync";
 import LanguageSync from "@/components/LanguageSync";
 import NavTracker from "@/components/NavTracker";
+import { MobileTabBar } from "@/components/MobileTabBar";
 
 // FIX (Sep 2026 — "hindi font me mistake ho rahi hai matrao ki"): the app
 // referenced 'Noto Sans Devanagari' by NAME in a CSS variable, but never
@@ -89,6 +90,14 @@ export default function RootLayout({
         } as React.CSSProperties
       }
     >
+      <head>
+        {/* Apply the saved theme before first paint: no light-to-dark flash. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "try{if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}",
+          }}
+        />
+      </head>
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         <ThemeProvider>
           {children}
@@ -98,6 +107,7 @@ export default function RootLayout({
           <OfflineSubmitSync />
           <LanguageSync />
           <NavTracker />
+          <MobileTabBar />
         </ThemeProvider>
       </body>
     </html>

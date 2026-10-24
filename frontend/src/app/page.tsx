@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { motion } from "framer-motion";
+import { Reveal } from "@/components/Reveal";
 import { SiteHeader } from "@/components/SiteHeader";
 import { SiteFooter } from "@/components/SiteFooter";
 
@@ -74,11 +74,6 @@ const pricing = [
     highlight: true,
   },
 ];
-
-const fadeUp = {
-  hidden: { opacity: 0, y: 18 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.45, ease: "easeOut" as const } },
-};
 
 type LbRow = { rank: number; name: string; score: number };
 
@@ -189,39 +184,39 @@ export default function HomePage() {
       <section className="hero-bg relative overflow-hidden border-b border-border/60">
         <div className="grid-dots pointer-events-none absolute inset-0 [mask-image:linear-gradient(to_bottom,black,transparent_75%)]" />
         <div className="container-page relative grid items-center gap-12 py-14 sm:py-20 lg:grid-cols-[1.1fr_0.9fr]">
-          <motion.div initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.09 } } }}>
-            <motion.span variants={fadeUp} className="eyebrow">
+          <div>
+            <span className="eyebrow animate-rise">
               India&apos;s SSC practice platform
-            </motion.span>
-            <motion.h1 variants={fadeUp} className="mt-5 text-4xl font-extrabold leading-[1.1] tracking-tight sm:text-5xl lg:text-[3.4rem]">
+            </span>
+            <h1 style={{ animationDelay: "60ms" }} className="animate-rise mt-5 text-4xl font-extrabold leading-[1.1] tracking-tight sm:text-5xl lg:text-[3.4rem]">
               Practise like the real exam.
               <br />
               <span className="text-primary">Score like a topper.</span>
-            </motion.h1>
-            <motion.p variants={fadeUp} className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+            </h1>
+            <p style={{ animationDelay: "120ms" }} className="animate-rise mt-5 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
               Full-length SSC mock tests, previous year papers and detailed analytics in Hindi and English.
               Start free today, and unlock everything from just ₹11 a month.
-            </motion.p>
-            <motion.div variants={fadeUp} className="mt-8 flex flex-wrap items-center gap-3">
+            </p>
+            <div style={{ animationDelay: "180ms" }} className="animate-rise mt-8 flex flex-wrap items-center gap-3">
               <a href="/signup" className="btn btn-primary btn-lg shadow-lift">
                 Start free practice <IconArrow className="h-4 w-4" />
               </a>
               <a href="#pricing" className="btn btn-outline btn-lg">
                 View plans
               </a>
-            </motion.div>
-            <motion.ul variants={fadeUp} className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
+            </div>
+            <ul style={{ animationDelay: "240ms" }} className="animate-rise mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
               {["3 free mocks per exam", "Hindi + English", "Detailed solutions"].map((t) => (
                 <li key={t} className="flex items-center gap-1.5">
                   <IconCheck className="h-4 w-4 text-success" /> {t}
                 </li>
               ))}
-            </motion.ul>
-          </motion.div>
+            </ul>
+          </div>
 
-          <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.15 }}>
+          <div style={{ animationDelay: "200ms" }} className="animate-rise">
             <TestPreview />
-          </motion.div>
+          </div>
         </div>
       </section>
 
@@ -253,15 +248,7 @@ export default function HomePage() {
         </div>
         <div className="mt-10 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
           {exams.map((exam, i) => (
-            <motion.a
-              key={exam.id}
-              href={`/question-bank?exam=${exam.id}`}
-              initial={{ opacity: 0, y: 16 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.35, delay: (i % 4) * 0.05 }}
-              className="card card-hover group flex flex-col p-4 sm:p-5"
-            >
+            <Reveal as="a" key={exam.id} href={`/question-bank?exam=${exam.id}`} delay={(i % 4) * 0.05} className="card card-hover group flex flex-col p-4 sm:p-5">
               <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${exam.tone}`}>
                 <IconBook className="h-5 w-5" />
               </span>
@@ -271,7 +258,7 @@ export default function HomePage() {
                 <span className="font-semibold text-success">Free mocks</span>
                 <IconArrow className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
               </span>
-            </motion.a>
+            </Reveal>
           ))}
         </div>
       </section>
@@ -285,20 +272,15 @@ export default function HomePage() {
           </div>
           <div className="relative mt-12 grid gap-6 md:grid-cols-3">
             {steps.map((s, i) => (
-              <motion.div
+              <Reveal as="div" delay={i * 0.08}
                 key={s.n}
-                initial={{ opacity: 0, y: 16 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.35, delay: i * 0.08 }}
-                className="relative rounded-xl border border-border bg-background p-6"
-              >
+                className="relative rounded-xl border border-border bg-background p-6">
                 <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground shadow-sm">
                   {s.n}
                 </span>
                 <h3 className="mt-4 text-lg font-bold">{s.title}</h3>
                 <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{s.desc}</p>
-              </motion.div>
+              </Reveal>
             ))}
           </div>
         </div>
@@ -312,20 +294,15 @@ export default function HomePage() {
         </div>
         <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((f, i) => (
-            <motion.div
+            <Reveal as="div" delay={(i % 3) * 0.06}
               key={f.title}
-              initial={{ opacity: 0, y: 16 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.35, delay: (i % 3) * 0.06 }}
-              className="card card-hover p-6"
-            >
+              className="card card-hover p-6">
               <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${f.tone}`}>
                 <f.icon className="h-5 w-5" />
               </span>
               <h3 className="mt-4 font-bold">{f.title}</h3>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{f.desc}</p>
-            </motion.div>
+            </Reveal>
           ))}
         </div>
 
@@ -367,16 +344,9 @@ export default function HomePage() {
           </div>
           <div className="mx-auto mt-10 grid max-w-3xl gap-6 sm:grid-cols-2">
             {pricing.map((plan, i) => (
-              <motion.div
-                key={plan.name}
-                initial={{ opacity: 0, y: 18 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.4, delay: i * 0.08 }}
-                className={`relative flex flex-col rounded-2xl border p-7 ${
+              <Reveal as="div" key={plan.name} delay={i * 0.08} className={`relative flex flex-col rounded-2xl border p-7 ${
                   plan.highlight ? "border-primary bg-primary/[0.04] shadow-lift" : "border-border bg-background"
-                }`}
-              >
+                }`}>
                 {plan.highlight && (
                   <span className="absolute -top-3 left-6 rounded-full bg-accent px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-accent-foreground">
                     Best value
@@ -401,7 +371,7 @@ export default function HomePage() {
                 <a href="/signup" className={`btn btn-lg mt-8 ${plan.highlight ? "btn-primary" : "btn-outline"}`}>
                   Get started
                 </a>
-              </motion.div>
+              </Reveal>
             ))}
           </div>
         </div>

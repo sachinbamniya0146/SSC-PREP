@@ -2,15 +2,13 @@
 
 import PlanTestBanner from "@/components/PlanTestBanner";
 import * as React from "react";
-import { Logo } from "@/components/Logo";
-import { ThemeContext } from "@/components/theme-provider";
+import { AppHeader } from "@/components/AppHeader";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { PERMISSION_INFO, StaffPermission } from "@/lib/permissions";
 import { useT } from "@/lib/i18n";
 
 export default function DashboardPage() {
   const tr = useT();
-  const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [user, setUser] = React.useState<{
     fullName: string;
     email: string;
@@ -136,70 +134,38 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <Logo size={32} />
-          <div className="flex items-center gap-3 text-sm">
-            <button
-              onClick={toggleTheme}
-              aria-label="Toggle theme"
-              className="rounded-lg border border-border p-2 text-sm hover:bg-muted"
-            >
-              {theme === "dark" ? "☀️" : "🌙"}
-            </button>
-            <span className="hidden font-medium sm:block">{user?.fullName || "Student"}</span>
-            <a
-              href="/login"
-              className="rounded-lg border border-border px-4 py-2 font-semibold hover:bg-muted"
-              onClick={() => {
-                localStorage.clear();
-              }}
-            >
-              Logout
-            </a>
-          </div>
-        </div>
-      </header>
+      <AppHeader name={user?.fullName} />
 
-      <main className="mx-auto max-w-6xl px-4 py-10">
+      <main className="container-page py-8 sm:py-10">
         <PlanTestBanner />
-        {/* Hero: greeting + streak as the page's one deliberate visual
-            moment, instead of a plain h1 sitting above an undifferentiated
-            grid of identical cards. Numbers get to be genuinely large —
-            this is the one place on the page that earns it. */}
-        <div className="flex flex-col gap-8 border-b border-border pb-8 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">{greeting}</p>
-            <h1 className="mt-1 text-3xl font-bold tracking-tight sm:text-4xl">{firstName}</h1>
-            <p className="mt-2 text-sm text-muted-foreground">Today's goal: 10 questions</p>
+
+        {/* Greeting + live stats */}
+        <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-6 sm:p-8">
+          <div className="hero-bg pointer-events-none absolute inset-0 opacity-70" />
+          <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">{greeting}</p>
+              <h1 className="mt-1 text-3xl font-extrabold tracking-tight sm:text-4xl">{firstName}</h1>
+              <p className="mt-2 text-sm text-muted-foreground">Today&apos;s goal: 10 questions. Keep the streak alive.</p>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <a href="/question-bank-practice" className="btn btn-primary">Start practice</a>
+                <a href="/mocks" className="btn btn-outline">Take a mock</a>
+              </div>
+            </div>
+            <dl className="grid grid-cols-3 gap-3 sm:gap-4">
+              {[
+                { l: "Day streak", v: gami ? gami.currentStreak : "—", tone: "text-accent" },
+                { l: "XP", v: gami ? gami.xp : "—", tone: "text-primary" },
+                { l: "Rank", v: gami ? `#${gami.rank}` : "—", tone: "text-foreground" },
+              ].map((x) => (
+                <div key={x.l} className="min-w-[5.5rem] rounded-xl border border-border bg-background/80 px-4 py-3 text-center backdrop-blur">
+                  <dd className={`text-2xl font-extrabold tabular-nums leading-none sm:text-3xl ${x.tone}`}>{x.v}</dd>
+                  <dt className="mt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{x.l}</dt>
+                </div>
+              ))}
+            </dl>
           </div>
-          <div className="flex gap-8">
-            <div>
-              <div className="text-4xl font-bold tabular-nums leading-none">
-                {gami ? gami.currentStreak : "—"}
-              </div>
-              <div className="mt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Day streak
-              </div>
-            </div>
-            <div>
-              <div className="text-4xl font-bold tabular-nums leading-none text-primary">
-                {gami ? gami.xp : "—"}
-              </div>
-              <div className="mt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                XP
-              </div>
-            </div>
-            <div>
-              <div className="text-4xl font-bold tabular-nums leading-none">
-                {gami ? `#${gami.rank}` : "—"}
-              </div>
-              <div className="mt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Rank
-              </div>
-            </div>
-          </div>
-        </div>
+        </section>
 
         {isStaffOnly && (
           <div className="mt-8 rounded-xl border border-primary/30 bg-primary/[0.04] p-5">
@@ -353,203 +319,129 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Primary action zone: the exam picker is the thing every student
-            actually needs first, so it gets the dominant position and a
-            visual treatment distinct from the utility tiles below —
-            instead of being one card among a dozen identical ones. */}
-        <div className="mt-10 grid gap-6 lg:grid-cols-3">
-          <div className="rounded-2xl border border-border bg-card p-6 lg:col-span-2">
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-lg font-semibold">Choose your exam</h2>
+        {/* Exam picker + plan */}
+        <div className="mt-8 grid gap-6 lg:grid-cols-3">
+          <section className="card p-6 lg:col-span-2">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-lg font-bold">Choose your exam</h2>
               <span className="text-xs text-muted-foreground">PYQs · mocks · sectional</span>
             </div>
-            {/* BUG FIX: when the exams-with-questions API call fails, is
-                still loading, or every exam simply has too few approved
-                questions so far, examsWithQuestions stays an empty array —
-                always show a fallback so there's at least one way forward:
-                a direct link into the full question bank, which works with
-                no exam filter.
-                UX FIX: each exam card used to link straight into the raw
-                question-bank browser and nowhere else. Clicking an exam
-                gave no way to reach that exam's sectional practice, mocks,
-                or year-wise PYQs from here — a student had to already know
-                those separate tiles existed further up this page.
-                /mocks and /sectional don't accept an exam-scoped URL param
-                today (mocks are listed globally by template; sectional's
-                subject picker isn't exam-filtered — see backend/src/tests/
-                tests.service.ts sectionalSubjects()), so rather than
-                silently building a link those pages would ignore, each card
-                now lists all 3 real entry points with an honest label on
-                which are exam-specific right now vs. exam-selectable once
-                you're on that page. */}
             {examsWithQuestions.length > 0 ? (
-              <div className="mt-5 divide-y divide-border">
+              <div className="mt-4 divide-y divide-border">
                 {examsWithQuestions.map((e) => (
                   <div key={e.id} className="flex flex-wrap items-center justify-between gap-3 py-4 first:pt-0 last:pb-0">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold">{e.name}</span>
-                        {/* NEW ("sabhi SSC exams ko bhi pattern year ke
-                            saath dikhana he"): every exam with an active
-                            ExamPattern now shows its year/pattern label
-                            here, not just CGL. */}
-                        {e.patternYear && (
-                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                            {e.patternYear}
-                          </span>
-                        )}
+                        {e.patternYear && <span className="badge badge-primary">{e.patternYear}</span>}
                       </div>
-                      <div className="text-xs text-muted-foreground">
+                      <div className="mt-0.5 text-xs text-muted-foreground">
                         {e.count}+ questions available
                         {e.totalQuestions ? ` · ${e.totalQuestions} Qs in real paper` : ""}
                         {e.durationMinutes ? ` · ${e.durationMinutes} min` : ""}
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-2 text-sm">
-                      <a
-                        href={`/question-bank?exam=${encodeURIComponent(e.id)}`}
-                        className="rounded-lg border border-border px-3 py-1.5 font-medium hover:border-primary hover:text-primary"
-                      >
-                        Browse PYQs
-                      </a>
-                      <a href="/year-wise" className="rounded-lg border border-border px-3 py-1.5 font-medium hover:border-primary hover:text-primary">
-                        Year-wise
-                      </a>
-                      <a href="/sectional" className="rounded-lg border border-border px-3 py-1.5 font-medium hover:border-primary hover:text-primary">
-                        Sectional
-                      </a>
+                    <div className="flex flex-wrap gap-2">
+                      <a href={`/question-bank?exam=${encodeURIComponent(e.id)}`} className="btn btn-outline btn-sm">Browse PYQs</a>
+                      <a href="/year-wise" className="btn btn-outline btn-sm">Year-wise</a>
+                      <a href="/sectional" className="btn btn-outline btn-sm">Sectional</a>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="mt-5 rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+              <div className="mt-4 rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
                 Exam list is still loading or being set up.{" "}
                 <a href="/question-bank" className="font-semibold text-primary underline">
                   Browse the full question bank instead →
                 </a>
               </div>
             )}
-          </div>
+          </section>
 
-          {/* Premium / subscription gets the one accent-color highlight on
-              this page — it's the one thing worth genuinely standing out,
-              rather than every tile competing for attention with its own
-              colored border. */}
           <a
             href="/premium"
-            className={`flex flex-col justify-between rounded-2xl p-6 transition hover:shadow-md ${
-              subscription?.active
-                ? "border border-emerald-500/30 bg-emerald-500/[0.04]"
-                : "border border-primary/30 bg-gradient-to-br from-primary/[0.06] to-transparent hover:border-primary/50"
+            className={`card card-hover flex flex-col justify-between p-6 ${
+              subscription?.active ? "border-success/40 bg-success/[0.05]" : "border-primary/30 bg-gradient-to-br from-primary/[0.08] to-transparent"
             }`}
           >
             <div>
-              <h2 className="text-lg font-semibold">
-                {subscription?.active ? "Premium active" : "Go Premium"}
-              </h2>
+              <span className={`badge ${subscription?.active ? "badge-success" : "badge-primary"}`}>
+                {subscription?.active ? "Active" : "Upgrade"}
+              </span>
+              <h2 className="mt-3 text-lg font-bold">{subscription?.active ? "Premium active" : "Go Premium"}</h2>
               <p className="mt-2 text-sm text-muted-foreground">
                 {subscription?.active
                   ? `${subscription.plan?.name || "Plan"}${subscription.endsAt ? ` — until ${new Date(subscription.endsAt).toLocaleDateString()}` : ""}`
                   : "Unlimited mocks, sectional tests & PYQs."}
               </p>
             </div>
-            <span className={`mt-4 text-sm font-semibold ${subscription?.active ? "text-emerald-600 dark:text-emerald-400" : "text-primary"}`}>
+            <span className={`mt-5 text-sm font-semibold ${subscription?.active ? "text-success" : "text-primary"}`}>
               {subscription?.active ? "Manage plan →" : "See plans & pricing →"}
             </span>
           </a>
         </div>
 
-        {/* NEW ("Practice for SSC Exams" ka ek direct, prominent option
-            chahiye jaha admin ke daale practice questions milein — sabhi
-            chapter/topic/subtopic ke saath): /question-bank-practice
-            (backend/src/bank/question-bank-practice.service.ts) already
-            existed fully built — subject → chapter practice sets, resume,
-            per-chapter progress tracking, bilingual questions — but had NO
-            link anywhere in the app, same orphan-page pattern as
-            /sectional once had. This is the single most prominent tile on
-            the dashboard (own row, above the other test formats) since
-            it's the primary "practice" entry point the user asked for. */}
+        {/* Main practice entry */}
         <a
           href="/question-bank-practice"
-          className="mt-6 flex flex-col justify-between rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/[0.06] to-transparent p-6 transition hover:border-emerald-500/50 hover:shadow-md"
+          className="card card-hover mt-6 flex flex-col gap-3 border-success/30 bg-gradient-to-br from-success/[0.07] to-transparent p-6 sm:flex-row sm:items-center sm:justify-between"
         >
           <div>
-            <h2 className="text-lg font-semibold">Practice for SSC Exams</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <h2 className="text-lg font-bold">Practice for SSC Exams</h2>
+            <p className="mt-1.5 text-sm text-muted-foreground">
               Subject → chapter practice sets covering the full syllabus, with your progress and accuracy tracked per chapter.
             </p>
           </div>
-          <span className="mt-4 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-            Start practicing →
-          </span>
+          <span className="btn btn-primary shrink-0 self-start sm:self-center">Start practicing →</span>
         </a>
 
-        {/* Test formats — a quiet, equal-weight row since these are peers
-            of each other, not competing for hierarchy the way the exam
-            picker above does. */}
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <a href="/study-plan/board" className="rounded-xl border-2 border-primary/50 bg-primary/5 p-5 transition hover:border-primary">
+        {/* Study tools */}
+        <h2 className="mb-3 mt-10 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Study tools</h2>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <a href="/study-plan/board" className="card card-hover border-primary/40 bg-primary/[0.05] p-5">
             <h3 className="font-semibold">🗓️ My Study Planner</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">{tr("Target exam + date, mark chapters, tomorrow's 9 AM test, daily revision.", "Target exam + date, chapters mark karein, kal 9 AM ka test, roz ka revision.")}</p>
           </a>
-          <a href="/weak-topics" className="rounded-xl border-2 border-red-500/40 bg-red-500/5 p-5 transition hover:border-red-500">
+          <a href="/weak-topics" className="card card-hover border-danger/30 bg-danger/[0.04] p-5">
             <h3 className="font-semibold">🎯 Meri Weak List</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">{tr("Chapters / topics / sub-topics you got wrong — strengthen them one by one.", "Galat hue chapter / topic / sub-topic — ek-ek ko strong karein.")}</p>
           </a>
-          <a href="/mocks" className="rounded-xl border border-border bg-card p-5 transition hover:border-primary/40">
+          <a href="/mocks" className="card card-hover p-5">
             <h3 className="font-semibold">Mock Tests</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Full-length timed mocks, a few free per exam.</p>
           </a>
-          <a href="/sectional" className="rounded-xl border border-border bg-card p-5 transition hover:border-primary/40">
+          <a href="/sectional" className="card card-hover p-5">
             <h3 className="font-semibold">Sectional Practice</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Pick a subject, get a multi-year mixed set.</p>
           </a>
-          <a href="/cgl-test" className="rounded-xl border border-border bg-card p-5 transition hover:border-primary/40">
+          <a href="/cgl-test" className="card card-hover p-5">
             <h3 className="font-semibold">Full Sectional Paper (CGL)</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Real exam-format mock — sections, per-section timer.</p>
           </a>
-          <a href="/year-wise" className="rounded-xl border border-border bg-card p-5 transition hover:border-primary/40">
+          <a href="/year-wise" className="card card-hover p-5">
             <h3 className="font-semibold">Year-wise PYQ Test</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Choose exam + year, narrow to subject or chapter.</p>
           </a>
-          <a href="/vocabulary" className="rounded-xl border border-border bg-card p-5 transition hover:border-primary/40">
+          <a href="/vocabulary" className="card card-hover p-5">
             <h3 className="font-semibold">📖 Vocabulary Mastery</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Learn one word at a time — quiz, 95%+ to unlock the next.</p>
           </a>
         </div>
 
-        {/* Utilities: distinguished from the primary flows above by a
-            quieter, unbordered list treatment — same information, lower
-            visual weight, since these are secondary to actually studying. */}
+        {/* Utilities */}
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-xl border border-border/60 bg-card/50 p-5">
-            <h3 className="text-sm font-semibold">Weak areas practice</h3>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              Auto-generated from your wrong & skipped questions.
-            </p>
-            <a href="/weak-practice" className="mt-3 inline-block text-sm font-semibold text-primary hover:underline">
-              Start practice →
-            </a>
-          </div>
-          <div className="rounded-xl border border-border/60 bg-card/50 p-5">
-            <h3 className="text-sm font-semibold">Leaderboard</h3>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              Climb the ranks with XP from tests & daily quizzes.
-            </p>
-            <a href="/leaderboard" className="mt-3 inline-block text-sm font-semibold text-primary hover:underline">
-              View leaderboard →
-            </a>
-          </div>
-          <div className="rounded-xl border border-border/60 bg-card/50 p-5">
-            <h3 className="text-sm font-semibold">Refer & earn</h3>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              Free subscription when 10 friends buy using your code.
-            </p>
-            <a href="/referral" className="mt-3 inline-block text-sm font-semibold text-primary hover:underline">
-              Invite friends →
-            </a>
-          </div>
+          {[
+            { t: "Weak areas practice", d: "Auto-generated from your wrong & skipped questions.", h: "/weak-practice", c: "Start practice →" },
+            { t: "Leaderboard", d: "Climb the ranks with XP from tests & daily quizzes.", h: "/leaderboard", c: "View leaderboard →" },
+            { t: "Refer & earn", d: "Free subscription when 10 friends buy using your code.", h: "/referral", c: "Invite friends →" },
+          ].map((u) => (
+            <div key={u.h} className="card p-5">
+              <h3 className="text-sm font-semibold">{u.t}</h3>
+              <p className="mt-1.5 text-xs text-muted-foreground">{u.d}</p>
+              <a href={u.h} className="mt-3 inline-block text-sm font-semibold text-primary hover:underline">{u.c}</a>
+            </div>
+          ))}
         </div>
       </main>
     </div>

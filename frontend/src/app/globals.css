@@ -133,12 +133,34 @@
     background: transparent;
   }
   @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; }
     html { scroll-behavior: auto; }
     *, *::before, *::after {
       animation-duration: 0.01ms !important;
       transition-duration: 0.01ms !important;
     }
   }
+}
+
+@layer utilities {
+  .animate-page { animation: page-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .animate-rise { animation: rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .animate-pop { animation: pop 0.14s ease-out both; transform-origin: top right; }
+  @keyframes page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+  @keyframes pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity 0.5s ease-out, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1); will-change: opacity, transform; }
+  .reveal-in { opacity: 1; transform: none; }
+}
+
+/* Smooth light/dark switch (class is added for ~250ms by the toggle). */
+html.theme-anim, html.theme-anim *, html.theme-anim *::before, html.theme-anim *::after {
+  transition: background-color 0.22s ease, border-color 0.22s ease, color 0.22s ease, fill 0.22s ease, stroke 0.22s ease, box-shadow 0.22s ease !important;
+}
+
+/* Room for the mobile bottom tab bar */
+@media (max-width: 1023px) {
+  body.has-tabbar { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
 }
 
 @layer components {
