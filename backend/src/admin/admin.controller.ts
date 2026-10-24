@@ -258,10 +258,14 @@ export class AdminController {
           preferredLanguage: true,
           isEmailVerified: true,
           createdAt: true,
+          // Only the live subscription (ACTIVE and not yet expired). Superseded /
+          // lapsed rows used to be listed too, so a user could show several
+          // "plans" and a raw plan UUID instead of a name.
           subscriptions: {
-            where: { status: { not: 'CANCELLED' } },
-            select: { status: true, endsAt: true, planId: true },
-            orderBy: { startsAt: 'desc' },
+            where: { status: 'ACTIVE', endsAt: { gt: new Date() } },
+            select: { status: true, endsAt: true, planId: true, startsAt: true, plan: { select: { name: true } } },
+            orderBy: { endsAt: 'desc' },
+            take: 1,
           },
           _count: { select: { testAttempts: true, bookmarks: true } },
         },
@@ -274,77 +278,97 @@ export class AdminController {
 
   @Post('users/:id/subscription/cancel')
   async cancelUserSubscription(@Param('id', ParseUUIDPipe) userId: string) {
-    const subscription = await this.prisma.subscription.findFirst({
+    const active = await this.prisma.subscription.findMany({ where: { userId, status: 'ACTIVE' } });
+    if (active.length === 0) throw new NotFoundException('No active subscription found');
+    await this.prisma.subscription.updateMany({
       where: { userId, status: 'ACTIVE' },
-    });
-    if (!subscription) throw new NotFoundException('No active subscription found');
-    await this.prisma.subscription.update({
-      where: { id: subscription.id },
       data: { status: 'CANCELLED' },
     });
     await this.auditLogService.log({
       action: 'SUBSCRIPTION_CANCELLED_BY_ADMIN',
       targetEntity: 'Subscription',
-      entityId: subscription.id,
-      metadataJson: { userId, planId: subscription.planId },
+      entityId: active[0].id,
+      metadataJson: { userId, planId: active[0].planId, rows: active.length },
     });
     return { ok: true };
+  }
+
+  /**
+   * Resolves the duration an admin grant should add: an explicit custom
+   * `months` / `days` (e.g. a 10-day gift) wins, otherwise the plan's own length.
+   */
+  private grantDuration(plan: { durationMonths: number }, body: { months?: number; days?: number }) {
+    const months = body.months === undefined || body.months === null ? undefined : Number(body.months);
+    const days = body.days === undefined || body.days === null ? undefined : Number(body.days);
+    if (days !== undefined) {
+      if (!Number.isInteger(days) || days < 1 || days > 3650) throw new BadRequestException('days must be a whole number between 1 and 3650');
+      return { days };
+    }
+    if (months !== undefined) {
+      if (!Number.isInteger(months) || months < 1 || months > 120) throw new BadRequestException('months must be a whole number between 1 and 120');
+      return { months };
+    }
+    return { months: plan.durationMonths };
   }
 
   @Post('users/:id/subscription/add')
   async addUserSubscription(
     @Param('id', ParseUUIDPipe) userId: string,
-    @Body() body: { planId: string },
+    @Body() body: { planId: string; months?: number; days?: number },
   ) {
-    const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
+    const plan = await this.prisma.plan.findUnique({ where: { id: body?.planId } });
     if (!plan || !plan.isActive) throw new BadRequestException('Plan not found or inactive');
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!user) throw new NotFoundException('User not found');
+    const duration = this.grantDuration(plan, body);
 
     // Extends instead of replacing: remaining paid days are never destroyed.
-    const grant = await grantOrExtendSubscription(this.prisma as any, {
-      userId,
-      planId: plan.id,
-      months: plan.durationMonths,
-    });
+    const grant = await grantOrExtendSubscription(this.prisma as any, { userId, planId: plan.id, ...duration });
     const sub = grant.subscription;
 
     await this.auditLogService.log({
       action: 'SUBSCRIPTION_GRANTED_BY_ADMIN',
       targetEntity: 'Subscription',
       entityId: sub.id,
-      metadataJson: { userId, planId: plan.id, durationMonths: plan.durationMonths, extended: grant.extended },
+      metadataJson: { userId, planId: plan.id, ...duration, extended: grant.extended, endsAt: sub.endsAt },
     });
-    return { ok: true, subscription: sub, extended: grant.extended };
+    return { ok: true, subscription: sub, extended: grant.extended, endsAt: sub.endsAt };
   }
 
   @Post('subscriptions/bulk')
-  async bulkGrantSubscription(@Body() body: { emails: string[]; planId: string }) {
-    const plan = await this.prisma.plan.findUnique({ where: { id: body.planId } });
+  async bulkGrantSubscription(@Body() body: { emails: string[] | string; planId: string; months?: number; days?: number }) {
+    const plan = await this.prisma.plan.findUnique({ where: { id: body?.planId } });
     if (!plan || !plan.isActive) throw new BadRequestException('Plan not found or inactive');
+    const duration = this.grantDuration(plan, body);
 
-    const results = [];
-    for (const email of body.emails) {
-      const user = await this.prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
-      if (!user) {
-        results.push({ email, success: false, reason: 'User not found' });
-        continue;
+    // Accept an array or a comma / space / newline separated string; dedupe.
+    const raw = Array.isArray(body?.emails) ? body.emails : String(body?.emails ?? '').split(/[\s,;]+/);
+    const emails = [...new Set(raw.map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
+    if (emails.length === 0) throw new BadRequestException('Provide at least one email');
+    if (emails.length > 500) throw new BadRequestException('Maximum 500 emails per request');
+
+    const results: { email: string; success: boolean; reason?: string; endsAt?: Date }[] = [];
+    for (const email of emails) {
+      try {
+        const user = await this.prisma.user.findUnique({ where: { email } });
+        if (!user) {
+          results.push({ email, success: false, reason: 'User not found' });
+          continue;
+        }
+        const g = await grantOrExtendSubscription(this.prisma as any, { userId: user.id, planId: plan.id, ...duration });
+        await this.auditLogService.log({
+          action: 'SUBSCRIPTION_GRANTED_BY_ADMIN',
+          targetEntity: 'Subscription',
+          entityId: g.subscription.id,
+          metadataJson: { userId: user.id, planId: plan.id, ...duration, bulk: true, extended: g.extended },
+        });
+        results.push({ email, success: true, endsAt: g.subscription.endsAt });
+      } catch (e) {
+        results.push({ email, success: false, reason: (e as Error)?.message || 'Failed' });
       }
-
-      await grantOrExtendSubscription(this.prisma as any, {
-        userId: user.id,
-        planId: plan.id,
-        months: plan.durationMonths,
-      });
-
-      await this.auditLogService.log({
-        action: 'SUBSCRIPTION_GRANTED_BY_ADMIN',
-        targetEntity: 'Subscription',
-        entityId: user.id,
-        metadataJson: { userId: user.id, planId: plan.id, bulk: true },
-      });
-
-      results.push({ email, success: true });
     }
-    return { results };
+    const granted = results.filter((r) => r.success).length;
+    return { total: results.length, granted, failed: results.length - granted, results };
   }
 
   @Get('plans')

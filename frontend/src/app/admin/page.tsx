@@ -19,7 +19,7 @@ interface User {
   preferredLanguage?: string;
   isEmailVerified: boolean;
   createdAt: string;
-  subscriptions: { status: string; endsAt: string | null; planId: string }[];
+  subscriptions: { status: string; endsAt: string | null; startsAt?: string; planId: string; plan?: { name: string } | null }[];
   _count: { testAttempts: number; bookmarks: number };
 }
 
@@ -124,6 +124,11 @@ export default function AdminPage() {
   const [showEmailModal, setShowEmailModal] = React.useState(false);
   const [bulkEmail, setBulkEmail] = React.useState("");
   const [bulkPlanId, setBulkPlanId] = React.useState("");
+  // Optional custom duration for admin grants ("" = use the plan's own length).
+  const [grantUnit, setGrantUnit] = React.useState<"plan" | "days" | "months">("plan");
+  const [grantAmount, setGrantAmount] = React.useState("");
+  const [grantBusy, setGrantBusy] = React.useState(false);
+  const [bulkResult, setBulkResult] = React.useState<{ total: number; granted: number; failed: number; results: { email: string; success: boolean; reason?: string }[] } | null>(null);
   const [plans, setPlans] = React.useState<SubscriptionPlan[]>([]);
   const [error, setError] = React.useState("");
   const [info, setInfo] = React.useState("");
@@ -303,32 +308,53 @@ export default function AdminPage() {
     }
   }
 
+  function durationPayload(): { months?: number; days?: number } {
+    if (grantUnit === "plan") return {};
+    const n = Number(grantAmount);
+    if (!Number.isInteger(n) || n < 1) throw new Error("Custom duration must be a whole number (1 or more)");
+    return grantUnit === "days" ? { days: n } : { months: n };
+  }
+
   async function addSubscription(userId: string, planId: string) {
+    if (grantBusy) return;
+    setError("");
+    setGrantBusy(true);
     try {
-      await api(`/admin/users/${userId}/subscription/add`, {
+      const res = await api<{ extended: boolean; endsAt: string }>(`/admin/users/${userId}/subscription/add`, {
         method: "POST",
-        body: JSON.stringify({ planId }),
+        body: JSON.stringify({ planId, ...durationPayload() }),
       });
-      setInfo("Subscription added successfully");
+      setInfo(
+        `${res.extended ? "Subscription extended" : "Subscription added"} — valid until ${new Date(res.endsAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
+      );
       setShowSubscriptionModal(false);
+      setSelectedUser(null);
+      setGrantUnit("plan");
+      setGrantAmount("");
       loadUsers();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add subscription");
+    } finally {
+      setGrantBusy(false);
     }
   }
 
   async function sendBulkSubscription() {
-    if (!bulkEmail || !bulkPlanId) return;
+    if (!bulkEmail.trim() || !bulkPlanId || grantBusy) return;
+    setError("");
+    setGrantBusy(true);
     try {
-      await api("/admin/subscriptions/bulk", {
+      const res = await api<NonNullable<typeof bulkResult>>("/admin/subscriptions/bulk", {
         method: "POST",
-        body: JSON.stringify({ emails: bulkEmail.split(",").map(e => e.trim()), planId: bulkPlanId }),
+        body: JSON.stringify({ emails: bulkEmail, planId: bulkPlanId, ...durationPayload() }),
       });
-      setInfo("Bulk subscriptions sent successfully");
-      setShowEmailModal(false);
-      setBulkEmail("");
+      setBulkResult(res);
+      setInfo(`Bulk grant done: ${res.granted} granted, ${res.failed} failed`);
+      loadUsers();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send bulk subscriptions");
+    } finally {
+      setGrantBusy(false);
     }
   }
 
@@ -1855,13 +1881,15 @@ export default function AdminPage() {
                       <td className="px-4 py-3">{u._count.bookmarks}</td>
                       <td className="px-4 py-3">
                         {u.subscriptions.length > 0 ? (
-                          u.subscriptions.map((s) => (
-                            <div key={s.planId} className="text-xs">
-                              <span className={s.status === "ACTIVE" ? "text-emerald-500" : "text-muted-foreground"}>
-                                {s.status === "ACTIVE" ? "✅" : "❌"} {s.planId} {s.endsAt ? `until ${new Date(s.endsAt).toLocaleDateString()}` : ""}
-                              </span>
-                            </div>
-                          ))
+                          u.subscriptions.map((sub) => {
+                            const left = sub.endsAt ? Math.max(0, Math.ceil((new Date(sub.endsAt).getTime() - Date.now()) / 86400000)) : null;
+                            return (
+                              <div key={sub.planId + (sub.endsAt || "")} className="text-xs text-emerald-500">
+                                ✅ {sub.plan?.name || "Premium"}
+                                {sub.endsAt ? ` · until ${new Date(sub.endsAt).toLocaleDateString("en-IN")} (${left}d left)` : ""}
+                              </div>
+                            );
+                          })
                         ) : (
                           <span className="text-muted-foreground">Free</span>
                         )}
@@ -1870,10 +1898,16 @@ export default function AdminPage() {
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <button onClick={() => setSelectedUser(u)} className="rounded border border-border px-2 py-1 text-xs hover:bg-muted">View</button>
-                          {u.subscriptions.some(s => s.status === "ACTIVE") ? (
-                            <button onClick={() => cancelSubscription(u.id)} className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs text-red-600 hover:bg-red-500/20">Cancel Sub</button>
-                          ) : (
-                            <button onClick={() => { setSelectedUser(u); setShowSubscriptionModal(true); }} className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-500/20">Add Sub</button>
+                          <button onClick={() => { setSelectedUser(u); setShowSubscriptionModal(true); }} className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-500/20">
+                            {u.subscriptions.length > 0 ? "Extend" : "Add Sub"}
+                          </button>
+                          {u.subscriptions.length > 0 && (
+                            <button
+                              onClick={() => { if (confirm(`Cancel ${u.fullName}'s subscription? Remaining days will be lost.`)) cancelSubscription(u.id); }}
+                              className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs text-red-600 hover:bg-red-500/20"
+                            >
+                              Cancel Sub
+                            </button>
                           )}
                         </div>
                       </td>
@@ -1947,20 +1981,42 @@ export default function AdminPage() {
       {showSubscriptionModal && selectedUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl">
-            <h2 className="text-xl font-bold">Add Subscription for {selectedUser.fullName}</h2>
+            <h2 className="text-xl font-bold">{selectedUser.subscriptions.length > 0 ? "Extend" : "Add"} Subscription — {selectedUser.fullName}</h2>
             <p className="mt-1 text-sm text-muted-foreground">{selectedUser.email}</p>
-            <div className="mt-4 space-y-3 max-h-60 overflow-y-auto">
+            {selectedUser.subscriptions[0]?.endsAt && (
+              <p className="mt-2 rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600">
+                Current: {selectedUser.subscriptions[0].plan?.name || "Premium"} until {new Date(selectedUser.subscriptions[0].endsAt!).toLocaleDateString("en-IN")}
+              </p>
+            )}
+            <div className="mt-4 rounded-lg border border-border bg-background p-3 text-sm">
+              <label className="mb-1.5 block font-medium">Duration</label>
+              <div className="flex gap-2">
+                <select value={grantUnit} onChange={(e) => setGrantUnit(e.target.value as any)} className="rounded-lg border border-border bg-card px-3 py-2 text-sm">
+                  <option value="plan">Plan&apos;s own duration</option>
+                  <option value="days">Custom — days</option>
+                  <option value="months">Custom — months</option>
+                </select>
+                {grantUnit !== "plan" && (
+                  <input type="number" min="1" value={grantAmount} onChange={(e) => setGrantAmount(e.target.value)} placeholder={grantUnit === "days" ? "e.g. 10" : "e.g. 3"} className="w-28 rounded-lg border border-border bg-card px-3 py-2 text-sm" />
+                )}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">Remaining days are kept — new time is added after the current expiry.</p>
+            </div>
+            <p className="mt-4 text-sm font-medium">Choose a plan to grant</p>
+            <div className="mt-2 space-y-2 max-h-60 overflow-y-auto">
+              {plans.filter(p => p.isActive).length === 0 && <p className="text-sm text-muted-foreground">No active plans. Create one from the plan prices section.</p>}
               {plans.filter(p => p.isActive).map((plan) => (
                 <button
                   key={plan.id}
+                  disabled={grantBusy}
                   onClick={() => addSubscription(selectedUser.id, plan.id)}
-                  className="w-full text-left rounded-lg border border-border bg-background p-3 hover:border-primary hover:bg-primary/5 transition"
+                  className="w-full text-left rounded-lg border border-border bg-background p-3 hover:border-primary hover:bg-primary/5 transition disabled:opacity-50"
                 >
                   <div className="font-medium">{plan.name} — ₹{plan.priceInr}/{plan.durationMonths} mo</div>
                 </button>
               ))}
             </div>
-            <button onClick={() => { setShowSubscriptionModal(false); setSelectedUser(null); }} className="mt-4 w-full rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted">Cancel</button>
+            <button onClick={() => { setShowSubscriptionModal(false); setSelectedUser(null); setGrantUnit("plan"); setGrantAmount(""); }} className="mt-4 w-full rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted">Cancel</button>
           </div>
         </div>
       )}
@@ -1970,7 +2026,7 @@ export default function AdminPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl">
             <h2 className="text-xl font-bold">📧 Bulk Grant Subscription</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Enter emails (comma-separated) and select a plan</p>
+            <p className="mt-1 text-sm text-muted-foreground">Enter emails (comma, space or new-line separated) and select a plan</p>
             <div className="mt-4 space-y-3">
               <div>
                 <label className="mb-1.5 block text-sm font-medium">Emails</label>
@@ -1992,9 +2048,32 @@ export default function AdminPage() {
                 </select>
               </div>
             </div>
+                        <div className="mt-3 rounded-lg border border-border bg-background p-3 text-sm">
+              <label className="mb-1.5 block font-medium">Duration</label>
+              <div className="flex gap-2">
+                <select value={grantUnit} onChange={(e) => setGrantUnit(e.target.value as any)} className="rounded-lg border border-border bg-card px-3 py-2 text-sm">
+                  <option value="plan">Plan&apos;s own duration</option>
+                  <option value="days">Custom — days</option>
+                  <option value="months">Custom — months</option>
+                </select>
+                {grantUnit !== "plan" && (
+                  <input type="number" min="1" value={grantAmount} onChange={(e) => setGrantAmount(e.target.value)} placeholder={grantUnit === "days" ? "e.g. 10" : "e.g. 3"} className="w-28 rounded-lg border border-border bg-card px-3 py-2 text-sm" />
+                )}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">Remaining days are kept — new time is added after the current expiry.</p>
+            </div>
+            {bulkResult && (
+              <div className="mt-3 max-h-40 overflow-y-auto rounded-lg border border-border bg-background p-3 text-xs">
+                <p className="mb-1 font-semibold">{bulkResult.granted} granted · {bulkResult.failed} failed</p>
+                {bulkResult.results.filter((r) => !r.success).map((r) => (
+                  <p key={r.email} className="text-red-600">❌ {r.email} — {r.reason}</p>
+                ))}
+                {bulkResult.failed === 0 && <p className="text-emerald-600">All users updated.</p>}
+              </div>
+            )}
             <div className="mt-6 flex gap-2">
-              <button onClick={sendBulkSubscription} disabled={!bulkEmail || !bulkPlanId} className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">Grant Subscriptions</button>
-              <button onClick={() => { setShowEmailModal(false); setBulkEmail(""); setBulkPlanId(""); }} className="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm hover:bg-muted">Cancel</button>
+              <button onClick={sendBulkSubscription} disabled={!bulkEmail.trim() || !bulkPlanId || grantBusy} className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">{grantBusy ? "Granting…" : "Grant Subscriptions"}</button>
+              <button onClick={() => { setShowEmailModal(false); setBulkEmail(""); setBulkPlanId(""); setBulkResult(null); setGrantUnit("plan"); setGrantAmount(""); }} className="flex-1 rounded-lg border border-border px-4 py-2.5 text-sm hover:bg-muted">Cancel</button>
             </div>
           </div>
         </div>
