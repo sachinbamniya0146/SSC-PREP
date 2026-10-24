@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { BackButton } from "@/components/BackButton";
+import { AppShell, PageHeading, EmptyState, CardSkeletons } from "@/components/AppShell";
+import { useT } from "@/lib/i18n";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { StemMedia, OptionBody, RichText } from "@/components/QuestionMedia";
 
@@ -107,6 +108,7 @@ function apiBase() {
 }
 
 export default function QuestionBankPage() {
+  const t = useT();
   // NEW ("20 20 ke batch me test format me hona chahiye, jitne bache utne
   // aayein, last attempt se aage continue ho"): single source of truth for
   // batch size, used both for the request `take` and for all the
@@ -415,23 +417,23 @@ export default function QuestionBankPage() {
   const hasNextBatch = skip + BATCH_SIZE < total;
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-8">
-      <BackButton className="mb-3" />
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Question Bank</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {metaTotal}+ verified PYQs · Hindi + English · instant answer feedback
-          </p>
-        </div>
-        <label className="flex items-center gap-1.5 text-sm font-medium">
-          <input type="checkbox" checked={showHi} onChange={(e) => setShowHi(e.target.checked)} />
-          Hindi
-        </label>
-      </div>
+    <AppShell width="wide">
+      <PageHeading
+        title={t("Question bank", "Question bank")}
+        subtitle={t(
+          `${metaTotal}+ verified PYQs in Hindi and English, with instant answer feedback.`,
+          `${metaTotal}+ verified PYQs Hindi aur English me, turant jawab feedback ke saath.`,
+        )}
+        actions={
+          <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium">
+            <input type="checkbox" checked={showHi} onChange={(e) => setShowHi(e.target.checked)} />
+            {t("Show Hindi", "Hindi dikhayein")}
+          </label>
+        }
+      />
 
       {/* Filters */}
-      <div className="mb-4 grid gap-4 rounded-xl border border-border bg-card p-5 sm:grid-cols-3">
+      <div className="card mb-4 grid gap-4 p-4 sm:grid-cols-3 sm:p-5">
         <div>
           <label className="text-xs font-medium text-muted-foreground">
             {examScoped ? "Exam (Fixed)" : "Exam"}
@@ -484,7 +486,7 @@ export default function QuestionBankPage() {
 
       <div className="mb-6 flex flex-wrap items-center gap-2">
         <button onClick={() => loadQuestions(skip)} disabled={loading}
-          className="flex-1 rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50">
+          className="btn btn-primary flex-1">
           {loading
             ? "Loading..."
             : attemptedInScope
@@ -495,14 +497,14 @@ export default function QuestionBankPage() {
           <>
           <a
             href={`/test?chapter=${encodeURIComponent(chapterId)}${examId ? `&exam=${encodeURIComponent(examId)}` : ""}`}
-            className="rounded-lg border border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-semibold text-primary hover:bg-primary/20"
+            className="btn btn-outline"
           >
             Practice Chapter (25 Qs)
           </a>
           <button
             onClick={downloadChapterPdf}
             disabled={pdfBusy || !chapterId}
-            className="rounded-lg border border-success/40 bg-success/10 px-5 py-2.5 text-sm font-semibold text-success hover:bg-success/20 disabled:opacity-50"
+            className="btn btn-outline text-success"
           >
             {pdfBusy ? "Generating…" : "Chapter PDF (₹1)"}
           </button>
@@ -539,8 +541,16 @@ export default function QuestionBankPage() {
       )}
 
       {/* Questions */}
+      {loading && questions.length === 0 && <CardSkeletons count={3} />}
       {questions.length === 0 && !loading && (
-        <p className="py-10 text-center text-sm text-muted-foreground">Select a filter and press Load Questions.</p>
+        <EmptyState
+          icon="📖"
+          title={t("Pick a filter and load questions", "Filter chunein aur sawal load karein")}
+          body={t(
+            "Choose an exam, subject or chapter above, then press Load questions. You get 20 at a time.",
+            "Upar exam, subject ya chapter chunein, phir Load questions dabayein. Ek baar me 20 sawal aate hain.",
+          )}
+        />
       )}
       <div className="space-y-4">
         {questions.map((q, i) => {
@@ -662,6 +672,6 @@ export default function QuestionBankPage() {
           );
         })}
       </div>
-    </main>
+    </AppShell>
   );
 }

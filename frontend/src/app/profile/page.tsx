@@ -1,9 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { Logo } from "@/components/Logo";
-import { ThemeContext } from "@/components/theme-provider";
+import { ShellHeader, CardSkeletons } from "@/components/AppShell";
 import { api } from "@/lib/api";
+import { clearUserCaches } from "@/lib/offline";
 import { getStoredLang, setStoredLang, useLang } from "@/lib/i18n";
 
 interface UserProfile {
@@ -22,7 +22,6 @@ interface UserProfile {
 }
 
 export default function ProfilePage() {
-  const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [user, setUser] = React.useState<UserProfile | null>(null);
   const [phone, setPhone] = React.useState("");
   const [currentPassword, setCurrentPassword] = React.useState("");
@@ -264,29 +263,18 @@ export default function ProfilePage() {
 
   if (!user) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background px-4">
-        <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 shadow-xl">
-          <div className="flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-          </div>
-        </div>
+      <div className="min-h-screen bg-background">
+        <ShellHeader />
+        <main className="mx-auto max-w-4xl px-4 py-8">
+          <CardSkeletons count={3} />
+        </main>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-4">
-          <Logo size={32} />
-          <div className="flex items-center gap-3 text-sm">
-            <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm">
-              {theme === "dark" ? "☀️" : "🌙"}
-            </button>
-            <a href="/dashboard" className="rounded-lg border border-border px-4 py-2 font-semibold hover:bg-muted">Dashboard</a>
-          </div>
-        </div>
-      </header>
+      <ShellHeader />
 
       <main className="mx-auto max-w-4xl px-4 py-8">
         <h1 className="text-2xl font-bold">👤 My Profile</h1>
@@ -666,7 +654,7 @@ export default function ProfilePage() {
             <button className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-600 hover:bg-red-500/20">
               Delete Account
             </button>
-            <a href="/login" onClick={() => localStorage.clear()} className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted">Logout</a>
+            <a href="/login" onClick={() => { void clearUserCaches(); localStorage.clear(); }} className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted">Logout</a>
           </div>
         </div>
       </main>

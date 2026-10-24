@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
-import { getStoredLang } from "@/lib/i18n";
+import { getStoredLang, useT } from "@/lib/i18n";
+import { AppShell, PageHeading, EmptyState, ErrorNote, CardSkeletons, ChoiceChip } from "@/components/AppShell";
 
 type Mock = {
   id: string;
@@ -24,10 +25,10 @@ type Mock = {
   examDate?: string | null;
 };
 
-// NEW (Sep 2026 — exam-scoping audit): minimal shape for the exam picker,
-// same fields /bank/meta already returns (question-bank/page.tsx uses the
-// same endpoint for its own exam dropdown).
+// Exam picker shape: same fields /bank/meta already returns (question-bank/page.tsx uses the same endpoint).
 type ExamOption = { id: string; name: string; count: number };
+
+type Filter = "all" | "free" | "locked" | "pyq";
 
 // Cashfree JS SDK (v3), loaded only when the student is about to pay (same as /premium).
 let cashfreeSdkPromise: Promise<any> | null = null;
@@ -49,20 +50,28 @@ function loadCashfreeSdk(): Promise<any> {
   return cashfreeSdkPromise;
 }
 
+function formatDate(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
 export default function MocksPage() {
+  const t = useT();
   const [mocks, setMocks] = React.useState<Mock[]>([]);
   const [offer, setOffer] = React.useState<{ active: boolean; priceInr: number; days: number; message: string } | null>(null);
   const [loading, setLoading] = React.useState(true);
-  // NEW — exam-scoping (see mocks.service.ts#listAvailableMocks doc-comment
-  // and schema.prisma TestTemplate.examId doc-comment for the backend
-  // half of this fix). Empty string = "All Exams", same convention
-  // question-bank/page.tsx uses for its examId state.
+  const [loadError, setLoadError] = React.useState("");
+  const [payError, setPayError] = React.useState("");
+  const [busyId, setBusyId] = React.useState<string | null>(null);
+  // Exam scoping (mocks.service.ts#listAvailableMocks): "" = All Exams, same convention as question-bank.
   const [exams, setExams] = React.useState<ExamOption[]>([]);
   const [examId, setExamId] = React.useState<string>("");
+  const [filter, setFilter] = React.useState<Filter>("all");
+  const [query, setQuery] = React.useState("");
 
-  // Exam list for the picker — same /bank/meta endpoint and same
-  // count > 0 filter question-bank/page.tsx already uses, so both pickers
-  // only ever offer exams that actually have content.
+  // Exam list for the picker: same /bank/meta endpoint and count > 0 filter as question-bank.
   React.useEffect(() => {
     (async () => {
       try {
@@ -70,52 +79,45 @@ export default function MocksPage() {
         const d = await r.json();
         const allExams = Array.isArray(d?.exams) ? d.exams.filter((e: ExamOption) => e.count > 0) : [];
         setExams(allExams);
-        const urlExam =
-          typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("exam") : null;
+        const urlExam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("exam") : null;
         if (urlExam && allExams.some((e: ExamOption) => e.id === urlExam)) setExamId(urlExam);
       } catch {
-        // non-fatal — picker just stays empty/"All Exams" if this fails
+        // non-fatal: picker just stays hidden / "All Exams"
       }
     })();
   }, []);
 
-  // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() + manual
-  // token, so an expired access token auto-refreshes instead of leaving
-  // the mocks list stuck showing nothing (or worse, all-locked).
-  const load = async (forExamId: string) => {
+  // fetchAuth() so an expired access token auto-refreshes instead of leaving the list empty / all-locked.
+  const load = React.useCallback(async (forExamId: string) => {
     try {
       setLoading(true);
+      setLoadError("");
       const qs = forExamId ? `?examId=${encodeURIComponent(forExamId)}` : "";
       const res = await fetchAuth(`${API_BASE}/mocks${qs}`);
       if (res.ok) {
         const d = await res.json();
-        setMocks(d.mockAccess);
-        setOffer(d.offer);
+        setMocks(Array.isArray(d.mockAccess) ? d.mockAccess : []);
+        setOffer(d.offer ?? null);
+      } else {
+        setLoadError(res.status === 401 ? "LOGIN" : "FAILED");
       }
+    } catch {
+      setLoadError("NETWORK");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   React.useEffect(() => {
     load(examId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [examId]);
+  }, [examId, load]);
 
-  // SECURITY FIX: this used to POST straight to /mocks/purchase, which
-  // instantly granted access with a fake, unverified "payment" (no PayU
-  // involved at all — see backend/src/mocks/mocks.controller.ts for the
-  // full explanation). That endpoint is now admin-only. Real purchases go
-  // through the same PayU order-creation + hash-verified flow the
-  // subscription checkout (/premium) already uses: create an order for
-  // this mockTemplateId, then hand off to PayU's hosted payment page.
-  // PayU redirects back to /payment/success, which calls /payments/verify
-  // and only then unlocks access server-side.
+  // SECURITY: real purchases go through the Cashfree order flow (server verifies payment before unlocking).
+  // /mocks/purchase is admin-only on the backend; never call it from here.
   const purchase = async (m: Mock) => {
+    setPayError("");
+    setBusyId(m.id);
     try {
-      // BUGFIX (2026-09 audit): fetchAuth() instead of raw fetch() +
-      // manual token — a payment attempt must not silently fail to even
-      // start just because the access token expired.
       const res = await fetchAuth(`${API_BASE}/payments/order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -123,64 +125,44 @@ export default function MocksPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(err.message || "⚠️ Could not start payment. Try again.");
+        setPayError(err.message || t("Could not start payment. Try again.", "Payment shuru nahi ho paya. Dobara try karein."));
         return;
       }
-      // Oct 2026: the backend moved to Cashfree. This page still built a PayU form
-      // (payuForm.payuUrl is undefined now), so "Unlock" never opened a payment page.
       const order = await res.json();
       const Cashfree = await loadCashfreeSdk();
       if (!Cashfree) throw new Error("Payment SDK failed to load");
       const cashfree = Cashfree({ mode: order.cashfreeEnv === "PRODUCTION" ? "production" : "sandbox" });
       await cashfree.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: "_self" });
     } catch (e: any) {
-      alert(e?.message ? `⚠️ ${e.message}` : "⚠️ Could not start payment. Try again.");
+      setPayError(e?.message || t("Could not start payment. Try again.", "Payment shuru nahi ho paya. Dobara try karein."));
+    } finally {
+      setBusyId(null);
     }
   };
 
-  const renderMock = (m: Mock) => (
-      <div
-                key={m.id}
-                className="card flex flex-wrap items-center justify-between gap-3 p-5"
-              >
-                <div>
-                  <p className="font-semibold">{m.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {m.totalQuestions} questions · {m.durationMinutes} min · {m.totalMarks} marks ·{" "}
-                    {m.type}
-                  </p>
-                  {m.free ? (
-                    <span className="mt-2 inline-block rounded-full bg-success/20 px-3 py-1 text-xs font-semibold text-success">
-                      FREE {m.reason?.startsWith("FREE_") ? "(2 free per mock)" : ""}
-                    </span>
-                  ) : (
-                    <span className="mt-2 inline-block rounded-full bg-primary/20 px-3 py-1 text-xs font-semibold text-primary">
-                      🔒 Locked · ₹{m.offerPriceInr}/{m.offerDays} days
-                    </span>
-                  )}
-                </div>
-                {m.free ? (
-                  <a
-                    href={`/test?template=${encodeURIComponent(m.id)}`}
-                    className="btn bg-success text-success-foreground hover:opacity-90"
-                  >
-                    Start Mock
-                  </a>
-                ) : (
-                  <button
-                    onClick={() => purchase(m)}
-                    className="btn bg-primary text-primary-foreground hover:opacity-90"
-                  >
-                    Unlock for ₹{m.offerPriceInr}
-                  </button>
-                )}
-              </div>
+  const counts = React.useMemo(
+    () => ({
+      all: mocks.length,
+      free: mocks.filter((m) => m.free).length,
+      locked: mocks.filter((m) => !m.free).length,
+      pyq: mocks.filter((m) => m.isPyq).length,
+    }),
+    [mocks],
   );
 
-  const pyq = mocks.filter((m) => m.isPyq);
-  const others = mocks.filter((m) => !m.isPyq);
+  const visible = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return mocks.filter((m) => {
+      if (filter === "free" && !m.free) return false;
+      if (filter === "locked" && m.free) return false;
+      if (filter === "pyq" && !m.isPyq) return false;
+      if (q && !`${m.title} ${m.year ?? ""} ${m.shift ?? ""}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [mocks, filter, query]);
+
   const pyqByYear = new Map<number, Mock[]>();
-  for (const m of pyq) {
+  for (const m of visible.filter((x) => x.isPyq)) {
     const y = m.year ?? 0;
     if (!pyqByYear.has(y)) pyqByYear.set(y, []);
     pyqByYear.get(y)!.push(m);
@@ -189,100 +171,200 @@ export default function MocksPage() {
     list.sort((a, b) => String(b.examDate ?? "").localeCompare(String(a.examDate ?? "")) || String(a.shift ?? "").localeCompare(String(b.shift ?? "")));
   }
   const pyqYears = Array.from(pyqByYear.keys()).sort((a, b) => b - a);
+  const others = visible.filter((m) => !m.isPyq);
+
+  const FILTERS: { id: Filter; label: string }[] = [
+    { id: "all", label: t("All", "Sab") },
+    { id: "free", label: t("Free", "Free") },
+    { id: "pyq", label: t("Previous year", "Pichle saal") },
+    { id: "locked", label: t("Locked", "Locked") },
+  ];
+
+  const renderMock = (m: Mock) => {
+    const meta = [m.isPyq && m.shift ? m.shift : "", m.isPyq ? formatDate(m.examDate) : ""].filter(Boolean).join(" · ");
+    return (
+      <div key={m.id} className="card card-hover flex flex-wrap items-center justify-between gap-x-4 gap-y-3 p-4 sm:p-5">
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold leading-snug">{m.title}</p>
+          {meta ? <p className="mt-0.5 text-xs text-muted-foreground">{meta}</p> : null}
+          <p className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+            <span>{m.totalQuestions} {t("questions", "sawal")}</span>
+            <span>{m.durationMinutes} {t("min", "min")}</span>
+            <span>{m.totalMarks} {t("marks", "marks")}</span>
+          </p>
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            {m.free ? (
+              <span className="badge badge-success">
+                {t("Free", "Free")}
+                {m.reason?.startsWith("FREE_") ? ` · ${t("2 free per mock", "har mock ke 2 free")}` : ""}
+              </span>
+            ) : (
+              <span className="badge badge-primary">
+                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <rect x="4" y="11" width="16" height="10" rx="2" />
+                  <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                </svg>
+                {t("Locked", "Locked")} · ₹{m.offerPriceInr}/{m.offerDays} {t("days", "din")}
+              </span>
+            )}
+            {m.isPyq ? <span className="badge badge-info">PYQ</span> : null}
+          </div>
+        </div>
+        {m.free ? (
+          <a href={`/test?template=${encodeURIComponent(m.id)}`} className="btn btn-primary w-full sm:w-auto">
+            {t("Start mock", "Mock shuru karein")}
+          </a>
+        ) : (
+          <button onClick={() => purchase(m)} disabled={busyId === m.id} className="btn btn-accent w-full sm:w-auto">
+            {busyId === m.id ? t("Opening payment…", "Payment khul raha hai…") : t(`Unlock for ₹${m.offerPriceInr}`, `₹${m.offerPriceInr} me unlock karein`)}
+          </button>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <a href="/dashboard" className="btn btn-outline text-sm">
-            Back to Dashboard
-          </a>
+    <AppShell>
+      <PageHeading
+        title={t("Mock tests", "Mock tests")}
+        subtitle={t(
+          `2 free mocks per test. Previous-year papers are always free. Unlock more for ₹${offer?.priceInr ?? 10} for ${offer?.days ?? 15} days.`,
+          `Har test ke 2 mock free. Pichle saal ke papers hamesha free. Baaki ₹${offer?.priceInr ?? 10} me ${offer?.days ?? 15} din ke liye unlock karein.`,
+        )}
+        actions={
+          <>
+            <a href="/sectional" className="btn btn-outline btn-sm">{t("Sectional", "Sectional")}</a>
+            <a href="/year-wise" className="btn btn-outline btn-sm">{t("Year-wise", "Year-wise")}</a>
+          </>
+        }
+      />
+
+      {!loading && !loadError && offer?.message ? (
+        <div className="card mb-4 border-success/30 bg-success/5 px-5 py-4">
+          <p className="text-sm font-semibold text-success">{t("Special offer", "Special offer")}</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">{offer.message}</p>
         </div>
-      </header>
+      ) : null}
 
-      <main className="mx-auto max-w-4xl px-4 py-10">
-        <h1 className="text-2xl font-bold">Mock Tests 🎯</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          2 free mocks per test · Previous-year mocks are always FREE · unlock more for just
-          ₹{offer?.priceInr ?? 10} for {offer?.days ?? 15} days!
-        </p>
+      {/* Daily Test (Live mode): one timed plan-based test per day */}
+      {!loading && !loadError ? (
+        <div className="card mb-6 flex flex-wrap items-center justify-between gap-3 border-primary/30 bg-primary/5 p-4 sm:p-5">
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-primary">{t("Daily test (live mode)", "Daily test (live mode)")}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t(
+                "One timed test a day from your study plan. Server-timed, auto-submits at zero. Missed days stack up as backlog.",
+                "Study plan se roz ek timed test. Server-timed, zero par auto-submit. Chhute hue din backlog me jama hote hain.",
+              )}
+            </p>
+          </div>
+          <a href="/test?daily=1" className="btn btn-primary w-full sm:w-auto">{t("Start daily test", "Daily test shuru karein")}</a>
+        </div>
+      ) : null}
 
-        {/* NEW — exam picker (see mocks.service.ts#listAvailableMocks /
-            schema.prisma TestTemplate.examId doc-comments). Defaults to
-            "All Exams" so nothing changes for anyone who doesn't touch it. */}
-        {exams.length > 0 && (
-          <div className="mt-4">
-            <label className="mb-1 block text-xs font-semibold text-muted-foreground">Exam</label>
+      {/* Filters */}
+      <div className="mb-5 space-y-3">
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t("Filter mocks", "Mocks filter karein")}>
+          {FILTERS.map((f) => (
+            <ChoiceChip key={f.id} selected={filter === f.id} onClick={() => setFilter(f.id)}>
+              {f.label} <span className="text-xs text-muted-foreground">{counts[f.id]}</span>
+            </ChoiceChip>
+          ))}
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("Search by title, year or shift", "Title, saal ya shift se dhundhein")}
+            aria-label={t("Search mocks", "Mocks dhundhein")}
+            className="w-full border bg-card px-3 py-2 text-sm sm:max-w-sm"
+          />
+          {exams.length > 0 ? (
             <select
               value={examId}
               onChange={(e) => setExamId(e.target.value)}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm sm:w-72"
+              aria-label={t("Exam", "Exam")}
+              className="w-full border bg-card px-3 py-2 text-sm sm:w-64"
             >
-              <option value="">All Exams</option>
+              <option value="">{t("All exams", "Sab exams")}</option>
               {exams.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
+                <option key={e.id} value={e.id}>{e.name}</option>
               ))}
             </select>
-          </div>
-        )}
+          ) : null}
+        </div>
+      </div>
 
-        {loading && <p className="mt-8 text-muted-foreground">Loading mocks…</p>}
+      {payError ? <div className="mb-4"><ErrorNote>{payError}</ErrorNote></div> : null}
 
-        {!loading && offer && (
-          <div className="card mt-6 border-success/30 bg-success/5 p-5">
-            <p className="font-semibold text-success">🔥 Special Offer</p>
-            <p className="mt-1 text-sm text-muted-foreground">{offer.message}</p>
-          </div>
-        )}
+      {loading ? <CardSkeletons count={5} /> : null}
 
-        {/* v3 §6.4 — Daily Test (Live mode): one timed plan-based test per day */}
-        {!loading && (
-          <div className="card mt-6 flex flex-wrap items-center justify-between gap-3 border-primary/30 bg-primary/5 p-5">
-            <div>
-              <p className="font-semibold text-primary">🎯 Daily Test (Live Mode)</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                One timed test per day from your study plan — exam-style, server-timed, auto-submit at zero. Missed days stack up as backlog.
-              </p>
-            </div>
-            <a
-              href="/test?daily=1"
-              className="btn bg-primary text-primary-foreground hover:opacity-90"
-            >
-              Start Daily Test
-            </a>
-          </div>
-        )}
+      {!loading && loadError ? (
+        loadError === "LOGIN" ? (
+          <EmptyState
+            title={t("Log in to see your mocks", "Mocks dekhne ke liye login karein")}
+            body={t("Your free and unlocked mocks show up here after you sign in.", "Login ke baad aapke free aur unlocked mocks yahan dikhenge.")}
+            action={<a href="/login" className="btn btn-primary">{t("Log in", "Login")}</a>}
+          />
+        ) : (
+          <ErrorNote onRetry={() => load(examId)} retryLabel={t("Try again", "Dobara try karein")}>
+            {loadError === "NETWORK"
+              ? t("Could not reach the server. Check your internet.", "Server tak nahi pahunch paye. Internet check karein.")
+              : t("Mocks could not be loaded.", "Mocks load nahi ho paye.")}
+          </ErrorNote>
+        )
+      ) : null}
 
-        {!loading && (
-          <div className="mt-6 space-y-4">
-            {mocks.length === 0 && (
-              <p className="card p-6 text-center text-sm text-muted-foreground">
-                No mock tests available yet — the question bank is being loaded. Practice daily
-                quizzes in the meantime!
-              </p>
-            )}
-            {/* NEW (Sep 29 2026): real PYQ papers auto-grouped Year > Date > Shift.
-                One card = one real shift (its own questions only, never a mixed pool). */}
-            {pyqYears.map((y) => (
-              <section key={y}>
-                <h2 className="mb-2 mt-2 text-lg font-bold">📅 {y || "Other"} — Previous Year Papers</h2>
-                <div className="space-y-3">{pyqByYear.get(y)!.map(renderMock)}</div>
-              </section>
-            ))}
-            {others.length > 0 && (
-              <section>
-                {pyqYears.length > 0 && <h2 className="mb-2 mt-4 text-lg font-bold">🎯 Other Mock Tests</h2>}
-                <div className="space-y-3">{others.map(renderMock)}</div>
-              </section>
-            )}
-          </div>
-        )}
-      </main>
-    </div>
+      {!loading && !loadError ? (
+        <div className="space-y-8">
+          {mocks.length === 0 ? (
+            <EmptyState
+              icon="📝"
+              title={t("No mock tests yet", "Abhi koi mock test nahi hai")}
+              body={t(
+                examId ? "This exam has no mocks yet. Try All exams, or practise from the question bank meanwhile." : "The question bank is still being loaded. Practise from the question bank meanwhile.",
+                examId ? "Is exam ke mocks abhi nahi hain. Sab exams try karein, ya tab tak question bank se practice karein." : "Question bank abhi load ho raha hai. Tab tak question bank se practice karein.",
+              )}
+              action={<a href="/question-bank" className="btn btn-outline">{t("Open question bank", "Question bank kholein")}</a>}
+            />
+          ) : visible.length === 0 ? (
+            <EmptyState
+              icon="🔍"
+              title={t("Nothing matches", "Kuch match nahi mila")}
+              body={t("Try a different filter or clear the search.", "Doosra filter try karein ya search hata dein.")}
+              action={
+                <button type="button" className="btn btn-outline" onClick={() => { setFilter("all"); setQuery(""); }}>
+                  {t("Clear filters", "Filters hatayein")}
+                </button>
+              }
+            />
+          ) : null}
+
+          {/* Real PYQ papers grouped Year > Date > Shift. One card = one real shift. */}
+          {pyqYears.map((y) => (
+            <section key={y} aria-label={`${y || "Other"} previous year papers`}>
+              <h2 className="mb-3 flex items-baseline gap-2 text-lg font-bold">
+                {y || t("Other", "Anya")}
+                <span className="text-sm font-medium text-muted-foreground">{t("Previous year papers", "Pichle saal ke papers")} · {pyqByYear.get(y)!.length}</span>
+              </h2>
+              <div className="space-y-3">{pyqByYear.get(y)!.map(renderMock)}</div>
+            </section>
+          ))}
+
+          {others.length > 0 ? (
+            <section aria-label="Other mock tests">
+              {pyqYears.length > 0 ? (
+                <h2 className="mb-3 flex items-baseline gap-2 text-lg font-bold">
+                  {t("Other mock tests", "Anya mock tests")}
+                  <span className="text-sm font-medium text-muted-foreground">{others.length}</span>
+                </h2>
+              ) : null}
+              <div className="space-y-3">{others.map(renderMock)}</div>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+    </AppShell>
   );
 }

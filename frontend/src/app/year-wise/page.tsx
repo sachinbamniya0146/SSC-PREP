@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { AppShell, PageHeading, EmptyState, ErrorNote, ChoiceChip } from "@/components/AppShell";
 
 type Exam = { id: string; name: string; slug: string; count: number };
 type YearRow = { year: number; questionCount: number };
@@ -10,126 +12,164 @@ type Subject = { id: string; name: string; slug: string; questionCount: number }
 type Chapter = { id: string; name: string; slug: string; count: number };
 type TopicRow = { id: string; name: string; slug: string; count: number };
 
+/** Numbered step heading. The flow really is a sequence (exam → year → shift → scope), so numbers carry meaning. */
+function Step({ n, title, hint, done, children }: { n: number; title: string; hint?: string; done?: boolean; children: React.ReactNode }) {
+  return (
+    <section className="card p-4 sm:p-5" aria-label={title}>
+      <div className="mb-3 flex items-start gap-3">
+        <span
+          className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+            done ? "bg-success text-success-foreground" : "bg-primary/10 text-primary"
+          }`}
+          aria-hidden
+        >
+          {done ? "✓" : n}
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold leading-6">{title}</h2>
+          {hint ? <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p> : null}
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export default function YearWisePage() {
-  const apiBase = () => API_BASE;
-  const authHeaders = (): Record<string, string> => {
-    const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
+  const t = useT();
 
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
+  const [needsLogin, setNeedsLogin] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
 
   const [exams, setExams] = React.useState<Exam[]>([]);
   const [examId, setExamId] = React.useState("");
 
   const [years, setYears] = React.useState<YearRow[]>([]);
+  const [yearsLoading, setYearsLoading] = React.useState(false);
   const [year, setYear] = React.useState<number | null>(null);
 
-  // NEW — shift picker (see tests.service.ts yearWiseStart() BUGFIX):
-  // a year with multiple shifts used to have no way to attempt just ONE
-  // real shift's paper, so "Full Paper" silently combined every shift into
-  // one uncapped mega-test. `shift === null` means "not chosen yet";
-  // `shift === ""` means the student explicitly chose "all shifts combined".
+  // Shift picker (tests.service.ts yearWiseStart()): `null` = not chosen yet, `""` = student explicitly chose
+  // "all shifts combined", otherwise the exact shift string.
   const [shifts, setShifts] = React.useState<ShiftRow[]>([]);
   const [shift, setShift] = React.useState<string | null>(null);
 
   const [subjects, setSubjects] = React.useState<Subject[]>([]);
   const [selectedSubjects, setSelectedSubjects] = React.useState<Set<string>>(new Set());
-
   const [chapters, setChapters] = React.useState<Chapter[]>([]);
   const [selectedChapters, setSelectedChapters] = React.useState<Set<string>>(new Set());
-
   const [topics, setTopics] = React.useState<TopicRow[]>([]);
   const [selectedTopics, setSelectedTopics] = React.useState<Set<string>>(new Set());
+  const [customOpen, setCustomOpen] = React.useState(false);
 
-  // Step 1 — load exams
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetchAuth(`${apiBase()}/bank/meta`, { headers: authHeaders() });
-        if (!r.ok) {
-          setError(r.status === 401 ? "Login required" : "Failed to load exams");
-          return;
-        }
-        const d = await r.json();
-        const list: Exam[] = Array.isArray(d?.exams) ? d.exams : [];
-        setExams(list.filter((e) => e.count > 0));
-        if (list.length > 0) setExamId(list[0].id);
-      } catch {
-        setError("Network error — backend unreachable");
-      } finally {
-        setLoading(false);
+  // Step 1: exams
+  const loadExams = React.useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/bank/meta`);
+      if (!r.ok) {
+        if (r.status === 401) setNeedsLogin(true);
+        else setError("LOAD");
+        return;
       }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      const d = await r.json();
+      const list: Exam[] = (Array.isArray(d?.exams) ? d.exams : []).filter((e: Exam) => e.count > 0);
+      setExams(list);
+      // Honour ?exam=<id> (deep links from the dashboard), otherwise leave the choice to the student.
+      const urlExam = new URLSearchParams(window.location.search).get("exam");
+      if (urlExam && list.some((e) => e.id === urlExam)) setExamId(urlExam);
+      else if (list.length === 1) setExamId(list[0].id);
+    } catch {
+      setError("NETWORK");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // Step 2 — load years for the chosen exam
   React.useEffect(() => {
-    if (!examId) return;
+    loadExams();
+  }, [loadExams]);
+
+  // Step 2: years for the chosen exam. Changing the exam clears everything below it.
+  React.useEffect(() => {
     setYear(null);
     setYears([]);
+    setShift(null);
+    setShifts([]);
     setSubjects([]);
     setSelectedSubjects(new Set());
     setChapters([]);
     setSelectedChapters(new Set());
     setTopics([]);
     setSelectedTopics(new Set());
+    setCustomOpen(false);
+    if (!examId) return;
+    let cancelled = false;
+    setYearsLoading(true);
     (async () => {
       try {
-        const r = await fetchAuth(`${apiBase()}/bank/years?examId=${examId}`, { headers: authHeaders() });
-        if (!r.ok) return;
+        const r = await fetchAuth(`${API_BASE}/bank/years?examId=${examId}`);
+        if (!r.ok || cancelled) return;
         const d = await r.json();
-        const list: YearRow[] = Array.isArray(d) ? d : [];
-        setYears(list);
+        if (!cancelled) setYears(Array.isArray(d) ? d : []);
       } catch {
-        /* keep list empty, UI shows "no years yet" */
+        /* keep list empty: UI shows "no years yet" */
+      } finally {
+        if (!cancelled) setYearsLoading(false);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [examId]);
 
-  // Step 3 — load subjects for exam+year once a year is chosen
-  React.useEffect(() => {
-    if (!examId || !year) return;
-    (async () => {
-      try {
-        const r = await fetchAuth(`${apiBase()}/bank/subjects?examId=${examId}`, { headers: authHeaders() });
-        if (!r.ok) return;
-        const d = await r.json();
-        const list: Subject[] = Array.isArray(d) ? d : [];
-        setSubjects(list.filter((s) => s.questionCount > 0));
-      } catch {
-        /* ignore */
-      }
-    })();
-  }, [examId, year]);
-
-  // NEW — load shifts for exam+year whenever the year changes, and reset
-  // any previously-chosen shift (a shift from a different year makes no
-  // sense to carry over). When a year has only one shift (or none tagged
-  // at all — older/legacy uploads), auto-select it/skip the step so the
-  // flow isn't slowed down for the common case.
+  // Step 3: shifts for exam + year. A year with one shift (or none tagged) skips this step automatically.
   React.useEffect(() => {
     setShift(null);
     setShifts([]);
     if (!examId || !year) return;
+    let cancelled = false;
     (async () => {
       try {
-        const r = await fetchAuth(`${apiBase()}/bank/shifts?examId=${examId}&year=${year}`, { headers: authHeaders() });
-        if (!r.ok) return;
+        const r = await fetchAuth(`${API_BASE}/bank/shifts?examId=${examId}&year=${year}`);
+        if (!r.ok || cancelled) return;
         const d = await r.json();
         const list: ShiftRow[] = Array.isArray(d) ? d : [];
+        if (cancelled) return;
         setShifts(list);
-        if (list.length === 1) setShift(list[0].shift); // only one shift — nothing to choose
+        if (list.length === 1) setShift(list[0].shift);
       } catch {
-        /* keep list empty — start() below still works, just without shift narrowing */
+        /* start() still works without shift narrowing */
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [examId, year]);
 
-  // Step 4 — load chapters when subjects are (de)selected (one subject at a time, merged)
+  // Subjects for the optional customise step (loaded only once a year is chosen).
+  React.useEffect(() => {
+    if (!examId || !year) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/bank/subjects?examId=${examId}`);
+        if (!r.ok || cancelled) return;
+        const d = await r.json();
+        const list: Subject[] = Array.isArray(d) ? d : [];
+        if (!cancelled) setSubjects(list.filter((s) => s.questionCount > 0));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [examId, year]);
+
+  // Chapters when subjects are (de)selected (one fetch per subject, merged).
   React.useEffect(() => {
     if (selectedSubjects.size === 0) {
       setChapters([]);
@@ -138,54 +178,47 @@ export default function YearWisePage() {
       setSelectedTopics(new Set());
       return;
     }
+    let cancelled = false;
     (async () => {
       try {
         const results = await Promise.all(
           Array.from(selectedSubjects).map((sid) =>
-            fetchAuth(`${apiBase()}/bank/chapters?subjectId=${sid}&examId=${examId}`, { headers: authHeaders() }).then((r) =>
-              r.ok ? r.json() : [],
-            ),
+            fetchAuth(`${API_BASE}/bank/chapters?subjectId=${sid}&examId=${examId}`).then((r) => (r.ok ? r.json() : [])),
           ),
         );
-        const merged: Chapter[] = ([] as Chapter[]).concat(...results.filter(Array.isArray));
-        setChapters(merged);
+        if (!cancelled) setChapters(([] as Chapter[]).concat(...results.filter(Array.isArray)));
       } catch {
         /* ignore */
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
   }, [selectedSubjects, examId]);
 
-  // Step 5 — load topics when chapters are (de)selected
-  // BUGFIX (Session 20 — "exam-wise button should only give that exam's
-  // PYQs" audit): this call never sent examId even though the exam is
-  // already known at this point (same as the chapters fetch right above,
-  // which does send it). Without it, the topic list/counts came from every
-  // exam sharing this chapter, not just the one the student picked — a
-  // topic could look non-empty here and still produce zero questions when
-  // yearWiseStart() (which DOES filter by examId) tried to compose the
-  // actual test. See BankService.topics() doc comment for the backend half
-  // of this fix.
+  // Topics when chapters are (de)selected. examId is sent so counts match what yearWiseStart() will actually compose.
   React.useEffect(() => {
     if (selectedChapters.size === 0) {
       setTopics([]);
       setSelectedTopics(new Set());
       return;
     }
+    let cancelled = false;
     (async () => {
       try {
         const results = await Promise.all(
           Array.from(selectedChapters).map((cid) =>
-            fetchAuth(`${apiBase()}/bank/topics?chapterId=${cid}&examId=${examId}`, { headers: authHeaders() }).then((r) => (r.ok ? r.json() : [])),
+            fetchAuth(`${API_BASE}/bank/topics?chapterId=${cid}&examId=${examId}`).then((r) => (r.ok ? r.json() : [])),
           ),
         );
-        const merged: TopicRow[] = ([] as TopicRow[]).concat(...results.filter(Array.isArray));
-        setTopics(merged);
+        if (!cancelled) setTopics(([] as TopicRow[]).concat(...results.filter(Array.isArray)));
       } catch {
         /* ignore */
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
   }, [selectedChapters, examId]);
 
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, id: string) => {
@@ -195,17 +228,24 @@ export default function YearWisePage() {
     setter(next);
   };
 
+  const exam = exams.find((e) => e.id === examId);
+  const yearRow = years.find((y) => y.year === year);
+  const multiShift = shifts.length > 1;
+  const shiftReady = !!year && (!multiShift || shift !== null);
+  // Exact question pool of the chosen paper (before any subject/chapter/topic narrowing).
+  const shiftRow = shift ? shifts.find((s) => s.shift === shift) : undefined;
+  const paperCount = shiftRow ? shiftRow.questionCount : yearRow?.questionCount;
+
   const start = async (full: boolean) => {
     if (!examId || !year) return;
     setStarting(true);
     setError("");
     try {
+      // Same shape /test?yearwise=1 reads from sessionStorage. "" (all shifts) is sent as undefined so the
+      // backend's opts.shift stays falsy, exactly as before.
       const cfg = {
         examId,
         year,
-        // "" (all shifts combined) is sent as undefined — omitting the
-        // field entirely means the backend's opts.shift stays falsy, same
-        // as before this feature existed.
         shift: shift || undefined,
         full,
         subjectIds: full ? [] : Array.from(selectedSubjects),
@@ -215,203 +255,237 @@ export default function YearWisePage() {
       sessionStorage.setItem("ssc_yearwise_config", JSON.stringify(cfg));
       window.location.href = "/test?yearwise=1";
     } catch {
-      setError("Could not start the test — please try again");
+      setError("START");
       setStarting(false);
     }
   };
 
+  const errorText =
+    error === "NETWORK"
+      ? t("Could not reach the server. Check your internet.", "Server tak nahi pahunch paye. Internet check karein.")
+      : error === "START"
+        ? t("Could not start the test. Please try again.", "Test shuru nahi ho paya. Dobara try karein.")
+        : t("Exams could not be loaded.", "Exams load nahi ho paye.");
+
+  const scopeSummary =
+    selectedTopics.size > 0
+      ? t(`${selectedTopics.size} topic(s)`, `${selectedTopics.size} topic`)
+      : selectedChapters.size > 0
+        ? t(`${selectedChapters.size} chapter(s)`, `${selectedChapters.size} chapter`)
+        : selectedSubjects.size > 0
+          ? t(`${selectedSubjects.size} subject(s)`, `${selectedSubjects.size} subject`)
+          : t("All subjects", "Sab subjects");
+
+  const paperLabel = [exam?.name, year, shift ? shift : shifts.length > 1 && shift === "" ? t("all shifts", "sab shifts") : ""]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <a href="/mocks" className="btn btn-outline text-sm">Mock Tests</a>
+    <AppShell>
+      <PageHeading
+        title={t("Year-wise PYQ test", "Year-wise PYQ test")}
+        subtitle={t(
+          "Pick one exam, one year and one shift to attempt that exact paper. Or narrow it down to the subjects, chapters and topics you want.",
+          "Ek exam, ek saal aur ek shift chun kar wahi exact paper dein. Ya apne pasand ke subject, chapter aur topic tak seemit karein.",
+        )}
+        actions={<a href="/mocks" className="btn btn-outline btn-sm">{t("Mock tests", "Mock tests")}</a>}
+      />
+
+      {loading ? (
+        <div className="space-y-4" aria-busy="true" aria-label="Loading">
+          <div className="card space-y-3 p-5">
+            <div className="skeleton h-4 w-32" />
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="skeleton h-16" />
+              <div className="skeleton h-16" />
+            </div>
+          </div>
         </div>
-      </header>
+      ) : null}
 
-      <main className="mx-auto max-w-4xl px-4 py-10">
-        <h1 className="text-2xl font-bold">📅 Year-wise PYQ Test</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Pick an exam and a year, then attempt the full paper or narrow it down by subject, chapter, or topic.
-        </p>
+      {!loading && needsLogin ? (
+        <EmptyState
+          title={t("Log in to start a year-wise test", "Year-wise test ke liye login karein")}
+          action={<a href="/login" className="btn btn-primary">{t("Log in", "Login")}</a>}
+        />
+      ) : null}
 
-        {loading && <p className="mt-8 text-muted-foreground">Loading exams…</p>}
-        {error && <p className="card mt-8 p-6 text-center text-sm text-danger">{error}</p>}
+      {!loading && !needsLogin && error && exams.length === 0 ? (
+        <ErrorNote onRetry={loadExams} retryLabel={t("Try again", "Dobara try karein")}>{errorText}</ErrorNote>
+      ) : null}
 
-        {!loading && !error && (
-          <div className="card mt-6 max-w-2xl space-y-6 p-6">
-            {/* Exam */}
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground">Choose Exam *</label>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+      {!loading && !needsLogin && !error && exams.length === 0 ? (
+        <EmptyState
+          icon="📅"
+          title={t("No previous-year papers yet", "Abhi koi pichle saal ka paper nahi hai")}
+          body={t("Exams show up here once their PYQs are published.", "PYQ publish hote hi exams yahan dikhenge.")}
+          action={<a href="/mocks" className="btn btn-outline">{t("Browse mock tests", "Mock tests dekhein")}</a>}
+        />
+      ) : null}
+
+      {!loading && !needsLogin && exams.length > 0 ? (
+        <div className="grid gap-5 lg:grid-cols-[1fr_20rem] lg:items-start">
+          <div className="space-y-4">
+            <Step n={1} title={t("Exam", "Exam")} done={!!examId}>
+              <div className="grid gap-2.5 sm:grid-cols-2">
                 {exams.map((e) => (
-                  <button
-                    key={e.id}
-                    onClick={() => setExamId(e.id)}
-                    className={`rounded-xl border p-4 text-left transition ${
-                      examId === e.id ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
-                    }`}
-                  >
+                  <ChoiceChip key={e.id} tile selected={examId === e.id} onClick={() => setExamId(e.id)}>
                     <p className="font-semibold">{e.name}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{e.count.toLocaleString()} questions</p>
-                  </button>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{e.count.toLocaleString()} {t("questions", "sawal")}</p>
+                  </ChoiceChip>
                 ))}
               </div>
-            </div>
+            </Step>
 
-            {/* Year */}
-            {examId && (
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground">Choose Year *</label>
-                {years.length === 0 ? (
-                  <p className="mt-2 text-sm text-muted-foreground">No years tagged for this exam yet.</p>
+            {examId ? (
+              <Step n={2} title={t("Year", "Saal")} done={!!year}>
+                {yearsLoading ? (
+                  <div className="flex gap-2" aria-busy="true">
+                    {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-10 w-20" />)}
+                  </div>
+                ) : years.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t("No years are tagged for this exam yet.", "Is exam ke liye abhi koi saal tag nahi hai.")}</p>
                 ) : (
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {years.map((y) => (
-                      <button
-                        key={y.year}
-                        onClick={() => setYear(y.year)}
-                        className={`rounded-lg border px-4 py-2 text-sm transition ${
-                          year === y.year ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
-                        }`}
-                      >
+                      <ChoiceChip key={y.year} selected={year === y.year} onClick={() => setYear(y.year)}>
                         {y.year} <span className="text-xs text-muted-foreground">({y.questionCount})</span>
-                      </button>
+                      </ChoiceChip>
                     ))}
                   </div>
                 )}
-              </div>
-            )}
+              </Step>
+            ) : null}
 
-            {/* Shift — new. Shown only when this year has more than one
-                shift tagged (the common multi-shift case); a single-shift
-                or untagged year auto-skips this step, see the effect above. */}
-            {year && shifts.length > 1 && (
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground">Choose Shift</label>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  A real SSC paper is one shift (max 100 Q). Pick one, or attempt every shift combined as one longer practice set.
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {shifts.map((s) => (
-                    <button
-                      key={s.shift}
-                      onClick={() => setShift(s.shift)}
-                      className={`rounded-lg border px-4 py-2 text-sm transition ${
-                        shift === s.shift ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
-                      }`}
-                    >
-                      {s.shift} <span className="text-xs text-muted-foreground">({s.questionCount})</span>
-                    </button>
-                  ))}
-                  <button
-                    onClick={() => setShift("")}
-                    className={`rounded-lg border px-4 py-2 text-sm transition ${
-                      shift === "" ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
-                    }`}
-                  >
-                    All shifts combined
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Full paper shortcut */}
-            {year && (shifts.length <= 1 || shift !== null) && (
-              <button
-                onClick={() => start(true)}
-                disabled={starting}
-                className="btn w-full bg-primary py-3 text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            {year && multiShift ? (
+              <Step
+                n={3}
+                title={t("Shift", "Shift")}
+                hint={t(
+                  "A real SSC paper is one shift (up to 100 questions). Pick one, or combine every shift into a longer practice set.",
+                  "Asli SSC paper ek shift ka hota hai (100 sawal tak). Ek chunein, ya sab shifts ko milakar lamba practice set banayein.",
+                )}
+                done={shift !== null}
               >
-                {starting
-                  ? "Composing…"
-                  : shift
-                    ? `🚀 Attempt ${year} ${shift} Paper`
-                    : `🚀 Attempt Full ${year} Paper (all subjects)`}
-              </button>
-            )}
-
-            {/* Customisation — subject/chapter/topic, fully optional */}
-            {year && subjects.length > 0 && (
-              <div className="border-t border-border pt-5">
-                <p className="text-xs font-semibold text-muted-foreground">
-                  Or customise: pick subject(s) — leave empty for all subjects
-                </p>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {subjects.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => toggle(selectedSubjects, setSelectedSubjects, s.id)}
-                      className={`rounded-lg border p-3 text-left text-sm transition ${
-                        selectedSubjects.has(s.id) ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
-                      }`}
-                    >
-                      {s.name}
-                    </button>
+                <div className="flex flex-wrap gap-2">
+                  {shifts.map((s) => (
+                    <ChoiceChip key={s.shift} selected={shift === s.shift} onClick={() => setShift(s.shift)}>
+                      {s.shift} <span className="text-xs text-muted-foreground">({s.questionCount})</span>
+                    </ChoiceChip>
                   ))}
+                  <ChoiceChip selected={shift === ""} onClick={() => setShift("")}>
+                    {t("All shifts combined", "Sab shifts milakar")}
+                  </ChoiceChip>
                 </div>
+              </Step>
+            ) : null}
 
-                {chapters.length > 0 && (
-                  <>
-                    <p className="mt-4 text-xs font-semibold text-muted-foreground">
-                      Chapter(s) — optional, narrows within the subject(s) above
-                    </p>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      {chapters.map((c) => (
-                        <button
-                          key={c.id}
-                          onClick={() => toggle(selectedChapters, setSelectedChapters, c.id)}
-                          className={`rounded-lg border p-3 text-left text-sm transition ${
-                            selectedChapters.has(c.id) ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
-                          }`}
-                        >
-                          {c.name}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-
-                {topics.length > 0 && (
-                  <>
-                    <p className="mt-4 text-xs font-semibold text-muted-foreground">
-                      Topic(s) — optional, narrows all the way down
-                    </p>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      {topics.map((t) => (
-                        <button
-                          key={t.id}
-                          onClick={() => toggle(selectedTopics, setSelectedTopics, t.id)}
-                          className={`rounded-lg border p-3 text-left text-sm transition ${
-                            selectedTopics.has(t.id) ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/50"
-                          }`}
-                        >
-                          {t.name}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-
+            {shiftReady && subjects.length > 0 ? (
+              <Step
+                n={multiShift ? 4 : 3}
+                title={t("Narrow it down (optional)", "Seemit karein (optional)")}
+                hint={t("Leave this closed to attempt the whole paper.", "Poora paper dene ke liye ise band rehne dein.")}
+              >
                 <button
-                  onClick={() => start(false)}
-                  disabled={starting || selectedSubjects.size === 0}
-                  className="btn mt-5 w-full bg-primary py-3 text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                  type="button"
+                  onClick={() => setCustomOpen((v) => !v)}
+                  aria-expanded={customOpen}
+                  className="btn btn-outline btn-sm"
                 >
-                  {starting ? "Composing…" : "🎯 Start Customised Test"}
+                  {customOpen ? t("Hide subject, chapter and topic", "Subject, chapter, topic chhupayein") : t("Choose subject, chapter and topic", "Subject, chapter, topic chunein")}
                 </button>
-                {selectedSubjects.size === 0 && (
-                  <p className="mt-2 text-center text-xs text-muted-foreground">
-                    Pick at least one subject to start a customised test, or use the Full Paper button above.
-                  </p>
-                )}
-              </div>
-            )}
+
+                {customOpen ? (
+                  <div className="mt-4 space-y-5">
+                    <div>
+                      <p className="mb-2 text-xs font-semibold text-muted-foreground">{t("Subjects", "Subjects")}</p>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {subjects.map((s) => (
+                          <ChoiceChip key={s.id} selected={selectedSubjects.has(s.id)} onClick={() => toggle(selectedSubjects, setSelectedSubjects, s.id)}>
+                            {s.name}
+                          </ChoiceChip>
+                        ))}
+                      </div>
+                    </div>
+                    {chapters.length > 0 ? (
+                      <div>
+                        <p className="mb-2 text-xs font-semibold text-muted-foreground">{t("Chapters", "Chapters")}</p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {chapters.map((c) => (
+                            <ChoiceChip key={c.id} selected={selectedChapters.has(c.id)} onClick={() => toggle(selectedChapters, setSelectedChapters, c.id)}>
+                              {c.name}
+                            </ChoiceChip>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {topics.length > 0 ? (
+                      <div>
+                        <p className="mb-2 text-xs font-semibold text-muted-foreground">{t("Topics", "Topics")}</p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {topics.map((tp) => (
+                            <ChoiceChip key={tp.id} selected={selectedTopics.has(tp.id)} onClick={() => toggle(selectedTopics, setSelectedTopics, tp.id)}>
+                              {tp.name}
+                            </ChoiceChip>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => start(false)}
+                      disabled={starting || selectedSubjects.size === 0}
+                      className="btn btn-outline w-full"
+                    >
+                      {starting ? t("Preparing…", "Taiyaar ho raha hai…") : t("Start customised test", "Customised test shuru karein")}
+                    </button>
+                    {selectedSubjects.size === 0 ? (
+                      <p className="text-center text-xs text-muted-foreground">
+                        {t("Pick at least one subject, or attempt the full paper from the summary.", "Kam se kam ek subject chunein, ya summary se poora paper dein.")}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </Step>
+            ) : null}
           </div>
-        )}
-      </main>
-    </div>
+
+          {/* Summary + primary action: always visible on desktop, below the steps on phones. */}
+          <aside className="card space-y-4 p-5 lg:sticky lg:top-24" aria-label={t("Your paper", "Aapka paper")}>
+            <p className="text-xs font-semibold text-muted-foreground">{t("Your paper", "Aapka paper")}</p>
+            {!year ? (
+              <p className="text-sm text-muted-foreground">{t("Choose an exam and a year to see the paper here.", "Yahan paper dekhne ke liye exam aur saal chunein.")}</p>
+            ) : (
+              <>
+                <div className="rounded-lg bg-muted/60 px-3.5 py-3 text-sm">
+                  <p className="font-semibold">{paperLabel}</p>
+                  <p className="mt-0.5 text-muted-foreground">
+                    {!shiftReady
+                      ? t("Choose a shift to continue", "Aage badhne ke liye shift chunein")
+                      : `${paperCount != null ? `${paperCount} ${t("questions", "sawal")} · ` : ""}${scopeSummary}`}
+                  </p>
+                </div>
+                {error ? <ErrorNote>{errorText}</ErrorNote> : null}
+                <button
+                  type="button"
+                  onClick={() => start(true)}
+                  disabled={starting || !shiftReady}
+                  className="btn btn-primary btn-lg w-full"
+                >
+                  {starting
+                    ? t("Preparing your test…", "Test taiyaar ho raha hai…")
+                    : shift
+                      ? t(`Attempt ${year} ${shift} paper`, `${year} ${shift} paper dein`)
+                      : t(`Attempt full ${year} paper`, `Poora ${year} paper dein`)}
+                </button>
+                <p className="text-xs text-muted-foreground">
+                  {t("Timed like the real exam. Your answers autosave and the result opens right after you submit.", "Asli exam jaisa timer. Jawab autosave hote hain aur submit ke turant baad result khulta hai.")}
+                </p>
+              </>
+            )}
+          </aside>
+        </div>
+      ) : null}
+    </AppShell>
   );
 }

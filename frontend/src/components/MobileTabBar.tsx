@@ -12,7 +12,7 @@ const tabs = [
 ];
 
 // Only on main browsing screens, never inside a test / quiz / admin screen.
-const SHOW_ON = ["/dashboard", "/mocks", "/question-bank", "/leaderboard", "/profile", "/vocabulary", "/study-plan", "/weak-topics", "/referral"];
+const SHOW_ON = ["/dashboard", "/mocks", "/sectional", "/year-wise", "/question-bank", "/leaderboard", "/profile", "/vocabulary", "/study-plan", "/weak-topics", "/referral"];
 
 /** App-style bottom navigation for signed-in users on phones. */
 export function MobileTabBar() {

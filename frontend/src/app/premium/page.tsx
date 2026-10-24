@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { fetchAuth, API_BASE } from "@/lib/api";
 import { startCashfreeCheckout } from "@/lib/vocab-pay";
 import { useT } from "@/lib/i18n";
+import { ShellHeader, PageHeading, CardSkeletons } from "@/components/AppShell";
 
 type Plan = {
   id: string;
@@ -154,30 +155,14 @@ export default function PremiumPage() {
     return addMonthsClamped(base, selectedPlan.durationMonths);
   }, [selectedPlan, hasActive, subscription]);
 
-  const header = (
-    <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-      <div className="mx-auto flex max-w-4xl items-center justify-between">
-        <h1 className="text-xl font-bold">{tr("Premium", "Premium")}</h1>
-        <div className="flex items-center gap-4 text-sm">
-          <Link href="/premium/history" className="text-muted-foreground hover:text-foreground">
-            {tr("Payment history", "Payment history")}
-          </Link>
-          <Link href="/dashboard" className="text-muted-foreground hover:text-foreground">
-            ← Dashboard
-          </Link>
-        </div>
-      </div>
-    </header>
-  );
+  const header = <ShellHeader />;
 
   if (loading) {
     return (
       <div className="min-h-screen bg-background text-foreground">
         {header}
-        <main className="mx-auto max-w-4xl px-4 py-10">
-          <div className="flex items-center justify-center py-20">
-            <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-primary" />
-          </div>
+        <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
+          <CardSkeletons count={3} />
         </main>
       </div>
     );
@@ -186,11 +171,16 @@ export default function PremiumPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       {header}
-      <main className="mx-auto max-w-4xl px-4 py-8">
+      <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
+        <PageHeading
+          title={tr("Premium", "Premium")}
+          subtitle={tr("Unlimited practice, all mocks and AI solutions. Plans stack, so renewing early never wastes time.", "Unlimited practice, saare mocks aur AI solutions. Plans stack hote hain, isliye jaldi renew karne se time waste nahi hota.")}
+          actions={<Link href="/premium/history" className="btn btn-outline btn-sm">{tr("Payment history", "Payment history")}</Link>}
+        />
         {loadError && (
-          <div className="mb-6 flex items-center justify-between rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <div className="mb-6 flex items-center justify-between rounded-lg border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
             <span>{loadError}</span>
-            <button onClick={loadData} className="rounded-md border border-red-300 px-3 py-1 font-medium hover:bg-red-100">
+            <button onClick={loadData} className="rounded-md border border-danger/40 px-3 py-1 font-medium hover:bg-danger/10">
               Retry
             </button>
           </div>
@@ -198,23 +188,23 @@ export default function PremiumPage() {
 
         {/* Current status */}
         {subscription?.active && subscription.admin && (
-          <div className="mb-8 rounded-lg border border-green-200 bg-green-50 p-4">
-            <p className="font-semibold text-green-800">Admin — full premium access</p>
+          <div className="mb-8 rounded-lg border border-success/30 bg-success/10 p-4">
+            <p className="font-semibold text-success">Admin — full premium access</p>
           </div>
         )}
 
         {hasActive && subscription?.plan && (
           <div
             className={`mb-8 rounded-xl border p-5 ${
-              subscription.expiringSoon ? "border-amber-300 bg-amber-50" : "border-green-200 bg-green-50"
+              subscription.expiringSoon ? "border-warning/40 bg-warning/10" : "border-success/30 bg-success/10"
             }`}
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className={`font-semibold ${subscription.expiringSoon ? "text-amber-900" : "text-green-800"}`}>
+                <p className={`font-semibold ${subscription.expiringSoon ? "text-warning" : "text-success"}`}>
                   {subscription.plan.name}
                 </p>
-                <p className={`text-sm ${subscription.expiringSoon ? "text-amber-800" : "text-green-700"}`}>
+                <p className={`text-sm text-foreground/80`}>
                   {tr("Valid until", "Valid until")} <strong>{fmtDate(subscription.endsAt)}</strong> ·{" "}
                   {subscription.daysLeft} {tr("days left", "din baaki")}
                 </p>
@@ -227,7 +217,7 @@ export default function PremiumPage() {
               </button>
             </div>
             {subscription.expiringSoon && (
-              <p className="mt-2 text-sm text-amber-800">
+              <p className="mt-2 text-sm text-foreground/80">
                 {tr(
                   "Aapka plan jaldi khatam ho raha hai — abhi renew karein, baaki bacha hua time add ho jayega.",
                   "Aapka plan jaldi khatam ho raha hai — abhi renew karein, baaki bacha hua time add ho jayega.",
@@ -238,11 +228,11 @@ export default function PremiumPage() {
         )}
 
         {!subscription?.active && (
-          <div className="mb-8 rounded-xl border border-amber-200 bg-amber-50 p-5">
-            <p className="font-semibold text-amber-800">
+          <div className="mb-8 rounded-xl border border-warning/30 bg-warning/10 p-5">
+            <p className="font-semibold text-warning">
               {subscription?.lastEndedAt ? tr("Your plan has expired", "Aapka plan khatam ho chuka hai") : "Free Tier"}
             </p>
-            <p className="text-sm text-amber-700">
+            <p className="text-sm text-foreground/80">
               {subscription?.lastEndedAt
                 ? `${tr("Expired on", "Khatam hua")} ${fmtDate(subscription.lastEndedAt)}. `
                 : ""}
@@ -325,9 +315,9 @@ export default function PremiumPage() {
                   </button>
                 )}
               </div>
-              {couponError && <p className="mt-1 text-sm text-red-600">{couponError}</p>}
+              {couponError && <p className="mt-1 text-sm text-danger">{couponError}</p>}
               {couponResult && (
-                <div className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+                <div className="mt-2 rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
                   <strong>{couponResult.code}</strong> applied{couponResult.description ? `: ${couponResult.description}` : ""} — you save{" "}
                   <strong>{inr(couponResult.discount)}</strong>
                 </div>
@@ -341,7 +331,7 @@ export default function PremiumPage() {
                 <span>{inr(selectedPlan.priceInr)}</span>
               </div>
               {couponResult && (
-                <div className="flex justify-between text-green-700">
+                <div className="flex justify-between text-success">
                   <span>Coupon ({couponResult.code})</span>
                   <span>− {inr(couponResult.discount)}</span>
                 </div>
@@ -378,7 +368,7 @@ export default function PremiumPage() {
               🔒 Cards, UPI, netbanking, wallets — powered by Cashfree. Hum aapka card/UPI detail kabhi store nahi karte.
             </p>
 
-            {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
+            {error && <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{error}</div>}
           </section>
         )}
 

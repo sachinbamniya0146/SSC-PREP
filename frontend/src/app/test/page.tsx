@@ -1261,80 +1261,78 @@ export default function TestPage() {
 
   // ============ INSTRUCTIONS SCREEN ============
   if (phase === "instructions") {
+    // No hooks in this branch (all hooks live at the top of TestPage).
+    const durMin = preMeta?.durationMinutes || Math.max(1, Math.round((total || 10) * 0.5));
+    const totalQ = preMeta?.totalQuestions || total || 10;
+    const maxMarks = preMeta?.totalMarks || questions.reduce((s, q) => s + (q.marks ?? 1), 0) || totalQ;
+    const negM = questions[0]?.negativeMarks ?? 0.25;
+    const posM = questions[0]?.marks ?? 1;
+    const rules: [string, string][] = [
+      ["The timer starts when you press Start and the test submits itself at zero.", "Start dabate hi timer chalu hota hai aur zero par test apne aap submit ho jata hai."],
+      ["Your answers save as you go, so a refresh or a dropped connection will not lose them.", "Aapke jawab saath-saath save hote hain, isliye refresh ya net jaane par bhi nahi khote."],
+      ["Use “Mark for Review & Next” for doubtful questions. Press ? during the test to see keyboard shortcuts.", "Sandeh wale sawal par “Mark for Review & Next” use karein. Test me ? dabakar keyboard shortcuts dekhein."],
+      ["Every question shows in English and हिंदी together, like the real SSC bilingual paper.", "Har sawal English aur हिंदी dono me ek saath dikhta hai, asli SSC bilingual paper jaisa."],
+    ];
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <div className="mx-auto max-w-4xl px-4 py-10">
+        <div className="mx-auto max-w-3xl px-4 pb-10 pt-6 sm:px-6 sm:pt-8">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Logo size={32} />
-            </div>
-            <a href="/dashboard" className="btn btn-outline">Back to Dashboard</a>
+            <Logo size={32} />
+            <a href="/dashboard" className="btn btn-outline btn-sm">{tr("Back to dashboard", "Dashboard par wapas")}</a>
           </div>
 
-          <h1 className="mt-10 text-3xl font-extrabold">{preMeta?.title || "Practice Test"}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Bilingual · Full Mock Experience</p>
+          <h1 className="mt-8 text-2xl font-extrabold tracking-tight sm:text-3xl">{preMeta?.title || tr("Practice test", "Practice test")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{tr("Read the instructions, then start when you are ready.", "Instructions padhein, taiyaar hon tab shuru karein.")}</p>
 
           {dailyGate ? (
-            // BUGFIX: previously this state didn't exist — the page rendered the
-            // full generic instructions form (wrong title/numbers) and only told
-            // the student the Daily Test was locked via a browser alert() AFTER
-            // they clicked Start. Now we check status up front and show this
-            // instead of the (misleading) instructions form.
-            <div className="card mt-8 border-warning/40 bg-warning/5 p-6">
+            // The Daily Test's lock status is checked up front, so the student sees why it is locked
+            // before pressing Start (instead of a browser alert afterwards).
+            <div className="card mt-6 border-warning/40 bg-warning/5 p-6">
               <p className="font-semibold text-warning">{tr("⚠️ This test is locked", "⚠️ Test abhi locked hai")}</p>
               <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">{dailyGate}</p>
-              <a
-                href="/study-plan"
-                className="mt-4 inline-block rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-              >
-                Create Study Plan →
+              <a href="/study-plan" className="btn btn-primary mt-4">
+                {tr("Create study plan", "Study plan banayein")}
               </a>
             </div>
           ) : (
             <>
-              {/* Instructions table — real values from preMeta when known, no hardcode (v6 §1) */}
-              <div className="card mt-8 divide-y divide-border overflow-hidden">
-                {(() => {
-                  const durMin = preMeta?.durationMinutes || Math.max(1, Math.round((total || 10) * 0.5));
-                  const totalQ = preMeta?.totalQuestions || total || 10;
-                  const maxMarks = preMeta?.totalMarks || questions.reduce((s, q) => s + (q.marks ?? 1), 0) || totalQ;
-                  const negM = questions[0]?.negativeMarks ?? 0.25;
-                  const posM = questions[0]?.marks ?? 1;
-                  return [
-                    ["Duration", `${durMin} minutes`],
-                    ["Total Questions", `${totalQ} Questions`],
-                    ["Max Marks", `${maxMarks} Marks`],
-                    ["Negative Marking", `−${negM} per wrong answer`],
-                    ["Marking", `+${posM} per correct answer`],
-                  ].map(([k, v]) => (
-                    <div key={k} className="flex items-center justify-between px-5 py-3">
-                      <span className="text-sm text-muted-foreground">{k}</span>
-                      <span className="text-sm font-semibold">{v}</span>
-                    </div>
-                  ));
-                })()}
+              {/* Real values from preMeta when known, no hardcoding */}
+              <div className="mt-6 grid grid-cols-3 gap-3">
+                {[
+                  [String(durMin), tr("minutes", "minute")],
+                  [String(totalQ), tr("questions", "sawal")],
+                  [String(maxMarks), tr("max marks", "max marks")],
+                ].map(([v, l]) => (
+                  <div key={l} className="card px-3 py-4 text-center">
+                    <p className="text-2xl font-extrabold tabular-nums sm:text-3xl">{v}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{l}</p>
+                  </div>
+                ))}
               </div>
 
-              {/* Bilingual language rule note */}
-              <div className="card mt-6 border-info/30 bg-info/5 p-5 text-sm">
-                <p className="font-semibold text-info">📘 Bilingual Questions</p>
-                <p className="mt-2 text-muted-foreground">
-                  Har question English <b>aur</b> हिंदी dono mein ek saath dikhta hai
-                  — kisi language toggle ki zaroorat nahi. Options bhi bilingual hain.
-                  Matching the real SSC bilingual paper experience.
-                </p>
+              <div className="card mt-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-3 text-sm">
+                <span className="font-semibold">{tr("Marking", "Marking")}</span>
+                <span className="flex flex-wrap gap-x-4 gap-y-1">
+                  <span className="text-success">+{posM} {tr("correct", "sahi")}</span>
+                  <span className="text-danger">−{negM} {tr("wrong", "galat")}</span>
+                  <span className="text-muted-foreground">0 {tr("unanswered", "unanswered")}</span>
+                </span>
               </div>
 
-              <div className="card mt-6 p-5">
-                <label className="text-sm font-semibold">Exam Format</label>
-                <div className="mt-3 flex gap-3">
-                  <button
-                    className="flex-1 rounded-xl border border-primary bg-primary/10 px-4 py-3 text-sm font-semibold text-primary"
-                  >
-                    Bilingual (EN + हिंदी)
-                  </button>
-                </div>
-                <label className="mt-5 flex items-start gap-3 text-sm">
+              <section className="card mt-6 p-5" aria-label={tr("Before you start", "Shuru karne se pehle")}>
+                <h2 className="text-sm font-bold">{tr("Before you start", "Shuru karne se pehle")}</h2>
+                <ul className="mt-3 space-y-2.5 text-sm text-muted-foreground">
+                  {rules.map(([en, hi]) => (
+                    <li key={en} className="flex gap-2.5">
+                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
+                      <span>{tr(en, hi)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <div className="card sticky bottom-3 z-10 mt-6 p-5 shadow-lift">
+                <label className="flex items-start gap-3 text-sm">
                   <input
                     type="checkbox"
                     checked={agreed}
@@ -1342,21 +1340,18 @@ export default function TestPage() {
                     className="mt-0.5 h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
                   />
                   <span className="text-muted-foreground">
-                    I have read and understood the instructions. I agree not to use any
-                    unfair means during this test. All questions will be auto-submitted
-                    when the timer reaches zero.
+                    {tr(
+                      "I have read the instructions and will not use unfair means. The test is submitted automatically when the timer reaches zero.",
+                      "Maine instructions padh liye hain aur koi unfair means use nahi karunga. Timer zero hote hi test apne aap submit ho jayega.",
+                    )}
                   </span>
                 </label>
-                <button
-                  disabled={!agreed || starting}
-                  onClick={startTest}
-                  className="mt-6 w-full rounded-xl bg-primary px-6 py-3.5 text-base font-bold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
+                <button disabled={!agreed || starting} onClick={startTest} className="btn btn-primary btn-lg mt-4 w-full">
                   {starting
-                    ? "Loading questions…"
+                    ? tr("Loading questions…", "Sawal load ho rahe hain…")
                     : agreed
-                      ? "Start Test →"
-                      : "Agree to start"}
+                      ? tr("Start test", "Test shuru karein")
+                      : tr("Tick the box to start", "Shuru karne ke liye box tick karein")}
                 </button>
               </div>
             </>
@@ -1389,13 +1384,13 @@ export default function TestPage() {
       return (
       <div className="min-h-screen bg-background px-4 py-10 text-foreground">
         <div className="mx-auto max-w-5xl">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="text-2xl font-extrabold">Test Result 🎉</h1>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h1 className="text-2xl font-extrabold tracking-tight">{tr("Practice result", "Practice result")}</h1>
             <div className="flex items-center gap-2">
               <span className={`badge ${qualifies ? "badge-success" : "badge-danger"}`}>
                 {qualifies ? "✓ Above Cut-off" : "✗ Below Cut-off"}
               </span>
-              <a href="/dashboard" className="btn btn-outline">Back to Dashboard</a>
+              <a href="/dashboard" className="btn btn-outline btn-sm">{tr("Dashboard", "Dashboard")}</a>
             </div>
           </div>
 
@@ -1450,7 +1445,7 @@ export default function TestPage() {
           {/* Topic breakdown weakest-first (real DB chapter tags) */}
           <div className="card mt-6 overflow-hidden">
             <div className="border-b border-border p-5">
-              <p className="text-xs font-bold text-muted-foreground">WHAT IT LOOKED AT — TOPIC BREAKDOWN (weakest first)</p>
+              <p className="text-xs font-bold text-muted-foreground">{tr("TOPIC BREAKDOWN (weakest first)", "TOPIC BREAKDOWN (kamzor pehle)")}</p>
             </div>
             {topicRows.length === 0 ? (
               <div className="px-5 py-4 text-sm text-muted-foreground">{tr("No attempts — topics could not be analysed.", "Koi attempt nahi — topics analyze nahi ho sake.")}</div>
@@ -1511,7 +1506,7 @@ export default function TestPage() {
               <h3 className="font-semibold">📌 What to do next</h3>
               <p className="mt-1 text-xs text-muted-foreground">Take another test, or review your mistakes below.</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               {wrong > 0 && (
                 <button onClick={() => retryWrong(false)} className="btn btn-primary">↻ Retry wrong ({wrong})</button>
               )}
