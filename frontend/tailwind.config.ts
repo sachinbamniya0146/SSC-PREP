@@ -25,6 +25,7 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
         success: {
           DEFAULT: "hsl(var(--success))",
@@ -59,8 +60,12 @@ const config: Config = {
         h4: ["1.25rem", { lineHeight: "1.35" }],
       },
       borderRadius: {
-        lg: "0.75rem",
+        lg: "0.625rem",
         md: "0.5rem",
+      },
+      boxShadow: {
+        soft: "0 1px 2px hsl(var(--shadow-color) / 0.05), 0 4px 16px -4px hsl(var(--shadow-color) / 0.08)",
+        lift: "0 12px 32px -12px hsl(var(--shadow-color) / 0.22)",
       },
     },
   },

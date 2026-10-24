@@ -2,51 +2,61 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------
+   SSC PrepHub design system (Oct 2026 redesign)
+   Clean, exam-platform look: trustworthy royal blue, neutral surfaces,
+   one warm accent. Every page already consumes these tokens, so changing
+   them here restyles the whole app consistently (light + dark).
+------------------------------------------------------------------- */
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    --background: 220 25% 97%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
-    --primary: 262 83% 58%;
+    --primary: 224 76% 48%;
     --primary-foreground: 0 0% 100%;
-    --accent: 330 90% 60%;
+    --accent: 24 95% 53%;
     --accent-foreground: 0 0% 100%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --border: 214 32% 91%;
-    --ring: 262 83% 58%;
-    --success: 142 71% 45%;
+    --muted: 220 20% 94%;
+    --muted-foreground: 220 13% 40%;
+    --border: 220 16% 88%;
+    --input: 220 16% 82%;
+    --ring: 224 76% 48%;
+    --success: 152 63% 33%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
+    --warning: 32 92% 44%;
     --warning-foreground: 0 0% 100%;
-    --danger: 0 72% 51%;
+    --danger: 0 72% 48%;
     --danger-foreground: 0 0% 100%;
-    --info: 199 89% 48%;
+    --info: 201 90% 38%;
     --info-foreground: 0 0% 100%;
+    --shadow-color: 222 47% 11%;
   }
 
   .dark {
-    --background: 222 47% 7%;
-    --foreground: 210 40% 98%;
-    --card: 222 47% 10%;
-    --card-foreground: 210 40% 98%;
-    --primary: 258 90% 66%;
-    --primary-foreground: 0 0% 100%;
-    --accent: 330 90% 68%;
-    --accent-foreground: 0 0% 100%;
-    --muted: 217 33% 15%;
-    --muted-foreground: 215 20% 65%;
-    --border: 217 33% 17%;
-    --ring: 258 90% 66%;
-    --success: 142 71% 45%;
-    --success-foreground: 0 0% 100%;
-    --warning: 38 92% 55%;
-    --warning-foreground: 217 33% 10%;
-    --danger: 0 72% 55%;
-    --danger-foreground: 0 0% 100%;
-    --info: 199 89% 55%;
-    --info-foreground: 217 33% 10%;
+    --background: 222 36% 8%;
+    --foreground: 210 40% 96%;
+    --card: 222 32% 12%;
+    --card-foreground: 210 40% 96%;
+    --primary: 217 91% 64%;
+    --primary-foreground: 222 47% 8%;
+    --accent: 27 96% 61%;
+    --accent-foreground: 222 47% 8%;
+    --muted: 222 26% 17%;
+    --muted-foreground: 215 18% 68%;
+    --border: 222 24% 21%;
+    --input: 222 22% 28%;
+    --ring: 217 91% 64%;
+    --success: 152 58% 48%;
+    --success-foreground: 222 47% 8%;
+    --warning: 38 92% 56%;
+    --warning-foreground: 222 47% 8%;
+    --danger: 0 80% 64%;
+    --danger-foreground: 222 47% 8%;
+    --info: 199 89% 58%;
+    --info-foreground: 222 47% 8%;
+    --shadow-color: 0 0% 0%;
   }
 }
 
@@ -54,49 +64,172 @@
   * {
     border-color: hsl(var(--border));
   }
-  body {
-    /* Noto Sans Devanagari sits in the FALLBACK position (not gated behind
-       a class) so any Devanagari character anywhere on the site — mixed
-       inline with English, which is the overwhelmingly common case here —
-       automatically renders with a font that correctly shapes matras and
-       conjuncts, via the browser's standard per-character font-fallback.
-       Inter still handles the Latin text in the same string. */
-    font-family: var(--font-inter), var(--font-noto-devanagari), system-ui, -apple-system, sans-serif;
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
   }
-  /* Kept for the few call sites already using it (verification page, test
-     review) — an explicit Devanagari-only rule for text that's ENTIRELY
-     Hindi, so it doesn't need to lean on font-fallback at all. */
+  body {
+    /* Devanagari font stays in the fallback slot so every Hindi character
+       on the site shapes correctly without per-element tagging. */
+    font-family: var(--font-inter), var(--font-noto-devanagari), system-ui, -apple-system, sans-serif;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
   .font-hindi {
     font-family: var(--font-noto-devanagari), var(--font-inter), sans-serif;
+  }
+  h1, h2, h3, h4 {
+    letter-spacing: -0.01em;
+  }
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
+  }
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* Consistent form controls everywhere (pages use raw inputs). */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+  select,
+  textarea {
+    border-radius: 0.5rem;
+    border-color: hsl(var(--input));
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+  select:focus,
+  textarea:focus {
+    border-color: hsl(var(--primary));
+    box-shadow: 0 0 0 3px hsl(var(--primary) / 0.15);
+    outline: none;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: hsl(var(--muted-foreground) / 0.7);
+  }
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"] {
+    accent-color: hsl(var(--primary));
+  }
+
+  /* Slim, quiet scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--input)) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--input));
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
 @layer components {
+  .container-page {
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+  }
+
+  /* ---------- Buttons ---------- */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition
+      duration-150 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98];
+  }
+  .btn-lg {
+    @apply rounded-xl px-6 py-3 text-base;
+  }
+  .btn-sm {
+    @apply rounded-md px-3 py-1.5 text-xs;
   }
   .btn-primary {
-    @apply bg-primary text-primary-foreground hover:opacity-90;
+    @apply bg-primary text-primary-foreground shadow-sm hover:brightness-110;
+  }
+  .btn-accent {
+    @apply bg-accent text-accent-foreground shadow-sm hover:brightness-105;
   }
   .btn-outline {
-    @apply border border-border bg-card text-foreground hover:bg-muted;
+    @apply border border-input bg-card text-foreground shadow-sm hover:bg-muted;
   }
+  .btn-ghost {
+    @apply text-foreground hover:bg-muted;
+  }
+
+  /* ---------- Surfaces ---------- */
   .card {
-    @apply rounded-2xl border border-border bg-card;
+    @apply rounded-xl border border-border bg-card text-card-foreground;
+    box-shadow: 0 1px 2px hsl(var(--shadow-color) / 0.04), 0 1px 3px hsl(var(--shadow-color) / 0.04);
   }
+  .card-hover {
+    @apply transition duration-200 hover:-translate-y-0.5 hover:border-primary/40;
+  }
+  .card-hover:hover {
+    box-shadow: 0 10px 28px -10px hsl(var(--shadow-color) / 0.18);
+  }
+  .section-title {
+    @apply text-2xl font-bold tracking-tight sm:text-3xl;
+  }
+  .section-sub {
+    @apply mt-2 text-sm text-muted-foreground sm:text-base;
+  }
+  .eyebrow {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/10 px-3 py-1
+      text-xs font-semibold uppercase tracking-wide text-primary;
+  }
+
+  /* ---------- Badges ---------- */
   .badge {
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold;
   }
-  .badge-success {
-    @apply bg-success/15 text-success;
+  .badge-success { @apply bg-success/10 text-success; }
+  .badge-warning { @apply bg-warning/15 text-warning; }
+  .badge-danger { @apply bg-danger/10 text-danger; }
+  .badge-info { @apply bg-info/10 text-info; }
+  .badge-primary { @apply bg-primary/10 text-primary; }
+
+  /* ---------- Tables ---------- */
+  .table-clean {
+    @apply w-full text-left text-sm;
   }
-  .badge-warning {
-    @apply bg-warning/15 text-warning;
+  .table-clean th {
+    @apply border-b border-border bg-muted/60 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground;
   }
-  .badge-danger {
-    @apply bg-danger/15 text-danger;
+  .table-clean td {
+    @apply border-b border-border px-4 py-3;
   }
-  .badge-info {
-    @apply bg-info/15 text-info;
+  .table-clean tr:hover td {
+    @apply bg-muted/40;
+  }
+
+  /* ---------- Skeleton loader ---------- */
+  .skeleton {
+    @apply animate-pulse rounded-md bg-muted;
+  }
+
+  /* ---------- Decorative hero backdrop ---------- */
+  .hero-bg {
+    background:
+      radial-gradient(60rem 28rem at 15% -10%, hsl(var(--primary) / 0.16), transparent 60%),
+      radial-gradient(40rem 24rem at 95% 0%, hsl(var(--accent) / 0.10), transparent 60%),
+      linear-gradient(hsl(var(--background)), hsl(var(--background)));
+  }
+  .grid-dots {
+    background-image: radial-gradient(hsl(var(--foreground) / 0.07) 1px, transparent 1px);
+    background-size: 22px 22px;
   }
 }

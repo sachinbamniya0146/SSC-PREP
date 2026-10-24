@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import "@fontsource-variable/inter";
 import "@fontsource/noto-sans-devanagari/devanagari-400.css";
 import "@fontsource/noto-sans-devanagari/devanagari-500.css";
 import "@fontsource/noto-sans-devanagari/devanagari-600.css";
@@ -36,6 +37,10 @@ import NavTracker from "@/components/NavTracker";
 
 // Oct 3 2026: phones — real device width + safe-area (notch / home bar) support for the test screen
 export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#1d4ed8" },
+    { media: "(prefers-color-scheme: dark)", color: "#0b1020" },
+  ],
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -79,7 +84,7 @@ export default function RootLayout({
       style={
         {
           "--font-inter":
-            "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+            "'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
           "--font-noto-devanagari": "'Noto Sans Devanagari'",
         } as React.CSSProperties
       }

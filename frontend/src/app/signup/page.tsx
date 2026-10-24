@@ -2,8 +2,8 @@
 
 import { setStoredLang } from "@/lib/i18n";
 import * as React from "react";
-import { Logo } from "@/components/Logo";
-import { ThemeContext } from "@/components/theme-provider";
+import { AuthBrandPanel } from "@/components/AuthBrandPanel";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { api } from "@/lib/api";
 
 type AuthResponse = {
@@ -13,7 +13,6 @@ type AuthResponse = {
 };
 
 export default function SignupPage() {
-  const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [fullName, setFullName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [phone, setPhone] = React.useState("");
@@ -217,36 +216,19 @@ export default function SignupPage() {
 
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
-      {/* Left: brand/value panel — same pattern as /login for consistency
-          across the two auth pages. */}
-      <div className="relative hidden overflow-hidden bg-gradient-to-br from-primary/10 via-background to-accent/10 lg:flex lg:flex-col lg:justify-between lg:p-12">
-        <div className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-32 -right-16 h-96 w-96 rounded-full bg-accent/20 blur-3xl" />
-        <span className="relative">
-          <Logo size={32} />
-        </span>
-        <div className="relative max-w-md">
-          <h2 className="text-3xl font-bold leading-tight tracking-tight">
-            Join thousands preparing smarter for SSC exams.
-          </h2>
-          <p className="mt-4 text-sm text-muted-foreground">
-            Free forever plan, bilingual questions, and a daily streak that keeps you accountable.
-          </p>
-        </div>
-        <p className="relative text-xs text-muted-foreground">© {new Date().getFullYear()} SSCPrepHub</p>
-      </div>
+      <AuthBrandPanel
+        heading="Join thousands preparing smarter for SSC exams."
+        sub="Create a free account and take your first full-length mock in minutes."
+      />
 
       <div className="flex items-center justify-center bg-background px-4 py-10">
         <div className="w-full max-w-md">
-        <div className="mb-8 flex items-center justify-between">
-          <h1 className="text-2xl font-bold tracking-tight">Create your account</h1>
-          <button
-            onClick={toggleTheme}
-            aria-label="Toggle theme"
-            className="rounded-lg border border-border p-2 text-sm hover:bg-muted"
-          >
-            {theme === "dark" ? "☀️" : "🌙"}
-          </button>
+        <div className="mb-8 flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight">Create your account</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Free to start. No card required.</p>
+          </div>
+          <ThemeToggle />
         </div>
 
         {error && (
@@ -397,7 +379,7 @@ export default function SignupPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+            className="btn btn-primary w-full py-3"
           >
             {loading ? "Creating account…" : "Create Free Account"}
           </button>

@@ -2,8 +2,9 @@
 
 import { setStoredLang } from "@/lib/i18n";
 import * as React from "react";
-import { ThemeContext } from "@/components/theme-provider";
 import { api } from "@/lib/api";
+import { AuthBrandPanel } from "@/components/AuthBrandPanel";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 type AuthResponse = {
   user: { id: string; email: string; fullName: string; role: string; preferredLanguage?: string };
@@ -12,7 +13,6 @@ type AuthResponse = {
 };
 
 export default function LoginPage() {
-  const { theme, toggleTheme } = React.useContext(ThemeContext);
   const [mode, setMode] = React.useState<"login" | "forgot" | "forgot-verify">("login");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -218,30 +218,33 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 shadow-xl">
-        <div className="mb-8 flex items-center justify-between">
-          <h1 className="text-2xl font-bold">
-            {mode === "login" ? "Login to " : mode === "forgot" ? "Reset Password " : "Verify OTP "}
-            <span className="text-primary">SSC Prep Hub</span>
-          </h1>
-          <button
-            onClick={toggleTheme}
-            aria-label="Toggle theme"
-            className="rounded-lg border border-border p-2 text-sm"
-          >
-            {theme === "dark" ? "☀️" : "🌙"}
-          </button>
+    <div className="grid min-h-screen lg:grid-cols-2">
+      <AuthBrandPanel
+        heading="Welcome back. Your next mock test is waiting."
+        sub="Pick up where you left off: your scores, streak and study plan are saved to your account."
+      />
+      <div className="flex items-center justify-center bg-background px-4 py-10">
+      <div className="w-full max-w-md">
+        <div className="mb-8 flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight">
+              {mode === "login" ? "Login to your account" : mode === "forgot" ? "Reset your password" : "Verify OTP"}
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {mode === "login" ? "Enter your email and password to continue." : mode === "forgot" ? "We will email you a one-time code." : "Enter the code we sent to your email."}
+            </p>
+          </div>
+          <ThemeToggle />
         </div>
 
         {/* Mode tabs - only Login and Forgot Password */}
-        <div className="mb-6 flex overflow-hidden rounded-lg border border-border text-sm">
+        <div className="mb-6 flex rounded-lg bg-muted p-1 text-sm">
           {(["login", "forgot"] as const).map((m) => (
             <button
               key={m}
               onClick={() => { setMode(m); setError(""); setInfo(""); }}
-              className={`flex-1 px-3 py-2 capitalize ${
-                mode === m ? "bg-primary font-semibold text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"
+              className={`flex-1 rounded-md px-3 py-2 capitalize transition ${
+                (m === "login" ? mode === "login" : mode !== "login") ? "bg-card font-semibold text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
               }`}
             >
               {m === "login" ? "Password Login" : "Forgot Password"}
@@ -286,7 +289,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 autoComplete="email"
-                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none"
               />
             </div>
             <div>
@@ -299,7 +302,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   autoComplete="current-password"
-                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
+                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none pr-10"
                 />
                 <button
                   type="button"
@@ -318,7 +321,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+              className="btn btn-primary w-full py-3"
             >
               {loading ? "Signing in…" : "Login"}
             </button>
@@ -337,7 +340,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@gmail.com"
                 autoComplete="email"
-                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none"
               />
               <p className="mt-1 text-xs text-muted-foreground">
                 Enter your registered email. We'll send a 6-digit OTP (valid for 10 minutes).
@@ -380,7 +383,7 @@ export default function LoginPage() {
                 onChange={(e) => setOtp(e.target.value)}
                 placeholder="Enter OTP from email"
                 autoComplete="one-time-code"
-                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary text-center tracking-widest text-lg"
+                className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none text-center tracking-widest text-lg"
               />
               <p className="mt-1 text-xs text-muted-foreground">
                 Didn't receive the OTP? Check spam folder or 
@@ -406,7 +409,7 @@ export default function LoginPage() {
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="6-20 characters"
                   autoComplete="new-password"
-                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
+                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none pr-10"
                 />
                 <button
                   type="button"
@@ -438,7 +441,7 @@ export default function LoginPage() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Confirm new password"
                   autoComplete="new-password"
-                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary pr-10"
+                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none pr-10"
                 />
                 <button
                   type="button"
@@ -472,7 +475,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading || !otp || !newPassword || !confirmPassword || newPassword !== confirmPassword || newPassword.length < 6 || newPassword.length > 20}
-              className="w-full rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+              className="btn btn-primary w-full py-3"
             >
               {loading ? "Resetting…" : "Reset Password"}
             </button>
@@ -485,6 +488,7 @@ export default function LoginPage() {
             Create free account
           </a>
         </p>
+      </div>
       </div>
     </div>
   );
