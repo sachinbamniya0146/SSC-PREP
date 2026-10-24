@@ -11,6 +11,7 @@ import { StemMedia, QFigure } from "@/components/QuestionMedia";
 import { ReportQuestion } from "@/components/ReportQuestion";
 import WeakTopicPractice from "@/components/WeakTopicPractice";
 import SolutionVerify from "@/components/SolutionVerify";
+import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang } from "@/components/SolutionPanel";
 import { useT } from "@/lib/i18n";
 
 type UgQ = {
@@ -239,6 +240,8 @@ export default function TestPage() {
   const [navQ, setNavQ] = React.useState<number | null>(null); // navigator selection
   // Per-question "View Solution" expand/collapse on the results review list.
   const [solOpen, setSolOpen] = React.useState<{ [qid: string]: boolean }>({});
+  // review language (English / Hindi / both) — remembered on the device
+  const [revLang, setRevLang] = useReviewLang();
 
   const [paused, setPaused] = React.useState(false);
 
@@ -1421,7 +1424,7 @@ export default function TestPage() {
           <div className="card mt-6 overflow-hidden">
             <div className="border-b border-border p-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="font-semibold">Answer Review</h3>
+                <div className="flex flex-wrap items-center gap-3"><h3 className="font-semibold">Answer Review</h3><ReviewLangToggle lang={revLang} onChange={setRevLang} /></div>
                 {/* filter tabs */}
                 <div className="flex gap-1 rounded-lg bg-muted p-1 text-xs font-semibold">
                   {([["all", `All (${total})`], ["wrong", `Wrong (${wrong})`], ["skipped", `Skipped (${skipped})`], ["correct", `Correct (${correct})`]] as const).map(([k, label]) => (
@@ -1464,7 +1467,8 @@ export default function TestPage() {
             <div className="divide-y divide-border">
               {(navQ !== null ? questions.map((q, i) => ({ q, i })).filter(({ i }) => i === navQ) : reviewQs).map(({ q, i }) => {
                 const a = result[q.id];
-                const ansText = answers[q.id] ? q.options.find((o) => o.key === answers[q.id])?.text : "—";
+                const pickOpt = (o?: { text: string; textHi?: string | null }) => (o ? (revLang === "hi" && o.textHi ? o.textHi : revLang === "both" && o.textHi ? `${o.text} / ${o.textHi}` : o.text) : undefined);
+                const ansText = answers[q.id] ? pickOpt(q.options.find((o) => o.key === answers[q.id])) : "—";
                 const spent = timeSpent[q.id] || 0;
                 // BUGFIX (Sachin report, Sep 2026 — solutions results screen
                 // pe kabhi nahi dikhta / "Answer not available — please
@@ -1480,7 +1484,7 @@ export default function TestPage() {
                 const ex = explanations[q.id];
                 const correctKey = (ex?.correctAnswer || a?.correctAnswer || "").trim().toUpperCase();
                 const correctOpt = q.options.find((o) => (o.key || "").trim().toUpperCase() === correctKey);
-                const correctLabel = correctOpt?.text || (correctKey ? `Option ${correctKey}` : null);
+                const correctLabel = pickOpt(correctOpt) || (correctKey ? `Option ${correctKey}` : null);
                 // `a` (= result[q.id], filled from /bank/attempt above) is now
                 // checked too — the practice/sectional/chapter-wise-PYQ path's
                 // only source for explanation (see BUGFIX above the /bank/attempt
@@ -1501,7 +1505,10 @@ export default function TestPage() {
                           {q.examName && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-semibold text-amber-600">{q.examName}{q.year ? ` ${q.year}` : ""}{q.shift ? ` · ${q.shift}` : ""}</span>}
                           {spent > 0 && <span className="text-muted-foreground">⏱ {spent}s</span>}
                         </div>
-                        <p className="mt-1 text-sm font-medium line-clamp-2">{q.questionText}</p>
+                        <p className="mt-1 text-sm font-medium line-clamp-2">{revLang === "hi" && q.questionTextHindi ? q.questionTextHindi : q.questionText}</p>
+                        {revLang === "both" && q.questionTextHindi && (
+                          <p className="mt-0.5 font-hindi text-sm text-muted-foreground line-clamp-2">{q.questionTextHindi}</p>
+                        )}
                         <p className="mt-1 text-xs text-muted-foreground">
                           Your answer: <span className="font-semibold">{ansText}</span>
                           {!a?.correct && (
@@ -1528,11 +1535,11 @@ export default function TestPage() {
                         onClick={() => {
                           const willOpen = !isOpen;
                           setSolOpen((p) => ({ ...p, [q.id]: willOpen }));
-                          if (willOpen && !expl && !aiExp[q.id]) fetchAiExplanation(q.id);
+                          
                         }}
                         className="text-xs font-semibold text-primary hover:underline"
                       >
-                        {isOpen ? "▲ Hide Solution" : "▼ View Solution"}
+                        {isOpen ? "▲ Hide question & solution" : "▼ View full question & solution"}
                       </button>
                       {/* Report + chat — works for every test type since this
                           only renders post-submit (phase === "results"), same
@@ -1543,24 +1550,27 @@ export default function TestPage() {
                       {currentUserId && <ReportQuestion questionId={q.id} currentUserId={currentUserId} compact />}
                     </div>
                     {isOpen && (
-                      <div className="ml-9 mt-2 rounded-xl border border-success/30 bg-success/5 p-3 text-xs leading-relaxed">
-                        <p className="font-bold text-success">Correct Answer: {correctKey || "—"}{correctLabel ? ` — ${correctLabel}` : ""}</p>
-                        {expl && <p className="mt-2 whitespace-pre-line text-muted-foreground">{expl}</p>}
-                        {explHi && <p className="mt-2 whitespace-pre-line border-t border-success/20 pt-2 text-muted-foreground">🇮🇳 {explHi}</p>}
-                        {expl && <SolutionVerify questionId={q.id} source={ex?.explanationSource ?? a?.explanationSource ?? null} />}
-                        {!expl && (
-                          <div className="mt-2 text-muted-foreground">
-                            <span className="mr-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
-                            {aiExp[q.id]?.loading && <p className="mt-1">{tr("Preparing the explanation…", "Explanation ban rahi hai…")}</p>}
-                            {aiExp[q.id]?.error && <p className="mt-1 text-danger">{aiExp[q.id]?.error}</p>}
-                            {aiExp[q.id]?.data?.stepByStepSolution && (
-                              <p className="mt-1 whitespace-pre-line">{aiExp[q.id]?.data?.stepByStepSolution}</p>
-                            )}
-                            {aiExp[q.id]?.data?.stepByStepSolution && (
-                              <SolutionVerify questionId={q.id} source={aiExp[q.id]?.data?.source ?? "AI_GENERATED"} />
-                            )}
-                          </div>
-                        )}
+                      <div className="ml-0 mt-3 space-y-3 sm:ml-9">
+                        <ReviewQuestionBody
+                          questionText={q.questionText}
+                          questionTextHindi={q.questionTextHindi}
+                          diagramType={q.questionDiagramType}
+                          diagramLabels={q.questionDiagramLabels}
+                          imageUrl={q.questionImageUrl}
+                          options={q.options}
+                          selected={answers[q.id] || null}
+                          correct={correctKey}
+                          lang={revLang}
+                        />
+                        <SolutionPanel
+                          questionId={q.id}
+                          correctKey={correctKey || null}
+                          correctLabel={correctOpt?.text || null}
+                          explanation={expl}
+                          explanationHindi={explHi}
+                          source={ex?.explanationSource ?? a?.explanationSource ?? null}
+                          lang={revLang}
+                        />
                       </div>
                     )}
                   </div>

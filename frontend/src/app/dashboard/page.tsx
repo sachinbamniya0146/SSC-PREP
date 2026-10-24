@@ -423,6 +423,10 @@ export default function DashboardPage() {
             <h3 className="font-semibold">Year-wise PYQ Test</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Choose exam + year, narrow to subject or chapter.</p>
           </a>
+          <a href="/offline" className="card card-hover p-5">
+            <h3 className="font-semibold">📴 Offline Practice</h3>
+            <p className="mt-1.5 text-sm text-muted-foreground">Questions download karein, bina internet practice karein, solution ke saath.</p>
+          </a>
           <a href="/vocabulary" className="card card-hover p-5">
             <h3 className="font-semibold">📖 Vocabulary Mastery</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Learn one word at a time — quiz, 95%+ to unlock the next.</p>

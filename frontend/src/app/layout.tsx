@@ -13,6 +13,7 @@ import OfflineSubmitSync from "@/components/OfflineSubmitSync";
 import LanguageSync from "@/components/LanguageSync";
 import NavTracker from "@/components/NavTracker";
 import { MobileTabBar } from "@/components/MobileTabBar";
+import OfflineManager from "@/components/OfflineManager";
 
 // FIX (Sep 2026 — "hindi font me mistake ho rahi hai matrao ki"): the app
 // referenced 'Noto Sans Devanagari' by NAME in a CSS variable, but never
@@ -108,6 +109,7 @@ export default function RootLayout({
           <LanguageSync />
           <NavTracker />
           <MobileTabBar />
+          <OfflineManager />
         </ThemeProvider>
       </body>
     </html>

@@ -165,27 +165,50 @@ export class AIExplanationService {
     difficulty?: string;
   }): string {
     const options = Array.isArray(question.optionsJson)
-      ? (question.optionsJson as { key: string; text: string }[])
+      ? (question.optionsJson as { key: string; text: string; textHi?: string | null }[])
       : [];
-    const optionsText = options.map((o) => `${o.key}. ${o.text}`).join('\n');
+    const optionsText = options.map((o) => `${o.key}. ${o.text}${o.textHi ? `  /  ${o.textHi}` : ''}`).join('\n');
+    const subject = (question.subject?.name ?? 'General').toLowerCase();
+    const subjectHint = /math|quant|arith|algebra|geometry|trigon|data/.test(subject)
+      ? 'Maths: show every calculation line by line, name the formula used, and give a faster exam shortcut / approximation trick when one exists.'
+      : /reason|logic|puzzle|series|coding/.test(subject)
+        ? 'Reasoning: explain the pattern / rule / logic step by step, and how to spot it quickly in the exam.'
+        : /english|grammar|vocab/.test(subject)
+          ? 'English: state the grammar rule or the meaning, then apply it to the sentence; give a memory tip when useful.'
+          : 'General Awareness: give the key fact with brief context and one easy way to remember it.';
 
-    return `You are helping an SSC exam aspirant understand a question they already attempted.
+    return `You are an expert SSC exam teacher writing the official model solution for an aspirant who just attempted this question.
 Subject: ${question.subject?.name ?? 'General'} | Chapter: ${question.chapter?.name ?? 'N/A'} | Difficulty: ${question.difficulty ?? 'MEDIUM'}
+${subjectHint}
 
-Question: ${question.questionText}
+Question: ${question.questionText}${question.questionTextHindi ? `\nप्रश्न: ${question.questionTextHindi}` : ''}
 Options:
 ${optionsText}
 
-The correct answer is option ${question.correctAnswer}.
+The correct answer is option ${question.correctAnswer}. Your solution MUST end on option ${question.correctAnswer}; never conclude any other option.
 
-Write a clear, step-by-step explanation of why option ${question.correctAnswer} is correct (and briefly why the other options are wrong, if relevant). Keep it exam-focused and concise (under 200 words).
+Write a detailed but exam-focused solution. Rules:
+- "steps": numbered steps ("Step 1: ...") with the actual working / reasoning, finishing with "Hence, option ${question.correctAnswer} is correct." (100-250 words)
+- "shortcut": a genuine time-saving trick or approximation if one exists, otherwise "" (empty string)
+- "whyOthers": one short reason for EACH wrong option (max 25 words each), as {"option":"A","reason":"..."}
+- "commonMistake": the typical trap students fall into on this question type (1-2 sentences), otherwise ""
+- "keyConcepts": 2-4 short concepts / formulas / rules to remember
+- Write the SAME content again in Hindi (Devanagari script) in the *Hindi fields. Keep numbers, units, formulas and option letters exactly as in English. Use simple, correct Hindi as in SSC papers.
 
 Respond ONLY as JSON, no markdown fences, in exactly this shape:
 {
-  "explanation": "step-by-step explanation in English",
-  "explanationHindi": "same explanation in Hindi (Devanagari script)",
-  "keyConcepts": ["short concept 1", "short concept 2"],
-  "keyConceptsHindi": ["concept 1 in Hindi", "concept 2 in Hindi"]
+  "answer": "${question.correctAnswer} — <the correct option text>",
+  "answerHindi": "${question.correctAnswer} — <सही विकल्प का पाठ>",
+  "steps": "...",
+  "stepsHindi": "...",
+  "shortcut": "...",
+  "shortcutHindi": "...",
+  "whyOthers": [{"option":"A","reason":"..."}],
+  "whyOthersHindi": [{"option":"A","reason":"..."}],
+  "commonMistake": "...",
+  "commonMistakeHindi": "...",
+  "keyConcepts": ["..."],
+  "keyConceptsHindi": ["..."]
 }`;
   }
 
@@ -196,7 +219,7 @@ Respond ONLY as JSON, no markdown fences, in exactly this shape:
     overwrite = true,
   ) {
     const prompt = this.buildPrompt(question);
-    const result = await this.aiProvider.generate(prompt, { userApiKey: userOpenRouterKey, jsonResponse: true, feature: 'AI_EXPLANATION', maxTokens: 1800 });
+    const result = await this.aiProvider.generate(prompt, { userApiKey: userOpenRouterKey, jsonResponse: true, feature: 'AI_EXPLANATION', maxTokens: 3200 });
     const verdict = parseExplanation(result.content, question.correctAnswer);
     if (!verdict.ok) {
       // a bad / contradicting answer is never saved: the student just retries later

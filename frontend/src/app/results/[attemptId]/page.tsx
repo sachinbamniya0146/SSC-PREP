@@ -10,6 +10,7 @@ import SubjectChapterAnalysis from "@/components/SubjectChapterAnalysis";
 import SolutionVerify from "@/components/SolutionVerify";
 import { StemMedia, QFigure, RichText } from "@/components/QuestionMedia";
 import { useT } from "@/lib/i18n";
+import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang, type ReviewLang } from "@/components/SolutionPanel";
 
 type ReviewQuestion = {
   questionId: string;
@@ -76,7 +77,7 @@ export default function AttemptReviewPage() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [filter, setFilter] = React.useState<Filter>("all");
-  const [lang, setLang] = React.useState<"en" | "both">("both");
+  const [lang, setLang] = useReviewLang();
   // v6 §6 — per-template stats (real cutoff P90 + top-5 toppers)
   const [stats, setStats] = React.useState<any>(null);
   // NEW (Sep 29 2026): topics the student got wrong in THIS attempt + Study-Plan verdict.
@@ -195,17 +196,7 @@ export default function AttemptReviewPage() {
         <div className="mx-auto flex max-w-5xl items-center justify-between">
           <a href="/results" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
           <div className="flex items-center gap-3">
-            <div className="flex overflow-hidden rounded-lg border border-border text-xs">
-              {(["en", "both"] as const).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => setLang(m)}
-                  className={`px-2.5 py-1.5 ${lang === m ? "bg-primary text-primary-foreground" : "bg-card hover:bg-muted"}`}
-                >
-                  {m === "en" ? "EN" : "EN+हिंदी"}
-                </button>
-              ))}
-            </div>
+            <ReviewLangToggle lang={lang} onChange={setLang} />
             <a href="/test" className="btn border border-border px-4 py-1.5 text-sm hover:bg-muted">New Test</a>
           </div>
         </div>
@@ -461,65 +452,8 @@ type AIExplanation = {
   source?: string;
 };
 
-function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; lang: "en" | "both" }) {
+function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; lang: ReviewLang }) {
   const tr = useT();
-  const showHi = lang === "both";
-  const optText = (o: { key: string; text: string; textHi: string | null }) =>
-    showHi && o.textHi ? `${o.text} / ${o.textHi}` : o.text;
-  const stem = showHi && q.questionTextHindi ? `${q.questionText} / ${q.questionTextHindi}` : q.questionText;
-  const explanation = showHi && q.explanationHindi ? `${q.explanation} / ${q.explanationHindi}` : q.explanation;
-
-  // BUGFIX (Sachin report, Sep 2026): explanation used to render ONLY from
-  // q.explanation/q.explanationHindi straight off the attempt record. For
-  // any question whose explanation was never pre-generated (a large chunk
-  // of the bank imported via the old parse_*/upload_*.py scripts, which
-  // don't call the AI-explanation pipeline), that field is null in the DB
-  // — so nothing ever showed here, on ANY test type (mock/sectional/daily
-  // all render through this same component), and on practice too via the
-  // sibling pages below. The backend has always had an on-demand
-  // AI-generate-and-cache endpoint (ai-explanation/questions/:id — same one
-  // /review already uses), this page just never called it. Now it does:
-  // when explanation is missing, auto-fetch it once on mount instead of
-  // showing a permanently empty box.
-  const [aiExplanation, setAiExplanation] = React.useState<AIExplanation | null>(null);
-  const [aiLoading, setAiLoading] = React.useState(false);
-  const [aiError, setAiError] = React.useState<string | null>(null);
-  const missingExplanation = !q.explanation && !q.explanationHindi;
-
-  React.useEffect(() => {
-    if (!missingExplanation) return;
-    let cancelled = false;
-    setAiLoading(true);
-    setAiError(null);
-    (async () => {
-      try {
-        const res = await fetchAuth(`${apiBase()}/ai-explanation/questions/${q.questionId}`, { headers: authHeaders() });
-        const d = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (res.ok) setAiExplanation(d as AIExplanation);
-        else setAiError(d.message || tr("An explanation is not available for this question yet.", "Explanation abhi available nahi hai is question ke liye."));
-      } catch {
-        if (!cancelled) setAiError(tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi."));
-      } finally {
-        if (!cancelled) setAiLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.questionId, missingExplanation]);
-  const srcLabel =
-    q.explanationSource === "AI_GENERATED"
-      ? { text: "🤖 AI-generated", cls: "bg-primary/10 text-primary" }
-      : q.explanationSource === "HUMAN_VERIFIED"
-        ? { text: "✅ Human-verified", cls: "bg-success/10 text-success" }
-        : q.explanationSource === "COMMUNITY_VERIFIED"
-          ? { text: "✅ Verified by students", cls: "bg-success/10 text-success" }
-        : q.explanationSource === "PDF"
-          ? { text: "📄 From PDF", cls: "bg-muted text-muted-foreground" }
-          : null;
-
   const badge = q.isSkipped
     ? { text: "Skipped", cls: "bg-muted text-muted-foreground" }
     : q.isCorrect
@@ -559,99 +493,31 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
         </div>
       </div>
 
-      <h3 className="mt-3 text-sm font-medium leading-relaxed">{stem}</h3>
-      {/* Session 22 — question-stem diagram (rare case) */}
-      <StemMedia diagramType={q.questionDiagramType} diagramLabels={q.questionDiagramLabels} imageUrl={q.questionImageUrl} />
-
-      <div className="mt-3 space-y-2">
-        {q.options.map((o) => {
-          const isSelected = q.selectedOption === o.key;
-          const isCorrectOpt = q.correctAnswer === o.key;
-          let cls = "border-border bg-card";
-          if (isCorrectOpt) cls = "border-success bg-success/10";
-          if (isSelected && !isCorrectOpt) cls = "border-danger bg-danger/10";
-          return (
-            <div key={o.key} className={`flex items-start gap-3 rounded-xl border p-3 text-sm ${cls}`}>
-              <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${
-                isCorrectOpt ? "border-success text-success" : isSelected ? "border-danger text-danger" : "border-border"
-              }`}>
-                {o.key}
-              </span>
-              {/* Session 22 — diagram option (common case: A/B/C/D are each a different diagram) */}
-              {o.diagramType ? (
-                <DiagramVenn type={o.diagramType} labels={o.diagramLabels} size={120} />
-              ) : o.imageUrl ? (
-                <QFigure src={o.imageUrl} alt={`Option ${o.key}`} className="max-h-32" />
-              ) : (
-                <span className="leading-relaxed">{optText(o)}</span>
-              )}
-              {isCorrectOpt && <span className="ml-auto text-xs font-bold text-success">✓ Answer</span>}
-              {isSelected && !isCorrectOpt && <span className="ml-auto text-xs font-bold text-danger">Your choice</span>}
-            </div>
-          );
-        })}
+      <div className="mt-3">
+        <ReviewQuestionBody
+          questionText={q.questionText}
+          questionTextHindi={q.questionTextHindi}
+          diagramType={q.questionDiagramType}
+          diagramLabels={q.questionDiagramLabels}
+          imageUrl={q.questionImageUrl}
+          options={q.options}
+          selected={q.selectedOption}
+          correct={q.correctAnswer}
+          lang={lang}
+        />
       </div>
 
-      {explanation && (
-        <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 text-sm leading-relaxed text-muted-foreground">
-          <span className="font-semibold text-foreground">💡 Explanation: </span>
-          {srcLabel && (
-            <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-semibold ${srcLabel.cls}`}>
-              {srcLabel.text}
-            </span>
-          )}
-          <RichText text={explanation} className="pt-1" />
-          <SolutionVerify questionId={q.questionId} source={q.explanationSource} />
-        </div>
-      )}
-
-      {/* BUGFIX: explanation missing on the question row — auto-generated
-          fallback (see effect above). Loading/error/success states mirror
-          the review page's manual "Get AI Explanation" button so the UX is
-          consistent app-wide, but here it fires automatically since the
-          person already paid the attention cost of finishing the test. */}
-      {missingExplanation && (
-        <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm leading-relaxed">
-          <span className="font-semibold text-foreground">💡 Explanation: </span>
-          <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-            🤖 AI-generated
-          </span>
-          {aiLoading && <p className="mt-2 text-muted-foreground">{tr("Preparing the explanation…", "Explanation ban rahi hai…")}</p>}
-          {aiError && !aiLoading && (
-            <div className="mt-2">
-              <p className="text-xs text-muted-foreground">{aiError}</p>
-              <button
-                onClick={() => {
-                  setAiError(null);
-                  setAiExplanation(null);
-                  // re-trigger the effect
-                  setAiLoading(true);
-                  fetchAuth(`${apiBase()}/ai-explanation/questions/${q.questionId}`, { headers: authHeaders() })
-                    .then(async (res) => {
-                      const d = await res.json().catch(() => ({}));
-                      if (res.ok) setAiExplanation(d as AIExplanation);
-                      else setAiError(d.message || tr("An explanation is not available for this question yet.", "Explanation abhi available nahi hai is question ke liye."));
-                    })
-                    .catch(() => setAiError(tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi.")))
-                    .finally(() => setAiLoading(false));
-                }}
-                className="mt-1 rounded-md border border-primary/30 px-3 py-1 text-xs font-semibold text-primary"
-              >
-                Retry
-              </button>
-            </div>
-          )}
-          {aiExplanation && !aiLoading && (
-            <div className="mt-2 whitespace-pre-line text-muted-foreground">
-              <p>{aiExplanation.stepByStepSolution}</p>
-              {showHi && aiExplanation.stepByStepSolutionHindi && (
-                <p className="mt-2">🇮🇳 {aiExplanation.stepByStepSolutionHindi}</p>
-              )}
-              <SolutionVerify questionId={q.questionId} source={aiExplanation.source ?? "AI_GENERATED"} />
-            </div>
-          )}
-        </div>
-      )}
+      <div className="mt-4">
+        <SolutionPanel
+          questionId={q.questionId}
+          correctKey={q.correctAnswer}
+          correctLabel={q.options.find((o) => o.key === q.correctAnswer)?.text ?? null}
+          explanation={q.explanation}
+          explanationHindi={q.explanationHindi}
+          source={q.explanationSource}
+          lang={lang}
+        />
+      </div>
     </div>
   );
 }
