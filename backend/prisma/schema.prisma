@@ -643,6 +643,12 @@ model TestTemplate {
   examDate         String?
   exam             Exam?         @relation(fields: [examId], references: [id], onDelete: SetNull)
 
+  // P0 (Oct 2026): optional link to an ExamPattern. When set, the paper is composed from the
+  // pattern's sections and — if the pattern has lockPreviousSections — the attempt runs with
+  // strict per-section timers. Null = legacy single-clock behaviour (unchanged).
+  examPatternId    String?
+  examPattern      ExamPattern?  @relation(fields: [examPatternId], references: [id], onDelete: SetNull)
+
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   
@@ -651,6 +657,7 @@ model TestTemplate {
   attemptStats     TestAttemptStats?
 
   @@index([examId])
+  @@index([examPatternId])
   @@map("test_templates")
 }
 
@@ -709,6 +716,14 @@ model TestAttempt {
   // (question ids in order; server composes from this, so a mid-test refresh
   // returns the identical paper instead of re-sampling the pool).
   questionSnapshot Json?
+
+  // P0 (Oct 2026) — frozen per-attempt section timeline (see common/section-plan.ts). Offsets are
+  // relative to startedAt, so refresh/resume and offline replays all derive the same deadlines, and
+  // a later admin edit to the pattern never changes an attempt that is already running.
+  sectionPlan      Json?
+  // Last time the server heard from this attempt's client (autosave / heartbeat). Used only to tell a genuinely
+  // offline student's late delivery from a connected client trying to edit a closed section.
+  lastSyncAt       DateTime?
 
   @@index([userId, status])
   @@index([testTemplateId, status]) // rank/percentile + leaderboard hot path
@@ -1418,11 +1433,22 @@ model ExamPattern {
   totalMarks      Int
   durationMinutes Int
   negativeMarks   Float    @default(0.25)
-  sections        Json // [{name, subjectSlug?, questions, marks, durationMinutes}]
+  sections        Json // [{name, subjectSlug?, questions, marks, durationMinutes, scribeMinutes?}]
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
 
-  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+  // P0 (Oct 2026) — SSC 2026 strict sectional timing. When true, every section runs on its own
+  // `durationMinutes` clock, sections open one after another on a fixed server timeline, and a
+  // closed section can never be re-opened or edited.
+  lockPreviousSections Boolean @default(false)
+  // Accessibility/scribe extra time. A section's own `scribeMinutes` wins; otherwise
+  // durationMinutes + scribeExtraMinutes is used. 0 = no scribe option for this pattern.
+  scribeExtraMinutes   Int     @default(0)
+  // Free-text note for admins (e.g. "numbers taken from notice dated ...; verify on ssc.gov.in").
+  sourceNote           String?
+
+  exam          Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
+  testTemplates TestTemplate[]
 
   @@unique([examId, name])
   @@map("exam_patterns")

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { WeakTopicService } from '../weak-topics/weak-topic.service';
 import { Injectable, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
 import { cacheGet, cacheSet } from '../common/cache';
@@ -10,6 +11,17 @@ import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-pa
 import { TelegramService } from '../telegram/telegram.service';
 import { applyAttemptToChapters } from '../study-plan/study-plan-progress.util';
 import { QuestionBankPracticeService } from '../bank/question-bank-practice.service';
+import {
+  buildSectionPlan,
+  describePlanAt,
+  isSectionWritable,
+  readPatternSections,
+  readSectionPlan,
+  scoreUnderPlan,
+  sectionIndexForSubject,
+  canAcceptLateWrite,
+  type SectionPlan,
+} from '../common/section-plan';
 
 @Injectable()
 export class TestsService {
@@ -155,9 +167,10 @@ export class TestsService {
   // Begin a timed attempt: server stamps startedAt + expiresAt from the
   // template duration. The client may render a countdown from expiresAt but
   // cannot extend it — submission after expiry is capped server-side.
-  async startAttempt(userId: string, testTemplateId: string) {
+  async startAttempt(userId: string, testTemplateId: string, opts: { scribe?: boolean } = {}) {
     const template = await this.prisma.testTemplate.findUnique({
       where: { id: testTemplateId },
+      include: { examPattern: true },
     });
     if (!template) throw new BadRequestException('Test template not found');
     await this.assertMockEntitled(userId, template);
@@ -167,18 +180,23 @@ export class TestsService {
     // Makes refresh/relogin mid-test lossless and prevents restart-cheating.
     const existing = await this.prisma.testAttempt.findFirst({
       where: { userId, testTemplateId, status: 'IN_PROGRESS', expiresAt: { gt: new Date() } },
-      select: { id: true, startedAt: true, expiresAt: true, status: true },
+      select: { id: true, startedAt: true, expiresAt: true, status: true, sectionPlan: true },
     });
     if (existing) {
       const saved = await this.prisma.attemptAnswer.findMany({
         where: { testAttemptId: existing.id },
         select: { questionId: true, selectedOption: true, timeSpentSeconds: true },
       });
-      return { ...existing, resumed: true, answers: saved };
+      const { sectionPlan, ...rest } = existing;
+      // Resume keeps the plan frozen at the original start (incl. the scribe choice) — never rebuilt from the live pattern.
+      return { ...rest, plan: readSectionPlan(sectionPlan), serverNow: Date.now(), resumed: true, answers: saved };
     }
 
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + (template.durationMinutes || 60) * 60 * 1000);
+    // P0 — strict sectional timers: when the template is linked to a lock-sections ExamPattern the whole timeline
+    // (every section's start/end) is frozen on the attempt now; expiresAt is the end of the last section.
+    const plan = buildSectionPlan(template.examPattern, { scribe: !!opts.scribe });
+    const expiresAt = new Date(now.getTime() + (plan ? plan.totalMs : (template.durationMinutes || 60) * 60 * 1000));
     const attempt = await this.prisma.testAttempt.create({
       data: {
         userId,
@@ -186,10 +204,11 @@ export class TestsService {
         status: 'IN_PROGRESS',
         startedAt: now,
         expiresAt,
+        ...(plan ? { sectionPlan: plan as unknown as Prisma.InputJsonValue } : {}),
       },
       select: { id: true, startedAt: true, expiresAt: true, status: true },
     });
-    return { ...attempt, resumed: false, answers: [] };
+    return { ...attempt, plan, serverNow: Date.now(), resumed: false, answers: [] };
   }
 
 // Score and finalize an in-progress attempt. Server-authoritative:
@@ -201,7 +220,13 @@ export class TestsService {
 async submitAttempt(
   userId: string,
   attemptId: string,
-  input: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; clientSubmittedAt?: number | string },
+  input: {
+    answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[];
+    clientSubmittedAt?: number | string;
+    // P0 — only used when an offline submit is replayed after the deadline of a sectional attempt:
+    // { [questionId]: epoch ms at which the student gave that answer }.
+    answeredAt?: Record<string, number>;
+  },
 ) {
   const attempt = await this.prisma.testAttempt.findFirst({
     where: { id: attemptId, userId },
@@ -244,8 +269,32 @@ async submitAttempt(
       timeSpentSeconds: s.timeSpentSeconds,
     });
   }
+  const plan = readSectionPlan((attempt as any).sectionPlan);
+  // P0 — with a section plan the client payload is filtered per question: only answers that belong to a section
+  // that is open right now (live submit) or that were given inside their own section window (offline replay)
+  // may overwrite what is stored. Everything else keeps the autosaved value.
+  const planSlugs = new Map<string, string | null>();
+  if (plan && honourClientAnswers && (input.answers?.length ?? 0) > 0) {
+    const rows = await this.prisma.question.findMany({
+      where: { id: { in: (input.answers ?? []).map((a) => a.questionId) } },
+      select: { id: true, subject: { select: { slug: true } } },
+    });
+    for (const r of rows) planSlugs.set(r.id, r.subject?.slug ?? null);
+  }
+  const startedMs = attempt.startedAt.getTime();
+  const elapsedNow = now.getTime() - startedMs;
+  const lastSyncMs = (attempt as any).lastSyncAt ? new Date((attempt as any).lastSyncAt).getTime() : null;
+  const acceptClientAnswer = (qid: string): boolean => {
+    if (!plan) return true;
+    if (!planSlugs.has(qid)) return false; // unknown question id
+    const sIdx = sectionIndexForSubject(plan, planSlugs.get(qid));
+    if (!expired && isSectionWritable(plan, sIdx, elapsedNow)) return true;
+    // closed section: only an offline student's stamped, late delivery gets through (see canAcceptLateWrite)
+    return canAcceptLateWrite(plan, sIdx, Number(input.answeredAt?.[qid]), startedMs, lastSyncMs);
+  };
   if (honourClientAnswers) {
     for (const a of input.answers ?? []) {
+      if (!acceptClientAnswer(a.questionId)) continue;
       merged.set(a.questionId, {
         questionId: a.questionId,
         selectedOption: a.selectedOption ?? null,
@@ -264,7 +313,7 @@ async submitAttempt(
   if (answers.length) {
     const questions = await this.prisma.question.findMany({
       where: { id: { in: answers.map((a) => a.questionId) } },
-      select: { id: true, correctAnswer: true, marks: true, negativeMarks: true },
+      select: { id: true, correctAnswer: true, marks: true, negativeMarks: true, subject: { select: { slug: true } } },
     });
     const qmap = new Map(questions.map((q) => [q.id, q]));
     for (const a of answers) {
@@ -274,10 +323,10 @@ async submitAttempt(
       if (a.selectedOption == null) totalSkipped++;
       else if (correct) {
         totalCorrect++;
-        score += q.marks ?? 2;
+        score += plan ? scoreUnderPlan(plan, sectionIndexForSubject(plan, q.subject?.slug), true, true, { marks: q.marks ?? 2 }) : (q.marks ?? 2);
       } else {
         totalWrong++;
-        score -= q.negativeMarks ?? 0.5;
+        score += plan ? scoreUnderPlan(plan, sectionIndexForSubject(plan, q.subject?.slug), false, true, { marks: q.marks ?? 2 }) : -(q.negativeMarks ?? 0.5);
       }
       scoredAnswers.push({
         questionId: a.questionId,
@@ -419,10 +468,15 @@ private async notifyTelegramAttemptPdf(userId: string, attemptId: string) {
 async attemptRemaining(userId: string, attemptId: string) {
   const attempt = await this.prisma.testAttempt.findFirst({
     where: { id: attemptId, userId },
-    select: { id: true, status: true, startedAt: true, expiresAt: true },
+    select: { id: true, status: true, startedAt: true, expiresAt: true, sectionPlan: true },
   });
   if (!attempt) throw new BadRequestException('Attempt not found');
   const now = Date.now();
+  const plan = readSectionPlan(attempt.sectionPlan);
+  // heartbeat (see canAcceptLateWrite): only meaningful — and only written — for strict-sectional attempts
+  if (plan && attempt.status === 'IN_PROGRESS') {
+    this.prisma.testAttempt.updateMany({ where: { id: attempt.id }, data: { lastSyncAt: new Date(now) } }).catch(() => undefined);
+  }
   const expiresMs = attempt.expiresAt ? new Date(attempt.expiresAt).getTime() : null;
   // v4 §31 — persisted autosaves returned so a resumed session hydrates exactly
   const savedAnswers = await this.prisma.attemptAnswer.findMany({
@@ -437,6 +491,10 @@ async attemptRemaining(userId: string, attemptId: string) {
     remainingMs: expiresMs != null ? Math.max(0, expiresMs - now) : null,
     expired: expiresMs != null && now > expiresMs,
     answers: savedAnswers,
+    // P0 — everything a refreshed client needs to re-sync its section clock to the server timeline.
+    serverNow: now,
+    plan,
+    ...(plan ? describePlanAt(plan, now - attempt.startedAt.getTime()) : {}),
   };
 }
 
@@ -449,11 +507,13 @@ async saveAnswers(
   input: {
     answers: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[];
     timeSpentByQuestion?: Record<string, number>;
+    // P0 — { [questionId]: epoch ms the answer was given }; lets an offline student's delayed autosave into a closed section.
+    answeredAt?: Record<string, number>;
   },
 ) {
   const attempt = await this.prisma.testAttempt.findFirst({
     where: { id: attemptId, userId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, startedAt: true, sectionPlan: true, lastSyncAt: true },
   });
   if (!attempt) throw new BadRequestException('Attempt not found');
   if (attempt.status !== 'IN_PROGRESS') throw new BadRequestException('Attempt is not in progress');
@@ -463,14 +523,35 @@ async saveAnswers(
 
   const questions = await this.prisma.question.findMany({
     where: { id: { in: answers.map((a) => a.questionId) } },
-    select: { id: true, correctAnswer: true },
+    select: { id: true, correctAnswer: true, subject: { select: { slug: true } } },
   });
   const qmap = new Map(questions.map((q) => [q.id, q]));
 
+  // P0 — strict sectional attempt: only the section that is open right now (plus a few seconds of grace for the
+  // autosave debounce) can be written. A closed or not-yet-open section is skipped here and keeps what it had.
+  const plan = readSectionPlan(attempt.sectionPlan);
+  const nowMs = Date.now();
+  const startedMs = attempt.startedAt.getTime();
+  const elapsed = nowMs - startedMs;
+  const priorSyncMs = attempt.lastSyncAt ? new Date(attempt.lastSyncAt).getTime() : null;
+  if (plan) {
+    // heartbeat for canAcceptLateWrite(); best-effort, never blocks an autosave
+    this.prisma.testAttempt.updateMany({ where: { id: attempt.id }, data: { lastSyncAt: new Date(nowMs) } }).catch(() => undefined);
+  }
+
   let saved = 0;
+  let rejected = 0;
   for (const a of answers) {
     const q = qmap.get(a.questionId);
     if (!q) continue;
+    if (plan) {
+      const sIdx = sectionIndexForSubject(plan, q.subject?.slug);
+      const ok = isSectionWritable(plan, sIdx, elapsed) || canAcceptLateWrite(plan, sIdx, Number(input.answeredAt?.[a.questionId]), startedMs, priorSyncMs);
+      if (!ok) {
+        rejected++;
+        continue;
+      }
+    }
     const selected = a.selectedOption != null ? String(a.selectedOption).trim().toUpperCase() : null;
     // BUGFIX (same class as attempt()/submitAnswer()): normalize
     // q.correctAnswer too — an un-normalized DB value silently marks a
@@ -494,7 +575,7 @@ async saveAnswers(
     });
     saved++;
   }
-  return { saved };
+  return { saved, rejected };
 }
 
   async listAvailable() {
@@ -650,7 +731,7 @@ async saveAnswers(
                 explanationSource: true,
                 exam: { select: { name: true } },
                 chapter: { select: { name: true } },
-                subject: { select: { name: true } },
+                subject: { select: { name: true, slug: true } },
                 // NEW (Sep 21 2026 — topic-wise deep analysis): so Results /
                 // weak-area review can drill below chapter level.
                 topic: { select: { name: true } },
@@ -695,9 +776,13 @@ async saveAnswers(
       _max: { score: true, accuracyPercent: true },
     });
 
+    // P0 — a sectional attempt was scored with the pattern's marks / negative marking, so the review shows those too.
+    const plan = readSectionPlan((attempt as any).sectionPlan);
+
     // v6 §6 — per-question review data, ordered with topic/exam labels.
     const questions = attempt.answers.map((a) => {
       const q = a.question;
+      const sectionIndex = plan ? sectionIndexForSubject(plan, (q as any).subject?.slug) : null;
       // Session 22 — pass diagramType/diagramLabels through untouched when
       // present (ordinary text options simply don't have these keys, so
       // this is a no-op for the ~99% non-diagram case).
@@ -736,14 +821,16 @@ async saveAnswers(
         subTopic: (q as any).subTopic?.name ?? null,
         year: q.year,
         shift: q.shift,
-        marks: q.marks,
-        negativeMarks: q.negativeMarks,
+        marks: plan && sectionIndex != null && plan.sections[sectionIndex]?.marksPerQuestion ? plan.sections[sectionIndex].marksPerQuestion : q.marks,
+        negativeMarks: plan ? plan.negativeMarks : q.negativeMarks,
+        sectionIndex,
         difficulty: q.difficulty ?? null,
       };
     });
 
     return {
       ...attempt,
+      sectionPlan: plan,
       testTemplateId: attempt.testTemplateId,
       rank,
       percentile,
@@ -781,10 +868,16 @@ async saveAnswers(
   async paper(userId: string, templateId: string) {
     const template = await this.prisma.testTemplate.findUnique({
       where: { id: templateId },
-      select: { id: true, title: true, type: true, durationMinutes: true, totalQuestions: true, totalMarks: true, isPremium: true, description: true },
+      select: { id: true, title: true, type: true, durationMinutes: true, totalQuestions: true, totalMarks: true, isPremium: true, description: true, examPatternId: true },
     });
     if (!template) throw new BadRequestException('Template not found');
     await this.assertMockEntitled(userId, template);
+
+    // P0 — template linked to an ExamPattern: the paper is composed from the PATTERN's sections (no hardcoded
+    // blueprint) and, when the pattern locks sections, every section carries its own timer.
+    const pattern = template.examPatternId
+      ? await this.prisma.examPattern.findUnique({ where: { id: template.examPatternId } })
+      : null;
 
     // NEW ("ek hee shift ke jo questions hote he ... to vo mock test me ho
     // pyq based mock test esa hona chaiye"): a SHIFT_WISE template whose id
@@ -801,7 +894,7 @@ async saveAnswers(
     // to the same id, which is exact and unambiguous by construction (see
     // BankUploadService.slugifyPaperCode() — same slug fn, same input).
     if (template.type === 'SHIFT_WISE' && templateId.startsWith('pyq-')) {
-      return this.shiftWisePyqPaper(template, templateId);
+      return this.shiftWisePyqPaper(template, templateId, pattern);
     }
 
     const fam = templateId.includes('mts') ? 'mts' : templateId.includes('chsl') ? 'chsl' : templateId.includes('cpo') ? 'cpo' : 'cgl';
@@ -817,12 +910,27 @@ async saveAnswers(
     // the dashboard's own exam lookup) and require every question to carry
     // THAT exam's id. If the exam row itself doesn't exist yet, fail loudly
     // instead of silently degrading to a cross-exam mix.
-    const famExam = await this.prisma.exam.findUnique({ where: { slug: fam }, select: { id: true, name: true } });
+    const patternRows = pattern ? readPatternSections(pattern.sections) : [];
+    const patternUsable = !!pattern && patternRows.length > 0 && patternRows.every((r) => r.subjectSlug && (r.questions ?? 0) > 0);
+    const famExam = patternUsable
+      ? await this.prisma.exam.findUnique({ where: { id: pattern!.examId }, select: { id: true, name: true } })
+      : await this.prisma.exam.findUnique({ where: { slug: fam }, select: { id: true, name: true } });
     if (!famExam) {
       throw new BadRequestException(`Exam not set up for "${fam}" yet — cannot compose an exam-specific paper.`);
     }
-    const sections =
-      fam === 'mts'
+    const strictPlan = patternUsable ? buildSectionPlan(pattern) : null;
+    const sections: any[] = patternUsable
+      ? patternRows.map((r, i) => ({
+          part: String.fromCharCode(65 + i),
+          name: r.name,
+          subjectSlug: r.subjectSlug,
+          q: r.questions as number,
+          marks: r.marks ?? 0,
+          min: r.durationMinutes && r.durationMinutes > 0 ? r.durationMinutes : 15,
+          // A short bank must not block a whole mock: serve at least half the section, like the legacy path does.
+          minQ: Math.max(1, Math.ceil((r.questions as number) / 2)),
+        }))
+      : fam === 'mts'
         ? [
             { part: 'A', name: 'Numerical and Mathematical Ability', subjectSlug: 'quantitative_aptitude', q: 20, marks: 20, min: 20 },
             { part: 'B', name: 'Reasoning Ability and Problem Solving', subjectSlug: 'reasoning', q: 25, marks: 25, min: 25 },
@@ -883,7 +991,7 @@ async saveAnswers(
       // (nothing to serve), and require a sane minimum (sec.min) otherwise.
       if (validRows.length === 0)
         throw new BadRequestException(`No approved bilingual questions available yet for ${sec.name}. Please try again later.`);
-      if (validRows.length < sec.min)
+      if (validRows.length < (sec.minQ ?? sec.min))
         throw new BadRequestException(`Not enough 4-option bilingual questions for ${sec.name} (${validRows.length}/${sec.q})`);
       if (validRows.length < sec.q) {
         const originalQ = sec.q;
@@ -940,8 +1048,9 @@ async saveAnswers(
           questionImageUrl: r.questionImageUrl ?? null,
           options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
           optionsHi: (r.optionsHi as any[]) || null,
-          marks: r.marks ?? 2,
-          negativeMarks: r.negativeMarks ?? 0.5,
+          // P0 — a pattern-driven paper shows the pattern's marking, the same numbers the server scores with.
+          marks: strictPlan && strictPlan.sections[out.length]?.marksPerQuestion ? strictPlan.sections[out.length].marksPerQuestion : (r.marks ?? 2),
+          negativeMarks: strictPlan ? strictPlan.negativeMarks : (r.negativeMarks ?? 0.5),
           year: r.year,
           shift: r.shift,
           examName: r.exam?.name,
@@ -971,10 +1080,43 @@ async saveAnswers(
       title: template.title,
       description: template.description,
       type: template.type,
-      durationMinutes: template.durationMinutes,
+      durationMinutes: strictPlan ? Math.round(strictPlan.totalMs / 60000) : template.durationMinutes,
       totalMarks: actualTotalMarks || template.totalMarks,
       isPremium: template.isPremium,
       sections: out,
+      pattern: this.patternMeta(pattern, strictPlan),
+    };
+  }
+
+  // P0 — pattern summary for the instructions screen (section table, timers, scribe option). No questions, no
+  // answers and no entitlement needed: the timing rules of an exam are not a secret.
+  async templatePattern(templateId: string) {
+    const t = await this.prisma.testTemplate.findUnique({ where: { id: templateId }, select: { examPatternId: true } });
+    if (!t?.examPatternId) return { pattern: null };
+    const pattern = await this.prisma.examPattern.findUnique({ where: { id: t.examPatternId } });
+    return { pattern: pattern ? this.patternMeta(pattern, buildSectionPlan(pattern)) : null };
+  }
+
+  // P0 — what the client needs to render a strict-sectional exam (instructions screen, timers, scribe option).
+  // The attempt's own frozen plan (returned by /attempts/start) is what actually drives the clock.
+  private patternMeta(pattern: any, plan: SectionPlan | null) {
+    if (!pattern || !plan) return null;
+    const rows = readPatternSections(pattern.sections);
+    return {
+      id: pattern.id,
+      name: pattern.name,
+      lockSections: true,
+      negativeMarks: plan.negativeMarks,
+      scribeAvailable: pattern.scribeExtraMinutes > 0 || rows.some((r) => (r.scribeMinutes ?? 0) > 0),
+      sourceNote: pattern.sourceNote ?? null,
+      sections: plan.sections.map((s, i) => ({
+        name: s.name,
+        subjectSlug: s.subjectSlug,
+        questions: s.questions,
+        minutes: s.minutes,
+        scribeMinutes: rows[i]?.scribeMinutes && rows[i].scribeMinutes! > 0 ? rows[i].scribeMinutes : s.minutes + Math.max(0, pattern.scribeExtraMinutes),
+        marksPerQuestion: s.marksPerQuestion,
+      })),
     };
   }
 
@@ -1000,6 +1142,7 @@ async saveAnswers(
   private async shiftWisePyqPaper(
     template: { id: string; title: string; type: string; durationMinutes: number; totalQuestions: number; totalMarks: number; isPremium: boolean; description: string | null },
     templateId: string,
+    pattern: any = null,
   ) {
     const wantedSlug = templateId.slice('pyq-'.length);
     // Pull every approved question tagged with a paperCode, then filter in
@@ -1060,13 +1203,36 @@ async saveAnswers(
       bySubject.get(slug)!.rows.push(r);
     }
 
-    const out = [...bySubject.values()].map((sec) => ({
+    // P0 — pattern-linked PYQ paper: sections follow the pattern's order and timers. Subjects the pattern does not
+    // name are folded into the LAST section (the server maps unknown subjects there too, so nothing is dropped).
+    const strictPlan = pattern ? buildSectionPlan(pattern) : null;
+    let groups = [...bySubject.values()];
+    if (strictPlan) {
+      const ordered: { name: string; slug: string; rows: typeof rows }[] = strictPlan.sections.map((ps) => ({
+        name: ps.name,
+        slug: ps.subjectSlug ?? ps.name,
+        rows: [] as typeof rows,
+      }));
+      for (const g of groups) {
+        const at = strictPlan.sections.findIndex((ps) => ps.subjectSlug && ps.subjectSlug === g.slug);
+        ordered[at >= 0 ? at : ordered.length - 1].rows.push(...g.rows);
+      }
+      const empty = ordered.filter((g) => g.rows.length === 0).map((g) => g.name);
+      if (empty.length) {
+        throw new BadRequestException(
+          `Pattern "${pattern.name}" needs questions for: ${empty.join(', ')} — this paper has none. Ask the admin to unlink the pattern from ${template.id}.`,
+        );
+      }
+      groups = ordered;
+    }
+
+    const out = groups.map((sec, secIdx) => ({
       part: sec.slug,
       name: sec.name,
       subjectSlug: sec.slug,
       questionCount: sec.rows.length,
-      marks: sec.rows.reduce((s, r) => s + (r.marks ?? 2), 0),
-      minutes: Math.max(5, Math.round(sec.rows.length * 0.6)),
+      marks: strictPlan ? Math.round(sec.rows.length * strictPlan.sections[secIdx].marksPerQuestion * 100) / 100 : sec.rows.reduce((s, r) => s + (r.marks ?? 2), 0),
+      minutes: strictPlan ? strictPlan.sections[secIdx].minutes : Math.max(5, Math.round(sec.rows.length * 0.6)),
       questions: sec.rows.map((r) => ({
         id: r.id,
         questionText: r.questionText,
@@ -1076,8 +1242,8 @@ async saveAnswers(
         questionDiagramLabels: r.questionDiagramLabels ?? null,
         questionImageUrl: r.questionImageUrl ?? null,
         options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
-        marks: r.marks ?? 2,
-        negativeMarks: r.negativeMarks ?? 0.5,
+        marks: strictPlan && strictPlan.sections[secIdx].marksPerQuestion ? strictPlan.sections[secIdx].marksPerQuestion : (r.marks ?? 2),
+        negativeMarks: strictPlan ? strictPlan.negativeMarks : (r.negativeMarks ?? 0.5),
         year: r.year,
         shift: r.shift,
         examName: r.exam?.name,
@@ -1093,10 +1259,11 @@ async saveAnswers(
       title: template.title,
       description: template.description,
       type: template.type,
-      durationMinutes: template.durationMinutes,
+      durationMinutes: strictPlan ? Math.round(strictPlan.totalMs / 60000) : template.durationMinutes,
       totalMarks: actualTotalMarks || template.totalMarks,
       isPremium: template.isPremium,
       sections: out,
+      pattern: this.patternMeta(pattern, strictPlan),
     };
   }
 

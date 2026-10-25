@@ -789,7 +789,10 @@ export class AdminController {
       totalMarks: number;
       durationMinutes: number;
       negativeMarks?: number;
-      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number }>;
+      lockPreviousSections?: boolean;
+      scribeExtraMinutes?: number;
+      sourceNote?: string;
+      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number; scribeMinutes?: number }>;
     },
   ) {
     if (!body.examId || !body.name || !Array.isArray(body.sections) || body.sections.length === 0) {
@@ -797,6 +800,7 @@ export class AdminController {
     }
     const exam = await this.prisma.exam.findUnique({ where: { id: body.examId } });
     if (!exam) throw new BadRequestException('Exam not found');
+    this.assertPatternShape(body.sections, !!body.lockPreviousSections);
 
     return this.prisma.examPattern.create({
       data: {
@@ -807,7 +811,36 @@ export class AdminController {
         durationMinutes: body.durationMinutes,
         negativeMarks: body.negativeMarks ?? 0.25,
         sections: body.sections as unknown as Prisma.InputJsonValue,
+        lockPreviousSections: !!body.lockPreviousSections,
+        scribeExtraMinutes: Math.max(0, Math.floor(Number(body.scribeExtraMinutes) || 0)),
+        sourceNote: body.sourceNote ?? null,
       },
+    });
+  }
+
+  // P0 — a strict-sectional pattern is only usable if every section can be composed AND timed. Fail loudly at save
+  // time instead of silently serving a mock whose timers cannot be built.
+  private assertPatternShape(sections: unknown, lock: boolean) {
+    const rows = Array.isArray(sections) ? (sections as any[]) : [];
+    const seen = new Set<string>();
+    rows.forEach((r, i) => {
+      const label = `Section ${i + 1}${r?.name ? ` (${r.name})` : ''}`;
+      if (!r?.name || !String(r.name).trim()) throw new BadRequestException(`${label}: name is required`);
+      if (!(Number(r.questions) > 0)) throw new BadRequestException(`${label}: questions must be > 0`);
+      if (!(Number(r.marks) > 0)) throw new BadRequestException(`${label}: marks must be > 0`);
+      if (lock) {
+        if (!(Number(r.durationMinutes) > 0)) throw new BadRequestException(`${label}: durationMinutes is required when sections are locked`);
+        if (!r.subjectSlug || !String(r.subjectSlug).trim()) throw new BadRequestException(`${label}: subjectSlug is required when sections are locked`);
+        const slug = String(r.subjectSlug).trim().toLowerCase();
+        const nm = `name:${String(r.name).trim().toLowerCase()}`;
+        if (seen.has(nm)) throw new BadRequestException(`${label}: two sections share the name "${r.name}" — names must be unique`);
+        seen.add(nm);
+        if (seen.has(slug)) throw new BadRequestException(`${label}: subjectSlug "${slug}" is used by two sections — each locked section needs its own subject`);
+        seen.add(slug);
+      }
+      if (r.scribeMinutes != null && !(Number(r.scribeMinutes) >= Number(r.durationMinutes || 0))) {
+        throw new BadRequestException(`${label}: scribeMinutes cannot be less than durationMinutes`);
+      }
     });
   }
 
@@ -822,11 +855,18 @@ export class AdminController {
       durationMinutes: number;
       negativeMarks: number;
       isActive: boolean;
-      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number }>;
+      lockPreviousSections: boolean;
+      scribeExtraMinutes: number;
+      sourceNote: string | null;
+      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number; scribeMinutes?: number }>;
     }>,
   ) {
     const existing = await this.prisma.examPattern.findUnique({ where: { id } });
     if (!existing) throw new BadRequestException('Exam pattern not found');
+    this.assertPatternShape(
+      body.sections !== undefined ? body.sections : existing.sections,
+      body.lockPreviousSections !== undefined ? !!body.lockPreviousSections : existing.lockPreviousSections,
+    );
 
     return this.prisma.examPattern.update({
       where: { id },
@@ -838,8 +878,142 @@ export class AdminController {
         ...(body.negativeMarks !== undefined ? { negativeMarks: body.negativeMarks } : {}),
         ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
         ...(body.sections !== undefined ? { sections: body.sections as unknown as Prisma.InputJsonValue } : {}),
+        ...(body.lockPreviousSections !== undefined ? { lockPreviousSections: !!body.lockPreviousSections } : {}),
+        ...(body.scribeExtraMinutes !== undefined ? { scribeExtraMinutes: Math.max(0, Math.floor(Number(body.scribeExtraMinutes) || 0)) } : {}),
+        ...(body.sourceNote !== undefined ? { sourceNote: body.sourceNote } : {}),
       },
     });
+  }
+
+  // P0 — create/refresh the two SSC CGL 2026 strict-sectional patterns (+ one DRAFT mock each, inactive).
+  // Idempotent: re-running updates the same rows by (exam, name). NOTE the numbers come from published coaching
+  // blogs (Drishti SSC, 1 Jun 2026) — sourceNote says so — so check them against the official notice on ssc.gov.in
+  // and edit the pattern if anything differs; nothing is hardcoded in the exam engine.
+  @Post('exam-patterns/seed-ssc-2026')
+  async seedSsc2026Patterns(@CurrentUser() user: AuthenticatedUser) {
+    const exam = await this.prisma.exam.findUnique({ where: { slug: 'cgl' } });
+    if (!exam) throw new BadRequestException('Exam with slug "cgl" not found — create it first');
+    const note =
+      'Seeded 25 Oct 2026 from the Drishti SSC blog "SSC CGL New Exam Pattern 2026" (1 Jun 2026). NOT yet checked against the official SSC notice — verify marks, negative marking and timers on ssc.gov.in.';
+    const defs = [
+      {
+        name: 'SSC CGL 2026 — Tier 1',
+        totalQuestions: 100,
+        totalMarks: 200,
+        durationMinutes: 60,
+        negativeMarks: 0.5,
+        scribeExtraMinutes: 5,
+        sections: [
+          { name: 'General Intelligence & Reasoning', subjectSlug: 'reasoning', questions: 25, marks: 50, durationMinutes: 15, scribeMinutes: 20 },
+          { name: 'General Awareness', subjectSlug: 'general_awareness', questions: 25, marks: 50, durationMinutes: 15, scribeMinutes: 20 },
+          { name: 'Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', questions: 25, marks: 50, durationMinutes: 15, scribeMinutes: 20 },
+          { name: 'English Comprehension', subjectSlug: 'english', questions: 25, marks: 50, durationMinutes: 15, scribeMinutes: 20 },
+        ],
+        mock: { id: 'tpl-cgl-2026-t1-sectional-1', title: 'SSC CGL 2026 Tier 1 — Sectional-Timer Mock 1' },
+      },
+      {
+        name: 'SSC CGL 2026 — Tier 2 Paper I (Session I)',
+        totalQuestions: 150,
+        totalMarks: 450,
+        durationMinutes: 135,
+        negativeMarks: 1,
+        scribeExtraMinutes: 5,
+        sections: [
+          { name: 'Mathematical Abilities', subjectSlug: 'quantitative_aptitude', questions: 30, marks: 90, durationMinutes: 30, scribeMinutes: 40 },
+          { name: 'Reasoning & General Intelligence', subjectSlug: 'reasoning', questions: 30, marks: 90, durationMinutes: 30, scribeMinutes: 40 },
+          { name: 'English Language & Comprehension', subjectSlug: 'english', questions: 45, marks: 135, durationMinutes: 40, scribeMinutes: 55 },
+          { name: 'General Awareness', subjectSlug: 'general_awareness', questions: 25, marks: 75, durationMinutes: 20, scribeMinutes: 25 },
+          { name: 'Computer Knowledge', subjectSlug: 'computer', questions: 20, marks: 60, durationMinutes: 15, scribeMinutes: 20 },
+        ],
+        mock: { id: 'tpl-cgl-2026-t2-sectional-1', title: 'SSC CGL 2026 Tier 2 Paper I — Sectional-Timer Mock 1' },
+      },
+    ];
+    const out: any[] = [];
+    for (const d of defs) {
+      this.assertPatternShape(d.sections, true);
+      const pattern = await this.prisma.examPattern.upsert({
+        where: { examId_name: { examId: exam.id, name: d.name } },
+        create: {
+          examId: exam.id,
+          name: d.name,
+          totalQuestions: d.totalQuestions,
+          totalMarks: d.totalMarks,
+          durationMinutes: d.durationMinutes,
+          negativeMarks: d.negativeMarks,
+          sections: d.sections as unknown as Prisma.InputJsonValue,
+          lockPreviousSections: true,
+          scribeExtraMinutes: d.scribeExtraMinutes,
+          sourceNote: note,
+        },
+        update: {
+          totalQuestions: d.totalQuestions,
+          totalMarks: d.totalMarks,
+          durationMinutes: d.durationMinutes,
+          negativeMarks: d.negativeMarks,
+          sections: d.sections as unknown as Prisma.InputJsonValue,
+          lockPreviousSections: true,
+          scribeExtraMinutes: d.scribeExtraMinutes,
+        },
+      });
+      const template = await this.prisma.testTemplate.upsert({
+        where: { id: d.mock.id },
+        create: {
+          id: d.mock.id,
+          title: d.mock.title,
+          description: `${d.name}: strict sectional timers, no going back to a closed section.`,
+          type: 'FULL_MOCK',
+          durationMinutes: d.durationMinutes,
+          totalQuestions: d.totalQuestions,
+          totalMarks: d.totalMarks,
+          isPremium: false,
+          isActive: false, // draft: admin reviews questions + decides free/paid, then activates
+          examId: exam.id,
+          examPatternId: pattern.id,
+        },
+        // never touch isActive/isPremium/price of an existing template on re-seed
+        update: { examPatternId: pattern.id, durationMinutes: d.durationMinutes, totalQuestions: d.totalQuestions, totalMarks: d.totalMarks },
+      });
+      out.push({ patternId: pattern.id, patternName: pattern.name, templateId: template.id, templateActive: template.isActive });
+    }
+    await this.auditLogService.log({
+      userId: user?.userId,
+      action: 'EXAM_PATTERN_SEED_SSC_2026',
+      targetEntity: 'ExamPattern',
+      metadataJson: { created: out },
+    });
+    return { ok: true, note, patterns: out };
+  }
+
+  // P0 — attach (or detach) an ExamPattern to mock templates, so those mocks run with strict section timers.
+  // Select either explicit templateIds, or every template of an exam (optionally only auto-PYQ "pyq-*" mocks).
+  @Post('exam-patterns/:id/link-templates')
+  async linkPatternTemplates(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: { templateIds?: string[]; examId?: string; pyqOnly?: boolean; unlink?: boolean },
+  ) {
+    const pattern = await this.prisma.examPattern.findUnique({ where: { id } });
+    if (!pattern) throw new BadRequestException('Exam pattern not found');
+    if (!body.unlink && !pattern.lockPreviousSections) {
+      throw new BadRequestException('This pattern does not lock sections — turn on lockPreviousSections first, or the link would change nothing.');
+    }
+    const ids = Array.isArray(body.templateIds) ? body.templateIds.filter((x) => typeof x === 'string' && x) : [];
+    if (ids.length === 0 && !body.examId) throw new BadRequestException('Give templateIds, or an examId to link all of that exam’s templates');
+    const where: Prisma.TestTemplateWhereInput = {
+      ...(ids.length ? { id: { in: ids } } : {}),
+      ...(!ids.length && body.examId ? { examId: body.examId } : {}),
+      ...(body.pyqOnly ? { id: { startsWith: 'pyq-' } } : {}),
+      type: { in: ['FULL_MOCK', 'PREVIOUS_YEAR', 'SHIFT_WISE'] },
+    };
+    const res = await this.prisma.testTemplate.updateMany({ where, data: { examPatternId: body.unlink ? null : pattern.id } });
+    await this.auditLogService.log({
+      userId: user?.userId,
+      action: body.unlink ? 'EXAM_PATTERN_UNLINK_TEMPLATES' : 'EXAM_PATTERN_LINK_TEMPLATES',
+      targetEntity: 'ExamPattern',
+      entityId: id,
+      metadataJson: { count: res.count, templateIds: ids, examId: body.examId ?? null, pyqOnly: !!body.pyqOnly },
+    });
+    return { ok: true, updated: res.count };
   }
 
   @Delete('exam-patterns/:id')

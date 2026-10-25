@@ -13,6 +13,7 @@ import WeakTopicPractice from "@/components/WeakTopicPractice";
 import SolutionVerify from "@/components/SolutionVerify";
 import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang } from "@/components/SolutionPanel";
 import { useT } from "@/lib/i18n";
+import { sectionIndexAt, sectionRemainingSec, totalMinutes, type SectionPlan, type PatternMeta } from "@/lib/section-plan";
 
 type UgQ = {
   id: string;
@@ -323,6 +324,33 @@ export default function TestPage() {
 
   const [paused, setPaused] = React.useState(false);
 
+  // ---- P0: strict sectional timers (SSC CGL 2026 style) -------------------------------------------------------
+  // The SERVER owns the timeline (a frozen plan returned by /tests/attempts/start). Everything below only displays it:
+  // `skewRef` = serverNow - clientNow, `planStartRef` = attempt start in server ms, so a refresh, a second device or an
+  // offline stretch all land on the same section clock. All hooks stay up here (hooks-order rule for this page).
+  const [plan, setPlan] = React.useState<SectionPlan | null>(null);
+  const [patternMeta, setPatternMeta] = React.useState<PatternMeta | null>(null);
+  const [scribe, setScribe] = React.useState(false);
+  const [secClock, setSecClock] = React.useState<{ idx: number; remainingSec: number } | null>(null);
+  const [secBanner, setSecBanner] = React.useState<number | null>(null);
+  const planStartRef = React.useRef(0);
+  const skewRef = React.useRef(0);
+  const deadlineRef = React.useRef<number | null>(null); // attempt deadline in SERVER ms (null = practice, tick-based)
+  const lastSecRef = React.useRef(-2);
+  const answeredAtRef = React.useRef<{ [qid: string]: number }>({}); // server-ms stamp per answer, for offline replays
+  React.useEffect(() => {
+    try {
+      setScribe(localStorage.getItem("ssc_scribe_pref") === "1");
+    } catch {
+      /* storage blocked — default off */
+    }
+  }, []);
+  React.useEffect(() => {
+    if (secBanner === null) return;
+    const t = window.setTimeout(() => setSecBanner(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [secBanner]);
+
   // ---- Pre-start metadata (BUGFIX: instructions screen used to show a
   // hardcoded "SSC CGL Tier I" title + fake "5 minutes / 10 Questions"
   // for EVERY entry point — daily test, every mock template, chapter
@@ -445,6 +473,16 @@ export default function TestPage() {
               totalQuestions: tpl.totalQuestions || 25,
               totalMarks: tpl.totalMarks || tpl.totalQuestions || 25,
             });
+          }
+          // P0 — a strict-sectional template: fetch its section table so the instructions screen shows the real timers.
+          try {
+            const pr = await fetchAuth(`${apiBase()}/tests/pattern/${encodeURIComponent(tplId)}`, { headers: getAuthHeaders() });
+            if (pr.ok) {
+              const pd = await pr.json().catch(() => null);
+              if (pd?.pattern?.lockSections) setPatternMeta(pd.pattern);
+            }
+          } catch {
+            /* instructions still work without the table */
           }
           return;
         }
@@ -632,12 +670,25 @@ export default function TestPage() {
           const ar = await fetchAuth(`${apiBase()}/tests/attempts/start`, {
             method: "POST",
             headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify({ testTemplateId: tplId }),
+            body: JSON.stringify({ testTemplateId: tplId, ...(patternMeta?.scribeAvailable && scribe ? { scribe: true } : {}) }),
           });
           const ad = await ar.json();
           attemptId = ad.id ?? null;
           setAttemptId(attemptId);
           if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
+          // P0 — sync to the server clock; count down to the attempt's absolute deadline (also fixes a resumed
+          // attempt, which used to restart its on-screen timer from the full duration).
+          if (ad?.serverNow) skewRef.current = Number(ad.serverNow) - Date.now();
+          if (ad?.expiresAt) {
+            deadlineRef.current = new Date(ad.expiresAt).getTime();
+            durationSec = Math.max(1, Math.ceil((deadlineRef.current - skewRef.current - Date.now()) / 1000));
+          }
+          if (ad?.plan && ad?.startedAt) {
+            planStartRef.current = new Date(ad.startedAt).getTime();
+            lastSecRef.current = -2;
+            setSecClock(null);
+            setPlan(ad.plan as SectionPlan);
+          }
           // v4 §31 — resumed attempt (refresh/revisit): hydrate persisted autosaves
           {
             const savedMap: { [qid: string]: string } = {};
@@ -645,6 +696,7 @@ export default function TestPage() {
             // answers mirrored on this device (written even while offline) are newer than the server autosave
             const draft = attemptId ? loadDraft(attemptId) : null;
             if (draft) Object.assign(savedMap, draft.answers);
+            if (draft?.answeredAt) Object.assign(answeredAtRef.current, draft.answeredAt);
             if (Object.keys(savedMap).length > 0) {
             setAnswers(savedMap);
             setStatus((p) => {
@@ -726,12 +778,75 @@ export default function TestPage() {
       submitTest(); // auto-submit at 0
       return;
     }
-    const t = window.setTimeout(() => setTimeLeft((p) => p - 1), 1000);
+    const t = window.setTimeout(() => {
+      const dl = deadlineRef.current;
+      // Server-timed attempts count down to an absolute deadline (no drift, right after a refresh or a sleeping tab);
+      // practice sets keep the simple one-tick-per-second countdown.
+      setTimeLeft((p) => (dl != null ? Math.max(0, Math.ceil((dl - skewRef.current - Date.now()) / 1000)) : p - 1));
+    }, 1000);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, timeLeft, phase, paused]);
 
+  // ---- P0: section clock. Derives the open section + its remaining seconds from the server timeline. When the open
+  // section changes (its timer hit zero) the student is moved to the first question of the next one; the closed
+  // section can no longer be navigated to (see markVisited) and the server refuses its writes too. ----
+  React.useEffect(() => {
+    if (!plan || phase !== "exam") return;
+    const tick = () => {
+      const elapsed = Date.now() + skewRef.current - planStartRef.current;
+      const raw = sectionIndexAt(plan, elapsed);
+      const cur = Math.min(Math.max(raw, 0), plan.sections.length - 1);
+      const rem = sectionRemainingSec(plan, elapsed);
+      setSecClock((p) => (p && p.idx === cur && p.remainingSec === rem ? p : { idx: cur, remainingSec: rem }));
+      if (lastSecRef.current !== cur) {
+        const prev = lastSecRef.current;
+        lastSecRef.current = cur;
+        const first = questions.findIndex((x) => x.section === plan.sections[cur].name);
+        if (first >= 0) {
+          if (qEnterRef.qid) markQuestionTime(qEnterRef.qid);
+          setIdx(first);
+          setVisited((p) => ({ ...p, [questions[first].id]: true }));
+        }
+        if (prev !== -2) setSecBanner(cur);
+      }
+    };
+    tick();
+    const t = window.setInterval(tick, 500);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan, phase, questions]);
+
+  // ---- P0: heartbeat — re-syncs the server clock and tells the server this device is still connected (that is what
+  // lets it tell a genuinely offline student's late delivery from a connected client editing a closed section). ----
+  React.useEffect(() => {
+    if (!plan || !attemptId || phase !== "exam") return;
+    let stop = false;
+    const beat = async () => {
+      const t0 = Date.now();
+      try {
+        const r = await fetchAuth(`${apiBase()}/tests/attempts/${attemptId}/remaining`, { headers: getAuthHeaders() });
+        if (!r.ok || stop) return;
+        const d = await r.json().catch(() => null);
+        if (d?.serverNow) skewRef.current = Number(d.serverNow) - (t0 + Date.now()) / 2;
+      } catch {
+        /* offline — the device clock keeps the section timer going; the server re-checks everything on delivery */
+      }
+    };
+    const t = window.setInterval(beat, 20000);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [plan, attemptId, phase]);
+
+  // P0 — can the student open question `i` right now? In a strict sectional attempt only the open section is reachable.
+  const planOk = !!plan && plan.sections.every((sec) => questions.some((x) => x.section === sec.name));
+  const lockNav = planOk && !!secClock;
+  const canOpen = (i: number) => !lockNav || questions[i]?.section === plan!.sections[secClock!.idx]?.name;
+
   const markVisited = (i: number, qid: string) => {
+    if (!canOpen(i)) return;
     setVisited((p) => ({ ...p, [qid]: true }));
     if (questions[idx]) markQuestionTime(questions[idx].id);
     setIdx(i);
@@ -742,6 +857,7 @@ export default function TestPage() {
   };
 
   const chooseOption = (qid: string, key: string) => {
+    answeredAtRef.current[qid] = Date.now() + skewRef.current;
     setAnswers((p) => ({ ...p, [qid]: key }));
     setVisited((p) => ({ ...p, [qid]: true }));
     const wasMarked = status[qid] === "marked" || status[qid] === "answered-marked";
@@ -754,8 +870,8 @@ export default function TestPage() {
   // ---- Offline-safe: mirror answers on the device immediately (no debounce, no network) ----
   React.useEffect(() => {
     if (!attemptId || phase !== "exam") return;
-    saveDraft(attemptId, answers, timeSpent);
-  }, [answers, timeSpent, attemptId, phase]);
+    saveDraft(attemptId, answers, timeSpent, plan ? answeredAtRef.current : undefined);
+  }, [answers, timeSpent, attemptId, phase, plan]);
 
   // ---- Offline-safe: track connectivity; replay a queued submit as soon as the network is back ----
   React.useEffect(() => {
@@ -802,7 +918,7 @@ export default function TestPage() {
         await fetchAuth(`${apiBase()}/tests/attempts/${attemptId}/answers`, {
           method: "PUT",
           headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ answers: payload }),
+          body: JSON.stringify({ answers: payload, ...(plan ? { answeredAt: answeredAtRef.current } : {}) }),
         });
       } catch {
         /* autosave is best-effort — the submit payload is authoritative */
@@ -811,7 +927,7 @@ export default function TestPage() {
     return () => {
       if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     };
-  }, [answers, attemptId, phase]);
+  }, [answers, attemptId, phase, plan]);
 
   // ---- keyboard shortcuts (real CBT feel) ----
   // A-D / Alt+1-4 choose · Space or → save & next · ← / Shift+Space previous · M mark & next · C clear · P palette · ? help
@@ -890,6 +1006,7 @@ export default function TestPage() {
   const clearAnswer = () => {
     const q = questions[idx];
     if (!q) return;
+    answeredAtRef.current[q.id] = Date.now() + skewRef.current;
     setAnswers((p) => {
       const n = { ...p };
       delete n[q.id];
@@ -956,7 +1073,8 @@ export default function TestPage() {
     // explanation above submitTest): submit to the real attempt, then pull
     // the server-scored per-question detail — never call /bank/attempt here.
     if (activeAttempt) {
-      const clientSubmittedAt = Date.now(); // the moment the student actually finished (server uses it for offline replays)
+      const clientSubmittedAt = Date.now() + skewRef.current; // the moment the student actually finished, in SERVER time (used for offline replays)
+      const answeredAtPayload = plan ? { answeredAt: answeredAtRef.current } : {};
       let stayInExam = false; // true => submit did not reach the server: keep the student on the exam screen, NOT results
       try {
         const answersPayload = qs.map((q) => ({
@@ -981,12 +1099,12 @@ export default function TestPage() {
           sr = await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
             method: "POST",
             headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify({ answers: answersPayload, clientSubmittedAt }),
+            body: JSON.stringify({ answers: answersPayload, clientSubmittedAt, ...answeredAtPayload }),
           });
         } catch {
           // Internet is down: the test is NOT lost. Queue the final submit on the device; it is sent automatically
           // when the network returns (even after closing the app) and the real result is shown then.
-          queueSubmit({ attemptId: activeAttempt, answers: answersPayload, clientSubmittedAt });
+          queueSubmit({ attemptId: activeAttempt, answers: answersPayload, clientSubmittedAt, ...(plan ? { answeredAt: answeredAtRef.current } : {}) });
           stayInExam = true;
           setOfflinePending(true);
           setStarting(false);
@@ -1007,7 +1125,7 @@ export default function TestPage() {
             );
             // server error (5xx) / gateway down: same safety net as offline — queue it and keep retrying
             if (sr.status >= 500 || sr.status === 0) {
-              queueSubmit({ attemptId: activeAttempt, answers: answersPayload, clientSubmittedAt });
+              queueSubmit({ attemptId: activeAttempt, answers: answersPayload, clientSubmittedAt, ...(plan ? { answeredAt: answeredAtRef.current } : {}) });
               stayInExam = true;
               setOfflinePending(true);
               setStarting(false);
@@ -1256,17 +1374,22 @@ export default function TestPage() {
           ? "Bach gaye " + skipped + " skipped questions — ab unhe attempt karna seekho, speed par kaam karo."
           : tr("Good accuracy! Now take a new test to build speed.", "Achhi accuracy! Ab naya test try karke speed badhao.");
 
+  // P0 — in a strict sectional attempt the SECTION clock drives the colour / warnings, not the whole-paper clock.
+  const clockSec = planOk && secClock ? secClock.remainingSec : timeLeft;
   const timelineColor =
-    timeLeft > 120 ? "text-success" : timeLeft > 60 ? "text-warning" : "text-danger";
+    clockSec > 120 ? "text-success" : clockSec > 60 ? "text-warning" : "text-danger";
 
   // ============ INSTRUCTIONS SCREEN ============
   if (phase === "instructions") {
     // No hooks in this branch (all hooks live at the top of TestPage).
-    const durMin = preMeta?.durationMinutes || Math.max(1, Math.round((total || 10) * 0.5));
+    const patMin = patternMeta ? (scribe && patternMeta.scribeAvailable ? totalMinutes(patternMeta.sections.map((x) => ({ minutes: x.scribeMinutes }))) : totalMinutes(patternMeta.sections)) : 0;
+    const durMin = patMin || preMeta?.durationMinutes || Math.max(1, Math.round((total || 10) * 0.5));
     const totalQ = preMeta?.totalQuestions || total || 10;
     const maxMarks = preMeta?.totalMarks || questions.reduce((s, q) => s + (q.marks ?? 1), 0) || totalQ;
-    const negM = questions[0]?.negativeMarks ?? 0.25;
-    const posM = questions[0]?.marks ?? 1;
+    // Marking comes from the exam pattern when there is one; otherwise from the loaded questions. When neither is known
+    // yet we say so instead of showing an invented number.
+    const negM: number | null = patternMeta ? patternMeta.negativeMarks : questions[0]?.negativeMarks ?? null;
+    const posM = patternMeta?.sections[0]?.marksPerQuestion || (questions[0]?.marks ?? 1);
     const rules: [string, string][] = [
       ["The timer starts when you press Start and the test submits itself at zero.", "Start dabate hi timer chalu hota hai aur zero par test apne aap submit ho jata hai."],
       ["Your answers save as you go, so a refresh or a dropped connection will not lose them.", "Aapke jawab saath-saath save hote hain, isliye refresh ya net jaane par bhi nahi khote."],
@@ -1314,10 +1437,62 @@ export default function TestPage() {
                 <span className="font-semibold">{tr("Marking", "Marking")}</span>
                 <span className="flex flex-wrap gap-x-4 gap-y-1">
                   <span className="text-success">+{posM} {tr("correct", "sahi")}</span>
-                  <span className="text-danger">−{negM} {tr("wrong", "galat")}</span>
+                  {negM != null ? (
+                    <span className="text-danger">−{negM} {tr("wrong", "galat")}</span>
+                  ) : (
+                    <span className="text-muted-foreground">{tr("negative marking as per the paper", "negative marking paper ke hisaab se")}</span>
+                  )}
                   <span className="text-muted-foreground">0 {tr("unanswered", "unanswered")}</span>
                 </span>
               </div>
+
+              {patternMeta && (
+                <section className="card mt-3 p-5" aria-label={tr("Sections and timers", "Sections aur timers")}>
+                  <h2 className="text-sm font-bold">{tr("Sections and timers", "Sections aur timers")}</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {tr(
+                      "Every section has its own timer. When it ends you move to the next section automatically and cannot go back.",
+                      "Har section ka apna timer hai. Khatam hote hi agle section par apne aap chale jaoge, wapas nahi ja sakte.",
+                    )}
+                  </p>
+                  <div className="mt-3 overflow-x-auto rounded-xl border border-border">
+                    <table className="w-full min-w-[320px] text-sm">
+                      <thead>
+                        <tr className="bg-muted/60 text-left text-xs text-muted-foreground">
+                          <th className="px-3 py-2 font-semibold">{tr("Section", "Section")}</th>
+                          <th className="px-3 py-2 text-right font-semibold">{tr("Qs", "Sawal")}</th>
+                          <th className="px-3 py-2 text-right font-semibold">{tr("Time", "Samay")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {patternMeta.sections.map((sec) => (
+                          <tr key={sec.name} className="border-t border-border">
+                            <td className="px-3 py-2 font-medium">{sec.name}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{sec.questions}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{scribe && patternMeta.scribeAvailable ? sec.scribeMinutes : sec.minutes} {tr("min", "min")}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {patternMeta.scribeAvailable && (
+                    <label className="mt-3 flex items-start gap-3 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={scribe}
+                        onChange={(e) => {
+                          setScribe(e.target.checked);
+                          try { localStorage.setItem("ssc_scribe_pref", e.target.checked ? "1" : "0"); } catch { /* ignore */ }
+                        }}
+                        className="mt-0.5 h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
+                      />
+                      <span className="text-muted-foreground">
+                        {tr("I need the extra time given to scribe / accessibility candidates.", "Mujhe scribe / accessibility candidates wala extra time chahiye.")}
+                      </span>
+                    </label>
+                  )}
+                </section>
+              )}
 
               <section className="card mt-6 p-5" aria-label={tr("Before you start", "Shuru karne se pehle")}>
                 <h2 className="text-sm font-bold">{tr("Before you start", "Shuru karne se pehle")}</h2>
@@ -1718,7 +1893,14 @@ export default function TestPage() {
       setReviewOpen(false);
     }
   };
-  const lowTime = timeLeft > 0 && timeLeft <= 300;
+  const lowTime = planOk && secClock ? clockSec > 0 && clockSec <= 120 : timeLeft > 0 && timeLeft <= 300;
+  // P0 — navigation limits inside the open section
+  const curSecName = lockNav ? plan!.sections[secClock!.idx].name : "";
+  const secFirstIdx = lockNav ? questions.findIndex((x) => x.section === curSecName) : 0;
+  let secLastIdx = questions.length - 1;
+  if (lockNav) for (let k = questions.length - 1; k >= 0; k--) if (questions[k].section === curSecName) { secLastIdx = k; break; }
+  const atSectionStart = lockNav && idx <= secFirstIdx;
+  const atSectionEnd = lockNav && idx >= secLastIdx && secClock!.idx < plan!.sections.length - 1;
   const unansweredTotal = allCounts.notVisited + allCounts.notAnswered + allCounts.marked;
 
   return (
@@ -1745,6 +1927,26 @@ export default function TestPage() {
               className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
             >
               Retry now
+            </button>
+          </div>
+        </div>
+      )}
+      {/* P0 — NEW SECTION OPENED (the clock is already running; the previous section is closed for good) */}
+      {planOk && secBanner !== null && plan!.sections[secBanner] && (
+        <div className="pointer-events-none fixed inset-x-0 top-20 z-50 flex justify-center px-4" role="alert" aria-live="assertive">
+          <div className="card pointer-events-auto max-w-md border-primary/40 p-4 text-center shadow-lift">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-primary">
+              {tr("Section", "Section")} {secBanner + 1} / {plan!.sections.length}
+            </p>
+            <p className="mt-1 text-base font-extrabold">{plan!.sections[secBanner].name}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {tr(
+                `${plan!.sections[secBanner].minutes} minutes, already running. The previous section is closed and cannot be reopened.`,
+                `${plan!.sections[secBanner].minutes} minute, timer chalu ho chuka hai. Pichhla section band ho gaya, wapas nahi khulega.`,
+              )}
+            </p>
+            <button onClick={() => setSecBanner(null)} className="btn btn-primary btn-sm mt-3">
+              {tr("Got it", "Samajh gaya")}
             </button>
           </div>
         </div>
@@ -1788,6 +1990,23 @@ export default function TestPage() {
                 {paused ? "▶ Resume" : "⏸ Pause"}
               </button>
             )}
+            {planOk && secClock ? (
+              <div className="flex items-center gap-2">
+                <div
+                  role="timer"
+                  aria-label={tr("Section time left", "Section ka bacha samay")}
+                  className={`rounded-lg border px-3 py-1 font-mono text-sm font-bold tabular-nums sm:px-4 sm:py-1.5 sm:text-base ${timelineColor} ${clockSec > 0 && clockSec <= 60 ? "animate-pulse" : ""}`}
+                >
+                  <span className="mr-2 hidden font-sans text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:inline">
+                    {tr("Section", "Section")} {secClock.idx + 1}/{plan!.sections.length}
+                  </span>
+                  {formatSec(secClock.remainingSec)}
+                </div>
+                <div className="hidden rounded-lg border border-border px-2 py-1 text-[11px] tabular-nums text-muted-foreground sm:block" title={tr("Total time left in the paper", "Poore paper me bacha samay")}>
+                  {tr("Total", "Total")} {formatSec(timeLeft)}
+                </div>
+              </div>
+            ) : (
             <div
               role="timer"
               aria-label="Time left"
@@ -1795,6 +2014,7 @@ export default function TestPage() {
             >
               {formatSec(timeLeft)}
             </div>
+            )}
           </div>
         </div>
         {hasSections && (
@@ -1804,16 +2024,23 @@ export default function TestPage() {
                 const list = questions.filter((x) => x.section === name);
                 const c = tally(list);
                 const active = name === curSection;
+                // P0 — closed / not-yet-open sections cannot be entered
+                const pIdx = lockNav ? plan!.sections.findIndex((x) => x.name === name) : -1;
+                const tabLocked = lockNav && pIdx !== secClock!.idx;
                 return (
                   <button
                     key={name}
                     role="tab"
                     aria-selected={active}
+                    aria-disabled={tabLocked || undefined}
+                    disabled={tabLocked}
+                    title={tabLocked ? (pIdx < secClock!.idx ? tr("This section is closed", "Ye section band ho chuka hai") : tr("Opens when the previous section ends", "Pichhla section khatam hone par khulega")) : undefined}
                     onClick={() => jumpToSection(name)}
                     className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
                       active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted"
-                    }`}
+                    } ${tabLocked ? "cursor-not-allowed opacity-50 hover:bg-card" : ""}`}
                   >
+                    {tabLocked && <span aria-hidden>{pIdx < secClock!.idx ? "✓🔒" : "🔒"}</span>}
                     <span className="max-w-[10rem] truncate">{name}</span>
                     <span className={`rounded px-1.5 py-0.5 text-[10px] ${active ? "bg-primary-foreground/20" : "bg-muted"}`}>
                       {c.answered + c.answeredMarked}/{list.length}
@@ -1826,7 +2053,9 @@ export default function TestPage() {
         )}
         {lowTime && (
           <div className="bg-warning/15 px-3 py-1 text-center text-[11px] font-semibold text-warning" role="status">
-            {timeLeft <= 60 ? tr("Less than 1 minute left!", "1 minute se kam bacha hai!") : tr("Last 5 minutes — review your marked questions.", "Last 5 minutes — marked questions check karo.")}
+            {clockSec <= 60
+              ? planOk && secClock ? tr("Less than 1 minute left in this section!", "Is section me 1 minute se kam bacha hai!") : tr("Less than 1 minute left!", "1 minute se kam bacha hai!")
+              : planOk && secClock ? tr("Last 2 minutes of this section — it closes for good at 00:00.", "Section ke last 2 minute — 00:00 par ye hamesha ke liye band ho jayega.") : tr("Last 5 minutes — review your marked questions.", "Last 5 minutes — marked questions check karo.")}
           </div>
         )}
       </div>
@@ -2009,8 +2238,9 @@ export default function TestPage() {
                 </div>
               )}
               <div className="mt-3 hidden justify-between text-xs text-muted-foreground lg:flex">
-                <button onClick={() => idx > 0 && markVisited(idx - 1, questions[idx - 1].id)} className="hover:text-foreground">← Previous</button>
-                <button onClick={() => idx < questions.length - 1 && markVisited(idx + 1, questions[idx + 1].id)} className="hover:text-foreground">Next →</button>
+                <button onClick={() => idx > 0 && markVisited(idx - 1, questions[idx - 1].id)} disabled={atSectionStart} className="hover:text-foreground disabled:opacity-40">← Previous</button>
+                {atSectionEnd && <span className="text-warning">{tr("Last question of this section — it closes when the timer hits 00:00.", "Is section ka last sawal — timer 00:00 par ye band ho jayega.")}</span>}
+                <button onClick={() => idx < questions.length - 1 && markVisited(idx + 1, questions[idx + 1].id)} disabled={atSectionEnd} className="hover:text-foreground disabled:opacity-40">Next →</button>
               </div>
             </motion.div>
           )}
@@ -2041,9 +2271,9 @@ export default function TestPage() {
       {questions.length > 0 && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 backdrop-blur lg:hidden" style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
           <div className="mx-auto flex max-w-xl items-center gap-2 px-3 pt-2">
-            <button onClick={() => idx > 0 && markVisited(idx - 1, questions[idx - 1].id)} disabled={idx === 0} className="flex-1 rounded-xl border border-border px-3 py-3 text-sm font-semibold disabled:opacity-40">← Prev</button>
+            <button onClick={() => idx > 0 && markVisited(idx - 1, questions[idx - 1].id)} disabled={idx === 0 || atSectionStart} className="flex-1 rounded-xl border border-border px-3 py-3 text-sm font-semibold disabled:opacity-40">← Prev</button>
             <button onClick={() => setPaletteOpen(true)} className="rounded-xl border border-border px-3 py-3 text-sm font-bold" aria-label="Open question palette">☰ {idx + 1}/{questions.length}</button>
-            <button onClick={() => (idx < questions.length - 1 ? markVisited(idx + 1, questions[idx + 1].id) : setReviewOpen(true))} className="flex-1 rounded-xl bg-primary px-3 py-3 text-sm font-bold text-primary-foreground">{idx < questions.length - 1 ? "Next →" : "Submit"}</button>
+            <button onClick={() => (idx < questions.length - 1 ? markVisited(idx + 1, questions[idx + 1].id) : setReviewOpen(true))} disabled={atSectionEnd} className="flex-1 rounded-xl bg-primary px-3 py-3 text-sm font-bold text-primary-foreground disabled:opacity-40">{atSectionEnd ? tr("Section ends at 00:00", "00:00 par section band") : idx < questions.length - 1 ? "Next →" : "Submit"}</button>
           </div>
         </div>
       )}
@@ -2064,7 +2294,8 @@ export default function TestPage() {
                   <button
                     key={name}
                     onClick={() => jumpToSection(name)}
-                    className={`shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold ${name === curSection ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
+                    disabled={lockNav && plan!.sections.findIndex((x) => x.name === name) !== secClock!.idx}
+                    className={`shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${name === curSection ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
                   >
                     {name}
                   </button>
@@ -2170,6 +2401,14 @@ export default function TestPage() {
                 </tbody>
               </table>
             </div>
+            {lockNav && secClock!.idx < plan!.sections.length - 1 && (
+              <p className="mt-3 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger">
+                {tr(
+                  `You are in section ${secClock!.idx + 1} of ${plan!.sections.length}. Submitting now ends the WHOLE test — the remaining sections stay unattempted.`,
+                  `Aap section ${secClock!.idx + 1}/${plan!.sections.length} me ho. Abhi submit karne se POORA test khatam ho jayega — baaki sections attempt nahi honge.`,
+                )}
+              </p>
+            )}
             {unansweredTotal > 0 && (
               <p className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
                 {tr(`${unansweredTotal} question(s) are still unanswered.`, `${unansweredTotal} question abhi unanswered hain.`)}

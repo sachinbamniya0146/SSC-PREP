@@ -20,9 +20,12 @@ export type PendingSubmit = {
   answers: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[];
   clientSubmittedAt: number;
   queuedAt: number;
+  // Sectional-timer attempts: { [questionId]: server-time ms at which the answer was given } so a late
+  // replay can be checked against the right section window (see backend canAcceptLateWrite).
+  answeredAt?: Record<string, number>;
 };
 
-type Draft = { answers: Record<string, string>; timeSpent: Record<string, number>; savedAt: number };
+type Draft = { answers: Record<string, string>; timeSpent: Record<string, number>; savedAt: number; answeredAt?: Record<string, number> };
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -41,9 +44,9 @@ function write(key: string, value: unknown) {
 }
 
 // ---- drafts (live answers mirrored on the device) ----
-export function saveDraft(attemptId: string, answers: Record<string, string>, timeSpent: Record<string, number>) {
+export function saveDraft(attemptId: string, answers: Record<string, string>, timeSpent: Record<string, number>, answeredAt?: Record<string, number>) {
   if (typeof window === "undefined" || !attemptId) return;
-  write(DRAFT_PREFIX + attemptId, { answers, timeSpent, savedAt: Date.now() } as Draft);
+  write(DRAFT_PREFIX + attemptId, { answers, timeSpent, savedAt: Date.now(), ...(answeredAt ? { answeredAt } : {}) } as Draft);
 }
 export function loadDraft(attemptId: string): Draft | null {
   if (typeof window === "undefined" || !attemptId) return null;
@@ -91,7 +94,7 @@ export async function flushPendingSubmits(): Promise<string[]> {
       const res = await fetchAuth(`${getApiBase()}/tests/attempts/${item.attemptId}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers: item.answers, clientSubmittedAt: item.clientSubmittedAt }),
+        body: JSON.stringify({ answers: item.answers, clientSubmittedAt: item.clientSubmittedAt, ...(item.answeredAt ? { answeredAt: item.answeredAt } : {}) }),
       });
       if (res.ok) {
         dropPending(item.attemptId);

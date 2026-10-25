@@ -34,6 +34,8 @@ export type InsightQuestion = {
   shift?: string | null;
   marks: number;
   negativeMarks: number;
+  // set by the server for strict-sectional attempts (index into the attempt's section plan)
+  sectionIndex?: number | null;
 };
 
 export const fmtDur = (s: number) => {
@@ -373,6 +375,79 @@ export function SubjectBars({ questions }: { questions: InsightQuestion[] }) {
     </section>
   );
 }
+
+/* ------------------------------------------------------------------------------- Section clock (strict timers) */
+
+/**
+ * Strict-sectional attempts only (SSC CGL 2026 style): per section, how many marks, how the time was used against the
+ * section's own timer, and whether time was left on the table. A section that ended with minutes to spare is the
+ * clearest "you could have re-checked" signal; one that ran dry shows where the clock is being lost.
+ */
+export function SectionTimeCard({ questions, plan }: { questions: InsightQuestion[]; plan: SectionPlanLike }) {
+  const tr = useT();
+  const rows = React.useMemo(
+    () =>
+      plan.sections.map((sec) => {
+        const qs = questions.filter((q) => q.sectionIndex === sec.index);
+        let c = 0, w = 0, sk = 0, used = 0, score = 0;
+        for (const q of qs) {
+          used += q.timeSpentSeconds || 0;
+          if (q.isCorrect) { c++; score += q.marks || 0; }
+          else if (q.isSkipped || !q.selectedOption) sk++;
+          else { w++; score -= q.negativeMarks || 0; }
+        }
+        const allotted = Math.round((sec.endMs - sec.startMs) / 1000);
+        const usedClamped = Math.min(used, allotted);
+        const left = Math.max(0, allotted - used);
+        const attempted = c + w;
+        return { sec, c, w, sk, score, allotted, used: usedClamped, left, attempted, total: qs.length, perQ: attempted ? used / attempted : 0, ideal: qs.length ? allotted / qs.length : 0 };
+      }),
+    [questions, plan],
+  );
+  if (rows.every((r) => r.total === 0)) return null;
+  return (
+    <section className="card p-5" aria-label="Section-wise time">
+      <h2 className="text-sm font-bold">⏱ {tr("Section-wise time", "Section-wise samay")}</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {tr("Each section had its own timer. Times are approximate (time spent on each question's screen).", "Har section ka apna timer tha. Samay lagbhag hai (har sawal ki screen par bita samay).")}
+      </p>
+      <div className="mt-4 space-y-4">
+        {rows.map((r) => {
+          const pct = r.allotted ? Math.round((r.used / r.allotted) * 100) : 0;
+          const spare = r.allotted ? r.left / r.allotted : 0;
+          const verdict =
+            r.total === 0
+              ? null
+              : spare >= 0.2
+                ? { tone: "text-warning", en: `About ${fmtDur(r.left)} was left unused — use it to re-check marked and risky questions.`, hi: `Lagbhag ${fmtDur(r.left)} bach gaya — marked aur risky sawal dobara check karne me lagao.` }
+                : r.sk > 0 && spare < 0.05
+                  ? { tone: "text-danger", en: `The clock ran out with ${r.sk} question(s) skipped — attempt the quick ones first.`, hi: `Timer khatam ho gaya aur ${r.sk} sawal skip rahe — pehle aasaan sawal karo.` }
+                  : { tone: "text-success", en: "Time was used well.", hi: "Samay ka achha use hua." };
+          return (
+            <div key={r.sec.index}>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
+                <span className="font-semibold">{r.sec.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {r.score.toFixed(r.score % 1 ? 2 : 0)} {tr("marks", "marks")} · {r.c}✓ {r.w}✗ {r.sk}○
+                </span>
+              </div>
+              <div className="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-muted" role="img" aria-label={`${pct}% of the section time used`}>
+                <div className="h-full bg-primary" style={{ width: `${Math.min(100, pct)}%` }} />
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {fmtDur(r.used)} / {fmtDur(r.allotted)} · {tr("avg", "avg")} {fmtDur(r.perQ)}/{tr("attempted Q", "attempted sawal")} ({tr("ideal", "ideal")} ~{fmtDur(r.ideal)}/Q)
+              </p>
+              {verdict && <p className={`mt-0.5 text-[11px] font-semibold ${verdict.tone}`}>{tr(verdict.en, verdict.hi)}</p>}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** Subset of the server's frozen SectionPlan that the results screen needs. */
+export type SectionPlanLike = { sections: { index: number; name: string; startMs: number; endMs: number }[] };
 
 /* --------------------------------------------------------------------------------------- Retry wrong only */
 

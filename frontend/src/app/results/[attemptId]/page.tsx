@@ -8,7 +8,7 @@ import DiagramVenn from "@/components/DiagramVenn";
 import WeakTopicPractice from "@/components/WeakTopicPractice";
 import SubjectChapterAnalysis from "@/components/SubjectChapterAnalysis";
 import SolutionVerify from "@/components/SolutionVerify";
-import { ScoreHero, ScoreComparison, TimeAnalysis, SubjectBars, RetryPanel } from "@/components/ResultsInsights";
+import { ScoreHero, ScoreComparison, TimeAnalysis, SubjectBars, RetryPanel, SectionTimeCard, type SectionPlanLike } from "@/components/ResultsInsights";
 import { StemMedia, QFigure, RichText } from "@/components/QuestionMedia";
 import { useT } from "@/lib/i18n";
 import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang, type ReviewLang } from "@/components/SolutionPanel";
@@ -42,6 +42,7 @@ type ReviewQuestion = {
   difficulty?: string | null;
   marks: number;
   negativeMarks: number;
+  sectionIndex?: number | null;
 };
 
 type AttemptDetail = {
@@ -58,6 +59,7 @@ type AttemptDetail = {
   submittedAt: string;
   testTemplate: { id: string; title: string; totalQuestions: number; totalMarks: number };
   topper?: { score: number | null; accuracyPercent: number | null } | null;
+  sectionPlan?: SectionPlanLike | null;
   questions: ReviewQuestion[];
 };
 
@@ -333,6 +335,7 @@ export default function AttemptReviewPage() {
         {/* Time per question + subject-wise bars */}
         <div className="mt-4 space-y-4">
           <TimeAnalysis questions={questions} onJump={jumpTo} />
+          {detail?.sectionPlan && <SectionTimeCard questions={questions} plan={detail.sectionPlan} />}
           <SubjectBars questions={questions} />
         </div>
 

@@ -24,8 +24,9 @@ export class TestsController {
 
   // P0 — server-authoritative timed session: start (stamps startedAt+expiresAt)
   @Post('attempts/start')
-  startAttempt(@CurrentUser() user: { userId: string }, @Body() body: { testTemplateId: string }) {
-    return this.testsService.startAttempt(user.userId, body.testTemplateId);
+  startAttempt(@CurrentUser() user: { userId: string }, @Body() body: { testTemplateId: string; scribe?: boolean }) {
+    // `scribe` = extra-time accessibility option; only has an effect on strict-sectional patterns that offer it.
+    return this.testsService.startAttempt(user.userId, body.testTemplateId, { scribe: body.scribe === true });
   }
 
   // P0 — submit a timed attempt (server-enforced expiry + server-side scoring)
@@ -33,7 +34,7 @@ export class TestsController {
   submitAttempt(
     @CurrentUser() user: { userId: string },
     @Param('attemptId') attemptId: string,
-    @Body() body: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; clientSubmittedAt?: number | string },
+    @Body() body: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; clientSubmittedAt?: number | string; answeredAt?: Record<string, number> },
   ) {
     return this.testsService.submitAttempt(user.userId, attemptId, body);
   }
@@ -52,6 +53,12 @@ export class TestsController {
     @Body() body: { answers: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; timeSpentByQuestion?: Record<string, number> },
   ) {
     return this.testsService.saveAnswers(user.userId, attemptId, body);
+  }
+
+  // P0 — section timers / scribe option of a strict-sectional template (instructions screen). {pattern:null} for normal mocks.
+  @Get('pattern/:templateId')
+  templatePattern(@Param('templateId') templateId: string) {
+    return this.testsService.templatePattern(templateId);
   }
 
   // v6 §6 — per-template stats: attempts, averages, real cutoff (P90), toppers
