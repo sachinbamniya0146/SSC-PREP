@@ -10,6 +10,7 @@ import { MonetizationService } from '../monetization/monetization.service';
 import { AdminService } from './admin.service';
 import { PayoutService } from '../referral/payout.service';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import { readPatternSections } from '../common/section-plan';
 
 // v1 §10 — Admin dashboards: revenue overview + audit log viewer + user management.
 // All endpoints are ADMIN-only (global JwtAuthGuard is on the module).
@@ -777,6 +778,88 @@ export class AdminController {
       include: { exam: { select: { name: true, slug: true, code: true } } },
       orderBy: { name: 'asc' },
     });
+  }
+
+  // Pattern editor health check (Oct 26 2026). For ONE pattern it answers the three questions an admin has before
+  // trusting it: (1) can every section actually be composed from the question bank, (2) which mocks run on it,
+  // (3) which same-exam mocks could still be linked. Read-only; counts approximate paper() (published + bilingual).
+  @Get('exam-patterns/:id/health')
+  async examPatternHealth(@Param('id', ParseUUIDPipe) id: string) {
+    const pattern = await this.prisma.examPattern.findUnique({ where: { id }, include: { exam: { select: { name: true } } } });
+    if (!pattern) throw new NotFoundException('Exam pattern not found');
+    const rows = readPatternSections(pattern.sections);
+    const subjects = await this.prisma.subject.findMany({ select: { id: true, slug: true, name: true } });
+    const bySlug = new Map(subjects.map((s) => [s.slug.toLowerCase(), s]));
+    const idToSlug = new Map(subjects.map((s) => [s.id, s.slug.toLowerCase()]));
+
+    const sections = await Promise.all(
+      rows.map(async (r, index) => {
+        const subj = r.subjectSlug ? bySlug.get(r.subjectSlug) : undefined;
+        const need = r.questions ?? 0;
+        let available = 0;
+        if (subj) {
+          available = await this.prisma.question.count({
+            where: {
+              isApproved: true,
+              isActive: true,
+              autoSuspended: false,
+              subjectId: subj.id,
+              examId: pattern.examId,
+              OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+            },
+          });
+        }
+        // Same rules paper() applies: 0 -> blocked, below half the section -> blocked, below full -> shortened.
+        const status = !r.subjectSlug ? 'no_subject' : !subj ? 'unknown_subject' : available === 0 || available < Math.max(1, Math.ceil(need / 2)) ? 'blocked' : available < need ? 'short' : 'ok';
+        return { index, name: r.name, subjectSlug: r.subjectSlug ?? null, subjectName: subj?.name ?? null, questions: need, available, status };
+      }),
+    );
+
+    const templateSelect = { id: true, title: true, type: true, isActive: true, isPremium: true, year: true, shift: true, examPatternId: true } as const;
+    const typeIn = { in: ['FULL_MOCK', 'PREVIOUS_YEAR', 'SHIFT_WISE'] as any };
+    const [linkedRaw, availableRaw] = await Promise.all([
+      this.prisma.testTemplate.findMany({ where: { examPatternId: id }, select: templateSelect, orderBy: { createdAt: 'desc' }, take: 300 }),
+      this.prisma.testTemplate.findMany({
+        where: { examId: pattern.examId, type: typeIn, OR: [{ examPatternId: null }, { examPatternId: { not: id } }] },
+        select: { ...templateSelect, examPattern: { select: { name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 300,
+      }),
+    ]);
+
+    const blockedSections = sections.filter((x) => x.status === 'blocked' || x.status === 'unknown_subject' || x.status === 'no_subject').map((x) => x.name);
+    const linked = await Promise.all(
+      linkedRaw.map(async (t) => {
+        let warning: string | null = null;
+        let missing: string[] = [];
+        if (t.id.startsWith('pyq-')) {
+          // A PYQ mock serves ITS OWN paper; every pattern section needs >= 1 question there or the paper refuses to open.
+          if (!t.year || !t.shift) {
+            warning = 'unknown_paper';
+          } else {
+            const grouped = await this.prisma.question.groupBy({
+              by: ['subjectId'],
+              where: { isApproved: true, isActive: true, autoSuspended: false, examId: pattern.examId, year: t.year, shift: t.shift },
+              _count: { _all: true },
+            });
+            const present = new Set(grouped.map((g) => idToSlug.get(g.subjectId)).filter(Boolean) as string[]);
+            missing = rows.filter((r) => !r.subjectSlug || !present.has(r.subjectSlug)).map((r) => r.name);
+            if (missing.length) warning = 'missing_sections';
+          }
+        } else if (blockedSections.length) {
+          missing = blockedSections;
+          warning = 'missing_sections';
+        }
+        return { ...t, warning, missingSections: missing };
+      }),
+    );
+
+    return {
+      pattern: { id: pattern.id, name: pattern.name, examId: pattern.examId, examName: pattern.exam?.name ?? '', lock: pattern.lockPreviousSections },
+      sections,
+      linked,
+      available: availableRaw.map((t) => ({ ...t, otherPattern: t.examPattern?.name ?? null, examPattern: undefined })),
+    };
   }
 
   @Post('exam-patterns')

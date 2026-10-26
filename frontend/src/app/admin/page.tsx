@@ -1228,6 +1228,14 @@ export default function AdminPage() {
             📅 PYQ ki exam date + Tier 1/2 AI se map — Date Mapping status →
           </a>
           )}
+          {access.isAdmin && (
+          <a
+            href="/admin/patterns"
+            className="mb-3 ml-2 inline-block rounded-lg border border-primary/40 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+          >
+            ⏱️ Exam Patterns — sections, strict sectional timer, mocks se link →
+          </a>
+          )}
           <a
             href="/admin/pyq-export"
             className="mb-3 ml-2 inline-block rounded-lg border border-teal-500/40 bg-teal-500/5 px-3 py-1.5 text-xs font-medium text-teal-600 hover:bg-teal-500/10 dark:text-teal-400"
