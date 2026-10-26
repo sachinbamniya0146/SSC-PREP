@@ -63,6 +63,17 @@ export default function YearWisePage() {
   const [selectedTopics, setSelectedTopics] = React.useState<Set<string>>(new Set());
   const [customOpen, setCustomOpen] = React.useState(false);
 
+  // Narrows subject / chapter / topic counts (and hides empty ones) to the exact paper chosen. `shift` is
+  // null while undecided and "" for "all shifts combined"; both mean "no shift narrowing".
+  const paperQuery = year ? `&year=${year}${shift ? `&shift=${encodeURIComponent(shift)}` : ""}` : "";
+
+  // A different paper (year / shift) has different subjects and chapters: drop picks that may no longer exist.
+  React.useEffect(() => {
+    setSelectedSubjects(new Set());
+    setSelectedChapters(new Set());
+    setSelectedTopics(new Set());
+  }, [paperQuery]);
+
   // Step 1: exams
   const loadExams = React.useCallback(async () => {
     setLoading(true);
@@ -155,7 +166,7 @@ export default function YearWisePage() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetchAuth(`${API_BASE}/bank/subjects?examId=${examId}`);
+        const r = await fetchAuth(`${API_BASE}/bank/subjects?examId=${examId}${paperQuery}`);
         if (!r.ok || cancelled) return;
         const d = await r.json();
         const list: Subject[] = Array.isArray(d) ? d : [];
@@ -167,7 +178,7 @@ export default function YearWisePage() {
     return () => {
       cancelled = true;
     };
-  }, [examId, year]);
+  }, [examId, year, paperQuery]);
 
   // Chapters when subjects are (de)selected (one fetch per subject, merged).
   React.useEffect(() => {
@@ -183,7 +194,7 @@ export default function YearWisePage() {
       try {
         const results = await Promise.all(
           Array.from(selectedSubjects).map((sid) =>
-            fetchAuth(`${API_BASE}/bank/chapters?subjectId=${sid}&examId=${examId}`).then((r) => (r.ok ? r.json() : [])),
+            fetchAuth(`${API_BASE}/bank/chapters?subjectId=${sid}&examId=${examId}${paperQuery}`).then((r) => (r.ok ? r.json() : [])),
           ),
         );
         if (!cancelled) setChapters(([] as Chapter[]).concat(...results.filter(Array.isArray)));
@@ -194,7 +205,7 @@ export default function YearWisePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedSubjects, examId]);
+  }, [selectedSubjects, examId, paperQuery]);
 
   // Topics when chapters are (de)selected. examId is sent so counts match what yearWiseStart() will actually compose.
   React.useEffect(() => {
@@ -208,7 +219,7 @@ export default function YearWisePage() {
       try {
         const results = await Promise.all(
           Array.from(selectedChapters).map((cid) =>
-            fetchAuth(`${API_BASE}/bank/topics?chapterId=${cid}&examId=${examId}`).then((r) => (r.ok ? r.json() : [])),
+            fetchAuth(`${API_BASE}/bank/topics?chapterId=${cid}&examId=${examId}${paperQuery}`).then((r) => (r.ok ? r.json() : [])),
           ),
         );
         if (!cancelled) setTopics(([] as TopicRow[]).concat(...results.filter(Array.isArray)));
@@ -219,7 +230,7 @@ export default function YearWisePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedChapters, examId]);
+  }, [selectedChapters, examId, paperQuery]);
 
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, id: string) => {
     const next = new Set(set);
@@ -402,7 +413,7 @@ export default function YearWisePage() {
                       <div className="grid gap-2 sm:grid-cols-2">
                         {subjects.map((s) => (
                           <ChoiceChip key={s.id} selected={selectedSubjects.has(s.id)} onClick={() => toggle(selectedSubjects, setSelectedSubjects, s.id)}>
-                            {s.name}
+                            {s.name} <span className="text-xs text-muted-foreground">({s.questionCount})</span>
                           </ChoiceChip>
                         ))}
                       </div>
@@ -413,7 +424,7 @@ export default function YearWisePage() {
                         <div className="grid gap-2 sm:grid-cols-2">
                           {chapters.map((c) => (
                             <ChoiceChip key={c.id} selected={selectedChapters.has(c.id)} onClick={() => toggle(selectedChapters, setSelectedChapters, c.id)}>
-                              {c.name}
+                              {c.name} <span className="text-xs text-muted-foreground">({c.count})</span>
                             </ChoiceChip>
                           ))}
                         </div>
@@ -425,7 +436,7 @@ export default function YearWisePage() {
                         <div className="grid gap-2 sm:grid-cols-2">
                           {topics.map((tp) => (
                             <ChoiceChip key={tp.id} selected={selectedTopics.has(tp.id)} onClick={() => toggle(selectedTopics, setSelectedTopics, tp.id)}>
-                              {tp.name}
+                              {tp.name} <span className="text-xs text-muted-foreground">({tp.count})</span>
                             </ChoiceChip>
                           ))}
                         </div>

@@ -180,8 +180,8 @@ export default function PremiumPage() {
         {loadError && (
           <div className="mb-6 flex items-center justify-between rounded-lg border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
             <span>{loadError}</span>
-            <button onClick={loadData} className="rounded-md border border-danger/40 px-3 py-1 font-medium hover:bg-danger/10">
-              Retry
+            <button onClick={loadData} className="btn btn-outline btn-sm">
+              {tr("Retry", "Dobara try karein")}
             </button>
           </div>
         )}
@@ -211,7 +211,7 @@ export default function PremiumPage() {
               </div>
               <button
                 onClick={() => selectPlan(subscription.plan!)}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+                className="btn btn-primary"
               >
                 {tr("Renew / extend", "Renew / extend karein")}
               </button>
@@ -247,7 +247,7 @@ export default function PremiumPage() {
         {/* Plans */}
         <section className="mb-8">
           <h2 className="mb-5 text-2xl font-bold">{tr("Choose your plan", "Apna plan chunein")}</h2>
-          {plans.length === 0 && !loadError && <p className="text-sm text-muted-foreground">No plans are available right now.</p>}
+          {plans.length === 0 && !loadError && <p className="text-sm text-muted-foreground">{tr("No plans are available right now.", "Abhi koi plan available nahi hai.")}</p>}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {plans.map((plan) => {
               const selected = selectedPlan?.id === plan.id;
@@ -257,8 +257,8 @@ export default function PremiumPage() {
                   type="button"
                   onClick={() => selectPlan(plan)}
                   aria-pressed={selected}
-                  className={`relative rounded-xl border p-4 text-center transition-all ${
-                    selected ? "border-primary bg-primary/5 shadow-lg" : "border-border hover:border-primary/50 hover:shadow-md"
+                  className={`card card-hover relative p-4 text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                    selected ? "!border-primary bg-primary/5 ring-2 ring-primary/30" : ""
                   }`}
                 >
                   {bestValueId === plan.id && (
@@ -280,7 +280,7 @@ export default function PremiumPage() {
 
         {/* Checkout */}
         {selectedPlan && (
-          <section className="mb-10 rounded-xl border bg-card p-6">
+          <section className="card mb-10 p-5 sm:p-6" aria-label={selectedPlan.name}>
             <h3 className="mb-4 text-xl font-bold">{selectedPlan.name}</h3>
 
             <div className="mb-4">
@@ -292,7 +292,8 @@ export default function PremiumPage() {
                   onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
                   onKeyDown={(e) => e.key === "Enter" && !couponResult && applyCoupon()}
                   placeholder="Enter coupon code"
-                  className="flex-1 rounded-lg border border-input bg-background px-4 py-2"
+                  className="min-w-0 flex-1 rounded-lg border border-input bg-background px-4 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  aria-label={tr("Coupon code", "Coupon code")}
                   disabled={!!couponResult}
                 />
                 {couponResult ? (
@@ -301,17 +302,17 @@ export default function PremiumPage() {
                       setCouponCode("");
                       setCouponResult(null);
                     }}
-                    className="rounded-lg border border-input bg-background px-4 py-2 hover:bg-muted"
+                    className="btn btn-outline"
                   >
-                    Remove
+                    {tr("Remove", "Hatayein")}
                   </button>
                 ) : (
                   <button
                     onClick={applyCoupon}
                     disabled={!couponCode.trim() || couponBusy || processing}
-                    className="rounded-lg bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    className="btn btn-primary"
                   >
-                    {couponBusy ? "…" : "Apply"}
+                    {couponBusy ? "…" : tr("Apply", "Lagayein")}
                   </button>
                 )}
               </div>
@@ -356,7 +357,7 @@ export default function PremiumPage() {
             <button
               onClick={payNow}
               disabled={processing}
-              className="w-full rounded-lg bg-primary py-3 font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              className="btn btn-primary btn-lg w-full"
             >
               {processing
                 ? tr("Opening secure checkout…", "Secure checkout khul raha hai…")
@@ -384,7 +385,7 @@ export default function PremiumPage() {
               ["Progress Analytics", "Topic-wise performance tracking aur recommendations"],
               ["Priority Support", "Tez response aur dedicated help"],
             ].map(([t, d]) => (
-              <div key={t} className="rounded-lg border bg-card p-4">
+              <div key={t} className="card p-4">
                 <h4 className="mb-1 font-semibold">{t}</h4>
                 <p className="text-sm text-muted-foreground">{d}</p>
               </div>

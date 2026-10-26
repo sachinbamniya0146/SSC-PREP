@@ -601,8 +601,10 @@ export class BankService implements OnModuleInit {
 
   // `kind` (NEW, Sep 21 2026): 'pyq' counts only year-tagged questions,
   // 'practice' only year-less ones, omitted = everything (unchanged default).
-  async subjects(examId?: string, kind?: 'pyq' | 'practice') {
-    const cacheKey = `bank:subjects:${examId ?? ''}:${kind ?? ''}`;
+  // `year` / `shift` (NEW, Oct 26 2026): optional paper narrowing for /year-wise so
+  // the subject / chapter / topic counts match the exact paper the student picked.
+  async subjects(examId?: string, kind?: 'pyq' | 'practice', year?: number, shift?: string) {
+    const cacheKey = `bank:subjects:${examId ?? ''}:${kind ?? ''}:${year ?? ''}:${shift ?? ''}`;
     const cached = cacheGet<any>(cacheKey);
     if (cached) return cached;
     const out = await this.prisma.$queryRaw`
@@ -614,12 +616,14 @@ export class BankService implements OnModuleInit {
            AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
            AND (${examId}::text IS NULL OR q."examId" = ${examId})
            AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
+           AND (${year ?? null}::int IS NULL OR q."year" = ${year ?? null})
+           AND (${shift ?? null}::text IS NULL OR q."shift" = ${shift ?? null})
       GROUP BY s.id ORDER BY s.name;`;
     cacheSet(cacheKey, out, 300_000);
     return out;
   }
 
-  async chapters(subjectId?: string, examId?: string, includeEmpty = false, kind?: 'pyq' | 'practice') {
+  async chapters(subjectId?: string, examId?: string, includeEmpty = false, kind?: 'pyq' | 'practice', year?: number, shift?: string) {
     // NEW `includeEmpty` — admin chapter-assignment pickers (e.g. the PDF
     // review queue's chapter dropdown/AI-suggest) need to see EVERY
     // chapter in a subject, including ones that don't have any approved
@@ -634,6 +638,8 @@ export class BankService implements OnModuleInit {
                  WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
                  AND (${examId}::text IS NULL OR q."examId" = ${examId})
                  AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
+                 AND (${year ?? null}::int IS NULL OR q."year" = ${year ?? null})
+                 AND (${shift ?? null}::text IS NULL OR q."shift" = ${shift ?? null})
                )::int AS count
         FROM chapters c
         JOIN subjects sub ON sub.id = c."subjectId"
@@ -650,6 +656,8 @@ export class BankService implements OnModuleInit {
            AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
            AND (${examId}::text IS NULL OR q."examId" = ${examId})
            AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
+           AND (${year ?? null}::int IS NULL OR q."year" = ${year ?? null})
+           AND (${shift ?? null}::text IS NULL OR q."shift" = ${shift ?? null})
       WHERE (${subjectId}::text IS NULL OR c."subjectId" = ${subjectId})
       GROUP BY c.id, sub.name
       HAVING COUNT(q.id) > 0
@@ -721,7 +729,7 @@ export class BankService implements OnModuleInit {
   // parameter here, same pattern as subjects()/chapters()/years(), closes
   // that gap so the topic list a student sees is always honest for the
   // exam they actually picked.
-  async topics(chapterId?: string, examId?: string, kind?: 'pyq' | 'practice') {
+  async topics(chapterId?: string, examId?: string, kind?: 'pyq' | 'practice', year?: number, shift?: string) {
     return this.prisma.$queryRaw`
       SELECT t.id, t.name, t."nameHindi", t.slug, COUNT(q.id)::int AS count
       FROM topics t
@@ -729,6 +737,8 @@ export class BankService implements OnModuleInit {
            AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
            AND (${examId}::text IS NULL OR q."examId" = ${examId})
            AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
+           AND (${year ?? null}::int IS NULL OR q."year" = ${year ?? null})
+           AND (${shift ?? null}::text IS NULL OR q."shift" = ${shift ?? null})
       WHERE (${chapterId}::text IS NULL OR t."chapterId" = ${chapterId})
       GROUP BY t.id
       HAVING COUNT(q.id) > 0

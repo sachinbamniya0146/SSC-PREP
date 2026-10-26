@@ -9,6 +9,13 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { Department } from '../common/decorators/department.decorator';
 import { parseQuestionKind } from '../common/question-visibility';
 
+/** `?year=2023` -> 2023. Anything missing / non-numeric -> undefined (= no year narrowing), never a 500. */
+function parseYearParam(raw?: string): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1990 && n <= 2100 ? n : undefined;
+}
+
 @Controller('bank')
 @UseGuards(JwtAuthGuard)
 export class BankController {
@@ -89,8 +96,13 @@ export class BankController {
   }
 
   @Get('subjects')
-  subjects(@Query('examId') examId?: string, @Query('kind') kind?: string) {
-    return this.bank.subjects(examId, parseQuestionKind(kind));
+  subjects(
+    @Query('examId') examId?: string,
+    @Query('kind') kind?: string,
+    @Query('year') year?: string,
+    @Query('shift') shift?: string,
+  ) {
+    return this.bank.subjects(examId, parseQuestionKind(kind), parseYearParam(year), shift || undefined);
   }
 
   @Get('chapters')
@@ -99,8 +111,10 @@ export class BankController {
     @Query('examId') examId?: string,
     @Query('includeEmpty') includeEmpty?: string,
     @Query('kind') kind?: string,
+    @Query('year') year?: string,
+    @Query('shift') shift?: string,
   ) {
-    return this.bank.chapters(subjectId, examId, includeEmpty === 'true', parseQuestionKind(kind));
+    return this.bank.chapters(subjectId, examId, includeEmpty === 'true', parseQuestionKind(kind), parseYearParam(year), shift || undefined);
   }
 
   // Session 18+ — year-wise custom test picker: distinct years for an exam.
@@ -122,8 +136,14 @@ export class BankController {
   // doc comment for why this was missing while subjects/chapters/years all
   // already had it.
   @Get('topics')
-  topics(@Query('chapterId') chapterId?: string, @Query('examId') examId?: string, @Query('kind') kind?: string) {
-    return this.bank.topics(chapterId, examId, parseQuestionKind(kind));
+  topics(
+    @Query('chapterId') chapterId?: string,
+    @Query('examId') examId?: string,
+    @Query('kind') kind?: string,
+    @Query('year') year?: string,
+    @Query('shift') shift?: string,
+  ) {
+    return this.bank.topics(chapterId, examId, parseQuestionKind(kind), parseYearParam(year), shift || undefined);
   }
 
   // NEW (Sep 21 2026) — sub-topics (with question counts) under a topic, for

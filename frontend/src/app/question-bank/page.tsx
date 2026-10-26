@@ -425,7 +425,7 @@ export default function QuestionBankPage() {
           `${metaTotal}+ verified PYQs Hindi aur English me, turant jawab feedback ke saath.`,
         )}
         actions={
-          <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium">
+          <label className="card flex items-center gap-2 px-3 py-2 text-sm font-medium">
             <input type="checkbox" checked={showHi} onChange={(e) => setShowHi(e.target.checked)} />
             {t("Show Hindi", "Hindi dikhayein")}
           </label>
@@ -558,7 +558,7 @@ export default function QuestionBankPage() {
           const selKey = sel[q.id];
           const showAnswer = Boolean(a);
           return (
-            <div key={q.id} className="rounded-xl border border-border bg-card p-5">
+            <div key={q.id} className="card p-4 sm:p-5">
               {/* FIX ("chapter mein topic bhi hona tha, year/shift/exam
                   dikhna chahiye"): this metadata was already coming back
                   from the API (chapter/exam/topic/year/shift) but nothing
