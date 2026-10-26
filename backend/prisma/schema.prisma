@@ -505,6 +505,12 @@ model Question {
   // Filled by the PYQ date-mapping worker (or typed by admin), shown in the admin
   // PYQ export. Nullable: practice questions and older PYQs simply have no tier yet.
   examTier           String?
+  // NEW (26 Oct 2026 — date-wise mocks): Tier-2 papers can have several papers on one date
+  // ("PAPER_1" | "PAPER_2" | "PAPER_3"). Blank = PAPER_1. Part of the paper identity, see common/pyq-paper-key.ts.
+  tierPaper          String?
+  // NEW (26 Oct 2026): the question's number INSIDE its real paper (1..N, as printed).
+  // The mock follows this order. NOT the same as `questionNo` below, which is the global unique serial.
+  paperQuestionNo    Int?
 
   questionText       String
   questionTextHindi  String?
@@ -592,6 +598,7 @@ model Question {
   @@index([isApproved, isActive])
   @@index([errorReportCount])
   @@index([examId, subjectId, isApproved, isActive]) // CGL/compose hot path
+  @@index([examId, examTier, examDate, shift]) // date-wise PYQ paper lookup
   @@map("questions")
 }
 
@@ -641,6 +648,12 @@ model TestTemplate {
   year             Int?
   shift            String?
   examDate         String?
+  // NEW (26 Oct 2026 — date-wise mocks): which tier / tier-paper this auto PYQ mock belongs to, and how many
+  // questions the full paper should have (from the ExamPattern; null = unknown, 100 assumed). totalQuestions is
+  // the number built so far. Template ids of keyed papers look like `pyq-k-<exam>-t1-<yyyymmdd>-s2`.
+  examTier         String?
+  tierPaper        String?
+  targetQuestions  Int?
   exam             Exam?         @relation(fields: [examId], references: [id], onDelete: SetNull)
 
   // P0 (Oct 2026): optional link to an ExamPattern. When set, the paper is composed from the

@@ -23,12 +23,26 @@ type Mock = {
   year?: number | null;
   shift?: string | null;
   examDate?: string | null;
+  // NEW (26 Oct 2026): date-wise + tier-wise mocks (TIER_1 / TIER_2, PAPER_1.. for Tier 2).
+  examTier?: string | null;
+  tierPaper?: string | null;
 };
 
 // Exam picker shape: same fields /bank/meta already returns (question-bank/page.tsx uses the same endpoint).
 type ExamOption = { id: string; name: string; count: number };
 
 type Filter = "all" | "free" | "locked" | "pyq";
+type TierFilter = "all" | "TIER_1" | "TIER_2";
+
+// "2025-09" -> "September 2025" (locale-independent so server and browser agree)
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+function monthLabel(key: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(key);
+  return m ? `${MONTH_NAMES[Number(m[2]) - 1] ?? key} ${m[1]}` : "";
+}
+function tierLabel(tier?: string | null): string {
+  return tier === "TIER_1" ? "Tier 1" : tier === "TIER_2" ? "Tier 2" : "";
+}
 
 // Cashfree JS SDK (v3), loaded only when the student is about to pay (same as /premium).
 let cashfreeSdkPromise: Promise<any> | null = null;
@@ -70,6 +84,7 @@ export default function MocksPage() {
   const [examId, setExamId] = React.useState<string>("");
   const [filter, setFilter] = React.useState<Filter>("all");
   const [query, setQuery] = React.useState("");
+  const [tier, setTier] = React.useState<TierFilter>("all");
 
   // Exam list for the picker: same /bank/meta endpoint and count > 0 filter as question-bank.
   React.useEffect(() => {
@@ -156,10 +171,20 @@ export default function MocksPage() {
       if (filter === "free" && !m.free) return false;
       if (filter === "locked" && m.free) return false;
       if (filter === "pyq" && !m.isPyq) return false;
-      if (q && !`${m.title} ${m.year ?? ""} ${m.shift ?? ""}`.toLowerCase().includes(q)) return false;
+      if (tier !== "all" && m.examTier !== tier) return false;
+      if (q && !`${m.title} ${m.year ?? ""} ${m.shift ?? ""} ${tierLabel(m.examTier)}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [mocks, filter, query]);
+  }, [mocks, filter, query, tier]);
+
+  // Tier tabs only appear once at least one real paper carries a tier.
+  const tierCounts = React.useMemo(
+    () => ({
+      TIER_1: mocks.filter((m) => m.examTier === "TIER_1").length,
+      TIER_2: mocks.filter((m) => m.examTier === "TIER_2").length,
+    }),
+    [mocks],
+  );
 
   const pyqByYear = new Map<number, Mock[]>();
   for (const m of visible.filter((x) => x.isPyq)) {
@@ -171,6 +196,20 @@ export default function MocksPage() {
     list.sort((a, b) => String(b.examDate ?? "").localeCompare(String(a.examDate ?? "")) || String(a.shift ?? "").localeCompare(String(b.shift ?? "")));
   }
   const pyqYears = Array.from(pyqByYear.keys()).sort((a, b) => b - a);
+  // Inside a year: newest month first; list is already newest-date-first. Mocks without a date share one headless group.
+  const groupByMonth = (list: Mock[]) => {
+    const groups: { key: string; label: string; items: Mock[] }[] = [];
+    for (const m of list) {
+      const key = /^\d{4}-\d{2}/.test(m.examDate ?? "") ? String(m.examDate).slice(0, 7) : "";
+      let g = groups.find((x) => x.key === key);
+      if (!g) {
+        g = { key, label: monthLabel(key), items: [] };
+        groups.push(g);
+      }
+      g.items.push(m);
+    }
+    return groups.sort((a, b) => b.key.localeCompare(a.key));
+  };
   const others = visible.filter((m) => !m.isPyq);
 
   const FILTERS: { id: Filter; label: string }[] = [
@@ -181,7 +220,8 @@ export default function MocksPage() {
   ];
 
   const renderMock = (m: Mock) => {
-    const meta = [m.isPyq && m.shift ? m.shift : "", m.isPyq ? formatDate(m.examDate) : ""].filter(Boolean).join(" · ");
+    const paperNo = m.examTier === "TIER_2" && m.tierPaper ? `${t("Paper", "Paper")} ${m.tierPaper.slice(-1)}` : "";
+    const meta = [m.isPyq && m.shift ? m.shift : "", paperNo, m.isPyq ? formatDate(m.examDate) : ""].filter(Boolean).join(" · ");
     return (
       <div key={m.id} className="card card-hover flex flex-wrap items-center justify-between gap-x-4 gap-y-3 p-4 sm:p-5">
         <div className="min-w-0 flex-1">
@@ -208,6 +248,7 @@ export default function MocksPage() {
               </span>
             )}
             {m.isPyq ? <span className="badge badge-info">PYQ</span> : null}
+            {m.examTier ? <span className="badge badge-primary">{tierLabel(m.examTier)}</span> : null}
           </div>
         </div>
         {m.free ? (
@@ -271,6 +312,17 @@ export default function MocksPage() {
             </ChoiceChip>
           ))}
         </div>
+        {tierCounts.TIER_1 + tierCounts.TIER_2 > 0 ? (
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t("Filter by tier", "Tier se filter karein")}>
+            <ChoiceChip selected={tier === "all"} onClick={() => setTier("all")}>{t("All tiers", "Sab tiers")}</ChoiceChip>
+            <ChoiceChip selected={tier === "TIER_1"} onClick={() => setTier("TIER_1")}>
+              Tier 1 <span className="text-xs text-muted-foreground">{tierCounts.TIER_1}</span>
+            </ChoiceChip>
+            <ChoiceChip selected={tier === "TIER_2"} onClick={() => setTier("TIER_2")}>
+              Tier 2 <span className="text-xs text-muted-foreground">{tierCounts.TIER_2}</span>
+            </ChoiceChip>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
             type="search"
@@ -348,7 +400,16 @@ export default function MocksPage() {
                 {y || t("Other", "Anya")}
                 <span className="text-sm font-medium text-muted-foreground">{t("Previous year papers", "Pichle saal ke papers")} · {pyqByYear.get(y)!.length}</span>
               </h2>
-              <div className="space-y-3">{pyqByYear.get(y)!.map(renderMock)}</div>
+              {groupByMonth(pyqByYear.get(y)!).map((g) => (
+                <div key={g.key || "nodate"} className="mb-4 last:mb-0">
+                  {g.label ? (
+                    <h3 className="mb-2 text-sm font-semibold text-muted-foreground">
+                      {g.label} <span className="font-normal">({g.items.length} {g.items.length === 1 ? t("paper", "paper") : t("papers", "papers")})</span>
+                    </h3>
+                  ) : null}
+                  <div className="space-y-3">{g.items.map(renderMock)}</div>
+                </div>
+              ))}
             </section>
           ))}
 

@@ -13,6 +13,7 @@
 //   * UploadJobStore                 — in-memory progress tracking for the
 //                                       background import (poll-able by the UI).
 import { Worker } from 'worker_threads';
+import { pickQuestionsSheetName } from '../common/excel-sheet';
 
 export const MAX_REPORTED_ERRORS = 1000; // errors kept WITH row data (UI list + CSV report)
 export const MAX_REPORTED_WARNINGS = 500;
@@ -31,12 +32,14 @@ export function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+// The picker is copied into the worker with Function#toString (it is self-contained on purpose, see common/excel-sheet.ts).
 const EXCEL_WORKER_SRC = `
 const { parentPort, workerData } = require('worker_threads');
+const pickQuestionsSheetName = ${pickQuestionsSheetName.toString()};
 try {
   const XLSX = require(workerData.xlsxPath);
   const wb = XLSX.read(Buffer.from(workerData.buf), { type: 'buffer' });
-  const sheetName = wb.SheetNames[0];
+  const sheetName = pickQuestionsSheetName(wb.SheetNames, (n) => (XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1 })[0] || [])) || wb.SheetNames[0];
   const data = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1 });
   parentPort.postMessage({ ok: true, data });
 } catch (e) {
@@ -45,7 +48,7 @@ try {
 `;
 
 /**
- * Parses the FIRST sheet of an .xlsx/.xls buffer into an array-of-arrays
+ * Parses the questions sheet ("Questions Import" / "Questions" / the sheet with an examId+questionText header / else the first sheet) of an .xlsx/.xls buffer into an array-of-arrays
  * (header row first) inside a worker thread. `xlsxPath` is injectable for tests.
  */
 export function parseExcelOffThread(buffer: Buffer, xlsxPath?: string): Promise<any[][]> {

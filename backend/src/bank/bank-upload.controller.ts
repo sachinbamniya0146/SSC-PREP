@@ -167,6 +167,22 @@ export class BankUploadController {
   }
 
   // Progress / result of a background (async) import — poll every ~2 s.
+  // ---- Date-wise + tier-wise PYQ papers (26 Oct 2026) ----
+  @Get('pyq-papers')
+  async pyqPapers() {
+    return this.uploadService.listKeyedPapers();
+  }
+
+  @Post('pyq-papers/rebuild')
+  async rebuildPyqPapers() {
+    return this.uploadService.rebuildAllKeyedPapers();
+  }
+
+  @Post('pyq-papers/:id/publish-now')
+  async publishPyqPaperNow(@Param('id') id: string) {
+    return this.uploadService.publishKeyedPaperNow(id);
+  }
+
   @Get('jobs/:id')
   getUploadJob(@Param('id') id: string, @Req() req: any) {
     const job = this.uploadService.getUploadJob(id, this.adminId(req));

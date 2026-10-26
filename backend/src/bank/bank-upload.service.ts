@@ -11,6 +11,18 @@ import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagr
 import { cacheClearPrefix } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, QuestionKind } from '../common/question-visibility';
 import { dedupeAndCapPaperRows } from '../common/pyq-paper';
+import { buildKeyedPaper } from './pyq-paper-builder';
+import {
+  PaperParts,
+  buildPaperKey,
+  derivePaperCode,
+  normalizeExamTier,
+  normalizeTierPaper,
+  parsePaperKey,
+  parsePaperQuestionNo,
+  yearOfDate,
+} from '../common/pyq-paper-key';
+import { pickQuestionsSheetName } from '../common/excel-sheet';
 import { normalizeShiftOrUndefined } from '../common/shift';
 import { compareQuestions } from '../common/duplicate-compare';
 import { buildZip } from '../common/zip';
@@ -193,6 +205,10 @@ export interface BulkUploadQuestion {
   shift?: string;
   paperCode?: string;
   examDate?: string; // YYYY-MM-DD (real exam date of a PYQ shift)
+  // 26 Oct 2026 (date-wise mocks): with examId + examDate + shift these make ONE real paper, see common/pyq-paper-key.ts
+  examTier?: string; // TIER_1 | TIER_2
+  tierPaper?: string; // PAPER_1 | PAPER_2 | PAPER_3 (blank = PAPER_1)
+  paperQuestionNo?: number; // the question's printed number inside its paper
   marks?: number;
   negativeMarks?: number;
   difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
@@ -495,7 +511,8 @@ export class BankUploadService {
       if (/xlsx module not found|ERR_WORKER_UNSUPPORTED/i.test(msg)) {
         // worker threads unavailable in this runtime -> original in-process parse
         const wb = XLSX.read(fileBuffer, { type: 'buffer' });
-        return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 }) as any[][];
+        const sheetName = pickQuestionsSheetName(wb.SheetNames, (n) => (XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1 }) as any[][])[0] ?? []) ?? wb.SheetNames[0];
+        return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1 }) as any[][];
       }
       throw new BadRequestException(
         `Failed to parse Excel file: ${msg} — check the file is a real, unpasswordprotected .xlsx/.xls (an .xls saved from Google Sheets or a corrupted download are the usual causes here).`,
@@ -655,6 +672,9 @@ export class BankUploadService {
     let shift: string | undefined;
     let paperCode: string | undefined;
     let examDate: string | undefined;
+    let examTier: string | undefined;
+    let tierPaper: string | undefined;
+    let paperQuestionNo: number | undefined;
     if (kind === 'pyq') {
       year = Number(input.year);
       if (!Number.isInteger(year) || year < 1990 || year > 2100) throw new BadRequestException('PYQ ke liye sahi year likhein (jaise 2024). / A valid year is required for a PYQ.');
@@ -666,6 +686,9 @@ export class BankUploadService {
       } catch (e) {
         throw new BadRequestException(e instanceof Error ? e.message : 'Invalid examDate');
       }
+      examTier = normalizeExamTier(input.examTier).tier;
+      tierPaper = normalizeTierPaper(input.tierPaper).paper;
+      paperQuestionNo = parsePaperQuestionNo(input.questionNo ?? input.paperQuestionNo);
     }
 
     const question: BulkUploadQuestion = {
@@ -685,6 +708,9 @@ export class BankUploadService {
       shift,
       paperCode,
       examDate,
+      examTier,
+      tierPaper,
+      paperQuestionNo,
       marks,
       negativeMarks,
       difficulty: difficulty as 'EASY' | 'MEDIUM' | 'HARD',
@@ -769,6 +795,9 @@ export class BankUploadService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    if (kind === 'pyq' && question.examTier && question.examDate) {
+      await this.rebuildKeyedPapersForRows([question]); // never throws
+    }
     if (kind === 'pyq' && question.year && question.shift) {
       try {
         await this.upsertPyqMockForPaper(question.examId, question.year, question.shift, question.paperCode ?? null, question.examDate ?? null);
@@ -780,7 +809,8 @@ export class BankUploadService {
     const warnings: string[] = [];
     const published = created?.isApproved ?? result.warnings.length === 0;
     if (!published) warnings.push('Saved, lekin students ko abhi nahi dikhega — Hindi question text add karein. / Saved but NOT live: add the Hindi text to publish it.');
-    if (kind === 'pyq' && !question.shift) warnings.push('Shift nahi di — ye question shift-wise mock me nahi judega. / No shift given: it will not join a shift-wise mock.');
+    if (kind === 'pyq' && !question.shift && !(question.examTier && question.examDate)) warnings.push('Shift nahi di — ye question shift-wise mock me nahi judega. / No shift given: it will not join a shift-wise mock.');
+    if (kind === 'pyq' && question.examDate && !question.examTier) warnings.push('examTier (TIER_1 / TIER_2) nahi di — ye question tier-wise mock me nahi judega. / No tier given: it will not join a date-wise mock.');
     return { id: created?.id ?? null, published, kind, warnings };
   }
 
@@ -857,9 +887,13 @@ export class BankUploadService {
   private async autoCreatePyqMocksForBatch(batchId: string): Promise<void> {
     const rows = await this.prisma.question.findMany({
       where: { uploadBatchId: batchId },
-      select: { examId: true, year: true, shift: true, paperCode: true, examDate: true },
+      select: { examId: true, year: true, shift: true, paperCode: true, examDate: true, examTier: true, tierPaper: true },
     });
     if (rows.length === 0) return;
+
+    // DATE-WISE MOCKS: rows that carry examTier + examDate form papers by (exam, tier, tierPaper, date, shift).
+    // Shift and year are NOT required for them (Tier 2 often prints no shift).
+    await this.rebuildKeyedPapersForRows(rows);
 
     const groups = new Map<string, { examId: string; year: number; shift: string; paperCode: string | null; examDate: string | null; count: number }>();
     for (const r of rows) {
@@ -886,6 +920,82 @@ export class BankUploadService {
     }
   }
 
+  /**
+   * Rebuilds every keyed paper (exam + tier + tierPaper + date + shift) that the given rows belong to.
+   * Rows without a valid tier/date are ignored here (they stay on the legacy paperCode path).
+   * Never throws: the questions are already saved.
+   */
+  async rebuildKeyedPapersForRows(
+    rows: { examId?: string | null; examTier?: string | null; tierPaper?: string | null; examDate?: string | null; shift?: string | null }[],
+  ): Promise<void> {
+    const keys = new Set<string>();
+    for (const r of rows) {
+      const k = buildPaperKey(r);
+      if (k) keys.add(k);
+    }
+    for (const k of keys) {
+      const parts = parsePaperKey(k);
+      if (!parts) continue;
+      try {
+        await this.rebuildKeyedPaper(parts);
+      } catch {
+        /* the questions are saved; the mock refreshes on the next upload / admin rebuild */
+      }
+    }
+  }
+
+  /** Admin view: every keyed (date-wise + tier-wise) paper with its progress, plus how many dated PYQs still lack a tier. */
+  async listKeyedPapers() {
+    const [tpls, noTier] = await Promise.all([
+      this.prisma.testTemplate.findMany({
+        where: { id: { startsWith: 'pyq-k-' } },
+        orderBy: [{ examDate: 'desc' }, { examTier: 'asc' }],
+        select: { id: true, title: true, examId: true, examTier: true, tierPaper: true, examDate: true, shift: true, year: true, totalQuestions: true, targetQuestions: true, isActive: true, updatedAt: true },
+        take: 2000,
+      }),
+      this.prisma.question.count({ where: { examDate: { not: null }, examTier: null, year: { not: null } } }),
+    ]);
+    return {
+      papers: tpls.map((t) => {
+        const target = t.targetQuestions ?? 100;
+        return {
+          ...t,
+          target,
+          patternLinked: t.targetQuestions != null, // false => 100 assumed; link an ExamPattern named "... Tier 1/2 ..."
+          status: t.isActive ? 'LIVE' : t.totalQuestions >= target ? 'READY_HIDDEN' : 'BUILDING',
+        };
+      }),
+      questionsWithDateButNoTier: noTier, // these join no mock until their examTier is filled
+    };
+  }
+
+  /** Rebuild every keyed paper from the questions already in the bank (after the date-mapping worker or a manual fix). */
+  async rebuildAllKeyedPapers(): Promise<{ papers: number }> {
+    const rows = await this.prisma.question.findMany({
+      where: { examId: { not: null }, examTier: { not: null }, examDate: { not: null } },
+      select: { examId: true, examTier: true, tierPaper: true, examDate: true, shift: true },
+      distinct: ['examId', 'examTier', 'tierPaper', 'examDate', 'shift'],
+    });
+    await this.rebuildKeyedPapersForRows(rows);
+    return { papers: rows.length };
+  }
+
+  /** Admin "abhi dikhao": make a still-building paper visible to students now. */
+  async publishKeyedPaperNow(templateId: string): Promise<{ id: string; isActive: boolean }> {
+    if (!templateId.startsWith('pyq-k-')) throw new BadRequestException('Ye date-wise paper nahi hai. / Not a date-wise PYQ paper.');
+    const t = await this.prisma.testTemplate.findUnique({ where: { id: templateId }, select: { id: true } });
+    if (!t) throw new NotFoundException('Paper nahi mila. / Paper not found.');
+    return this.prisma.testTemplate.update({ where: { id: templateId }, data: { isActive: true }, select: { id: true, isActive: true } });
+  }
+
+  /**
+   * ONE mock per real paper (exam + tier + tierPaper + date + shift; paperCode is only a label).
+   * The logic lives in pyq-paper-builder.ts (unit-tested without a database); this is the Nest entry point.
+   */
+  async rebuildKeyedPaper(parts: PaperParts): Promise<{ templateId: string; built: number; target: number; live: boolean } | null> {
+    return buildKeyedPaper(this.prisma as any, parts);
+  }
+
   // Slugifies a paperCode (e.g. "SSC-CGL-T-I-12-Sep-2025-S1") into a safe
   // TestTemplate id fragment. paperCode is admin-authored free text in the
   // upload sheet, so this strips anything that isn't alphanumeric/hyphen
@@ -903,6 +1013,15 @@ export class BankUploadService {
   // year+shift.
   async upsertPyqMockForPaper(examId: string, year: number, shift: string, paperCode: string | null, examDate: string | null = null): Promise<void> {
     const effectiveCode = paperCode ?? `${year}-${shift}`;
+
+    // DATE-WISE MOCKS: any question of this group that carries examTier + examDate belongs to a keyed paper.
+    // Rebuild those papers first (shared entry point for upload, duplicate-review, edits and the date-mapping worker).
+    const keyedRows = await this.prisma.question.findMany({
+      where: { examId, year, shift, paperCode, examTier: { not: null }, examDate: { not: null } },
+      select: { examId: true, examTier: true, tierPaper: true, examDate: true, shift: true },
+    });
+    if (keyedRows.length > 0) await this.rebuildKeyedPapersForRows(keyedRows);
+
     const [exam, candidateRows] = await Promise.all([
       this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } }),
       // BUGFIX (Sachin — "shift wise mock test me max 100 questions hone
@@ -926,6 +1045,12 @@ export class BankUploadService {
     if (actualCount < BankUploadService.MIN_PAPER_QUESTIONS) return; // not enough APPROVED rows yet to bother creating/keeping this live
 
     const templateId = `pyq-${this.slugifyPaperCode(effectiveCode)}`;
+    // A paper that has tier + date is owned by the keyed mock above: do not also create a second, paperCode-based
+    // mock for it. A legacy mock that ALREADY exists keeps updating exactly as before.
+    if (keyedRows.length > 0) {
+      const legacyExists = await this.prisma.testTemplate.findUnique({ where: { id: templateId }, select: { id: true } });
+      if (!legacyExists) return;
+    }
     const examName = exam?.name ?? 'SSC';
     // With a real exam date the title is human ("SSC CGL 2025 — 12 Sep 2025 · Shift 1"); otherwise the old paperCode title.
     const title = examDate ? `${examName} ${year} — ${formatExamDate(examDate)} · ${shift}` : `${examName} — ${effectiveCode}`;
@@ -1772,7 +1897,7 @@ export class BankUploadService {
     const workbook = XLSX.utils.book_new();
 
     // Main template sheet
-    const sheetData = [[...template.headers, 'examDate', 'explanationImageUrl', 'questionSvg'], ...template.sampleRows.map((r, i) => [...JSON.parse(r), i === 0 ? '2023-09-12' : '', '', ''])];
+    const sheetData = [[...template.headers, 'examDate', 'examTier', 'tierPaper', 'questionNo', 'explanationImageUrl', 'questionSvg'], ...template.sampleRows.map((r, i) => [...JSON.parse(r), i === 0 ? '2023-09-12' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''])];
     const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Questions Template');
 
@@ -1790,8 +1915,11 @@ export class BankUploadService {
       ['5. year should be a valid year (e.g., 2023, 2024) — set this to enable Year-wise PYQ tests.'],
       ['6. shift + paperCode are optional but help students filter/identify the exact paper.'],
       ['6b. shift accepts Shift 1/2/3 OR words: morning/subah = Shift 1, afternoon/dopahar = Shift 2, evening/shaam = Shift 3 (even a time like 9:00 AM / 4 PM). It is saved automatically as Shift 1 / Shift 2 / Shift 3.'],
-      ['6a. examDate (last column, YYYY-MM-DD or DD-MM-YYYY) = the real date of the shift. With exam + year + shift + examDate'],
-      ['   every date/shift becomes its OWN real-paper mock (max 100 questions) automatically — no paperCode needed.'],
+      ['6a. examDate (YYYY-MM-DD or DD-MM-YYYY) = the real date of the paper, examTier = TIER_1 or TIER_2 (tierPaper = PAPER_1/2/3 only for Tier 2 days with several papers).'],
+      ['   Same exam + examTier + examDate + shift = ONE mock, no matter how many uploads or what paperCode says. The mock grows as you upload more subjects'],
+      ['   of that paper and becomes visible to students when it has all the questions of its exam pattern. Tier 1 and Tier 2 are always separate mocks.'],
+      ['   questionNo = the question\'s printed number inside the paper (the mock follows this order). Practice questions: leave all of these blank.'],
+      ['   NEVER guess a date or tier: if you do not know it, leave it blank (the question just joins no mock until an admin fixes it).'],
       ['7. marks default to 1, negativeMarks default to 0.25'],
       ['8. examId and subjectId MUST exactly match an existing ID/slug — see the'],
       ['   "Reference IDs" sheet (next tab) for every real ID currently in the database.'],
@@ -2252,8 +2380,8 @@ export class BankUploadService {
    */
   generateCSVTemplate(): Buffer {
     const template = this.getTemplates().csv;
-    const lines = [[...template.headers, 'examDate', 'explanationImageUrl', 'questionSvg'].join(',')];
-    template.sampleRows.forEach((row, i) => lines.push(this.escapeCSVRow([...JSON.parse(row), i === 0 ? '2023-09-12' : '', '', ''])));
+    const lines = [[...template.headers, 'examDate', 'examTier', 'tierPaper', 'questionNo', 'explanationImageUrl', 'questionSvg'].join(',')];
+    template.sampleRows.forEach((row, i) => lines.push(this.escapeCSVRow([...JSON.parse(row), i === 0 ? '2023-09-12' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''])));
     return Buffer.from(lines.join('\n'), 'utf-8');
   }
 
@@ -2262,8 +2390,8 @@ export class BankUploadService {
    */
   generateTextTemplate(): Buffer {
     const template = this.getTemplates().text;
-    const lines = [[...template.headers, 'examDate', 'explanationImageUrl', 'questionSvg'].join('\t')];
-    template.sampleRows.forEach((row, i) => lines.push([...JSON.parse(row), i === 0 ? '2023-09-12' : '', '', ''].join('\t')));
+    const lines = [[...template.headers, 'examDate', 'examTier', 'tierPaper', 'questionNo', 'explanationImageUrl', 'questionSvg'].join('\t')];
+    template.sampleRows.forEach((row, i) => lines.push([...JSON.parse(row), i === 0 ? '2023-09-12' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''].join('\t')));
     return Buffer.from(lines.join('\n'), 'utf-8');
   }
 
@@ -2448,6 +2576,9 @@ export class BankUploadService {
           question.shift = undefined;
           question.paperCode = undefined;
           question.examDate = undefined;
+          question.examTier = undefined;
+          question.tierPaper = undefined;
+          question.paperQuestionNo = undefined;
         }
         // Oct 2026: a question WITHOUT a solution is not uploaded — it is reported so the admin can add it.
         if (requireSolution && !hasSolution(question)) {
@@ -2720,6 +2851,9 @@ export class BankUploadService {
           question.shift = undefined;
           question.paperCode = undefined;
           question.examDate = undefined;
+          question.examTier = undefined;
+          question.tierPaper = undefined;
+          question.paperQuestionNo = undefined;
         }
         await this.resolveReferenceIds(
           question,
@@ -2923,8 +3057,13 @@ export class BankUploadService {
 
     const marks = parseFloat(get('marks')) || 1;
     const negativeMarks = parseFloat(get('negativeMarks')) || 0.25;
-    const year = get('year') ? parseInt(get('year'), 10) : undefined;
     const examDate = normalizeExamDate(get('examDate') || get('date'));
+    // date-wise mocks: year may be left blank when the exam date is given (year = year of examDate)
+    const year = get('year') ? parseInt(get('year'), 10) : yearOfDate(examDate);
+    // unreadable tier / paper text does NOT fail the row — it just joins no mock (undefined)
+    const examTier = normalizeExamTier(get('examTier')).tier;
+    const tierPaper = normalizeTierPaper(get('tierPaper')).paper;
+    const paperQuestionNo = parsePaperQuestionNo(get('questionNo'));
     const difficulty = get('difficulty').toUpperCase() as 'EASY' | 'MEDIUM' | 'HARD' || 'MEDIUM';
     if (!['EASY', 'MEDIUM', 'HARD'].includes(difficulty)) {
       throw new Error(`Invalid difficulty: must be EASY, MEDIUM, or HARD (got ${difficulty})`);
@@ -2953,8 +3092,14 @@ export class BankUploadService {
       // A blank paperCode + a real exam date still identifies ONE paper: derive
       // a stable code from exam + date + shift so each date/shift becomes its
       // own 100-question mock instead of merging into a year+shift bucket.
-      paperCode: get('paperCode') || (examDate && year && shiftNormalized ? `${get('examId')}-${examDate}-${shiftNormalized}` : undefined),
+      paperCode:
+        get('paperCode') ||
+        (examDate && examTier ? derivePaperCode(get('examId'), examTier, examDate, shiftNormalized) : undefined) ||
+        (examDate && year && shiftNormalized ? `${get('examId')}-${examDate}-${shiftNormalized}` : undefined),
       examDate,
+      examTier,
+      tierPaper,
+      paperQuestionNo,
       marks,
       negativeMarks,
       difficulty,
@@ -3585,6 +3730,9 @@ export class BankUploadService {
       shift: question.shift,
       paperCode: question.paperCode,
       examDate: question.examDate ?? null,
+      examTier: question.examTier ?? null,
+      tierPaper: question.tierPaper ?? null,
+      paperQuestionNo: question.paperQuestionNo ?? null,
       marks: question.marks,
       negativeMarks: question.negativeMarks,
       difficulty: question.difficulty,
@@ -3848,6 +3996,9 @@ export class BankUploadService {
         shift: question.shift,
         paperCode: question.paperCode,
         examDate: question.examDate ?? null,
+        examTier: question.examTier ?? null,
+        tierPaper: question.tierPaper ?? null,
+        paperQuestionNo: question.paperQuestionNo ?? null,
         marks: question.marks,
         negativeMarks: question.negativeMarks,
         difficulty: question.difficulty,
@@ -4249,6 +4400,9 @@ export class BankUploadService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    if (question.examTier && question.examDate) {
+      await this.rebuildKeyedPapersForRows([question]); // never throws
+    }
     if (paper) {
       try {
         await this.upsertPyqMockForPaper(paper.examId, paper.year, paper.shift, paper.paperCode, paper.examDate);

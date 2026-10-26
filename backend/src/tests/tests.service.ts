@@ -7,7 +7,8 @@ import { GamificationService } from '../gamification/gamification.service';
 import { cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank } from '../common/pyq-mock-pricing';
-import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows } from '../common/pyq-paper';
+import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows, dedupeKeyedPaperRows } from '../common/pyq-paper';
+import { KEYED_PAPER_CEILING, effectiveTierPaper, isKeyedTemplateId } from '../common/pyq-paper-key';
 import { TelegramService } from '../telegram/telegram.service';
 import { applyAttemptToChapters } from '../study-plan/study-plan-progress.util';
 import { QuestionBankPracticeService } from '../bank/question-bank-practice.service';
@@ -868,7 +869,7 @@ async saveAnswers(
   async paper(userId: string, templateId: string) {
     const template = await this.prisma.testTemplate.findUnique({
       where: { id: templateId },
-      select: { id: true, title: true, type: true, durationMinutes: true, totalQuestions: true, totalMarks: true, isPremium: true, description: true, examPatternId: true },
+      select: { id: true, title: true, type: true, durationMinutes: true, totalQuestions: true, totalMarks: true, isPremium: true, description: true, examPatternId: true, examId: true, examTier: true, tierPaper: true, examDate: true, shift: true },
     });
     if (!template) throw new BadRequestException('Template not found');
     await this.assertMockEntitled(userId, template);
@@ -1144,22 +1145,50 @@ async saveAnswers(
     templateId: string,
     pattern: any = null,
   ) {
+    const keyed = isKeyedTemplateId(templateId);
     const wantedSlug = templateId.slice('pyq-'.length);
     // Pull every approved question tagged with a paperCode, then filter in
     // JS to the ones matching this template's slug — a full LIKE/regex scan
     // isn't available portably across Postgres setups here, and the
     // candidate set (questions WITH a paperCode) is small relative to the
     // whole bank, so this is cheap.
-    const candidates = await this.prisma.question.findMany({
-      where: { ...PUBLISHED_QUESTION_WHERE, paperCode: { not: null } },
-      include: {
-        exam: { select: { name: true } },
-        subject: { select: { name: true, slug: true } },
-        chapter: { select: { name: true } },
-      },
-      orderBy: [{ subjectId: 'asc' }, { createdAt: 'asc' }],
-    });
+    // DATE-WISE MOCKS (26 Oct 2026): a keyed template (id `pyq-k-...`) is served from its own identity columns
+    // (exam + tier + tierPaper + date + shift), NOT from paperCode. Same rows BankUploadService.rebuildKeyedPaper() counted.
+    const keyedTpl = template as { examId?: string | null; examTier?: string | null; tierPaper?: string | null; examDate?: string | null; shift?: string | null };
+    const candidates = keyed
+      ? []
+      : await this.prisma.question.findMany({
+          where: { ...PUBLISHED_QUESTION_WHERE, paperCode: { not: null } },
+          include: {
+            exam: { select: { name: true } },
+            subject: { select: { name: true, slug: true } },
+            chapter: { select: { name: true } },
+          },
+          orderBy: [{ subjectId: 'asc' }, { createdAt: 'asc' }],
+        });
     let rows = candidates.filter((r) => r.paperCode && this.slugifyPaperCode(r.paperCode) === wantedSlug);
+    if (keyed) {
+      if (!keyedTpl.examId || !keyedTpl.examTier || !keyedTpl.examDate) {
+        throw new BadRequestException('This PYQ paper is not set up correctly (missing exam/tier/date). Please check /mocks for other papers.');
+      }
+      const tp = effectiveTierPaper(keyedTpl.tierPaper);
+      const keyedRows = await this.prisma.question.findMany({
+        where: {
+          ...PUBLISHED_QUESTION_WHERE,
+          examId: keyedTpl.examId,
+          examTier: keyedTpl.examTier,
+          examDate: keyedTpl.examDate,
+          shift: keyedTpl.shift ? keyedTpl.shift : null,
+          AND: [tp === 'PAPER_1' ? { OR: [{ tierPaper: null }, { tierPaper: 'PAPER_1' }] } : { tierPaper: tp }],
+        },
+        include: {
+          exam: { select: { name: true } },
+          subject: { select: { name: true, slug: true } },
+          chapter: { select: { name: true } },
+        },
+      });
+      rows = keyedRows as any;
+    }
 
     // BUGFIX (Sachin — "ek hee exam or ek he year me or ek he shift me
     // puche gye ho to automatic pyq bn jana chaiye"): BankUploadService
@@ -1171,7 +1200,7 @@ async saveAnswers(
     // longer available" even though the questions genuinely exist. Fall
     // back to matching examId+year+shift among paperCode-IS-NULL questions
     // whenever the paperCode-based match comes up empty.
-    if (rows.length === 0) {
+    if (rows.length === 0 && !keyed) {
       const nullPaperCandidates = await this.prisma.question.findMany({
         where: { ...PUBLISHED_QUESTION_WHERE, paperCode: null, examId: { not: null }, year: { not: null }, shift: { not: null } },
         include: {
@@ -1194,7 +1223,7 @@ async saveAnswers(
     // BEFORE grouping by subject, so this served set always matches what
     // upsertPyqMockForPaper() counted when it built the mock's
     // totalQuestions — both use the exact same helper/ordering.
-    rows = dedupeAndCapPaperRows(rows as any) as any;
+    rows = (keyed ? dedupeKeyedPaperRows(rows as any, KEYED_PAPER_CEILING) : dedupeAndCapPaperRows(rows as any)) as any;
 
     const bySubject = new Map<string, { name: string; slug: string; rows: typeof rows }>();
     for (const r of rows) {
@@ -1207,6 +1236,12 @@ async saveAnswers(
     // name are folded into the LAST section (the server maps unknown subjects there too, so nothing is dropped).
     const strictPlan = pattern ? buildSectionPlan(pattern) : null;
     let groups = [...bySubject.values()];
+    // Keyed papers: show sections in the order they appear in the real paper (by printed question number),
+    // when every question of a section carries one. Otherwise the old subject order stays.
+    if (keyed && !strictPlan) {
+      const firstNo = (g: { rows: any[] }) => (g.rows.every((r) => r.paperQuestionNo != null) ? Math.min(...g.rows.map((r) => r.paperQuestionNo as number)) : null);
+      if (groups.every((g) => firstNo(g) != null)) groups.sort((a, b) => (firstNo(a) as number) - (firstNo(b) as number));
+    }
     if (strictPlan) {
       const ordered: { name: string; slug: string; rows: typeof rows }[] = strictPlan.sections.map((ps) => ({
         name: ps.name,
@@ -1236,7 +1271,8 @@ async saveAnswers(
       questions: sec.rows.map((r) => ({
         id: r.id,
         questionText: r.questionText,
-        questionNo: (r as any).questionNo,
+        questionNo: (r as any).questionNo, // global serial shown on the card / used in error reports: never replaced
+        paperQuestionNo: (r as any).paperQuestionNo ?? null, // number printed in the real paper (keyed papers)
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,

@@ -20,6 +20,7 @@ import { BankUploadService } from './bank-upload.service';
 import { QuestionEditService } from './question-edit.service';
 import { buildUpdateBody, diffUpdate, isQuestionId } from './bank-template';
 import { parseJsonQuestions, shortDigest, mediaKey } from './question-media.util';
+import { pickQuestionsSheetName } from '../common/excel-sheet';
 
 export type JobErrorCategory =
   | 'MISSING_FIELD' | 'INVALID_REFERENCE' | 'DUPLICATE' | 'FORMAT' | 'OTHER'
@@ -98,7 +99,8 @@ export class BankUploadJobService {
     let data: any[][];
     try {
       const wb = XLSX.read(buffer, { type: 'buffer' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
+      const sheetName = pickQuestionsSheetName(wb.SheetNames, (n) => (XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1 }) as any[][])[0] ?? []) ?? wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
       data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false }) as any[][];
     } catch (e: any) {
       throw new BadRequestException(`File padhi nahi ja saki (${e?.message ?? e}) — sahi .xlsx/.csv file upload karein.`);

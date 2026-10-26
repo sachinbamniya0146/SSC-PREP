@@ -64,3 +64,33 @@ export function dedupeAndCapPaperRows<T extends { id: string; questionText: stri
   }
   return deduped.slice(0, MAX_PYQ_PAPER_QUESTIONS);
 }
+
+/**
+ * DATE-WISE PYQ MOCKS (26 Oct 2026): rows of ONE keyed paper (examId + tier + tierPaper +
+ * examDate + shift, see pyq-paper-key.ts). Same duplicate-text drop as dedupeAndCapPaperRows
+ * (oldest copy wins) but capped at KEYED_PAPER_CEILING instead of 100, because a Tier 2 paper is
+ * longer than 100 questions. The ordering handed back is the real paper order: printed
+ * question number first (when present), then upload order.
+ * BankUploadService (count) and TestsService (serve) both call this so they always agree.
+ */
+export function dedupeKeyedPaperRows<T extends { id: string; questionText: string; createdAt: Date; paperQuestionNo?: number | null }>(
+  rows: T[],
+  ceiling: number,
+): T[] {
+  const oldestFirst = [...rows].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const seen = new Set<string>();
+  const kept: T[] = [];
+  for (const r of oldestFirst) {
+    const key = normalizeQuestionTextForDedup(r.questionText);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(r);
+  }
+  const capped = kept.slice(0, ceiling);
+  return capped.sort((a, b) => {
+    const an = a.paperQuestionNo ?? Number.MAX_SAFE_INTEGER;
+    const bn = b.paperQuestionNo ?? Number.MAX_SAFE_INTEGER;
+    if (an !== bn) return an - bn;
+    return a.createdAt.getTime() - b.createdAt.getTime();
+  });
+}
