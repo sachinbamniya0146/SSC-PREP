@@ -1,6 +1,6 @@
 "use client";
 import { fetchAuth } from "@/lib/api";
-import { saveDraft, loadDraft, clearDraft, queueSubmit, flushPendingSubmits } from "@/lib/offline-submit";
+import { saveDraft, loadDraft, clearDraft, queueSubmit, flushPendingSubmits, saveAttemptStart, loadAttemptStart, clearAttemptStartById } from "@/lib/offline-submit";
 import { Logo } from "@/components/Logo";
 
 import * as React from "react";
@@ -667,12 +667,32 @@ export default function TestPage() {
         durationSec = (paper?.durationMinutes || 60) * 60;
         // server-authoritative timed attempt
         try {
-          const ar = await fetchAuth(`${apiBase()}/tests/attempts/start`, {
-            method: "POST",
-            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify({ testTemplateId: tplId, ...(patternMeta?.scribeAvailable && scribe ? { scribe: true } : {}) }),
-          });
-          const ad = await ar.json();
+          // Offline-safe start: a reload / app restart in the middle of a test calls start again to RESUME the attempt.
+          // With no internet that call used to fail and the page carried on with NO attempt (answers could never be
+          // submitted). The last start response is kept on the device and re-used while the attempt can still be running.
+          let ad: any;
+          try {
+            const ar = await fetchAuth(`${apiBase()}/tests/attempts/start`, {
+              method: "POST",
+              headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+              body: JSON.stringify({ testTemplateId: tplId, ...(patternMeta?.scribeAvailable && scribe ? { scribe: true } : {}) }),
+            });
+            ad = await ar.json();
+            if (ar.ok && ad?.id) {
+              saveAttemptStart(`tpl:${tplId}`, { id: ad.id, serverNow: ad.serverNow, startedAt: ad.startedAt, expiresAt: ad.expiresAt, plan: ad.plan });
+            }
+          } catch (netErr) {
+            const st = loadAttemptStart(`tpl:${tplId}`);
+            if (!st) throw netErr;
+            ad = {
+              id: st.id,
+              startedAt: st.startedAt,
+              expiresAt: st.expiresAt,
+              plan: st.plan,
+              serverNow: st.serverNow ? st.serverNow + (Date.now() - st.localAt) : undefined,
+              answers: [],
+            };
+          }
           attemptId = ad.id ?? null;
           setAttemptId(attemptId);
           if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
@@ -1141,6 +1161,7 @@ export default function TestPage() {
         }
         sessionStorage.removeItem("ssc_active_attempt");
         clearDraft(activeAttempt);
+        clearAttemptStartById(activeAttempt);
 
         // The server has scored the attempt. /results/[attemptId] is the single full-analytics screen
         // (rank, percentile, topper compare, subject/chapter charts, time analysis, wrong-only retry),

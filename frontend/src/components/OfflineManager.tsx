@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
-import { registerServiceWorker, warmPages, syncOfflineOwner, useOnline } from "@/lib/offline";
-import { getPendingSubmits, flushPendingSubmits } from "@/lib/offline-submit";
+import { registerServiceWorker, warmPages, warmIsDue, syncOfflineOwner, requestPersistentStorage, useOnline } from "@/lib/offline";
+import { getPendingSubmits, flushPendingSubmits, pruneOfflineJunk } from "@/lib/offline-submit";
 
 type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
 
@@ -18,6 +18,7 @@ export default function OfflineManager() {
   const [wasOffline, setWasOffline] = React.useState(false);
   const [showBack, setShowBack] = React.useState(false);
   const [pending, setPending] = React.useState(0);
+  const [syncingNow, setSyncingNow] = React.useState(false);
   const [install, setInstall] = React.useState<InstallEvent | null>(null);
   const [installDismissed, setInstallDismissed] = React.useState(true);
 
@@ -29,26 +30,27 @@ export default function OfflineManager() {
       const reg = await registerServiceWorker();
       if (!reg || cancelled) return;
       await syncOfflineOwner();
+      pruneOfflineJunk();
       const loggedIn = !!localStorage.getItem("ssc_access_token");
-      const last = Number(localStorage.getItem("ssc_warm_at") || 0);
-      // once a day, after the page is idle, only on a decent connection and when signed in
+      if (loggedIn) void requestPersistentStorage(); // keep packs safe when the phone runs low on space
+      // saved pages: first visit, a new saved-page list, or older than a day. Only when signed in, after the page
+      // is idle, and never on Data Saver.
       const conn = (navigator as unknown as { connection?: { saveData?: boolean } }).connection;
-      if (loggedIn && !conn?.saveData && Date.now() - last > 24 * 3600 * 1000) {
-        const run = () => {
-          warmPages();
-          try {
-            localStorage.setItem("ssc_warm_at", String(Date.now()));
-          } catch {
-            /* ignore */
-          }
-        };
+      if (loggedIn && navigator.onLine && !conn?.saveData && warmIsDue()) {
+        const run = () => void warmPages();
         const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
         if (ric) ric(run);
         else setTimeout(run, 4000);
       }
     })();
+    // a new worker took over (deploy): saved pages of the old build are refreshed once
+    const onSw = (e: MessageEvent) => {
+      if (e.data?.type === "SW_ACTIVATED" && navigator.onLine && localStorage.getItem("ssc_access_token")) void warmPages();
+    };
+    if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", onSw);
     return () => {
       cancelled = true;
+      if ("serviceWorker" in navigator) navigator.serviceWorker.removeEventListener("message", onSw);
     };
   }, []);
 
@@ -68,6 +70,36 @@ export default function OfflineManager() {
     return () => window.removeEventListener("beforeinstallprompt", h);
   }, []);
 
+  // Replay saved submits: on app open, when the network returns, when the tab becomes visible again, and every
+  // minute while something is waiting. (The old code only replayed after an offline->online switch seen in the SAME
+  // tab session, so a test queued, app closed, app reopened online was never sent.)
+  const syncing = React.useRef(false);
+  const replay = React.useCallback(async () => {
+    if (syncing.current || !navigator.onLine || getPendingSubmits().length === 0) return;
+    syncing.current = true;
+    setPending(getPendingSubmits().length);
+    setSyncingNow(true);
+    try {
+      await flushPendingSubmits();
+    } finally {
+      syncing.current = false;
+      setSyncingNow(false);
+      setPending(getPendingSubmits().length);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    setPending(getPendingSubmits().length);
+    void replay();
+    const onVis = () => document.visibilityState === "visible" && void replay();
+    document.addEventListener("visibilitychange", onVis);
+    const t = window.setInterval(() => void replay(), 60000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.clearInterval(t);
+    };
+  }, [replay]);
+
   // connection transitions
   React.useEffect(() => {
     setPending(getPendingSubmits().length);
@@ -77,11 +109,11 @@ export default function OfflineManager() {
     }
     if (wasOffline) {
       setShowBack(true);
-      void flushPendingSubmits().finally(() => setPending(getPendingSubmits().length));
+      void replay();
       const t = setTimeout(() => setShowBack(false), 4000);
       return () => clearTimeout(t);
     }
-  }, [online, wasOffline]);
+  }, [online, wasOffline, replay]);
 
   // never cover the exam screen
   if (path.startsWith("/test") || path.startsWith("/cgl-test") || path === "/offline") return null;
@@ -111,6 +143,22 @@ export default function OfflineManager() {
         <span>Back online{pending > 0 ? `: syncing ${pending} saved test${pending > 1 ? "s" : ""}…` : ""}</span>
       </>,
       "border-success/40 bg-card text-foreground",
+    );
+  }
+  if (pending > 0) {
+    return pill(
+      <>
+        <span className="h-2 w-2 rounded-full bg-warning" />
+        <span>
+          {syncingNow ? "Syncing" : "Waiting to sync"}: {pending} saved test{pending > 1 ? "s" : ""}
+        </span>
+        {!syncingNow && (
+          <button className="rounded-full bg-primary px-3 py-1 text-primary-foreground" onClick={() => void replay()}>
+            Retry
+          </button>
+        )}
+      </>,
+      "border-warning/40 bg-card text-foreground",
     );
   }
   if (install && !installDismissed && path === "/dashboard") {

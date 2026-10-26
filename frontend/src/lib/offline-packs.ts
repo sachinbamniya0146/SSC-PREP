@@ -40,6 +40,26 @@ export type OfflinePack = {
   subjectName: string;
   createdAt: number;
   questions: PackQuestion[];
+  /** account that downloaded it: a pack never opens for another account (shared phones) */
+  userId?: string;
+  /** after this moment the pack must be renewed online (access / paywall may have changed) */
+  expiresAt?: number;
+  /** every picture the pack needs (kept in the never-trimmed pack image cache) */
+  imageUrls?: string[];
+  /** images that could NOT be saved, so the status screen can say "2 images missing" */
+  imagesMissing?: number;
+};
+
+export const PACK_TTL_DAYS = 30;
+export const isPackExpired = (p: OfflinePack, now = Date.now()) => !!p.expiresAt && now > p.expiresAt;
+export const packImages = (qs: PackQuestion[]): string[] =>
+  Array.from(new Set(qs.flatMap((q) => [q.questionImageUrl, ...q.options.map((o) => o.imageUrl)]).filter((u): u is string => !!u)));
+export const currentUserId = (): string | null => {
+  try {
+    return (JSON.parse(localStorage.getItem("ssc_user") || "null")?.id as string | undefined) ?? null;
+  } catch {
+    return null;
+  }
 };
 
 export type OfflineResult = {
@@ -89,7 +109,11 @@ export const getPack = (id: string) => tx<OfflinePack | undefined>("packs", "rea
 export const deletePack = (id: string) => tx("packs", "readwrite", (s) => s.delete(id));
 export async function listPacks(): Promise<OfflinePack[]> {
   const all = await tx<OfflinePack[]>("packs", "readonly", (s) => s.getAll());
-  return all.sort((a, b) => b.createdAt - a.createdAt);
+  const uid = currentUserId();
+  // another account's packs are deleted on sight (answers + solutions inside)
+  const foreign = all.filter((p) => p.userId && uid && p.userId !== uid);
+  for (const p of foreign) await deletePack(p.id).catch(() => undefined);
+  return all.filter((p) => !foreign.includes(p)).sort((a, b) => b.createdAt - a.createdAt);
 }
 export const saveResult = (r: OfflineResult) => tx("results", "readwrite", (s) => s.add(r));
 export async function listResults(limit = 20): Promise<OfflineResult[]> {

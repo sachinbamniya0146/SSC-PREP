@@ -3,13 +3,18 @@
 import * as React from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { API_BASE, fetchAuth } from "@/lib/api";
-import { useOnline } from "@/lib/offline";
+import { cachePackImages, dropPackImages, useOnline } from "@/lib/offline";
+import OfflineStatus from "@/components/OfflineStatus";
 import { flushPendingSubmits, getPendingSubmits } from "@/lib/offline-submit";
 import {
   type OfflinePack,
   type OfflineResult,
   type PackQuestion,
+  PACK_TTL_DAYS,
+  currentUserId,
   deletePack,
+  isPackExpired,
+  packImages,
   getPack,
   listPacks,
   listResults,
@@ -43,7 +48,16 @@ export default function OfflinePage() {
 
   const refresh = React.useCallback(async () => {
     try {
-      setPacks(await listPacks());
+      let list = await listPacks();
+      if (navigator.onLine) {
+        const dead = list.filter((p) => isPackExpired(p));
+        for (const p of dead) {
+          await deletePack(p.id).catch(() => undefined);
+          if (p.imageUrls?.length) void dropPackImages(p.imageUrls);
+        }
+        if (dead.length) list = list.filter((p) => !dead.includes(p));
+      }
+      setPacks(list);
       setResults(await listResults());
     } catch {
       /* IndexedDB blocked (private mode) */
@@ -110,21 +124,36 @@ export default function OfflinePage() {
       if (!questions.length) throw new Error("Is exam + subject me abhi questions available nahi hain.");
       const exam = exams.find((e) => e.id === examId);
       const subject = subjects.find((s) => s.id === subjectId);
+      const imageUrls = packImages(questions);
+      // pictures first: a pack is only "ready" when its diagrams can show with no internet
+      let imagesMissing = 0;
+      if (imageUrls.length) {
+        setMsg({ tone: "ok", text: `Pictures save ho rahi hain (0/${imageUrls.length})…` });
+        const res = await cachePackImages(imageUrls, (d, t) => setMsg({ tone: "ok", text: `Pictures save ho rahi hain (${d}/${t})…` }));
+        imagesMissing = res ? res.failed : imageUrls.length; // no worker (unsupported browser) = nothing could be saved
+      }
+      const now = Date.now();
       const pack: OfflinePack = {
-        id: `${examId}:${subjectId}:${Date.now()}`,
+        id: `${examId}:${subjectId}:${now}`,
         title: `${exam?.name ?? "Exam"} · ${subject?.name ?? "Subject"}`,
         examId,
         examName: exam?.name ?? "",
         subjectId,
         subjectName: subject?.name ?? "",
-        createdAt: Date.now(),
+        createdAt: now,
         questions,
+        userId: currentUserId() ?? undefined,
+        expiresAt: now + PACK_TTL_DAYS * 86400000,
+        imageUrls,
+        imagesMissing,
       };
       await savePack(pack);
-      // also keep the pictures of these questions on the device
-      const imgs = questions.flatMap((q) => [q.questionImageUrl, ...q.options.map((o) => o.imageUrl)]).filter(Boolean) as string[];
-      await Promise.all(imgs.map((u) => fetch(u, { mode: "no-cors" }).catch(() => undefined)));
-      setMsg({ tone: "ok", text: `${questions.length} questions offline save ho gaye.` });
+      setMsg({
+        tone: imagesMissing ? "err" : "ok",
+        text: imagesMissing
+          ? `${questions.length} questions save ho gaye, par ${imagesMissing} picture save nahi hui (offline me wo nahi dikhegi).`
+          : `${questions.length} questions offline save ho gaye.`,
+      });
       await refresh();
     } catch (e) {
       setMsg({ tone: "err", text: e instanceof Error ? e.message : "Download fail hua." });
@@ -134,7 +163,13 @@ export default function OfflinePage() {
   };
 
   const remove = async (id: string) => {
+    const gone = packs.find((p) => p.id === id);
     await deletePack(id);
+    if (gone?.imageUrls?.length) {
+      // keep pictures that another saved pack still uses
+      const still = new Set(packs.filter((p) => p.id !== id).flatMap((p) => p.imageUrls ?? []));
+      void dropPackImages(gone.imageUrls.filter((u) => !still.has(u)));
+    }
     await refresh();
   };
 
@@ -172,6 +207,8 @@ export default function OfflinePage() {
           </div>
           <span className={`badge ${online ? "badge-success" : "badge-warning"}`}>{online ? "● Online" : "● Offline"}</span>
         </div>
+
+        <OfflineStatus packs={packs} onChanged={refresh} />
 
         {pending > 0 && (
           <div className="card mt-6 flex flex-wrap items-center justify-between gap-3 border-warning/40 bg-warning/5 p-4">
@@ -234,10 +271,16 @@ export default function OfflinePage() {
                   <h3 className="font-semibold">{p.title}</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {p.questions.length} questions · saved {fmtDate(p.createdAt)}
+                    {p.expiresAt ? ` · ${isPackExpired(p) ? "expired" : "valid till " + new Date(p.expiresAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}` : ""}
                   </p>
                   <div className="mt-4 flex gap-2">
-                    <button className="btn btn-primary btn-sm" onClick={async () => setActive((await getPack(p.id)) ?? p)}>
-                      Practice karein
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={isPackExpired(p)}
+                      title={isPackExpired(p) ? "Pack expire ho gaya: online aakar dobara download karein" : undefined}
+                      onClick={async () => setActive((await getPack(p.id)) ?? p)}
+                    >
+                      {isPackExpired(p) ? "Expired" : "Practice karein"}
                     </button>
                     <button className="btn btn-outline btn-sm" onClick={() => remove(p.id)}>Delete</button>
                   </div>
