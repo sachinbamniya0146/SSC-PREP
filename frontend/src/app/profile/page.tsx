@@ -3,7 +3,7 @@
 import * as React from "react";
 import { ShellHeader, CardSkeletons } from "@/components/AppShell";
 import { api } from "@/lib/api";
-import { clearUserCaches } from "@/lib/offline";
+import { clearUserCaches } from "@/lib/session-cache";
 import { getStoredLang, setStoredLang, useLang } from "@/lib/i18n";
 
 interface UserProfile {

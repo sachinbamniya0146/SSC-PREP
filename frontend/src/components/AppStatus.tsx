@@ -2,19 +2,22 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
-import { registerServiceWorker, warmPages, warmIsDue, syncOfflineOwner, requestPersistentStorage, useOnline } from "@/lib/offline";
-import { getPendingSubmits, flushPendingSubmits, pruneOfflineJunk } from "@/lib/offline-submit";
+import { getPendingSubmits, flushPendingSubmits, pruneStaleAttemptData } from "@/lib/submit-queue";
+import { purgeLegacyOfflineDataOnce } from "@/lib/session-cache";
 
 type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
 
 /**
- * Mounted once in the root layout:
- *  - registers the service worker (production builds only) and saves the main pages for offline use
- *  - shows a small status pill: offline / back online + syncing / install app
+ * Mounted once in the root layout. It is deliberately small:
+ *  - sends a finished test that could not reach the server (internet dropped while submitting) as soon as the net returns
+ *  - shows a status pill: no connection / back online + syncing / waiting to sync
+ *  - offers "Install app" on the dashboard
+ *  - one-time clean-up of data left by the removed offline-practice feature
+ * (There is no offline browsing: pages and questions always load from the server.)
  */
-export default function OfflineManager() {
-  const online = useOnline();
+export default function AppStatus() {
   const path = usePathname() || "";
+  const [online, setOnline] = React.useState(true);
   const [wasOffline, setWasOffline] = React.useState(false);
   const [showBack, setShowBack] = React.useState(false);
   const [pending, setPending] = React.useState(0);
@@ -22,35 +25,21 @@ export default function OfflineManager() {
   const [install, setInstall] = React.useState<InstallEvent | null>(null);
   const [installDismissed, setInstallDismissed] = React.useState(true);
 
-  // register + warm (production only: the dev server has no stable asset URLs)
   React.useEffect(() => {
-    if (process.env.NODE_ENV !== "production") return;
-    let cancelled = false;
-    (async () => {
-      const reg = await registerServiceWorker();
-      if (!reg || cancelled) return;
-      await syncOfflineOwner();
-      pruneOfflineJunk();
-      const loggedIn = !!localStorage.getItem("ssc_access_token");
-      if (loggedIn) void requestPersistentStorage(); // keep packs safe when the phone runs low on space
-      // saved pages: first visit, a new saved-page list, or older than a day. Only when signed in, after the page
-      // is idle, and never on Data Saver.
-      const conn = (navigator as unknown as { connection?: { saveData?: boolean } }).connection;
-      if (loggedIn && navigator.onLine && !conn?.saveData && warmIsDue()) {
-        const run = () => void warmPages();
-        const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
-        if (ric) ric(run);
-        else setTimeout(run, 4000);
-      }
-    })();
-    // a new worker took over (deploy): saved pages of the old build are refreshed once
-    const onSw = (e: MessageEvent) => {
-      if (e.data?.type === "SW_ACTIVATED" && navigator.onLine && localStorage.getItem("ssc_access_token")) void warmPages();
-    };
-    if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", onSw);
+    void purgeLegacyOfflineDataOnce();
+    pruneStaleAttemptData();
+  }, []);
+
+  // connectivity
+  React.useEffect(() => {
+    setOnline(navigator.onLine);
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
     return () => {
-      cancelled = true;
-      if ("serviceWorker" in navigator) navigator.serviceWorker.removeEventListener("message", onSw);
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
     };
   }, []);
 
@@ -65,14 +54,17 @@ export default function OfflineManager() {
       e.preventDefault();
       setInstall(e as InstallEvent);
     };
+    const done = () => setInstall(null);
     window.addEventListener("beforeinstallprompt", h);
-    window.addEventListener("appinstalled", () => setInstall(null));
-    return () => window.removeEventListener("beforeinstallprompt", h);
+    window.addEventListener("appinstalled", done);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", h);
+      window.removeEventListener("appinstalled", done);
+    };
   }, []);
 
   // Replay saved submits: on app open, when the network returns, when the tab becomes visible again, and every
-  // minute while something is waiting. (The old code only replayed after an offline->online switch seen in the SAME
-  // tab session, so a test queued, app closed, app reopened online was never sent.)
+  // minute while something is waiting.
   const syncing = React.useRef(false);
   const replay = React.useCallback(async () => {
     if (syncing.current || !navigator.onLine || getPendingSubmits().length === 0) return;
@@ -115,8 +107,8 @@ export default function OfflineManager() {
     }
   }, [online, wasOffline, replay]);
 
-  // never cover the exam screen
-  if (path.startsWith("/test") || path.startsWith("/cgl-test") || path === "/offline") return null;
+  // never cover the exam screen (it has its own banners)
+  if (path.startsWith("/test") || path.startsWith("/cgl-test")) return null;
 
   const pill = (children: React.ReactNode, tone: string) => (
     <div className="pointer-events-none fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-[60] flex justify-center px-4 lg:bottom-5">
@@ -130,8 +122,7 @@ export default function OfflineManager() {
     return pill(
       <>
         <span className="h-2 w-2 rounded-full bg-warning" />
-        <span>Offline mode: saved pages and downloaded packs work.</span>
-        <a href="/offline" className="underline">Practice offline</a>
+        <span>Internet nahi hai. Connection wapas aane par page refresh karein.</span>
       </>,
       "border-warning/40 bg-card text-foreground",
     );

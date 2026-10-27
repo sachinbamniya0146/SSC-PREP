@@ -11,7 +11,7 @@ import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagr
 import { cacheClearPrefix } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, QuestionKind } from '../common/question-visibility';
 import { dedupeAndCapPaperRows } from '../common/pyq-paper';
-import { buildKeyedPaper } from './pyq-paper-builder';
+import { analyzeKeyedPaper, buildKeyedPaper, legacyPaperCeiling, KeyedPaperDetail } from './pyq-paper-builder';
 import {
   PaperParts,
   buildPaperKey,
@@ -958,22 +958,31 @@ export class BankUploadService {
     }
   }
 
-  /** Admin view: every keyed (date-wise + tier-wise) paper with its progress, plus how many dated PYQs still lack a tier. */
-  async listKeyedPapers() {
+  /**
+   * Admin view: every keyed (date-wise + tier-wise) paper with its progress, plus how many dated PYQs still lack a tier.
+   * `examId` (27 Oct 2026) narrows the list to one exam; `exams` always lists every exam that has a paper (filter dropdown).
+   */
+  async listKeyedPapers(examId?: string) {
     const [tpls, noTier] = await Promise.all([
       this.prisma.testTemplate.findMany({
         where: { id: { startsWith: 'pyq-k-' } },
         orderBy: [{ examDate: 'desc' }, { examTier: 'asc' }],
-        select: { id: true, title: true, examId: true, examTier: true, tierPaper: true, examDate: true, shift: true, year: true, totalQuestions: true, targetQuestions: true, isActive: true, updatedAt: true },
+        select: { id: true, title: true, titleLocked: true, examId: true, examTier: true, tierPaper: true, examDate: true, shift: true, year: true, totalQuestions: true, targetQuestions: true, isActive: true, updatedAt: true },
         take: 2000,
       }),
       this.prisma.question.count({ where: { examDate: { not: null }, examTier: null, year: { not: null } } }),
     ]);
+    const examIds = [...new Set(tpls.map((t) => t.examId).filter((x): x is string => !!x))];
+    const examRows = examIds.length ? await this.prisma.exam.findMany({ where: { id: { in: examIds } }, select: { id: true, name: true } }) : [];
+    const examName = new Map(examRows.map((e) => [e.id, e.name]));
+    const shown = examId ? tpls.filter((t) => t.examId === examId) : tpls;
     return {
-      papers: tpls.map((t) => {
+      exams: examRows.map((e) => ({ id: e.id, name: e.name })).sort((x, y) => x.name.localeCompare(y.name)),
+      papers: shown.map((t) => {
         const target = t.targetQuestions ?? 100;
         return {
           ...t,
+          examName: t.examId ? examName.get(t.examId) ?? null : null,
           target,
           patternLinked: t.targetQuestions != null, // false => 100 assumed; link an ExamPattern named "... Tier 1/2 ..."
           status: t.isActive ? 'LIVE' : t.totalQuestions >= target ? 'READY_HIDDEN' : 'BUILDING',
@@ -981,6 +990,58 @@ export class BankUploadService {
       }),
       questionsWithDateButNoTier: noTier, // these join no mock until their examTier is filled
     };
+  }
+
+  private async keyedTemplateOrThrow(templateId: string) {
+    if (!templateId.startsWith('pyq-k-')) throw new BadRequestException('Ye date-wise paper nahi hai. / Not a date-wise PYQ paper.');
+    const t = await this.prisma.testTemplate.findUnique({
+      where: { id: templateId },
+      select: { id: true, title: true, isActive: true, examId: true, examTier: true, tierPaper: true, examDate: true, shift: true },
+    });
+    if (!t) throw new NotFoundException('Paper nahi mila. / Paper not found.');
+    return t;
+  }
+
+  /** Why is the paper not complete: short subjects and missing printed question numbers (e.g. "41–60"). */
+  async keyedPaperDetail(templateId: string): Promise<KeyedPaperDetail> {
+    const t = await this.keyedTemplateOrThrow(templateId);
+    const detail = await analyzeKeyedPaper(this.prisma as any, t);
+    if (!detail) throw new BadRequestException('Is paper me exam / tier / date poora nahi hai. / Paper is missing exam, tier or date.');
+    return detail;
+  }
+
+  /** Admin rename. The new title is locked: later uploads grow the mock but never overwrite the name. */
+  async renameKeyedPaper(templateId: string, title: string): Promise<{ id: string; title: string }> {
+    await this.keyedTemplateOrThrow(templateId);
+    const clean = String(title ?? '').replace(/\s+/g, ' ').trim();
+    if (clean.length < 3 || clean.length > 160) throw new BadRequestException('Naam 3 se 160 akshar ka hona chahiye. / Title must be 3-160 characters.');
+    const r = await this.prisma.testTemplate.update({ where: { id: templateId }, data: { title: clean, titleLocked: true }, select: { id: true, title: true } });
+    cacheClearPrefix('tests:list');
+    return r;
+  }
+
+  /** Admin hide / show. A hidden paper that already reached its full count stays hidden after later uploads. */
+  async setKeyedPaperVisible(templateId: string, visible: boolean): Promise<{ id: string; isActive: boolean }> {
+    await this.keyedTemplateOrThrow(templateId);
+    const r = await this.prisma.testTemplate.update({ where: { id: templateId }, data: { isActive: !!visible }, select: { id: true, isActive: true } });
+    cacheClearPrefix('tests:list');
+    return r;
+  }
+
+  /**
+   * Admin delete of the MOCK only (the questions stay in the bank). Refused when any student attempted it — hide it
+   * instead — because attempts, results and analytics point at the mock. Note: the next upload / "rebuild" of the same
+   * exam + tier + date + shift creates it again; fix or remove the questions' date/tier to stop that.
+   */
+  async deleteKeyedPaper(templateId: string): Promise<{ deleted: true; id: string }> {
+    await this.keyedTemplateOrThrow(templateId);
+    const attempts = await this.prisma.testAttempt.count({ where: { testTemplateId: templateId } });
+    if (attempts > 0) {
+      throw new ConflictException(`Is paper ke ${attempts} attempt ho chuke hain, delete nahi ho sakta — "Chhupao" use karein. / ${attempts} attempts exist: hide it instead.`);
+    }
+    await this.prisma.testTemplate.delete({ where: { id: templateId } });
+    cacheClearPrefix('tests:list');
+    return { deleted: true, id: templateId };
   }
 
   /** Rebuild every keyed paper from the questions already in the bank (after the date-mapping worker or a manual fix). */
@@ -999,7 +1060,9 @@ export class BankUploadService {
     if (!templateId.startsWith('pyq-k-')) throw new BadRequestException('Ye date-wise paper nahi hai. / Not a date-wise PYQ paper.');
     const t = await this.prisma.testTemplate.findUnique({ where: { id: templateId }, select: { id: true } });
     if (!t) throw new NotFoundException('Paper nahi mila. / Paper not found.');
-    return this.prisma.testTemplate.update({ where: { id: templateId }, data: { isActive: true }, select: { id: true, isActive: true } });
+    const r = await this.prisma.testTemplate.update({ where: { id: templateId }, data: { isActive: true }, select: { id: true, isActive: true } });
+    cacheClearPrefix('tests:list');
+    return r;
   }
 
   /**
@@ -1051,10 +1114,12 @@ export class BankUploadService {
       // doc-comment for the full story.
       this.prisma.question.findMany({
         where: { ...PUBLISHED_QUESTION_WHERE, examId, year, shift, paperCode },
-        select: { id: true, questionText: true, createdAt: true, marks: true },
+        select: { id: true, questionText: true, createdAt: true, marks: true, examTier: true, tierPaper: true },
       }),
     ]);
-    const keptRows = dedupeAndCapPaperRows(candidateRows);
+    // 27 Oct 2026: ceiling follows the ExamPattern (was a hard 100) — same helper the serving path uses.
+    const ceiling = await legacyPaperCeiling(this.prisma as any, examId, candidateRows.find((r) => r.examTier) ?? undefined);
+    const keptRows = dedupeAndCapPaperRows(candidateRows, ceiling);
     const actualCount = keptRows.length;
     if (actualCount < BankUploadService.MIN_PAPER_QUESTIONS) return; // not enough APPROVED rows yet to bother creating/keeping this live
 
@@ -2349,6 +2414,10 @@ export class BankUploadService {
         shift: q.shift ?? '',
         paperCode: q.paperCode ?? '',
         examDate: q.examDate ?? '',
+        // same column names the upload parser reads (see toExportRow), so a gap file re-uploads into the same paper
+        examTier: q.examTier ?? '',
+        tierPaper: q.tierPaper ?? '',
+        questionNo: q.paperQuestionNo ?? '',
         marks: q.marks,
         negativeMarks: q.negativeMarks,
         difficulty: q.difficulty,
@@ -2383,7 +2452,8 @@ export class BankUploadService {
       : ['id', 'examId', 'examName', 'subjectId', 'subjectName', 'chapterId', 'chapterName', 'topicId', 'subTopicId',
          'questionText', 'questionTextHindi', 'optionA', 'optionA_Hindi', 'optionB', 'optionB_Hindi', 'optionC',
          'optionC_Hindi', 'optionD', 'optionD_Hindi', 'correctAnswer', 'explanation', 'explanationHindi', 'year',
-         'shift', 'paperCode', 'marks', 'negativeMarks', 'difficulty', 'isPublishedToStudents', 'isPyq', 'gapType'];
+         'shift', 'paperCode', 'examDate', 'examTier', 'tierPaper', 'questionNo', 'marks', 'negativeMarks', 'difficulty',
+         'isPublishedToStudents', 'isPyq', 'gapType'];
     const sheetData = [headers, ...rowsAsObjects.map((row) => headers.map((h) => (row as any)[h]))];
     const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Missing Hindi-Solution-Answer');

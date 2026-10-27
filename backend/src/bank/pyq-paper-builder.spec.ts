@@ -1,4 +1,5 @@
-import { buildKeyedPaper, findPatternForPaper, PaperBuilderPrisma } from './pyq-paper-builder';
+import { analyzeKeyedPaper, buildKeyedPaper, findPatternForPaper, legacyPaperCeiling, missingNumberRanges, PaperBuilderPrisma } from './pyq-paper-builder';
+import { dedupeAndCapPaperRows } from '../common/pyq-paper';
 import { PaperParts } from '../common/pyq-paper-key';
 
 // ---- tiny in-memory Prisma stand-in (only what the builder touches) --------------------------------------
@@ -206,5 +207,110 @@ describe('findPatternForPaper', () => {
     const tierII = fakePrisma({ patterns: [pat('SSC CGL Tier II', 130)] });
     expect((await findPatternForPaper(tierII.prisma, 'exam-cgl', 'TIER_2', 'PAPER_1'))!.totalQuestions).toBe(130);
     expect(await findPatternForPaper(tierII.prisma, 'exam-cgl', 'TIER_1', 'PAPER_1')).toBeUndefined();
+  });
+});
+
+describe('legacyPaperCeiling: legacy paperCode mocks follow the pattern instead of a hard 100', () => {
+  const withPatterns = (patterns: any[]) => ({ examPattern: { findMany: async () => patterns } });
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `q${i}`, questionText: `question ${i}`, createdAt: new Date(2026, 0, 1, 0, 0, i) }));
+
+  it('no exam / no pattern -> 100 (old behaviour)', async () => {
+    expect(await legacyPaperCeiling(withPatterns([]), undefined)).toBe(100);
+    expect(await legacyPaperCeiling(withPatterns([]), 'exam-cgl')).toBe(100);
+  });
+
+  it('one pattern of 150 questions -> 150, and a 130-question paper is no longer cut at 100', async () => {
+    const c = await legacyPaperCeiling(withPatterns([pat('SSC CGL Tier 2', 150)]), 'exam-cgl');
+    expect(c).toBe(150);
+    expect(dedupeAndCapPaperRows(rows(130), c)).toHaveLength(130);
+    expect(dedupeAndCapPaperRows(rows(130))).toHaveLength(100); // default is unchanged
+  });
+
+  it('never goes below 100 (an existing mock must not shrink) and never above the keyed ceiling', async () => {
+    expect(await legacyPaperCeiling(withPatterns([pat('Typing', 40)]), 'exam-x')).toBe(100);
+    expect(await legacyPaperCeiling(withPatterns([pat('Huge', 5000)]), 'exam-x')).toBe(300);
+  });
+
+  it('ambiguous exam-level patterns (Tier 1 = 100, Tier 2 = 150) stay at 100', async () => {
+    expect(await legacyPaperCeiling(withPatterns([pat('SSC CGL Tier 1', 100), pat('SSC CGL Tier 2', 150)]), 'exam-cgl')).toBe(100);
+  });
+
+  it('rows that carry a tier use that tier\'s pattern', async () => {
+    const both = withPatterns([pat('SSC CGL Tier 1', 100), pat('SSC CGL Tier 2', 150)]);
+    expect(await legacyPaperCeiling(both, 'exam-cgl', { examTier: 'TIER_2' })).toBe(150);
+    expect(await legacyPaperCeiling(both, 'exam-cgl', { examTier: 'TIER_1' })).toBe(100);
+  });
+
+  it('a failing lookup falls back to 100 instead of throwing', async () => {
+    const broken = { examPattern: { findMany: async () => { throw new Error('db down'); } } };
+    expect(await legacyPaperCeiling(broken as any, 'exam-cgl')).toBe(100);
+  });
+});
+
+describe('admin paper detail: what is still missing', () => {
+  it('missingNumberRanges compresses gaps into ranges', () => {
+    expect(missingNumberRanges([1, 2, 3, 7, 9, 10], 12)).toEqual(['4–6', '8', '11–12']);
+    expect(missingNumberRanges([], 3)).toEqual(['1–3']);
+    expect(missingNumberRanges([1, 2, 3], 3)).toEqual([]);
+    expect(missingNumberRanges([0, 5, 99], 5)).toEqual(['1–4']); // 0 and out-of-range numbers are ignored
+  });
+
+  it('shows Q41–60 missing and the short subject when only 80 of 100 are in', async () => {
+    const f = fakePrisma({ patterns: [{ ...pat('SSC CGL Tier 1', 100), sections: [
+      { name: 'Reasoning', subjectSlug: 'reasoning', questions: 25, marks: 50, durationMinutes: 15 },
+      { name: 'Maths', subjectSlug: 'quant', questions: 25, marks: 50, durationMinutes: 15 },
+    ] }] });
+    for (let i = 1; i <= 40; i++) f.questions.push({ id: `r${i}`, questionText: `r ${i}`, createdAt: new Date(2026, 9, 26, 0, 0, i), marks: 2, isApproved: true, isActive: true, autoSuspended: false, examId: 'exam-cgl', examTier: 'TIER_1', tierPaper: null, examDate: '2025-09-12', shift: 'Shift 2', paperQuestionNo: i, subject: { name: 'Reasoning', slug: 'reasoning' } });
+    for (let i = 61; i <= 100; i++) f.questions.push({ id: `m${i}`, questionText: `m ${i}`, createdAt: new Date(2026, 9, 26, 0, 1, i), marks: 2, isApproved: true, isActive: true, autoSuspended: false, examId: 'exam-cgl', examTier: 'TIER_1', tierPaper: null, examDate: '2025-09-12', shift: 'Shift 2', paperQuestionNo: i, subject: { name: 'Maths', slug: 'quant' } });
+    const d = await analyzeKeyedPaper(f.prisma, { id: 'x', examId: 'exam-cgl', examTier: 'TIER_1', tierPaper: null, examDate: '2025-09-12', shift: 'Shift 2' });
+    expect(d).not.toBeNull();
+    expect(d!.built).toBe(80);
+    expect(d!.target).toBe(100);
+    expect(d!.numbering).toEqual({ numbered: 80, unnumbered: 0, missing: ['41–60'] });
+    expect(d!.subjects.find((x) => x.slug === 'reasoning')).toMatchObject({ have: 40, need: 25 });
+    expect(d!.shortSections).toEqual([]); // both sections have at least their 25
+  });
+
+  it('flags a short subject and counts unnumbered + duplicate rows', async () => {
+    const f = fakePrisma({ patterns: [{ ...pat('SSC CGL Tier 1', 100), sections: [{ name: 'Maths', subjectSlug: 'quant', questions: 25, marks: 50, durationMinutes: 15 }] }] });
+    const base = { marks: 2, isApproved: true, isActive: true, autoSuspended: false, examId: 'exam-cgl', examTier: 'TIER_1', tierPaper: null, examDate: '2025-09-12', shift: 'Shift 2', subject: { name: 'Maths', slug: 'quant' } };
+    for (let i = 1; i <= 10; i++) f.questions.push({ ...base, id: `m${i}`, questionText: `m ${i}`, createdAt: new Date(2026, 9, 26, 0, 0, i), paperQuestionNo: null });
+    f.questions.push({ ...base, id: 'dup', questionText: 'm 1', createdAt: new Date(2026, 9, 26, 0, 5, 0), paperQuestionNo: null }); // same text again
+    const d = await analyzeKeyedPaper(f.prisma, { id: 'x', examId: 'exam-cgl', examTier: 'TIER_1', tierPaper: null, examDate: '2025-09-12', shift: 'Shift 2' });
+    expect(d!.built).toBe(10);
+    expect(d!.duplicatesDropped).toBe(1);
+    expect(d!.numbering).toEqual({ numbered: 0, unnumbered: 10, missing: null });
+    expect(d!.shortSections).toEqual(['Maths: 15 aur chahiye (10/25)']);
+  });
+
+  it('a paper without exam / tier / date has no detail', async () => {
+    const f = fakePrisma();
+    expect(await analyzeKeyedPaper(f.prisma, { id: 'x', examId: 'e', examTier: null, tierPaper: null, examDate: null, shift: null })).toBeNull();
+  });
+});
+
+describe('titleLocked: a hand-typed mock name survives later uploads', () => {
+  it('keeps the admin title while the mock keeps growing', async () => {
+    const f = fakePrisma({ patterns: [pat('SSC CGL Tier 1', 100)] });
+    f.add(30, {}, 'reasoning');
+    await buildKeyedPaper(f.prisma, T1);
+    const id = [...f.templates.keys()][0];
+    f.templates.get(id)!.title = 'CGL 2025 — Shift 2 (Sachin edit)';
+    f.templates.get(id)!.titleLocked = true;
+    f.add(30, {}, 'maths');
+    await buildKeyedPaper(f.prisma, T1);
+    expect(f.templates.get(id)!.title).toBe('CGL 2025 — Shift 2 (Sachin edit)');
+    expect(f.templates.get(id)!.totalQuestions).toBe(60);
+  });
+
+  it('an unlocked title still follows the paper', async () => {
+    const f = fakePrisma({ patterns: [pat('SSC CGL Tier 1', 100)] });
+    f.add(30, {}, 'reasoning');
+    await buildKeyedPaper(f.prisma, T1);
+    const id = [...f.templates.keys()][0];
+    f.templates.get(id)!.title = 'old auto title';
+    f.add(30, {}, 'maths');
+    await buildKeyedPaper(f.prisma, T1);
+    expect(f.templates.get(id)!.title).not.toBe('old auto title');
   });
 });

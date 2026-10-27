@@ -1,6 +1,6 @@
 "use client";
 import { fetchAuth } from "@/lib/api";
-import { saveDraft, loadDraft, clearDraft, queueSubmit, flushPendingSubmits, saveAttemptStart, loadAttemptStart, clearAttemptStartById } from "@/lib/offline-submit";
+import { saveDraft, loadDraft, clearDraft, queueSubmit, flushPendingSubmits, saveAttemptStart, loadAttemptStart, clearAttemptStartById } from "@/lib/submit-queue";
 import { Logo } from "@/components/Logo";
 
 import * as React from "react";

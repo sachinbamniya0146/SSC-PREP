@@ -69,7 +69,8 @@ export default function YearWisePage() {
 
   // Narrows subject / chapter / topic counts (and hides empty ones) to the exact paper chosen. `shift` is
   // null while undecided and "" for "all shifts combined"; both mean "no shift narrowing".
-  const paperQuery = year ? `&year=${year}${shift ? `&shift=${encodeURIComponent(shift)}` : ""}` : "";
+  // `tier` ("" = both tiers combined, null = not chosen yet) narrows the counts to that tier's papers too.
+  const paperQuery = year ? `&year=${year}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}${shift ? `&shift=${encodeURIComponent(shift)}` : ""}` : "";
 
   // A different paper (year / shift) has different subjects and chapters: drop picks that may no longer exist.
   React.useEffect(() => {
@@ -276,7 +277,9 @@ export default function YearWisePage() {
   const stepOffset = multiTier ? 1 : 0;
   // Exact question pool of the chosen paper (before any subject/chapter/topic narrowing).
   const shiftRow = shift ? shifts.find((s) => s.shift === shift) : undefined;
-  const paperCount = shiftRow ? shiftRow.questionCount : yearRow?.questionCount;
+  // No shift picked: the year's total, or the chosen tier's total when a tier was picked.
+  const tierRow = tier ? tiers.find((x) => x.tier === tier) : undefined;
+  const paperCount = shiftRow ? shiftRow.questionCount : tierRow ? tierRow.questionCount : yearRow?.questionCount;
 
   const start = async (full: boolean) => {
     if (!examId || !year) return;

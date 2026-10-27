@@ -1,19 +1,26 @@
 "use client";
 
-// Admin → Date-wise + Tier-wise PYQ papers (26 Oct 2026)
-// Shows every real paper (exam + tier + paper + date + shift) with build progress, lets the admin
-// rebuild all mocks from the bank and make a still-building paper visible right now.
+// Admin → Date-wise + Tier-wise PYQ papers (26 Oct 2026, polished 27 Oct 2026)
+// Shows every real paper (exam + tier + paper + date + shift) with build progress, what is still missing
+// (short subjects, missing question numbers), and lets the admin rebuild all mocks from the bank, show / hide a
+// paper, rename it, delete it (only when nobody attempted it) and open it the way a student sees it.
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
 interface Paper {
-  id: string; title: string; examId: string | null; examTier: string | null; tierPaper: string | null;
+  id: string; title: string; titleLocked?: boolean; examId: string | null; examName?: string | null; examTier: string | null; tierPaper: string | null;
   examDate: string | null; shift: string | null; year: number | null;
   totalQuestions: number; targetQuestions: number | null; target: number; patternLinked: boolean;
   isActive: boolean; status: "LIVE" | "READY_HIDDEN" | "BUILDING"; updatedAt: string;
 }
-interface Overview { papers: Paper[]; questionsWithDateButNoTier: number }
+interface Overview { papers: Paper[]; exams: { id: string; name: string }[]; questionsWithDateButNoTier: number }
+interface Detail {
+  id: string; built: number; target: number; patternLinked: boolean; duplicatesDropped: number;
+  subjects: { name: string; slug: string; have: number; need: number | null }[];
+  shortSections: string[];
+  numbering: { numbered: number; unnumbered: number; missing: string[] | null };
+}
 
 const STATUS: Record<Paper["status"], { t: string; c: string }> = {
   LIVE: { t: "Live ✅", c: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
@@ -32,6 +39,9 @@ export default function AdminPyqPapersPage() {
   const [busy, setBusy] = React.useState("");
   const [filter, setFilter] = React.useState<"ALL" | Paper["status"]>("ALL");
   const [q, setQ] = React.useState("");
+  const [examId, setExamId] = React.useState("");
+  const [open, setOpen] = React.useState<string | null>(null);
+  const [detail, setDetail] = React.useState<Record<string, Detail | { error: string } | undefined>>({});
 
   React.useEffect(() => {
     try {
@@ -43,27 +53,50 @@ export default function AdminPyqPapersPage() {
 
   const load = React.useCallback(async () => {
     try {
-      setData(await api<Overview>("/bank/admin/upload/pyq-papers"));
+      setData(await api<Overview>(`/bank/admin/upload/pyq-papers${examId ? `?examId=${encodeURIComponent(examId)}` : ""}`));
       setErr("");
     } catch (e) { setErr((e as Error).message); }
-  }, []);
+  }, [examId]);
   React.useEffect(() => { if (ok) void load(); }, [ok, load]);
 
-  async function run(key: string, label: string, path: string) {
+  async function run(key: string, label: string, path: string, init: { method?: string; body?: unknown } = {}) {
     setBusy(key); setMsg(null);
     try {
-      const r = await api<unknown>(path, { method: "POST", body: JSON.stringify({}) });
+      const method = init.method ?? "POST";
+      const r = await api<unknown>(path, { method, ...(method === "DELETE" ? {} : { body: JSON.stringify(init.body ?? {}) }) });
       setMsg({ ok: true, text: `${label} ✅ ${r ? JSON.stringify(r) : ""}` });
+      setDetail({}); // numbers changed: reopen a row to see fresh gaps
       await load();
     } catch (e) { setMsg({ ok: false, text: `${label}: ${(e as Error).message}` }); }
     setBusy("");
+  }
+
+  async function toggleDetail(id: string) {
+    if (open === id) { setOpen(null); return; }
+    setOpen(id);
+    if (detail[id]) return;
+    try {
+      const d = await api<Detail>(`/bank/admin/upload/pyq-papers/${encodeURIComponent(id)}/detail`);
+      setDetail((prev) => ({ ...prev, [id]: d }));
+    } catch (e) { setDetail((prev) => ({ ...prev, [id]: { error: (e as Error).message } })); }
+  }
+
+  function rename(p: Paper) {
+    const title = window.prompt("Paper ka naya naam (ye naam aage ke uploads se nahi badlega):", p.title);
+    if (title === null || title.trim() === "" || title.trim() === p.title) return;
+    void run(`${p.id}:rename`, "Naam badla", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}/rename`, { body: { title: title.trim() } });
+  }
+
+  function remove(p: Paper) {
+    if (!window.confirm(`"${p.title}" ka mock delete karein?\n\nSirf mock hatega, questions bank me rahenge. Agar kisi student ne ye paper diya hai to delete nahi hoga (tab "Chhupao" use karein). Same exam+tier+date+shift ka agla upload ya Rebuild ise dobara bana dega.`)) return;
+    void run(`${p.id}:delete`, "Paper delete", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}`, { method: "DELETE" });
   }
 
   if (!ok) return null;
   const papers = data?.papers ?? [];
   const count = (s: Paper["status"]) => papers.filter((p) => p.status === s).length;
   const needle = q.trim().toLowerCase();
-  const rows = papers.filter((p) => (filter === "ALL" || p.status === filter) && (!needle || `${p.title} ${p.examDate} ${p.shift ?? ""}`.toLowerCase().includes(needle)));
+  const rows = papers.filter((p) => (filter === "ALL" || p.status === filter) && (!needle || `${p.title} ${p.examName ?? ""} ${p.examDate} ${p.shift ?? ""}`.toLowerCase().includes(needle)));
   const card = "rounded-xl border border-border bg-card p-4";
 
   return (
@@ -99,6 +132,10 @@ export default function AdminPyqPapersPage() {
             {busy === "rebuild" ? "Rebuild ho raha…" : "🔄 Bank se sab papers rebuild karo"}
           </button>
           <button disabled={!!busy} onClick={() => void load()} className="rounded-lg border border-border px-3 py-1.5 text-xs">↻ Refresh</button>
+          <select value={examId} onChange={(e) => { setExamId(e.target.value); setOpen(null); }} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
+            <option value="">Sab exams</option>
+            {(data?.exams ?? []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+          </select>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search: exam / date / shift"
             className="ml-auto w-56 rounded-lg border border-border bg-background px-2 py-1.5 text-xs" />
         </section>
@@ -108,7 +145,7 @@ export default function AdminPyqPapersPage() {
         </p>
 
         <section className="overflow-x-auto rounded-xl border border-border">
-          <table className="w-full min-w-[720px] text-left text-xs">
+          <table className="w-full min-w-[820px] text-left text-xs">
             <thead className="bg-muted/50 text-[11px] uppercase text-muted-foreground">
               <tr><th className="p-2">Paper</th><th className="p-2">Date</th><th className="p-2">Shift</th><th className="p-2">Tier</th><th className="p-2">Progress</th><th className="p-2">Status</th><th className="p-2" /></tr>
             </thead>
@@ -116,26 +153,79 @@ export default function AdminPyqPapersPage() {
               {rows.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">{data ? "Koi paper nahi mila." : "Load ho raha…"}</td></tr>}
               {rows.map((p) => {
                 const pct = Math.min(100, Math.round((p.totalQuestions / Math.max(1, p.target)) * 100));
+                const d = detail[p.id];
+                const isOpen = open === p.id;
+                const btn = "rounded-lg border border-border px-2 py-1 text-[11px] disabled:opacity-50";
                 return (
-                  <tr key={p.id} className="border-t border-border align-top">
-                    <td className="p-2"><p className="font-medium">{p.title}</p><p className="break-all text-[10px] text-muted-foreground">{p.id}</p></td>
-                    <td className="p-2 whitespace-nowrap">{p.examDate ?? "—"}</td>
-                    <td className="p-2">{p.shift ?? "—"}</td>
-                    <td className="p-2 whitespace-nowrap">{tierText(p.examTier)} {paperText(p.tierPaper)}</td>
-                    <td className="p-2">
-                      <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary" style={{ width: `${pct}%` }} /></div>
-                      <p className="mt-1 text-[11px]">{p.totalQuestions}/{p.target}{!p.patternLinked && <span className="text-amber-600"> · pattern link nahi</span>}</p>
-                    </td>
-                    <td className="p-2"><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${STATUS[p.status].c}`}>{STATUS[p.status].t}</span></td>
-                    <td className="p-2 text-right">
-                      {!p.isActive && (
-                        <button disabled={!!busy} onClick={() => run(p.id, "Paper live", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}/publish-now`)}
-                          className="rounded-lg border border-emerald-500/50 px-2 py-1 text-[11px] text-emerald-700 disabled:opacity-50">
-                          {busy === p.id ? "…" : "Abhi dikhao"}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                  <React.Fragment key={p.id}>
+                    <tr className="border-t border-border align-top">
+                      <td className="p-2">
+                        <p className="font-medium">{p.title}{p.titleLocked && <span title="Naam aapne badla hai" className="ml-1">✏️</span>}</p>
+                        <p className="text-[10px] text-muted-foreground">{p.examName ?? "—"}</p>
+                        <p className="break-all text-[10px] text-muted-foreground">{p.id}</p>
+                      </td>
+                      <td className="p-2 whitespace-nowrap">{p.examDate ?? "—"}</td>
+                      <td className="p-2">{p.shift ?? "—"}</td>
+                      <td className="p-2 whitespace-nowrap">{tierText(p.examTier)} {paperText(p.tierPaper)}</td>
+                      <td className="p-2">
+                        <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary" style={{ width: `${pct}%` }} /></div>
+                        <p className="mt-1 text-[11px]">{p.totalQuestions}/{p.target}{!p.patternLinked && <span className="text-amber-600"> · pattern link nahi</span>}</p>
+                        <button onClick={() => void toggleDetail(p.id)} className="mt-1 text-[11px] text-primary underline">{isOpen ? "Band karo" : "Kya missing hai?"}</button>
+                      </td>
+                      <td className="p-2"><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${STATUS[p.status].c}`}>{STATUS[p.status].t}</span></td>
+                      <td className="p-2">
+                        <div className="flex flex-wrap justify-end gap-1">
+                          {!p.isActive ? (
+                            <button disabled={!!busy} onClick={() => run(`${p.id}:show`, "Paper live", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}/publish-now`)}
+                              className="rounded-lg border border-emerald-500/50 px-2 py-1 text-[11px] text-emerald-700 disabled:opacity-50">
+                              {busy === `${p.id}:show` ? "…" : "Abhi dikhao"}
+                            </button>
+                          ) : (
+                            <button disabled={!!busy} onClick={() => run(`${p.id}:hide`, "Paper chhupaya", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}/visibility`, { body: { visible: false } })} className={btn}>
+                              {busy === `${p.id}:hide` ? "…" : "Chhupao"}
+                            </button>
+                          )}
+                          <a href={`/test?template=${encodeURIComponent(p.id)}`} target="_blank" rel="noreferrer" className={btn}>Student view ↗</a>
+                          <button disabled={!!busy} onClick={() => rename(p)} className={btn}>Rename</button>
+                          <button disabled={!!busy} onClick={() => remove(p)} className="rounded-lg border border-red-500/40 px-2 py-1 text-[11px] text-red-700 disabled:opacity-50">Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="border-t border-border bg-muted/20">
+                        <td colSpan={7} className="p-3 text-[11px]">
+                          {!d && <span className="text-muted-foreground">Load ho raha…</span>}
+                          {d && "error" in d && <span className="text-red-700">{d.error}</span>}
+                          {d && !("error" in d) && (
+                            <div className="grid gap-3 sm:grid-cols-3">
+                              <div>
+                                <p className="mb-1 font-semibold">Subject-wise</p>
+                                {d.subjects.length === 0 && <p className="text-muted-foreground">Abhi koi question nahi.</p>}
+                                {d.subjects.map((s) => (
+                                  <p key={s.slug}>{s.name}: <b>{s.have}</b>{s.need != null ? ` / ${s.need}` : ""}{s.need != null && s.have < s.need && <span className="text-amber-600"> (kam)</span>}</p>
+                                ))}
+                                {d.shortSections.map((t) => <p key={t} className="text-amber-700">⚠ {t}</p>)}
+                              </div>
+                              <div>
+                                <p className="mb-1 font-semibold">Question numbers</p>
+                                {d.numbering.missing === null
+                                  ? <p className="text-muted-foreground">Kisi question me questionNo nahi hai — mock upload order me chalega.</p>
+                                  : d.numbering.missing.length === 0
+                                    ? <p className="text-emerald-700">Koi number gap nahi ✅</p>
+                                    : <p className="text-amber-700">Missing: {d.numbering.missing.map((r) => `Q${r}`).join(", ")}</p>}
+                                <p className="text-muted-foreground">{d.numbering.numbered} numbered · {d.numbering.unnumbered} bina number</p>
+                              </div>
+                              <div>
+                                <p className="mb-1 font-semibold">Total</p>
+                                <p>{d.built} / {d.target} questions{!d.patternLinked && " (pattern link nahi: 100 maane gaye)"}</p>
+                                {d.duplicatesDropped > 0 && <p className="text-amber-700">{d.duplicatesDropped} duplicate (same text) ginti me nahi liye.</p>}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>

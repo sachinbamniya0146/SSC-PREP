@@ -49,9 +49,14 @@ export function normalizeQuestionTextForDedup(text: string): string {
  * needed for display) should happen AFTER this step, using the returned
  * (already-capped) array, so the "which 100 questions" decision is made
  * exactly once and every caller agrees on the same set.
+ *
+ * `ceiling` (27 Oct 2026): defaults to 100 (unchanged). Legacy paperCode papers whose ExamPattern says more than
+ * 100 questions pass the pattern target (see legacyPaperCeiling() in bank/pyq-paper-builder.ts) so they are not
+ * silently cut at 100. Upload (count) and serving MUST pass the same ceiling.
  */
 export function dedupeAndCapPaperRows<T extends { id: string; questionText: string; createdAt: Date }>(
   rows: T[],
+  ceiling: number = MAX_PYQ_PAPER_QUESTIONS,
 ): T[] {
   const ordered = [...rows].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   const seen = new Set<string>();
@@ -62,7 +67,7 @@ export function dedupeAndCapPaperRows<T extends { id: string; questionText: stri
     seen.add(key);
     deduped.push(r);
   }
-  return deduped.slice(0, MAX_PYQ_PAPER_QUESTIONS);
+  return deduped.slice(0, ceiling);
 }
 
 /**

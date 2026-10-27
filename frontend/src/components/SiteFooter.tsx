@@ -8,7 +8,6 @@ const cols = [
       { href: "/sectional", label: "Sectional Tests" },
       { href: "/question-bank", label: "PYQ Question Bank" },
       { href: "/year-wise", label: "Year-wise Papers" },
-      { href: "/offline", label: "Offline Practice" },
     ],
   },
   {

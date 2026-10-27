@@ -4,7 +4,7 @@ import * as React from "react";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { clearUserCaches } from "@/lib/offline";
+import { clearUserCaches } from "@/lib/session-cache";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard" },
@@ -88,7 +88,6 @@ export function AppHeader({ name }: { name?: string }) {
                   { href: "/profile", label: "My profile" },
                   { href: "/premium", label: "Premium plans" },
                   { href: "/referral", label: "Refer & earn" },
-                  { href: "/offline", label: "Offline practice" },
                   { href: "/settings/telegram", label: "Telegram" },
                 ].map((i) => (
                   <a key={i.href} href={i.href} role="menuitem" className="block rounded-lg px-3 py-2 text-sm hover:bg-muted">

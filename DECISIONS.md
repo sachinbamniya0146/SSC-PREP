@@ -348,3 +348,17 @@ accumulate images → postgres PANIC "No space left on device" (unhealthy). Fix:
 - **§3 (partial)**: scripts/self_source_pyqs.py — Hermes auto-fetch capability (v5 §34);
   Career Power URLs 404'd, web_search unconfigured (Firecrawl) → the multi-exam sweep is
   the known next campaign (translation grind too). Pipeline ingestion E2E-verified earlier.
+
+---
+
+## 27 Oct 2026 — PYQ paper identity, offline removal
+
+### Identity of a date-wise PYQ mock
+- **One mock = exam + tier + tierPaper (blank = PAPER_1) + examDate + shift (blank = none).** Template id `pyq-k-<exam>-t1[-p2]-<yyyymmdd>-<s#|na>`. `paperCode` is only a label.
+- The mock stays hidden until it holds the pattern's full question count (fallback 100), is switched on ONCE and never off by a rebuild. Admin can hide / show / "Abhi dikhao", rename (`titleLocked`) and delete (only with zero attempts).
+- Legacy `pyq-<slug>` mocks keep their ids; their question ceiling follows the ExamPattern (`legacyPaperCeiling`: never below 100, never above 300, 100 when ambiguous).
+- Reasons a question joins no mock yet: no examTier, no examDate, not approved/active, duplicate text of an older row in the same paper, or a paper that already has its full count.
+- Open: the same question repeated across papers (PAPER_LINKED) is NOT built yet; it still goes to Duplicate Review.
+
+### Offline practice removed
+- Offline hub, packs, page-cache service worker removed. `sw.js` is push-only and deletes old caches. The test submit queue (answers mirrored on device, replay after network drop) stays.

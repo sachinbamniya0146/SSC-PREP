@@ -102,8 +102,9 @@ export class BankController {
     @Query('kind') kind?: string,
     @Query('year') year?: string,
     @Query('shift') shift?: string,
+    @Query('tier') tier?: string,
   ) {
-    return this.bank.subjects(examId, parseQuestionKind(kind), parseYearParam(year), shift || undefined);
+    return this.bank.subjects(examId, parseQuestionKind(kind), parseYearParam(year), shift || undefined, normalizeExamTier(tier).tier);
   }
 
   @Get('chapters')
@@ -114,8 +115,9 @@ export class BankController {
     @Query('kind') kind?: string,
     @Query('year') year?: string,
     @Query('shift') shift?: string,
+    @Query('tier') tier?: string,
   ) {
-    return this.bank.chapters(subjectId, examId, includeEmpty === 'true', parseQuestionKind(kind), parseYearParam(year), shift || undefined);
+    return this.bank.chapters(subjectId, examId, includeEmpty === 'true', parseQuestionKind(kind), parseYearParam(year), shift || undefined, normalizeExamTier(tier).tier);
   }
 
   // Session 18+ — year-wise custom test picker: distinct years for an exam.
@@ -149,8 +151,9 @@ export class BankController {
     @Query('kind') kind?: string,
     @Query('year') year?: string,
     @Query('shift') shift?: string,
+    @Query('tier') tier?: string,
   ) {
-    return this.bank.topics(chapterId, examId, parseQuestionKind(kind), parseYearParam(year), shift || undefined);
+    return this.bank.topics(chapterId, examId, parseQuestionKind(kind), parseYearParam(year), shift || undefined, normalizeExamTier(tier).tier);
   }
 
   // NEW (Sep 21 2026) — sub-topics (with question counts) under a topic, for

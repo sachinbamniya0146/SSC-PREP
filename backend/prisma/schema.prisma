@@ -654,6 +654,8 @@ model TestTemplate {
   examTier         String?
   tierPaper        String?
   targetQuestions  Int?
+  // NEW (27 Oct 2026): admin renamed this mock by hand -> a later rebuild (more uploads) must NOT overwrite the title.
+  titleLocked      Boolean       @default(false)
   exam             Exam?         @relation(fields: [examId], references: [id], onDelete: SetNull)
 
   // P0 (Oct 2026): optional link to an ExamPattern. When set, the paper is composed from the

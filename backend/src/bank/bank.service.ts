@@ -577,6 +577,11 @@ export class BankService implements OnModuleInit {
         year: true,
         shift: true,
         paperCode: true,
+        // 27 Oct 2026: date-wise + tier-wise identity, so the gap file re-uploads into the same paper
+        examDate: true,
+        examTier: true,
+        tierPaper: true,
+        paperQuestionNo: true,
         marks: true,
         negativeMarks: true,
         difficulty: true,
@@ -603,8 +608,8 @@ export class BankService implements OnModuleInit {
   // 'practice' only year-less ones, omitted = everything (unchanged default).
   // `year` / `shift` (NEW, Oct 26 2026): optional paper narrowing for /year-wise so
   // the subject / chapter / topic counts match the exact paper the student picked.
-  async subjects(examId?: string, kind?: 'pyq' | 'practice', year?: number, shift?: string) {
-    const cacheKey = `bank:subjects:${examId ?? ''}:${kind ?? ''}:${year ?? ''}:${shift ?? ''}`;
+  async subjects(examId?: string, kind?: 'pyq' | 'practice', year?: number, shift?: string, tier?: string) {
+    const cacheKey = `bank:subjects:${examId ?? ''}:${kind ?? ''}:${year ?? ''}:${shift ?? ''}:${tier ?? ''}`;
     const cached = cacheGet<any>(cacheKey);
     if (cached) return cached;
     const out = await this.prisma.$queryRaw`
@@ -618,12 +623,13 @@ export class BankService implements OnModuleInit {
            AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
            AND (${year ?? null}::int IS NULL OR q."year" = ${year ?? null})
            AND (${shift ?? null}::text IS NULL OR q."shift" = ${shift ?? null})
+           AND (${tier ?? null}::text IS NULL OR q."examTier" = ${tier ?? null})
       GROUP BY s.id ORDER BY s.name;`;
     cacheSet(cacheKey, out, 300_000);
     return out;
   }
 
-  async chapters(subjectId?: string, examId?: string, includeEmpty = false, kind?: 'pyq' | 'practice', year?: number, shift?: string) {
+  async chapters(subjectId?: string, examId?: string, includeEmpty = false, kind?: 'pyq' | 'practice', year?: number, shift?: string, tier?: string) {
     // NEW `includeEmpty` — admin chapter-assignment pickers (e.g. the PDF
     // review queue's chapter dropdown/AI-suggest) need to see EVERY
     // chapter in a subject, including ones that don't have any approved
@@ -640,6 +646,7 @@ export class BankService implements OnModuleInit {
                  AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
                  AND (${year ?? null}::int IS NULL OR q."year" = ${year ?? null})
                  AND (${shift ?? null}::text IS NULL OR q."shift" = ${shift ?? null})
+                 AND (${tier ?? null}::text IS NULL OR q."examTier" = ${tier ?? null})
                )::int AS count
         FROM chapters c
         JOIN subjects sub ON sub.id = c."subjectId"
@@ -658,6 +665,7 @@ export class BankService implements OnModuleInit {
            AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
            AND (${year ?? null}::int IS NULL OR q."year" = ${year ?? null})
            AND (${shift ?? null}::text IS NULL OR q."shift" = ${shift ?? null})
+           AND (${tier ?? null}::text IS NULL OR q."examTier" = ${tier ?? null})
       WHERE (${subjectId}::text IS NULL OR c."subjectId" = ${subjectId})
       GROUP BY c.id, sub.name
       HAVING COUNT(q.id) > 0
@@ -748,7 +756,7 @@ export class BankService implements OnModuleInit {
   // parameter here, same pattern as subjects()/chapters()/years(), closes
   // that gap so the topic list a student sees is always honest for the
   // exam they actually picked.
-  async topics(chapterId?: string, examId?: string, kind?: 'pyq' | 'practice', year?: number, shift?: string) {
+  async topics(chapterId?: string, examId?: string, kind?: 'pyq' | 'practice', year?: number, shift?: string, tier?: string) {
     return this.prisma.$queryRaw`
       SELECT t.id, t.name, t."nameHindi", t.slug, COUNT(q.id)::int AS count
       FROM topics t
@@ -758,6 +766,7 @@ export class BankService implements OnModuleInit {
            AND (${kind ?? null}::text IS NULL OR (${kind ?? null} = 'pyq' AND q."year" IS NOT NULL) OR (${kind ?? null} = 'practice' AND q."year" IS NULL))
            AND (${year ?? null}::int IS NULL OR q."year" = ${year ?? null})
            AND (${shift ?? null}::text IS NULL OR q."shift" = ${shift ?? null})
+           AND (${tier ?? null}::text IS NULL OR q."examTier" = ${tier ?? null})
       WHERE (${chapterId}::text IS NULL OR t."chapterId" = ${chapterId})
       GROUP BY t.id
       HAVING COUNT(q.id) > 0

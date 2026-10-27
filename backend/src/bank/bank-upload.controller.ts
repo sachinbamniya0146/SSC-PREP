@@ -169,8 +169,33 @@ export class BankUploadController {
   // Progress / result of a background (async) import — poll every ~2 s.
   // ---- Date-wise + tier-wise PYQ papers (26 Oct 2026) ----
   @Get('pyq-papers')
-  async pyqPapers() {
-    return this.uploadService.listKeyedPapers();
+  async pyqPapers(@Query('examId') examId?: string) {
+    return this.uploadService.listKeyedPapers(examId || undefined);
+  }
+
+  // What is still missing in one paper (short subjects, missing printed question numbers).
+  @Get('pyq-papers/:id/detail')
+  async pyqPaperDetail(@Param('id') id: string) {
+    return this.uploadService.keyedPaperDetail(id);
+  }
+
+  // Rename / hide / show / delete change what students see: ADMIN only (moderators can still view + "Abhi dikhao").
+  @Post('pyq-papers/:id/rename')
+  @Roles('ADMIN')
+  async renamePyqPaper(@Param('id') id: string, @Body() body: { title?: string }) {
+    return this.uploadService.renameKeyedPaper(id, body?.title ?? '');
+  }
+
+  @Post('pyq-papers/:id/visibility')
+  @Roles('ADMIN')
+  async setPyqPaperVisibility(@Param('id') id: string, @Body() body: { visible?: boolean }) {
+    return this.uploadService.setKeyedPaperVisible(id, body?.visible === true);
+  }
+
+  @Delete('pyq-papers/:id')
+  @Roles('ADMIN')
+  async deletePyqPaper(@Param('id') id: string) {
+    return this.uploadService.deleteKeyedPaper(id);
   }
 
   @Post('pyq-papers/rebuild')

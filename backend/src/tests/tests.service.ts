@@ -9,6 +9,7 @@ import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank } from '../common/pyq-mock-pricing';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows, dedupeKeyedPaperRows } from '../common/pyq-paper';
 import { KEYED_PAPER_CEILING, effectiveTierPaper, isKeyedTemplateId } from '../common/pyq-paper-key';
+import { legacyPaperCeiling } from '../bank/pyq-paper-builder';
 import { TelegramService } from '../telegram/telegram.service';
 import { applyAttemptToChapters } from '../study-plan/study-plan-progress.util';
 import { QuestionBankPracticeService } from '../bank/question-bank-practice.service';
@@ -1223,7 +1224,15 @@ async saveAnswers(
     // BEFORE grouping by subject, so this served set always matches what
     // upsertPyqMockForPaper() counted when it built the mock's
     // totalQuestions — both use the exact same helper/ordering.
-    rows = (keyed ? dedupeKeyedPaperRows(rows as any, KEYED_PAPER_CEILING) : dedupeAndCapPaperRows(rows as any)) as any;
+    // 27 Oct 2026: a legacy paper's ceiling follows the ExamPattern (was a hard 100) — the SAME helper and inputs
+    // BankUploadService.upsertPyqMockForPaper() used when it counted this mock, so count and served set agree.
+    if (keyed) {
+      rows = dedupeKeyedPaperRows(rows as any, KEYED_PAPER_CEILING) as any;
+    } else {
+      const sample = (rows as any[]).find((r) => r.examTier) as { examTier?: string | null; tierPaper?: string | null } | undefined;
+      const ceiling = await legacyPaperCeiling(this.prisma as any, (rows as any[])[0]?.examId, sample);
+      rows = dedupeAndCapPaperRows(rows as any, ceiling) as any;
+    }
 
     const bySubject = new Map<string, { name: string; slug: string; rows: typeof rows }>();
     for (const r of rows) {
@@ -1663,7 +1672,8 @@ async saveAnswers(
     // practice set legitimately has its own natural size and shouldn't be
     // silently truncated.
     if (!opts.shift && !opts.tier && validRows.length > MAX_PYQ_PAPER_QUESTIONS) {
-      validRows = dedupeAndCapPaperRows(validRows as any) as any;
+      // 27 Oct 2026: ceiling = the exam's pattern target when it is unambiguous (still 100 otherwise).
+      validRows = dedupeAndCapPaperRows(validRows as any, await legacyPaperCeiling(this.prisma as any, examId)) as any;
     }
 
     const exam = await this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } });

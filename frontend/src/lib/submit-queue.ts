@@ -1,5 +1,5 @@
 /**
- * Offline-safe test submit.
+ * Network-drop-safe test submit (the "submit queue").
  *
  * Problem: when a student's internet drops during a timed test, the timer keeps running on the device, the final
  * POST /tests/attempts/:id/submit fails, and the student either lost the test or saw an empty result.
@@ -119,7 +119,7 @@ export function clearAttemptStartById(attemptId: string) {
 }
 
 /** Old drafts / start stashes of tests that finished long ago would fill localStorage forever. */
-export function pruneOfflineJunk(maxAgeDays = 3) {
+export function pruneStaleAttemptData(maxAgeDays = 3) {
   if (typeof window === "undefined") return;
   try {
     const pending = new Set(getPendingSubmits().map((p) => p.attemptId));
@@ -139,26 +139,6 @@ export function pruneOfflineJunk(maxAgeDays = 3) {
   } catch {
     /* ignore */
   }
-}
-
-/** For the status screen: tests still running / waiting on this device. */
-export function listLocalAttempts(): { attemptId: string; savedAt: number; answered: number; queued: boolean }[] {
-  if (typeof window === "undefined") return [];
-  const out: { attemptId: string; savedAt: number; answered: number; queued: boolean }[] = [];
-  const pending = new Set(getPendingSubmits().map((p) => p.attemptId));
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k || !k.startsWith(DRAFT_PREFIX)) continue;
-      const d = read<Draft | null>(k, null);
-      if (!d) continue;
-      const id = k.slice(DRAFT_PREFIX.length);
-      out.push({ attemptId: id, savedAt: d.savedAt, answered: Object.keys(d.answers || {}).length, queued: pending.has(id) });
-    }
-  } catch {
-    /* ignore */
-  }
-  return out.sort((a, b) => b.savedAt - a.savedAt);
 }
 
 // ---- queue ----
@@ -188,7 +168,7 @@ function dropPending(attemptId: string) {
  */
 let flushing: Promise<string[]> | null = null;
 export function flushPendingSubmits(): Promise<string[]> {
-  // one replay at a time: the manager, the exam screen and the offline hub may all ask at the same moment
+  // one replay at a time: the status pill, the exam screen and the login-time sync may all ask at the same moment
   if (!flushing) flushing = flushNow().finally(() => (flushing = null));
   return flushing;
 }
