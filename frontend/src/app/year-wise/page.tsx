@@ -187,7 +187,9 @@ export default function YearWisePage() {
     return () => {
       cancelled = true;
     };
-  }, [examId, year]);
+    // `tier` MUST be a dependency: picking a tier chip has to (re)load that tier's shifts (27 Oct 2026 fix —
+    // before this the shift step never appeared after choosing a tier).
+  }, [examId, year, tier]);
 
   // Subjects for the optional customise step (loaded only once a year is chosen).
   React.useEffect(() => {

@@ -36,6 +36,8 @@ type QView = {
   year: number | null;
   shift: string | null;
   examDate: string | null;
+  examTier?: string | null;
+  tierPaper?: string | null;
   paperCode: string | null;
 };
 type Item = {
@@ -45,6 +47,10 @@ type Item = {
   mode: "UPLOAD" | "SCAN";
   differences: string[];
   differenceLabels: string[];
+  /** same question but a different paper (shift / date / tier ...) */
+  crossPaper?: boolean;
+  crossPaperLabels?: string[];
+  suggestedAction?: Action | null;
   sourceRow: number | null;
   uploadBatchId: string | null;
   createdAt: string;
@@ -104,6 +110,12 @@ function QuestionColumn({ title, q, diffs, missing }: { title: string; q: QView 
         <Field label="Shift" diff={diffs.has("shift")}>{q.shift ?? "—"}</Field>
         <Field label="Date" diff={diffs.has("examDate")}>{q.examDate ?? "—"}</Field>
       </div>
+      {(q.examTier || q.tierPaper) && (
+        <div className="grid grid-cols-2 gap-1.5">
+          <Field label="Tier" diff={diffs.has("examTier")}>{q.examTier ? q.examTier.replace("TIER_", "Tier ") : "—"}</Field>
+          <Field label="Paper" diff={diffs.has("tierPaper")}>{q.tierPaper ? q.tierPaper.replace("PAPER_", "Paper ") : "Paper 1"}</Field>
+        </div>
+      )}
       {q.paperCode && <Field label="Paper code" diff={diffs.has("paperCode")}>{q.paperCode}</Field>}
       <Field label="Question" diff={diffs.has("questionText") || diffs.has("questionImageUrl")}>
         {q.questionImageUrl && (
@@ -593,6 +605,16 @@ export default function DuplicateReviewPage() {
                 )}
               </div>
 
+              {pending && it.crossPaper && (
+                <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 p-3 text-xs leading-relaxed">
+                  <p className="font-semibold text-sky-700 dark:text-sky-300">🔁 Ye question dusre paper me repeat hua hai</p>
+                  <p className="mt-0.5 text-muted-foreground">
+                    Alag: {(it.crossPaperLabels ?? []).join(", ")}. SSC aksar ek question alag shift / date / tier me dohrata hai. Dono dekh kar decide karein:
+                    <b> &quot;Dono paper me rakho&quot;</b> se ye question dono papers me aayega (har paper ki ginti poori hogi).{upload ? " Jab tak aap decide nahi karte, naya question kisi mock me nahi judta." : ""}
+                  </p>
+                </div>
+              )}
+
               <div className="grid gap-3 lg:grid-cols-2">
                 <QuestionColumn title={leftTitle} q={it.left} diffs={diffs} missing={it.leftMissing} />
                 <QuestionColumn title={rightTitle} q={it.right} diffs={diffs} />
@@ -615,8 +637,8 @@ export default function DuplicateReviewPage() {
                   <button disabled={busy} onClick={() => resolveOne(it.id, "KEEP_NEW")} className="rounded-lg border border-border px-3 py-2 text-sm font-semibold hover:border-primary disabled:opacity-40">
                     {upload ? "🔄 Naya rakho (purana hatao)" : "🔄 B rakho (A hide)"}
                   </button>
-                  <button disabled={busy} onClick={() => resolveOne(it.id, "KEEP_BOTH")} className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40">
-                    ➕ Dono rakho
+                  <button disabled={busy} onClick={() => resolveOne(it.id, "KEEP_BOTH")} className={`rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40 ${it.crossPaper ? "bg-primary text-primary-foreground ring-2 ring-primary/40" : "border border-border hover:border-primary"}`}>
+                    {it.crossPaper ? "➕ Ek question, dono paper me (recommended)" : "➕ Dono rakho"}
                   </button>
                   {busyId === it.id && <span className="self-center text-xs text-muted-foreground">Please wait…</span>}
                 </div>

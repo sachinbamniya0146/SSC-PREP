@@ -142,3 +142,17 @@ export function compareQuestions(a: ComparableQuestion, b: ComparableQuestion): 
   const exact = differences.length === 0;
   return { exact, matchType: exact ? 'EXACT' : 'SIMILAR', differences: [...differences] };
 }
+
+/**
+ * Fields that say WHICH PAPER a question belongs to. When the question is the same but one of these differs, it is
+ * a repeat of the same question in a DIFFERENT paper (SSC repeats questions across shifts / dates / tiers): the
+ * normal admin decision is "dono paper me rakho" (KEEP_BOTH), so each paper can reach its full question count.
+ * The question number inside the paper and the solution text do not decide the paper.
+ */
+export const PAPER_IDENTITY_FIELDS: readonly ComparedField[] = ['examId', 'year', 'shift', 'examDate', 'examTier', 'tierPaper', 'paperCode'];
+
+/** True when the differing fields include any paper-identity field. */
+export function isCrossPaperRepeat(differences: readonly string[] | null | undefined): boolean {
+  if (!differences || differences.length === 0) return false;
+  return differences.some((d) => (PAPER_IDENTITY_FIELDS as readonly string[]).includes(d));
+}

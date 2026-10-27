@@ -4478,7 +4478,13 @@ export class BankUploadService {
     // audit row + cache clear + PYQ-mock rebuild (the caller does them ONCE at the end and uses `paper`),
     // `forcePublish` makes the new question live at once (admin's explicit decision, like Publish All).
     opts: { deferRefresh?: boolean; forcePublish?: boolean } = {},
-  ): Promise<{ id: string; published: boolean; paper?: { examId: string; year: number; shift: string; paperCode: string | null; examDate: string | null } }> {
+  ): Promise<{
+    id: string;
+    published: boolean;
+    paper?: { examId: string; year: number; shift: string; paperCode: string | null; examDate: string | null };
+    /** date-wise + tier-wise identity, so a deferred (bulk) caller can rebuild that paper once at the end */
+    keyedRow?: { examId: string; examTier: string; tierPaper: string | null; examDate: string; shift: string | null };
+  }> {
     const hindiExempt = await this.loadHindiExemptSubjectIds();
     // the upload batch may have been deleted since the review was queued
     let batchId: string | null = uploadBatchId ?? null;
@@ -4499,7 +4505,11 @@ export class BankUploadService {
       question.examId && question.year && question.shift
         ? { examId: question.examId, year: question.year, shift: question.shift, paperCode: question.paperCode ?? null, examDate: question.examDate ?? null }
         : undefined;
-    if (opts.deferRefresh) return { id: created.id, published: prepared.published, paper };
+    const keyedRow =
+      question.examId && question.examTier && question.examDate
+        ? { examId: question.examId, examTier: question.examTier, tierPaper: question.tierPaper ?? null, examDate: question.examDate, shift: question.shift ?? null }
+        : undefined;
+    if (opts.deferRefresh) return { id: created.id, published: prepared.published, paper, keyedRow };
     try {
       await this.prisma.auditLog.create({
         data: {
@@ -4529,7 +4539,7 @@ export class BankUploadService {
         /* the question is saved; the mock refreshes on the next upload */
       }
     }
-    return { id: created.id, published: prepared.published, paper };
+    return { id: created.id, published: prepared.published, paper, keyedRow };
   }
 
   /**

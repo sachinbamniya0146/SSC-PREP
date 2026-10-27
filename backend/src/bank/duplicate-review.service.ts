@@ -3,7 +3,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { PrismaService } from '../prisma/prisma.service';
 import { BankUploadService } from './bank-upload.service';
 import { cacheClearPrefix } from '../common/cache';
-import { COMPARED_FIELDS, FIELD_LABELS, compareQuestions } from '../common/duplicate-compare';
+import { COMPARED_FIELDS, FIELD_LABELS, PAPER_IDENTITY_FIELDS, compareQuestions, isCrossPaperRepeat } from '../common/duplicate-compare';
 
 /**
  * Duplicate review queue  (Sachin, Oct 6 2026)
@@ -48,8 +48,11 @@ const BULK_TIME_BUDGET_MS = 40_000;
 const BULK_CONCURRENCY = 6;
 
 /** Work collected while many reviews are resolved, flushed ONCE at the end instead of after every review. */
+type KeyedRow = { examId: string | null; examTier: string | null; tierPaper: string | null; examDate: string | null; shift: string | null };
 interface BulkCtx {
   papers: Map<string, { examId: string; year: number; shift: string; paperCode: string | null; examDate: string | null }>;
+  /** 27 Oct 2026: date-wise + tier-wise papers touched by this run — rebuilt ONCE in flushBulk (they were never rebuilt before). */
+  keyed: KeyedRow[];
   audits: any[];
 }
 interface ResolveOpts {
@@ -156,6 +159,11 @@ export class DuplicateReviewService {
         mode: uploadMode ? 'UPLOAD' : 'SCAN',
         differences: ((r.differences as any) ?? []) as string[],
         differenceLabels: (((r.differences as any) ?? []) as string[]).map((f) => (FIELD_LABELS as any)[f] ?? f),
+        // 27 Oct 2026: same question in a DIFFERENT paper (shift / date / tier / year ...) — the usual decision is
+        // KEEP_BOTH ("dono paper me rakho"); a same-paper repeat is a true duplicate (keep one).
+        crossPaper: isCrossPaperRepeat((r.differences as any) ?? []),
+        crossPaperLabels: (((r.differences as any) ?? []) as string[]).filter((f) => (PAPER_IDENTITY_FIELDS as readonly string[]).includes(f)).map((f) => (FIELD_LABELS as any)[f] ?? f),
+        suggestedAction: isCrossPaperRepeat((r.differences as any) ?? []) ? 'KEEP_BOTH' : r.matchType === 'EXACT' ? 'KEEP_EXISTING' : null,
         sourceRow: r.sourceRow,
         uploadBatchId: r.uploadBatchId,
         createdAt: r.createdAt,
@@ -242,7 +250,7 @@ export class DuplicateReviewService {
       ids = found.map((f) => f.id);
     }
 
-    const ctx: BulkCtx = { papers: new Map(), audits: [] };
+    const ctx: BulkCtx = { papers: new Map(), keyed: [], audits: [] };
     let done = 0;
     let failed = 0;
     let cursor = 0;
@@ -375,7 +383,7 @@ export class DuplicateReviewService {
   private async unpublishAndHide(questionId: string, adminId: string, ctx?: BulkCtx) {
     const q = await this.prisma.question.findUnique({
       where: { id: questionId },
-      select: { id: true, examId: true, year: true, shift: true, paperCode: true, examDate: true },
+      select: { id: true, examId: true, year: true, shift: true, paperCode: true, examDate: true, examTier: true, tierPaper: true },
     });
     if (!q) return;
     await this.prisma.question.update({ where: { id: questionId }, data: { isActive: false, isApproved: false, reviewStatus: 'PENDING' } });
@@ -386,7 +394,7 @@ export class DuplicateReviewService {
   private async restore(questionId: string, adminId: string, ctx?: BulkCtx): Promise<boolean> {
     const q = await this.prisma.question.findUnique({
       where: { id: questionId },
-      select: { id: true, isActive: true, examId: true, year: true, shift: true, paperCode: true, examDate: true },
+      select: { id: true, isActive: true, examId: true, year: true, shift: true, paperCode: true, examDate: true, examTier: true, tierPaper: true },
     });
     if (!q) return false;
     if (q.isActive) return true;
@@ -396,12 +404,13 @@ export class DuplicateReviewService {
   }
 
   private async afterVisibilityChange(
-    q: { examId: string | null; year: number | null; shift: string | null; paperCode: string | null; examDate: string | null },
+    q: { examId: string | null; year: number | null; shift: string | null; paperCode: string | null; examDate: string | null; examTier?: string | null; tierPaper?: string | null },
     questionId: string,
     adminId: string,
     action: string,
     ctx?: BulkCtx,
   ) {
+    await this.refreshKeyed(q, ctx);
     const audit = { userId: adminId, action, targetEntity: 'Question', entityId: questionId, metadataJson: { via: 'duplicate-review-undo' } as any };
     const paper = q.examId && q.year && q.shift ? { examId: q.examId, year: q.year, shift: q.shift, paperCode: q.paperCode ?? null, examDate: q.examDate ?? null } : null;
     if (ctx) {
@@ -450,7 +459,7 @@ export class DuplicateReviewService {
       ids = found.map((f) => f.id);
     }
 
-    const ctx: BulkCtx = { papers: new Map(), audits: [] };
+    const ctx: BulkCtx = { papers: new Map(), keyed: [], audits: [] };
     let done = 0;
     let failed = 0;
     let cursor = 0;
@@ -489,7 +498,8 @@ export class DuplicateReviewService {
         /* audit is best effort */
       }
     }
-    if (ctx.audits.length || ctx.papers.size) this.clearBankCaches();
+    if (ctx.audits.length || ctx.papers.size || ctx.keyed.length) this.clearBankCaches();
+    if (ctx.keyed.length) await this.upload.rebuildKeyedPapersForRows(ctx.keyed); // never throws
     for (const g of ctx.papers.values()) {
       try {
         await this.upload.upsertPyqMockForPaper(g.examId, g.year, g.shift, g.paperCode, g.examDate);
@@ -498,6 +508,14 @@ export class DuplicateReviewService {
       }
     }
     void adminId;
+  }
+
+  /** Rebuild the date-wise + tier-wise paper a question belongs to (deferred into the bulk context when there is one). */
+  private async refreshKeyed(q: Partial<KeyedRow>, ctx?: BulkCtx) {
+    if (!q.examId || !q.examTier || !q.examDate) return;
+    const row: KeyedRow = { examId: q.examId, examTier: q.examTier, tierPaper: q.tierPaper ?? null, examDate: q.examDate, shift: q.shift ?? null };
+    if (ctx) ctx.keyed.push(row);
+    else await this.upload.rebuildKeyedPapersForRows([row]); // never throws
   }
 
   private clearBankCaches() {
@@ -632,6 +650,7 @@ export class DuplicateReviewService {
           metadataJson: { via: 'duplicate-review-bulk' } as any,
         });
         if (created.paper) ctx.papers.set(`${created.paper.examId}|${created.paper.year}|${created.paper.shift}|${created.paper.paperCode ?? ''}`, created.paper);
+        if (created.keyedRow) ctx.keyed.push(created.keyedRow);
       }
       if (action === 'KEEP_NEW' && review.existingQuestionId) {
         await this.hide(review.existingQuestionId, adminId, 'DUPLICATE_REVIEW_KEEP_NEW', ctx);
@@ -661,10 +680,11 @@ export class DuplicateReviewService {
   private async hide(questionId: string, adminId: string, reason: string, ctx?: BulkCtx) {
     const q = await this.prisma.question.findUnique({
       where: { id: questionId },
-      select: { id: true, isActive: true, examId: true, year: true, shift: true, paperCode: true, examDate: true },
+      select: { id: true, isActive: true, examId: true, year: true, shift: true, paperCode: true, examDate: true, examTier: true, tierPaper: true },
     });
     if (!q || !q.isActive) return;
     await this.prisma.question.update({ where: { id: questionId }, data: { isActive: false } });
+    await this.refreshKeyed(q, ctx);
     const audit = {
       userId: adminId,
       action: reason,
@@ -763,6 +783,8 @@ export class DuplicateReviewService {
       year: q.year ?? null,
       shift: q.shift ?? null,
       examDate: q.examDate ?? null,
+      examTier: q.examTier ?? null,
+      tierPaper: q.tierPaper ?? null,
       paperCode: q.paperCode ?? null,
       createdAt: q.createdAt,
     };
@@ -789,6 +811,8 @@ export class DuplicateReviewService {
       year: c.year ?? null,
       shift: c.shift ?? null,
       examDate: c.examDate ?? null,
+      examTier: c.examTier ?? null,
+      tierPaper: c.tierPaper ?? null,
       paperCode: c.paperCode ?? null,
       createdAt: null,
     };
