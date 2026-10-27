@@ -92,7 +92,8 @@ export default function AttemptReviewPage() {
       try {
         const r = await fetchAuth(`${apiBase()}/tests/attempts/${params.attemptId}`, { headers: authHeaders() });
         if (!r.ok) {
-          setError(r.status === 401 ? "Login required" : `Failed to load attempt (${r.status})`);
+          const b = await r.json().catch(() => null);
+          setError(r.status === 401 ? "Login required" : (typeof b?.message === "string" && b.message) || `Failed to load attempt (${r.status})`);
           return;
         }
         const d = await r.json();

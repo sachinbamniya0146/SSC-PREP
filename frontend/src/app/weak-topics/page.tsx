@@ -52,7 +52,7 @@ export default function WeakTopicsPage() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [tr]);
 
   const start = async (it: Item) => {
     setStarting(it.id);

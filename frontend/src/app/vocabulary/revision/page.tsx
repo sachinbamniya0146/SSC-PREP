@@ -59,7 +59,7 @@ export default function VocabRevisionPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tr]);
   React.useEffect(() => {
     loadStatus();
   }, [loadStatus]);

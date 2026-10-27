@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { fetchAuth, API_BASE } from "@/lib/api";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Suspense } from "react";
 import { useT } from "@/lib/i18n";
@@ -10,7 +10,6 @@ import { useT } from "@/lib/i18n";
 function PaymentSuccessContent() {
   const tr = useT();
   const searchParams = useSearchParams();
-  const router = useRouter();
   const [status, setStatus] = React.useState<"checking" | "success" | "pending" | "failed">("checking");
   const [message, setMessage] = React.useState("");
 

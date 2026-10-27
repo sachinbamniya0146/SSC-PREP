@@ -21,6 +21,15 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
   app.use(helmet());
   app.use(compression()); // gzip all API responses — fast
+  // Student-facing routes never need a big body: 1 MB is plenty for a 100-question submit or a login. Without this
+  // even the public /auth/login accepted a 500 MB JSON body before any guard ran. Registered BEFORE the big-upload
+  // parser below — body-parser skips a request whose body was already parsed. (Admin uploads keep the big limit.)
+  const rawBodyCapture = (req: any, _res: any, buf: Buffer) => {
+    req.rawBody = buf;
+  };
+  for (const prefix of ['auth', 'tests', 'gamification', 'quiz', 'review', 'bookmarks', 'users', 'payments']) {
+    app.use(`/api/v1/${prefix}`, bodyParser.json({ limit: '1mb', verify: rawBodyCapture }));
+  }
   // Keep the RAW body for Razorpay webhook signature verification (v3 §1) —
   // HMAC must be computed over the exact bytes received.
   app.use(

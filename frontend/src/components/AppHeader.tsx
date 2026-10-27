@@ -4,7 +4,7 @@ import * as React from "react";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { clearUserCaches } from "@/lib/session-cache";
+import { logoutAndClear } from "@/lib/session-cache";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard" },
@@ -32,12 +32,7 @@ export function AppHeader({ name }: { name?: string }) {
   }, []);
 
   const logout = () => {
-    void clearUserCaches();
-    try {
-      localStorage.clear();
-    } catch {
-      /* ignore */
-    }
+    void logoutAndClear();
   };
 
   return (

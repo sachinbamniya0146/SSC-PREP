@@ -712,7 +712,8 @@ export default function TestPage() {
           // v4 §31 — resumed attempt (refresh/revisit): hydrate persisted autosaves
           {
             const savedMap: { [qid: string]: string } = {};
-            if (Array.isArray(ad.answers)) for (const a of ad.answers) if (a.selectedOption) savedMap[a.questionId] = a.selectedOption;
+            savedOnServerRef.current = new Map();
+            if (Array.isArray(ad.answers)) for (const a of ad.answers) { if (a.selectedOption) savedMap[a.questionId] = a.selectedOption; savedOnServerRef.current.set(a.questionId, a.selectedOption ?? null); }
             // answers mirrored on this device (written even while offline) are newer than the server autosave
             const draft = attemptId ? loadDraft(attemptId) : null;
             if (draft) Object.assign(savedMap, draft.answers);
@@ -925,29 +926,47 @@ export default function TestPage() {
 
   // ---- v4 §31 — AUTOSAVE: debounced persist of answers mid-attempt. What's
   // saved here is exactly what an auto-submit-at-expiry scores (lossless). ----
-  const autosaveTimer = React.useRef<any>(null);
+  // 27 Oct 2026: only what CHANGED is sent (it used to re-send every answer on every change = 100 server upserts per
+  // tap on a slow phone), a cleared answer is sent as null (it used to stay on the server, so an auto-submit at
+  // expiry could score — and negative-mark — an answer the student had already cleared), and a failed save is retried.
+  // `savedOnServerRef` = what the server is known to hold (qid -> option, null = cleared).
+  const savedOnServerRef = React.useRef<Map<string, string | null>>(new Map());
+  const [saveTick, setSaveTick] = React.useState(0);
   React.useEffect(() => {
-    if (!attemptId || phase !== "exam" || Object.keys(answers).length === 0) return;
-    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = setTimeout(async () => {
+    if (!attemptId || phase !== "exam") return;
+    const saved = savedOnServerRef.current;
+    const diff: { questionId: string; selectedOption: string | null }[] = [];
+    for (const [questionId, selectedOption] of Object.entries(answers)) {
+      if (saved.get(questionId) !== selectedOption) diff.push({ questionId, selectedOption });
+    }
+    for (const [questionId, held] of saved) {
+      if (held !== null && !(questionId in answers)) diff.push({ questionId, selectedOption: null });
+    }
+    if (diff.length === 0) return;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const timer = setTimeout(async () => {
       try {
-        const payload = Object.entries(answers).map(([questionId, selectedOption]) => ({
-          questionId,
-          selectedOption,
-        }));
-        await fetchAuth(`${apiBase()}/tests/attempts/${attemptId}/answers`, {
+        const r = await fetchAuth(`${apiBase()}/tests/attempts/${attemptId}/answers`, {
           method: "PUT",
           headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ answers: payload, ...(plan ? { answeredAt: answeredAtRef.current } : {}) }),
+          body: JSON.stringify({ answers: diff, ...(plan ? { answeredAt: answeredAtRef.current } : {}) }),
         });
+        if (r.ok) {
+          for (const d of diff) saved.set(d.questionId, d.selectedOption);
+        } else if (r.status >= 500 || r.status === 429) {
+          retry = setTimeout(() => setSaveTick((n) => n + 1), 8000);
+        }
+        // other 4xx (attempt already submitted / not found): retrying can never succeed
       } catch {
-        /* autosave is best-effort — the submit payload is authoritative */
+        // offline / network drop: autosave stays best-effort (the device draft + the final submit are authoritative), try again shortly
+        retry = setTimeout(() => setSaveTick((n) => n + 1), 8000);
       }
     }, 2500);
     return () => {
-      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+      clearTimeout(timer);
+      if (retry) clearTimeout(retry);
     };
-  }, [answers, attemptId, phase, plan]);
+  }, [answers, attemptId, phase, plan, saveTick]);
 
   // ---- keyboard shortcuts (real CBT feel) ----
   // A-D / Alt+1-4 choose · Space or → save & next · ← / Shift+Space previous · M mark & next · C clear · P palette · ? help

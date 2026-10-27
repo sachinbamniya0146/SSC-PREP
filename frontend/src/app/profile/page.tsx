@@ -3,7 +3,7 @@
 import * as React from "react";
 import { ShellHeader, CardSkeletons } from "@/components/AppShell";
 import { api } from "@/lib/api";
-import { clearUserCaches } from "@/lib/session-cache";
+import { logoutAndClear } from "@/lib/session-cache";
 import { getStoredLang, setStoredLang, useLang } from "@/lib/i18n";
 
 interface UserProfile {
@@ -654,7 +654,7 @@ export default function ProfilePage() {
             <button className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-600 hover:bg-red-500/20">
               Delete Account
             </button>
-            <a href="/login" onClick={() => { void clearUserCaches(); localStorage.clear(); }} className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted">Logout</a>
+            <a href="/login" onClick={() => { void logoutAndClear(); }} className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted">Logout</a>
           </div>
         </div>
       </main>

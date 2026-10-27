@@ -88,7 +88,7 @@ export default function VocabWordDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [slug]);
+  }, [slug, tr]);
 
   React.useEffect(() => {
     load();

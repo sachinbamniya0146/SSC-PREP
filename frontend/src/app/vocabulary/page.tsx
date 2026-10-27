@@ -77,7 +77,7 @@ export default function VocabularyHubPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tr]);
 
   React.useEffect(() => {
     load();

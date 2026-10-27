@@ -25,6 +25,15 @@ import {
   type SectionPlan,
 } from '../common/section-plan';
 
+/** Fisher–Yates, in place. Used so a practice set is different on every start (sectional). */
+function shuffleInPlace<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 @Injectable()
 export class TestsService {
   constructor(
@@ -84,7 +93,16 @@ export class TestsService {
   // "purchase access to take it" — that's a real bug students would hit,
   // but an admin hitting it usually means they're testing/managing content
   // and got wrongly paywalled like a free student.
-  private async assertMockEntitled(userId: string, template: { id: string; title?: string; isPremium?: boolean | null }) {
+  // `consume` (default true) = this call is a NEW attempt start and may spend one free-trial use. paper() only loads
+  // the questions for the instructions/exam screen and for a refresh/resume, so it passes `consume: false`: it checks
+  // the same rules but never spends a use, and lets a student with an unexpired IN_PROGRESS attempt back in (before
+  // this, paper() + start each spent a use, so one click burned both free mocks and a mid-test refresh was locked out).
+  private async assertMockEntitled(
+    userId: string,
+    template: { id: string; title?: string; isPremium?: boolean | null },
+    opts: { consume?: boolean } = {},
+  ) {
+    const consume = opts.consume !== false;
     // NEW ("free honge bus top 10 rhenge bs baki paid") — auto-created PYQ
     // mocks (id prefix `pyq-`) are ALWAYS created with isPremium: false
     // (see BankUploadService.upsertPyqMockForPaper) because their pricing
@@ -128,6 +146,7 @@ export class TestsService {
     // straight to the paywall rejection below.
     if (!isPyqAutoMockId(template.id)) {
       if (!mock) {
+        if (!consume) return; // first attempt is still available; start will spend it
         // First-ever attempt on this template for this user — create the
         // row and consume free-trial use #1 in the same write.
         await this.prisma.mockAccess.create({
@@ -137,6 +156,7 @@ export class TestsService {
       }
 
       if (mock.mocksUsed < mock.freeMocksAllowed) {
+        if (!consume) return;
         const claim = await this.prisma.mockAccess.updateMany({
           where: { userId, testTemplateId: template.id, mocksUsed: { lt: mock.freeMocksAllowed } },
           data: { mocksUsed: { increment: 1 } },
@@ -145,6 +165,16 @@ export class TestsService {
         // else: someone else (a racing concurrent start) claimed the last
         // remaining free use between our read and write — fall through to reject.
       }
+    }
+
+    // Read-only check (paper()): a student who already has a running attempt of this mock may always load it again
+    // (refresh / app restart / lapsed plan mid-test) — the free use was spent when that attempt started.
+    if (!consume) {
+      const open = await this.prisma.testAttempt.findFirst({
+        where: { userId, testTemplateId: template.id, status: 'IN_PROGRESS', expiresAt: { gt: new Date() } },
+        select: { id: true },
+      });
+      if (open) return;
     }
 
     throw new BadRequestException('This mock is premium. Purchase access to take it.');
@@ -175,7 +205,6 @@ export class TestsService {
       include: { examPattern: true },
     });
     if (!template) throw new BadRequestException('Test template not found');
-    await this.assertMockEntitled(userId, template);
 
     // v4 §31 — resume-first: an unexpired in-progress attempt for this template
     // is RETURNED (with its autosaved answers) instead of opening a duplicate.
@@ -193,6 +222,10 @@ export class TestsService {
       // Resume keeps the plan frozen at the original start (incl. the scribe choice) — never rebuilt from the live pattern.
       return { ...rest, plan: readSectionPlan(sectionPlan), serverNow: Date.now(), resumed: true, answers: saved };
     }
+
+    // Entitlement is checked (and a free-trial use spent) only when a NEW attempt is really created — a resume above
+    // must never cost a second free use or be refused after the free uses ran out.
+    await this.assertMockEntitled(userId, template);
 
     const now = new Date();
     // P0 — strict sectional timers: when the template is linked to a lock-sections ExamPattern the whole timeline
@@ -361,29 +394,7 @@ async submitAttempt(
   // every scored answer individually (same create-or-update pattern
   // saveAnswers() already uses above), so both brand-new and
   // already-autosaved rows always end up holding the final, correctly
-  // scored answer before the TestAttempt itself is marked SUBMITTED.
-  if (scoredAnswers.length) {
-    await Promise.all(
-      scoredAnswers.map((a) =>
-        this.prisma.attemptAnswer.upsert({
-          where: { testAttemptId_questionId: { testAttemptId: attempt.id, questionId: a.questionId } },
-          create: {
-            testAttemptId: attempt.id,
-            questionId: a.questionId,
-            selectedOption: a.selectedOption,
-            isCorrect: a.isCorrect,
-            timeSpentSeconds: a.timeSpentSeconds,
-          },
-          update: {
-            selectedOption: a.selectedOption,
-            isCorrect: a.isCorrect,
-            ...(a.timeSpentSeconds > 0 ? { timeSpentSeconds: a.timeSpentSeconds } : {}),
-          },
-        }),
-      ),
-    );
-  }
-
+  // scored answer. (27 Oct 2026: this upsert now runs right AFTER the claim below, so only the winning submit writes.)
   // FIX (Sep 2026 audit — duplicate submit / double-XP race condition):
   // the `if (attempt.status === 'SUBMITTED') throw ...` check above reads
   // the row's status BEFORE scoring, but the actual write that marks it
@@ -417,20 +428,57 @@ async submitAttempt(
     },
   });
 
-  const updated = await this.prisma.testAttempt.findUniqueOrThrow({
-    where: { id: attempt.id },
-    include: {
-      testTemplate: { select: { id: true, title: true, totalQuestions: true, totalMarks: true } },
-      answers: { select: { questionId: true, selectedOption: true, isCorrect: true, timeSpentSeconds: true } },
-    },
-  });
+  const loadUpdated = () =>
+    this.prisma.testAttempt.findUniqueOrThrow({
+      where: { id: attempt.id },
+      include: {
+        testTemplate: { select: { id: true, title: true, totalQuestions: true, totalMarks: true } },
+        answers: { select: { questionId: true, selectedOption: true, isCorrect: true, timeSpentSeconds: true } },
+      },
+    });
 
   if (claim.count === 0) {
     // A racing request already finalized this attempt between our read and
     // our write — return its (already-scored) result without granting XP
-    // or sending a second Telegram notification again.
-    return { ...updated, expired };
+    // or sending a second Telegram notification again. (The per-question
+    // answer rows below are written ONLY by the request that won the claim,
+    // so the loser can never overwrite the winner's final answers.)
+    return { ...(await loadUpdated()), expired };
   }
+
+  // Persist the final per-question answers AFTER winning the claim (see the upsert note above).
+  // If this write fails the attempt is put back to IN_PROGRESS so the student's retry / the replay queue can
+  // submit it again, instead of leaving a SUBMITTED attempt whose review rows disagree with its score.
+  try {
+    if (scoredAnswers.length) {
+      await Promise.all(
+        scoredAnswers.map((a) =>
+          this.prisma.attemptAnswer.upsert({
+            where: { testAttemptId_questionId: { testAttemptId: attempt.id, questionId: a.questionId } },
+            create: {
+              testAttemptId: attempt.id,
+              questionId: a.questionId,
+              selectedOption: a.selectedOption,
+              isCorrect: a.isCorrect,
+              timeSpentSeconds: a.timeSpentSeconds,
+            },
+            update: {
+              selectedOption: a.selectedOption,
+              isCorrect: a.isCorrect,
+              ...(a.timeSpentSeconds > 0 ? { timeSpentSeconds: a.timeSpentSeconds } : {}),
+            },
+          }),
+        ),
+      );
+    }
+  } catch (err) {
+    await this.prisma.testAttempt
+      .updateMany({ where: { id: attempt.id, status: 'SUBMITTED' }, data: { status: 'IN_PROGRESS', submittedAt: null } })
+      .catch(() => undefined);
+    throw err;
+  }
+
+  const updated = await loadUpdated();
 
   this.gamification.awardTestXp(userId, totalCorrect, 'mock').catch(() => undefined);
 
@@ -690,7 +738,9 @@ async saveAnswers(
   }
 
   // List current user's attempts (newest first) with template + aggregate stats.
-  async myAttempts(userId: string, take = 50) {
+  async myAttempts(userId: string, takeIn = 50) {
+    // clamp: a missing / NaN / huge ?take= must never turn into an unbounded query
+    const take = Number.isFinite(takeIn) ? Math.min(Math.max(Math.floor(takeIn), 1), 200) : 50;
     const attempts = await this.prisma.testAttempt.findMany({
       where: { userId, status: 'SUBMITTED' },
       orderBy: { submittedAt: 'desc' },
@@ -750,6 +800,11 @@ async saveAnswers(
       },
     });
     if (!attempt) throw new BadRequestException('Attempt not found');
+    // The review carries the answer key + explanations, so it exists only after submit. Before this guard a student
+    // could autosave an answer for each question and read the whole key from an attempt that was still running.
+    if (attempt.status !== 'SUBMITTED') {
+      throw new BadRequestException('Attempt is still in progress — submit it to see the review.');
+    }
 
     // v6 §6 — rank & percentile: aggregate across all attempts of the same template.
     let rank = attempt.rank;
@@ -873,7 +928,7 @@ async saveAnswers(
       select: { id: true, title: true, type: true, durationMinutes: true, totalQuestions: true, totalMarks: true, isPremium: true, description: true, examPatternId: true, examId: true, examTier: true, tierPaper: true, examDate: true, shift: true },
     });
     if (!template) throw new BadRequestException('Template not found');
-    await this.assertMockEntitled(userId, template);
+    await this.assertMockEntitled(userId, template, { consume: false });
 
     // P0 — template linked to an ExamPattern: the paper is composed from the PATTERN's sections (no hardcoded
     // blueprint) and, when the pattern locks sections, every section carries its own timer.
@@ -1488,7 +1543,7 @@ async saveAnswers(
   // Compose a sectional test: subject-wise, multi-year distribution, per-test dedup.
   // Returns the SAME shape as bank.set so the live test UI can consume it directly.
   async sectional(subjectId: string, count = 25) {
-    const take = Math.min(Math.max(count, 5), 100);
+    const take = Number.isFinite(count) ? Math.min(Math.max(Math.floor(count), 5), 100) : 25;
     const rows: any[] = await this.prisma.question.findMany({
       where: {
         ...PUBLISHED_QUESTION_WHERE,
@@ -1513,6 +1568,9 @@ async saveAnswers(
       byYear.get(y)!.push(r);
     }
     const yearKeys = [...byYear.keys()].sort((a, b) => b - a);
+    // Shuffle inside each year: the round-robin below always took the first rows of every year, so every student got
+    // the SAME 25 questions on every start. The year spread stays, the questions now differ per start.
+    for (const pool of byYear.values()) shuffleInPlace(pool);
     const selected: any[] = [];
     const pointers = new Map<number, number>();
     let cycle = 0;

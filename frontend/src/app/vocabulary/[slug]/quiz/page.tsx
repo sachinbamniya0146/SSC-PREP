@@ -8,7 +8,7 @@
 // word mastered (unlocking the next word on the hub page). Below 95%, the
 // student can just retake it; nothing is lost.
 import * as React from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
@@ -38,7 +38,6 @@ type SubmitResult = {
 export default function VocabWordQuizPage() {
   const tr = useT();
   const params = useParams();
-  const router = useRouter();
   const slug = String(params?.slug ?? "");
 
   const [quiz, setQuiz] = React.useState<QuizData | null>(null);
@@ -82,7 +81,7 @@ export default function VocabWordQuizPage() {
         setLoading(false);
       }
     })();
-  }, [slug]);
+  }, [slug, tr]);
 
   const submit = async () => {
     if (!quiz) return;

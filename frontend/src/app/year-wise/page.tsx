@@ -150,7 +150,12 @@ export default function YearWisePage() {
     (async () => {
       try {
         const r = await fetchAuth(`${API_BASE}/bank/tiers?examId=${examId}&year=${year}`);
-        if (!r.ok || cancelled) return;
+        if (cancelled) return;
+        if (!r.ok) {
+          // server hiccup: continue without tier narrowing instead of leaving "choose a tier" with no chips (dead end)
+          setTier("");
+          return;
+        }
         const d = await r.json();
         const list: TierRow[] = Array.isArray(d) ? d : [];
         if (cancelled) return;
@@ -173,7 +178,7 @@ export default function YearWisePage() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetchAuth(`${API_BASE}/bank/shifts?examId=${examId}&year=${year}${tier ? `&tier=${tier}` : ""}`);
+        const r = await fetchAuth(`${API_BASE}/bank/shifts?examId=${examId}&year=${year}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`);
         if (!r.ok || cancelled) return;
         const d = await r.json();
         const list: ShiftRow[] = Array.isArray(d) ? d : [];
