@@ -60,3 +60,16 @@ describe('edit by ID', () => {
     expect(diffUpdate(existing, { options: [{ key: 'A', text: '1', textHi: 'एक' }, { key: 'B', text: '9', textHi: '' }] })).toEqual(['optionB']);
   });
 });
+
+describe('buildUpdateBody — date-wise PYQ columns (26 Oct 2026)', () => {
+  const hm = { examTier: 0, tierPaper: 1, questionNo: 2 };
+  it('reads tier / paper / questionNo and normalises them', () => {
+    const r = buildUpdateBody(hm, ['Tier 2', 'Paper II', '17'], [], false);
+    expect(r.problems).toEqual([]);
+    expect(r.body).toMatchObject({ examTier: 'TIER_2', tierPaper: 'PAPER_2', paperQuestionNo: 17 });
+  });
+  it('reports unreadable values and ignores them for practice-only', () => {
+    expect(buildUpdateBody(hm, ['tier 9', '', 'x'], [], false).problems).toHaveLength(2);
+    expect(buildUpdateBody(hm, ['TIER_1', '', '3'], [], true).body).toEqual({});
+  });
+});

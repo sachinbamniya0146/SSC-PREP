@@ -506,6 +506,7 @@ export class DuplicateReviewService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    cacheClearPrefix('bank:tiers');
   }
 
   // ------------------------------------------------------------------ scan
@@ -708,6 +709,9 @@ export class DuplicateReviewService {
       year: true,
       shift: true,
       examDate: true,
+      examTier: true,
+      tierPaper: true,
+      paperQuestionNo: true,
       paperCode: true,
       createdAt: true,
     } as const;

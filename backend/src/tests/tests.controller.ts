@@ -3,6 +3,7 @@ import { Controller, Get, Post, Put, Body, Query, Param, BadRequestException } f
 import { TestsService } from './tests.service';
 import { TestStatsService } from './test-stats.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { normalizeExamTier, normalizeTierPaper } from '../common/pyq-paper-key';
 
 @Controller('tests')
 export class TestsController {
@@ -130,6 +131,8 @@ export class TestsController {
       examId: string;
       year: number;
       shift?: string;
+      tier?: string;
+      tierPaper?: string;
       subjectIds?: string[];
       chapterIds?: string[];
       topicIds?: string[];
@@ -140,6 +143,8 @@ export class TestsController {
       examId: body.examId,
       year: Number(body.year),
       shift: body.shift || undefined,
+      tier: normalizeExamTier(body.tier).tier,
+      tierPaper: normalizeTierPaper(body.tierPaper).paper,
       subjectIds: body.subjectIds,
       chapterIds: body.chapterIds,
       topicIds: body.topicIds,

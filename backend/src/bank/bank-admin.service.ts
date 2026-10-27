@@ -80,6 +80,7 @@ export class BankAdminService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    cacheClearPrefix('bank:tiers');
   }
 
   /** Normalises whatever the query string / JSON body sent into a typed filter. */

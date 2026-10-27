@@ -1591,7 +1591,7 @@ async saveAnswers(
   // No parallel scoring/analysis code to maintain or get out of sync.
   async yearWiseStart(
     userId: string,
-    opts: { examId: string; year: number; shift?: string; subjectIds?: string[]; chapterIds?: string[]; topicIds?: string[]; full?: boolean },
+    opts: { examId: string; year: number; shift?: string; tier?: string; tierPaper?: string; subjectIds?: string[]; chapterIds?: string[]; topicIds?: string[]; full?: boolean },
   ) {
     const { examId, year } = opts;
     if (!examId) throw new BadRequestException('examId is required');
@@ -1614,6 +1614,9 @@ async saveAnswers(
     // so "Full Paper" silently combined every shift's questions into one
     // uncapped mega-test. When the student picked a shift, honor it.
     if (opts.shift) where.shift = opts.shift;
+    // 26 Oct 2026: Tier 1 / Tier 2 (and Paper 1/2/3 of a Tier 2 day) narrowing
+    if (opts.tier) where.examTier = opts.tier;
+    if (opts.tierPaper) where.tierPaper = opts.tierPaper === 'PAPER_1' ? { in: ['PAPER_1'] } : opts.tierPaper;
     // "full" (attempt the whole year's paper) always wins over any
     // subject/chapter/topic narrowing the UI may still have selected —
     // matches the button's label ("Attempt Full Paper").
@@ -1659,7 +1662,7 @@ async saveAnswers(
     // paper (i.e. shift wasn't narrowed) — a topic/chapter/subject-scoped
     // practice set legitimately has its own natural size and shouldn't be
     // silently truncated.
-    if (!opts.shift && validRows.length > MAX_PYQ_PAPER_QUESTIONS) {
+    if (!opts.shift && !opts.tier && validRows.length > MAX_PYQ_PAPER_QUESTIONS) {
       validRows = dedupeAndCapPaperRows(validRows as any) as any;
     }
 

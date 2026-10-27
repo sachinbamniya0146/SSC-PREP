@@ -69,6 +69,10 @@ interface UploadResult {
   updated?: number;
   unchanged?: number;
   preview?: Array<{ row: number; action: "NEW" | "UPDATE" | "SAME"; changes?: string[]; text?: string }>;
+  // 26 Oct 2026: date-wise + tier-wise PYQ papers this file feeds / rows that join none
+  papers?: Array<{ key: string; examId: string; examTier: string; tierPaper: string; examDate: string; shift: string | null; rows: number }>;
+  pending?: Array<{ row: number; reason: string; message: string }>;
+  pendingTotal?: number;
 }
 
 interface UploadJobState {
@@ -718,7 +722,7 @@ export default function AdminPage() {
       setUploadJob({ status: j.status, phase: j.status === "DONE" ? "FINALIZING" : "SAVING", processed: j.processed, total: j.total, created: j.created, failed: j.failed });
       if (j.status === "FAILED") throw new Error(j.fatalError || "Upload fail ho gaya");
       if (j.status === "DONE") {
-        const result = { success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors ?? [], warnings: j.warnings ?? [], queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted, uploadBatchId: j.uploadBatchId, updated: j.updated, unchanged: j.unchanged, preview: j.preview } as UploadResult;
+        const result = { success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors ?? [], warnings: j.warnings ?? [], queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted, uploadBatchId: j.uploadBatchId, updated: j.updated, unchanged: j.unchanged, preview: j.preview, papers: j.papers, pending: j.pending, pendingTotal: j.pendingTotal } as UploadResult;
         if (checkOnly) setInfo(`Sirf check hua (kuch save nahi hua): ${j.created} naye, ${j.updated ?? 0} update hone layak, ${j.unchanged ?? 0} jaise ke taise, ${j.failed} reject.`);
         return { result, rejectedUrl: j.hasRejected ? `${API_BASE}/bank/admin/upload/job/${started.id}/rejected` : null };
       }
@@ -1230,6 +1234,14 @@ export default function AdminPage() {
           )}
           {access.isAdmin && (
           <a
+            href="/admin/pyq-papers"
+            className="mb-3 ml-2 inline-block rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
+          >
+            🗓️ Date-wise + Tier-wise PYQ papers — progress, rebuild, abhi dikhao →
+          </a>
+          )}
+          {access.isAdmin && (
+          <a
             href="/admin/patterns"
             className="mb-3 ml-2 inline-block rounded-lg border border-primary/40 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
           >
@@ -1426,6 +1438,25 @@ export default function AdminPage() {
                 )}
                 {(uploadResult.reviewAlready ?? 0) > 0 && (
                   <span className="text-xs text-muted-foreground" title="Pehle se Duplicate Review me the ya aap pehle 'purana rakho' decide kar chuke the">+{uploadResult.reviewAlready} pehle se review me / skip</span>
+                )}
+                {(uploadResult.papers?.length ?? 0) > 0 && (
+                  <div className="w-full rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2 text-xs">
+                    <p className="font-semibold text-emerald-700 dark:text-emerald-400">🗓️ Ye file {uploadResult.papers!.length} real paper me judegi:</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {uploadResult.papers!.slice(0, 30).map((p) => (
+                        <li key={p.key}>{p.examDate} · {p.examTier === "TIER_2" ? "Tier 2" : "Tier 1"}{p.tierPaper !== "PAPER_1" ? ` · ${p.tierPaper.replace("PAPER_", "Paper ")}` : ""}{p.shift ? ` · ${p.shift}` : ""} — <strong>{p.rows}</strong> rows</li>
+                      ))}
+                    </ul>
+                    <a href="/admin/pyq-papers" className="mt-1 inline-block text-primary underline">Papers ka progress dekhein →</a>
+                  </div>
+                )}
+                {(uploadResult.pendingTotal ?? 0) > 0 && (
+                  <div className="w-full rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-300">
+                    <p className="font-semibold">⚠️ {uploadResult.pendingTotal} rows kisi date-wise mock me nahi judengi (tier/date theek karein):</p>
+                    <ul className="mt-1 max-h-32 space-y-0.5 overflow-auto">
+                      {(uploadResult.pending ?? []).slice(0, 30).map((p, i) => <li key={i}>Row {p.row}: {p.message.split(" / ")[0]}</li>)}
+                    </ul>
+                  </div>
                 )}
                 {(uploadResult.unaccounted ?? 0) > 0 && (
                   <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">⚠️ {uploadResult.unaccounted} rows ka hisaab nahi mila</span>

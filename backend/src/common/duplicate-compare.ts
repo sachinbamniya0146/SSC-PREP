@@ -35,6 +35,9 @@ export const COMPARED_FIELDS = [
   'year',
   'shift',
   'examDate',
+  'examTier',
+  'tierPaper',
+  'paperQuestionNo',
   'paperCode',
 ] as const;
 export type ComparedField = (typeof COMPARED_FIELDS)[number];
@@ -52,6 +55,9 @@ export const FIELD_LABELS: Record<ComparedField, string> = {
   year: 'Year',
   shift: 'Shift',
   examDate: 'Exam date',
+  examTier: 'Tier',
+  tierPaper: 'Tier paper',
+  paperQuestionNo: 'Question no. in paper',
   paperCode: 'Paper code',
 };
 
@@ -69,6 +75,9 @@ export interface ComparableQuestion {
   year?: number | null;
   shift?: string | null;
   examDate?: string | null;
+  examTier?: string | null;
+  tierPaper?: string | null;
+  paperQuestionNo?: number | null;
   paperCode?: string | null;
 }
 
@@ -107,6 +116,8 @@ export function fieldValue(q: ComparableQuestion, f: ComparedField): string {
       return optionsSignature(q);
     case 'year':
       return q.year == null ? '' : String(q.year);
+    case 'paperQuestionNo':
+      return q.paperQuestionNo == null ? '' : String(q.paperQuestionNo);
     case 'correctAnswer':
       return normText(q.correctAnswer);
     default:

@@ -1,4 +1,5 @@
 // Practice-question Excel template + "edit by ID" helpers (Oct 15 2026, Task B). Pure: no Nest / Prisma imports, unit-tested.
+import { normalizeExamTier, normalizeTierPaper, parsePaperQuestionNo } from '../common/pyq-paper-key';
 
 export interface TemplateColumn {
   key: string;            // header the parser reads (without the trailing *)
@@ -134,6 +135,24 @@ export function buildUpdateBody(
     }
   }
   if (!practiceOnly) for (const k of ['year', 'shift', 'paperCode', 'examDate']) if (get(k)) body[k] = get(k);
+  // date-wise + tier-wise mocks (26 Oct 2026)
+  if (!practiceOnly) {
+    if (get('examTier')) {
+      const t = normalizeExamTier(get('examTier'));
+      if (t.invalid) problems.push(`examTier galat ("${get('examTier')}") — TIER_1 ya TIER_2 chahiye`);
+      else body.examTier = t.tier;
+    }
+    if (get('tierPaper')) {
+      const t = normalizeTierPaper(get('tierPaper'));
+      if (t.invalid) problems.push(`tierPaper galat ("${get('tierPaper')}") — PAPER_1 / PAPER_2 / PAPER_3 chahiye`);
+      else body.tierPaper = t.paper;
+    }
+    if (get('questionNo')) {
+      const n = parsePaperQuestionNo(get('questionNo'));
+      if (n === undefined) problems.push(`questionNo poora number (1 ya zyada) hona chahiye ("${get('questionNo')}")`);
+      else body.paperQuestionNo = n;
+    }
+  }
   // options: any non-empty option cell -> send all four, the rest taken from the existing question
   const keys = ['A', 'B', 'C', 'D'];
   if (keys.some((k) => get(`option${k}`) || get(`option${k}_Hindi`))) {
@@ -149,14 +168,14 @@ const nz = (v: unknown) => (v === null || v === undefined ? '' : String(v).trim(
 
 /** which fields of `body` really differ from the stored question (names for the preview) */
 export function diffUpdate(
-  existing: { questionText?: string | null; questionTextHindi?: string | null; explanation?: string | null; explanationHindi?: string | null; correctAnswer?: string | null; difficulty?: string | null; marks?: number | null; negativeMarks?: number | null; year?: number | null; shift?: string | null; paperCode?: string | null; examDate?: string | null; optionsJson?: unknown },
+  existing: { questionText?: string | null; questionTextHindi?: string | null; explanation?: string | null; explanationHindi?: string | null; correctAnswer?: string | null; difficulty?: string | null; marks?: number | null; negativeMarks?: number | null; year?: number | null; shift?: string | null; paperCode?: string | null; examDate?: string | null; examTier?: string | null; tierPaper?: string | null; paperQuestionNo?: number | null; optionsJson?: unknown },
   body: UpdateBody,
 ): string[] {
   const changed: string[] = [];
-  for (const k of ['questionText', 'questionTextHindi', 'explanation', 'explanationHindi', 'correctAnswer', 'difficulty', 'shift', 'paperCode', 'examDate'] as const) {
+  for (const k of ['questionText', 'questionTextHindi', 'explanation', 'explanationHindi', 'correctAnswer', 'difficulty', 'shift', 'paperCode', 'examDate', 'examTier', 'tierPaper'] as const) {
     if (k in body && nz(body[k]) !== nz((existing as Record<string, unknown>)[k])) changed.push(k);
   }
-  for (const k of ['marks', 'negativeMarks', 'year'] as const) {
+  for (const k of ['marks', 'negativeMarks', 'year', 'paperQuestionNo'] as const) {
     if (k in body && Number(body[k]) !== Number((existing as Record<string, unknown>)[k])) changed.push(k);
   }
   if (body.options) {

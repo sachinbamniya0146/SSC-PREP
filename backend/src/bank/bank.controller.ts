@@ -8,6 +8,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Department } from '../common/decorators/department.decorator';
 import { parseQuestionKind } from '../common/question-visibility';
+import { normalizeExamTier } from '../common/pyq-paper-key';
 
 /** `?year=2023` -> 2023. Anything missing / non-numeric -> undefined (= no year narrowing), never a 500. */
 function parseYearParam(raw?: string): number | undefined {
@@ -127,8 +128,14 @@ export class BankController {
   // so a student can attempt one real shift's paper (max 100 Q) instead of
   // every shift of the year combined. See common/pyq-paper.ts doc-comment.
   @Get('shifts')
-  shifts(@Query('examId') examId?: string, @Query('year') year?: string) {
-    return this.bank.shifts(examId, year ? Number(year) : undefined);
+  shifts(@Query('examId') examId?: string, @Query('year') year?: string, @Query('tier') tier?: string) {
+    return this.bank.shifts(examId, year ? Number(year) : undefined, normalizeExamTier(tier).tier);
+  }
+
+  // 26 Oct 2026: tiers (Tier 1 / Tier 2) that have questions for an exam+year (year-wise picker step).
+  @Get('tiers')
+  tiers(@Query('examId') examId?: string, @Query('year') year?: string) {
+    return this.bank.tiers(examId, year ? Number(year) : undefined);
   }
 
   // Session 18+ — year-wise custom test picker: topics under a chapter.

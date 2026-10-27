@@ -691,8 +691,26 @@ export class BankService implements OnModuleInit {
   // /year-wise picker offer a shift step (same pattern as years()) so a
   // student can attempt ONE real shift's paper (max 100 Q, matches an
   // actual SSC exam) instead of every shift of the year glued together.
-  async shifts(examId?: string, year?: number) {
-    const cacheKey = `bank:shifts:${examId ?? 'all'}:${year ?? 'all'}`;
+  // 26 Oct 2026: tier (TIER_1 / TIER_2) narrows the shifts to that tier's papers; tiers() lists the tiers of a year.
+  async tiers(examId?: string, year?: number) {
+    const cacheKey = `bank:tiers:${examId ?? 'all'}:${year ?? 'all'}`;
+    const cached = cacheGet<any>(cacheKey);
+    if (cached) return cached;
+    const out = await this.prisma.$queryRaw`
+      SELECT q."examTier" AS tier, COUNT(q.id)::int AS "questionCount"
+      FROM questions q
+      WHERE q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
+        AND q."examTier" IS NOT NULL
+        AND (${examId}::text IS NULL OR q."examId" = ${examId})
+        AND (${year}::int IS NULL OR q.year = ${year})
+      GROUP BY q."examTier"
+      ORDER BY q."examTier" ASC;`;
+    cacheSet(cacheKey, out, 300_000);
+    return out;
+  }
+
+  async shifts(examId?: string, year?: number, tier?: string) {
+    const cacheKey = `bank:shifts:${examId ?? 'all'}:${year ?? 'all'}:${tier ?? 'all'}`;
     const cached = cacheGet<any>(cacheKey);
     if (cached) return cached;
     const out = await this.prisma.$queryRaw`
@@ -702,6 +720,7 @@ export class BankService implements OnModuleInit {
         AND q.shift IS NOT NULL AND q.shift <> ''
         AND (${examId}::text IS NULL OR q."examId" = ${examId})
         AND (${year}::int IS NULL OR q.year = ${year})
+        AND (${tier ?? null}::text IS NULL OR q."examTier" = ${tier ?? null})
       GROUP BY q.shift
       ORDER BY q.shift ASC;`;
     cacheSet(cacheKey, out, 300_000);

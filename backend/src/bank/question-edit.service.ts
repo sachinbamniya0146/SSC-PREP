@@ -8,6 +8,7 @@ import { BankAdminService, AdminQuestionFilter } from './bank-admin.service';
 import { BankUploadService } from './bank-upload.service';
 import { normalizeMathText, normalizeQuestionMath } from '../common/math-text';
 import { normalizeShift } from '../common/shift';
+import { normalizeExamTier, normalizeTierPaper, parsePaperQuestionNo } from '../common/pyq-paper-key';
 
 // =============================================================================
 // QuestionEditService  (NEW — Oct 3 2026)
@@ -198,6 +199,9 @@ export class QuestionEditService {
       year: q.year,
       shift: q.shift,
       examDate: q.examDate,
+      examTier: q.examTier,
+      tierPaper: q.tierPaper,
+      paperQuestionNo: q.paperQuestionNo,
       paperCode: q.paperCode,
       questionText: q.questionText,
       questionTextHindi: q.questionTextHindi ?? '',
@@ -324,11 +328,31 @@ export class QuestionEditService {
       examDate = this.normalizeDate(body.examDate);
       data.examDate = examDate;
     }
+    let examTier = existing.examTier;
+    if (has('examTier')) {
+      const t = normalizeExamTier(body.examTier);
+      if (t.invalid) throw new BadRequestException('Tier galat hai — TIER_1 ya TIER_2 likhein.');
+      examTier = t.tier ?? null;
+      data.examTier = examTier;
+    }
+    let tierPaper = existing.tierPaper;
+    if (has('tierPaper')) {
+      const t = normalizeTierPaper(body.tierPaper);
+      if (t.invalid) throw new BadRequestException('Tier paper galat hai — PAPER_1 / PAPER_2 / PAPER_3.');
+      tierPaper = t.paper ?? null;
+      data.tierPaper = tierPaper;
+    }
+    if (has('paperQuestionNo')) {
+      const raw = String(body.paperQuestionNo ?? '').trim();
+      if (raw && parsePaperQuestionNo(raw) === undefined) throw new BadRequestException('Paper me question number 1 se bada poora number hona chahiye.');
+      data.paperQuestionNo = raw ? parsePaperQuestionNo(raw)! : null;
+    }
     let paperCode = existing.paperCode;
     if (has('paperCode')) {
       paperCode = str(body.paperCode, 120, 'Paper code') || null;
       data.paperCode = paperCode;
     }
+    const keyedChanged = has('examId') || has('shift') || has('examDate') || has('examTier') || has('tierPaper') || has('paperQuestionNo');
     const identityChanged = has('examId') || has('year') || has('shift') || has('examDate');
     if (year != null && !paperCode && examDate && shift) {
       paperCode = await this.derivePaperCode(examId, examDate, shift);
@@ -446,6 +470,13 @@ export class QuestionEditService {
         .create({ data: { userId: adminId, action: 'QUESTION_EDITED', targetEntity: 'Question', entityId: id, metadataJson: { questionNo: existing.questionNo, fields: Object.keys(data) } as any } })
         .catch(() => undefined);
     }
+    if (keyedChanged) {
+      // date-wise + tier-wise mocks: refresh the paper the question left AND the one it joined (never throws)
+      await this.upload.rebuildKeyedPapersForRows([
+        { examId: existing.examId, examTier: existing.examTier, tierPaper: existing.tierPaper, examDate: existing.examDate, shift: existing.shift },
+        { examId, examTier, tierPaper, examDate, shift },
+      ]);
+    }
     if (year != null && shift && examId && identityChanged) {
       try {
         await this.upload.upsertPyqMockForPaper(examId, year, shift, paperCode ?? null, examDate ?? null);
@@ -485,6 +516,16 @@ export class QuestionEditService {
     if (has('shift')) data.shift = normalizeShift(str(set.shift, 60, 'Shift'));
     if (has('examDate')) data.examDate = this.normalizeDate(set.examDate);
     if (has('paperCode')) data.paperCode = str(set.paperCode, 120, 'Paper code') || null;
+    if (has('examTier')) {
+      const t = normalizeExamTier(set.examTier);
+      if (t.invalid) throw new BadRequestException('Tier galat hai — TIER_1 ya TIER_2 likhein.');
+      data.examTier = t.tier ?? null;
+    }
+    if (has('tierPaper')) {
+      const t = normalizeTierPaper(set.tierPaper);
+      if (t.invalid) throw new BadRequestException('Tier paper galat hai — PAPER_1 / PAPER_2 / PAPER_3.');
+      data.tierPaper = t.paper ?? null;
+    }
     if (has('difficulty')) {
       const d = String(set.difficulty ?? '').toUpperCase();
       if (!['EASY', 'MEDIUM', 'HARD'].includes(d)) throw new BadRequestException('Difficulty EASY, MEDIUM ya HARD honi chahiye.');
@@ -506,7 +547,15 @@ export class QuestionEditService {
     if (ids.length === 0) return { updated: 0 };
 
     let updated = 0;
-    const touchesPaper = has('examId') || has('year') || has('shift') || has('examDate');
+    const touchesPaper = has('examId') || has('year') || has('shift') || has('examDate') || has('examTier') || has('tierPaper');
+    // papers the questions belong to BEFORE the change (they may shrink)
+    const beforeRows = touchesPaper
+      ? await this.prisma.question.findMany({
+          where: { id: { in: ids.slice(0, 5000) }, examTier: { not: null }, examDate: { not: null } },
+          select: { examId: true, examTier: true, tierPaper: true, examDate: true, shift: true },
+          distinct: ['examId', 'examTier', 'tierPaper', 'examDate', 'shift'],
+        })
+      : [];
     if (touchesPaper && !has('paperCode') && data.examDate !== undefined && data.shift !== undefined) {
       // date + shift both given -> give every question the matching paper code (per exam)
       const rows = await this.prisma.question.findMany({ where: { id: { in: ids } }, select: { id: true, examId: true } });
@@ -538,6 +587,16 @@ export class QuestionEditService {
 
     // refresh the real-paper mocks the touched questions now belong to
     if (touchesPaper) {
+      try {
+        const afterRows = await this.prisma.question.findMany({
+          where: { id: { in: ids.slice(0, 5000) }, examTier: { not: null }, examDate: { not: null } },
+          select: { examId: true, examTier: true, tierPaper: true, examDate: true, shift: true },
+          distinct: ['examId', 'examTier', 'tierPaper', 'examDate', 'shift'],
+        });
+        await this.upload.rebuildKeyedPapersForRows([...beforeRows, ...afterRows]);
+      } catch {
+        /* non-fatal */
+      }
       try {
         const papers = await this.prisma.question.groupBy({
           by: ['examId', 'year', 'shift', 'paperCode', 'examDate'],

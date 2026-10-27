@@ -117,7 +117,7 @@ function formatExamDate(iso: string): string {
  * 2025-09-12, 12-09-2025, 12/09/2025 (day first — Indian format) and
  * "12 Sep 2025" are understood; anything else fails the row with a clear message.
  */
-function normalizeExamDate(raw: string): string | undefined {
+export function normalizeExamDate(raw: string): string | undefined {
   const v = String(raw ?? '').trim();
   if (!v) return undefined;
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -142,6 +142,7 @@ function normalizeExamDate(raw: string): string | undefined {
 
 import { hasSolution, applyInlineMedia, hasBase64Media, parseJsonQuestions, buildJsonTemplate, mediaKey, shortDigest, questionMediaSignature, hasAnyMedia } from './question-media.util';
 import { normalizeQuestionMath } from '../common/math-text';
+import { buildPaperPreview, PaperPreview } from '../common/pyq-paper-preview';
 
 export interface BulkUploadQuestion {
   examId: string;
@@ -254,6 +255,9 @@ const EXPORT_SELECT = {
   shift: true,
   paperCode: true,
   examDate: true,
+  examTier: true,
+  tierPaper: true,
+  paperQuestionNo: true,
   marks: true,
   negativeMarks: true,
   difficulty: true,
@@ -295,6 +299,10 @@ function toExportRow(q: any) {
     shift: q.shift ?? '',
     paperCode: q.paperCode ?? '',
     examDate: q.examDate ?? '',
+    // date-wise + tier-wise mocks: same column names the upload parser reads, so a download re-uploads intact
+    examTier: q.examTier ?? '',
+    tierPaper: q.tierPaper ?? '',
+    questionNo: q.paperQuestionNo ?? '',
     marks: q.marks,
     negativeMarks: q.negativeMarks,
     difficulty: q.difficulty,
@@ -336,6 +344,10 @@ export interface UploadResult {
   errorsTruncated?: boolean;
   errorSummary?: Record<string, number>;
   warningsTotal?: number;
+  // 26 Oct 2026: PYQ papers this upload feeds, and rows that join no date-wise mock (reason in `pending`)
+  papers?: PaperPreview['papers'];
+  pending?: PaperPreview['pending'];
+  pendingTotal?: number;
   // Oct 6 2026: rows that are the same question as one already in the bank. They are NOT
   // failures — they wait in the admin's duplicate review queue (/admin/questions/duplicates).
   queuedForReview?: number;
@@ -795,6 +807,7 @@ export class BankUploadService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    cacheClearPrefix('bank:tiers');
     if (kind === 'pyq' && question.examTier && question.examDate) {
       await this.rebuildKeyedPapersForRows([question]); // never throws
     }
@@ -851,6 +864,7 @@ export class BankUploadService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    cacheClearPrefix('bank:tiers');
     // NEW ("ek hee shift ke jo questions hote he ... to vo mock test me ho
     // pyq based mock test esa hona chaiye"): after every upload, check
     // whether this batch's questions form one or more complete real papers
@@ -1114,6 +1128,7 @@ export class BankUploadService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    cacheClearPrefix('bank:tiers');
     // Same PYQ-mock auto-detection as finalizeUploadBatch() above — the
     // Word-upload path is a separate finalize step so it needs its own call.
     try {
@@ -1475,6 +1490,7 @@ export class BankUploadService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    cacheClearPrefix('bank:tiers');
     return { unpublished: r.count };
   }
 
@@ -2549,6 +2565,8 @@ export class BankUploadService {
     // second RESOLVE+VALIDATE loop, instead of one loop doing parse +
     // resolve + validate together like before.
     const rawParsed: { rowNum: number; row: any[]; question: BulkUploadQuestion }[] = [];
+    const paperInputs: import('../common/pyq-paper-preview').PaperRowInput[] = [];
+    const rawCell = (row: any[], key: string) => (headerMap[key] !== undefined ? String(row[headerMap[key]] ?? '').trim() : '');
     for (let i = 0; i < rows.length; i++) {
       if (i > 0 && i % 2000 === 0) {
         await yieldToEventLoop(); // keep the API responsive on huge sheets
@@ -2591,6 +2609,9 @@ export class BankUploadService {
             data: row,
           });
           continue;
+        }
+        if (!isPracticeOnly) {
+          paperInputs.push({ row: rowNum, examId: question.examId, examDate: question.examDate, shift: question.shift, rawTier: rawCell(row, 'examTier'), rawPaper: rawCell(row, 'tierPaper') });
         }
         rawParsed.push({ rowNum, row, question });
       } catch (error) {
@@ -2744,6 +2765,13 @@ export class BankUploadService {
     );
 
     await this.linkPendingDuplicateReviews(pendingLinks, adminId, uploadBatchId);
+    {
+      const prev = buildPaperPreview(paperInputs);
+      result.papers = prev.papers;
+      result.pending = prev.pending;
+      result.pendingTotal = prev.pendingTotal;
+      for (const p of prev.pending) this.pushUploadWarning(result, { row: p.row, message: p.message });
+    }
     result.success = result.failed === 0;
     return result;
   }
@@ -2837,6 +2865,7 @@ export class BankUploadService {
     );
 
     const validRows: { rowNum: number; question: BulkUploadQuestion }[] = [];
+    const paperInputs2: import('../common/pyq-paper-preview').PaperRowInput[] = [];
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
       const rowNum = i + 1;
@@ -2846,6 +2875,15 @@ export class BankUploadService {
         // admin's checkbox before this fix.
         // Oct 2026: whatever the sheet/JSON/Word row says ("morning", "Shift-2", "4 PM"), store ONE canonical label.
         question.shift = normalizeShiftOrUndefined(question.shift);
+        // 26 Oct 2026: JSON / Word rows may carry examDate, examTier, tierPaper, questionNo (same meaning as the sheet columns)
+        const anyQ = question as any;
+        const rawTier = anyQ.examTier;
+        const rawPaper = anyQ.tierPaper;
+        if (anyQ.examDate) question.examDate = normalizeExamDate(String(anyQ.examDate));
+        question.examTier = normalizeExamTier(rawTier).tier;
+        question.tierPaper = normalizeTierPaper(rawPaper).paper;
+        question.paperQuestionNo = parsePaperQuestionNo(anyQ.paperQuestionNo ?? anyQ.questionNo);
+        if (question.year == null && question.examDate) question.year = yearOfDate(question.examDate);
         if (isPracticeOnly) {
           question.year = undefined;
           question.shift = undefined;
@@ -2854,6 +2892,8 @@ export class BankUploadService {
           question.examTier = undefined;
           question.tierPaper = undefined;
           question.paperQuestionNo = undefined;
+        } else {
+          paperInputs2.push({ row: rowNum, examId: question.examId, examDate: question.examDate, shift: question.shift, rawTier, rawPaper });
         }
         await this.resolveReferenceIds(
           question,
@@ -2948,6 +2988,13 @@ export class BankUploadService {
     );
 
     await this.linkPendingDuplicateReviews(pendingLinks, adminId, uploadBatchId);
+    {
+      const prev = buildPaperPreview(paperInputs2);
+      result.papers = prev.papers;
+      result.pending = prev.pending;
+      result.pendingTotal = prev.pendingTotal;
+      for (const p of prev.pending) this.pushUploadWarning(result, { row: p.row, message: p.message });
+    }
     result.success = result.failed === 0;
     return result;
   }
@@ -3493,6 +3540,7 @@ export class BankUploadService {
     const select = {
       id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true,
       explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true,
+      examDate: true, examTier: true, tierPaper: true, paperQuestionNo: true,
       subjectId: true, chapterId: true, examId: true, createdAt: true, searchHash: true, questionImageUrl: true,
     } as const;
 
@@ -4400,6 +4448,7 @@ export class BankUploadService {
     cacheClearPrefix('bank:meta');
     cacheClearPrefix('bank:years');
     cacheClearPrefix('bank:shifts');
+    cacheClearPrefix('bank:tiers');
     if (question.examTier && question.examDate) {
       await this.rebuildKeyedPapersForRows([question]); // never throws
     }
@@ -4424,6 +4473,7 @@ export class BankUploadService {
     const select = {
       id: true, questionText: true, questionTextHindi: true, optionsJson: true, correctAnswer: true,
       explanation: true, explanationHindi: true, year: true, shift: true, paperCode: true,
+      examDate: true, examTier: true, tierPaper: true, paperQuestionNo: true,
       subjectId: true, chapterId: true, examId: true, createdAt: true, questionImageUrl: true,
     } as const;
 

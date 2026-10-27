@@ -8,6 +8,7 @@ import { AppShell, PageHeading, EmptyState, ErrorNote, ChoiceChip } from "@/comp
 type Exam = { id: string; name: string; slug: string; count: number };
 type YearRow = { year: number; questionCount: number };
 type ShiftRow = { shift: string; questionCount: number };
+type TierRow = { tier: string; questionCount: number };
 type Subject = { id: string; name: string; slug: string; questionCount: number };
 type Chapter = { id: string; name: string; slug: string; count: number };
 type TopicRow = { id: string; name: string; slug: string; count: number };
@@ -52,6 +53,9 @@ export default function YearWisePage() {
 
   // Shift picker (tests.service.ts yearWiseStart()): `null` = not chosen yet, `""` = student explicitly chose
   // "all shifts combined", otherwise the exact shift string.
+  // Tier step (26 Oct 2026): shown only when the year has questions of more than one tier. null = not chosen, "" = all tiers.
+  const [tiers, setTiers] = React.useState<TierRow[]>([]);
+  const [tier, setTier] = React.useState<string | null>(null);
   const [shifts, setShifts] = React.useState<ShiftRow[]>([]);
   const [shift, setShift] = React.useState<string | null>(null);
 
@@ -136,15 +140,39 @@ export default function YearWisePage() {
     };
   }, [examId]);
 
-  // Step 3: shifts for exam + year. A year with one shift (or none tagged) skips this step automatically.
+  // Tier step: tiers that exist for exam + year. One tier (or none tagged) skips the step automatically.
   React.useEffect(() => {
-    setShift(null);
-    setShifts([]);
+    setTier(null);
+    setTiers([]);
     if (!examId || !year) return;
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetchAuth(`${API_BASE}/bank/shifts?examId=${examId}&year=${year}`);
+        const r = await fetchAuth(`${API_BASE}/bank/tiers?examId=${examId}&year=${year}`);
+        if (!r.ok || cancelled) return;
+        const d = await r.json();
+        const list: TierRow[] = Array.isArray(d) ? d : [];
+        if (cancelled) return;
+        setTiers(list);
+        if (list.length <= 1) setTier(list[0]?.tier ?? "");
+      } catch {
+        setTier("");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [examId, year]);
+
+  // Step 3/4: shifts for exam + year (+ tier). A year with one shift (or none tagged) skips this step automatically.
+  React.useEffect(() => {
+    setShift(null);
+    setShifts([]);
+    if (!examId || !year || tier === null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/bank/shifts?examId=${examId}&year=${year}${tier ? `&tier=${tier}` : ""}`);
         if (!r.ok || cancelled) return;
         const d = await r.json();
         const list: ShiftRow[] = Array.isArray(d) ? d : [];
@@ -241,8 +269,11 @@ export default function YearWisePage() {
 
   const exam = exams.find((e) => e.id === examId);
   const yearRow = years.find((y) => y.year === year);
+  const multiTier = tiers.length > 1;
+  const tierReady = !!year && tier !== null;
   const multiShift = shifts.length > 1;
-  const shiftReady = !!year && (!multiShift || shift !== null);
+  const shiftReady = tierReady && (!multiShift || shift !== null);
+  const stepOffset = multiTier ? 1 : 0;
   // Exact question pool of the chosen paper (before any subject/chapter/topic narrowing).
   const shiftRow = shift ? shifts.find((s) => s.shift === shift) : undefined;
   const paperCount = shiftRow ? shiftRow.questionCount : yearRow?.questionCount;
@@ -258,6 +289,7 @@ export default function YearWisePage() {
         examId,
         year,
         shift: shift || undefined,
+        tier: tier || undefined,
         full,
         subjectIds: full ? [] : Array.from(selectedSubjects),
         chapterIds: full ? [] : Array.from(selectedChapters),
@@ -287,7 +319,7 @@ export default function YearWisePage() {
           ? t(`${selectedSubjects.size} subject(s)`, `${selectedSubjects.size} subject`)
           : t("All subjects", "Sab subjects");
 
-  const paperLabel = [exam?.name, year, shift ? shift : shifts.length > 1 && shift === "" ? t("all shifts", "sab shifts") : ""]
+  const paperLabel = [exam?.name, year, tier ? (tier === "TIER_2" ? "Tier 2" : "Tier 1") : "", shift ? shift : shifts.length > 1 && shift === "" ? t("all shifts", "sab shifts") : ""]
     .filter(Boolean)
     .join(" · ");
 
@@ -368,9 +400,32 @@ export default function YearWisePage() {
               </Step>
             ) : null}
 
-            {year && multiShift ? (
+            {year && multiTier ? (
               <Step
                 n={3}
+                title={t("Tier", "Tier")}
+                hint={t(
+                  "Tier 1 and Tier 2 are different papers. Pick one, or combine both.",
+                  "Tier 1 aur Tier 2 alag paper hote hain. Ek chunein, ya dono milakar practice karein.",
+                )}
+                done={tier !== null}
+              >
+                <div className="flex flex-wrap gap-2">
+                  {tiers.map((x) => (
+                    <ChoiceChip key={x.tier} selected={tier === x.tier} onClick={() => setTier(x.tier)}>
+                      {x.tier === "TIER_2" ? "Tier 2" : "Tier 1"} <span className="text-xs text-muted-foreground">({x.questionCount})</span>
+                    </ChoiceChip>
+                  ))}
+                  <ChoiceChip selected={tier === ""} onClick={() => setTier("")}>
+                    {t("Both tiers combined", "Dono tier milakar")}
+                  </ChoiceChip>
+                </div>
+              </Step>
+            ) : null}
+
+            {year && tierReady && multiShift ? (
+              <Step
+                n={3 + stepOffset}
                 title={t("Shift", "Shift")}
                 hint={t(
                   "A real SSC paper is one shift (up to 100 questions). Pick one, or combine every shift into a longer practice set.",
@@ -393,7 +448,7 @@ export default function YearWisePage() {
 
             {shiftReady && subjects.length > 0 ? (
               <Step
-                n={multiShift ? 4 : 3}
+                n={(multiShift ? 4 : 3) + stepOffset}
                 title={t("Narrow it down (optional)", "Seemit karein (optional)")}
                 hint={t("Leave this closed to attempt the whole paper.", "Poora paper dene ke liye ise band rehne dein.")}
               >
@@ -471,7 +526,9 @@ export default function YearWisePage() {
                 <div className="rounded-lg bg-muted/60 px-3.5 py-3 text-sm">
                   <p className="font-semibold">{paperLabel}</p>
                   <p className="mt-0.5 text-muted-foreground">
-                    {!shiftReady
+                    {!tierReady
+                      ? t("Choose a tier to continue", "Aage badhne ke liye tier chunein")
+                      : !shiftReady
                       ? t("Choose a shift to continue", "Aage badhne ke liye shift chunein")
                       : `${paperCount != null ? `${paperCount} ${t("questions", "sawal")} · ` : ""}${scopeSummary}`}
                   </p>

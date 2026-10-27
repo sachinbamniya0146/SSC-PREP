@@ -16,7 +16,8 @@
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
-import { BankUploadService } from './bank-upload.service';
+import { BankUploadService, normalizeExamDate } from './bank-upload.service';
+import { buildPaperPreview, PaperRowInput, PaperPreview } from '../common/pyq-paper-preview';
 import { QuestionEditService } from './question-edit.service';
 import { buildUpdateBody, diffUpdate, isQuestionId } from './bank-template';
 import { parseJsonQuestions, shortDigest, mediaKey } from './question-media.util';
@@ -50,6 +51,10 @@ export interface UploadJob {
   updated: number;     // updated (real run) / would be updated (check-only run)
   unchanged: number;   // id rows whose cells equal what is stored
   preview: Array<{ row: number; action: 'NEW' | 'UPDATE' | 'SAME'; changes?: string[]; text?: string }>;
+  // 26 Oct 2026: which real PYQ papers (exam+tier+paper+date+shift) this file feeds, and rows that join no date-wise mock
+  papers: PaperPreview['papers'];
+  pending: PaperPreview['pending'];
+  pendingTotal: number;
   errors: JobError[];
   warnings: { row: number; message: string; questionPreview?: string }[];
   uploadBatchId?: string;
@@ -60,9 +65,15 @@ export interface UploadJob {
   finishedAt?: number;
 }
 
+/** Exam date cell -> YYYY-MM-DD, or undefined when blank / unreadable (the importer reports unreadable ones itself). */
+function safeDate(raw: string): string | undefined {
+  try { return normalizeExamDate(raw); } catch { return undefined; }
+}
+
 /** Everything the quality gate needs, extracted the same way for a sheet row or a JSON object. */
 interface Item {
   id?: string;
+  paper?: PaperRowInput; // examId/date/shift/tier text as written in the file
   rowNum: number;
   data: any; // original row array (sheet) or object (JSON)
   text: string;
@@ -131,6 +142,14 @@ export class BankUploadJobService {
       const optMedia = [get(r, 'optionDiagramTypes'), get(r, 'optionDiagramLabels'), get(r, 'optionImageUrls').split('|').map(mediaKey).join('|')].join('~');
       return {
         id: get(r, 'id') || undefined,
+        paper: {
+          row: i + 2,
+          examId: get(r, 'examId'),
+          examDate: safeDate(get(r, 'examDate') || get(r, 'date')),
+          shift: get(r, 'shift'),
+          rawTier: get(r, 'examTier'),
+          rawPaper: get(r, 'tierPaper'),
+        },
         rowNum: i + 2,
         data: r,
         text: get(r, 'questionText'),
@@ -157,6 +176,14 @@ export class BankUploadJobService {
       const stemMedia = [q?.questionDiagramType, (q?.questionDiagramLabels ?? []).join?.(','), mediaKey(q?.questionImageUrl), q?.questionSvg ? shortDigest(q.questionSvg) : '', q?.questionImageBase64 ? shortDigest(q.questionImageBase64) : ''].join('~');
       const optMedia = letters.map((k) => { const x = byKey(k); return [x.diagramType, (x.diagramLabels ?? []).join?.(','), mediaKey(x.imageUrl), x.svg ? shortDigest(x.svg) : '', x.imageBase64 ? shortDigest(x.imageBase64) : ''].join('.'); }).join('|');
       return {
+        paper: {
+          row: i + 1,
+          examId: String(q?.examId ?? '').trim(),
+          examDate: safeDate(String(q?.examDate ?? q?.date ?? '')),
+          shift: String(q?.shift ?? '').trim(),
+          rawTier: q?.examTier,
+          rawPaper: q?.tierPaper,
+        },
         rowNum: i + 1,
         data: q,
         text: String(q?.questionText ?? '').trim(),
@@ -194,7 +221,7 @@ export class BankUploadJobService {
     const job: UploadJob = {
       id: `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       adminId: opts.adminId, filename: opts.filename, kind, dryRun: opts.dryRun,
-      status: 'RUNNING', phase: 'Checking rows…', total: items.length, processed: 0, created: 0, failed: 0, queuedForReview: 0, queuedExact: 0, reviewAlready: 0, unaccounted: 0, updated: 0, unchanged: 0, preview: [],
+      status: 'RUNNING', phase: 'Checking rows…', total: items.length, processed: 0, created: 0, failed: 0, queuedForReview: 0, queuedExact: 0, reviewAlready: 0, unaccounted: 0, updated: 0, unchanged: 0, preview: [], papers: [], pending: [], pendingTotal: 0,
       errors: [], warnings: [], headers, rejectedRows: [], startedAt: Date.now(),
     };
     this.jobs.set(job.id, job);
@@ -214,6 +241,15 @@ export class BankUploadJobService {
     const preview = it.text.replace(/\s+/g, ' ').slice(0, 90);
     job.errors.push({ row: it.rowNum, error: reason, category, questionPreview: preview });
     job.rejectedRows.push({ row: it.rowNum, reason, data: it.data });
+  }
+
+  /** Date-wise + tier-wise mocks: show which papers this file feeds and warn about rows that will join none. */
+  private previewPapers(job: UploadJob, ok: Item[]) {
+    const prev = buildPaperPreview(ok.map((it) => it.paper).filter((p): p is PaperRowInput => !!p));
+    job.papers = prev.papers;
+    job.pending = prev.pending;
+    job.pendingTotal = prev.pendingTotal;
+    for (const p of prev.pending) job.warnings.push({ row: p.row, message: p.message });
   }
 
   private dupKey(it: Item): string {
@@ -262,6 +298,7 @@ export class BankUploadJobService {
       if (job.preview.length < 300) job.preview.push({ row: it.rowNum, action: 'NEW', text: it.text.replace(/\s+/g, ' ').slice(0, 70) });
     }
     if (idRows.length) await this.handleIdRows(job, idRows, opts);
+    if (!opts.isPracticeOnly) this.previewPapers(job, ok);
     job.processed = items.length - ok.length;
     if (batchId) await this.upload.updateBatchProgress(batchId, { failedCount: job.failed });
 
@@ -380,7 +417,7 @@ export class BankUploadJobService {
     for (let i = 0; i < ids.length; i += 400) {
       const part = await this.prisma.question.findMany({
         where: { id: { in: ids.slice(i, i + 400) } },
-        select: { id: true, questionText: true, questionTextHindi: true, explanation: true, explanationHindi: true, correctAnswer: true, difficulty: true, marks: true, negativeMarks: true, year: true, shift: true, paperCode: true, examDate: true, optionsJson: true },
+        select: { id: true, questionText: true, questionTextHindi: true, explanation: true, explanationHindi: true, correctAnswer: true, difficulty: true, marks: true, negativeMarks: true, year: true, shift: true, paperCode: true, examDate: true, examTier: true, tierPaper: true, paperQuestionNo: true, optionsJson: true },
       });
       for (const q of part) found.set(q.id.toLowerCase(), q);
     }
