@@ -2,6 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { StudyPlanType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { istDateKey } from '../gamification/gamification.service';
+import { clampDailyTarget } from './study-plan-pace.util';
 
 // BUGFIX: same IST-day-boundary bug fixed in tests/daily-test.service.ts and
 // quiz/quiz.service.ts. "Today"/streak day-keys here were computed with
@@ -74,10 +75,23 @@ export class StudyPlanService {
     const exam = await this.prisma.exam.findUnique({ where: { id: input.examId } });
     if (!exam) throw new BadRequestException('Exam not found');
 
-    const startDate = istMidnightUtc(new Date());
-    const targetDate = new Date(input.targetDate);
-    if (Number.isNaN(targetDate.getTime()) || targetDate <= startDate) {
-      throw new BadRequestException('targetDate must be a valid future date');
+    // `startDate` / `targetDate` are @db.Date columns (a calendar day, stored as UTC midnight of that day). The old code
+    // stored istMidnightUtc() (= 18:30 UTC of the PREVIOUS day) and so saved yesterday's date, and it let "today" pass as a
+    // future target date. Both are now plain IST calendar days compared as keys.
+    const todayKey = istDateKey(new Date());
+    const startDate = new Date(`${todayKey}T00:00:00.000Z`);
+    if (typeof input.targetDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.targetDate)) {
+      throw new BadRequestException('targetDate must look like YYYY-MM-DD');
+    }
+    const targetDate = new Date(`${input.targetDate}T00:00:00.000Z`);
+    if (Number.isNaN(targetDate.getTime()) || targetDate.toISOString().slice(0, 10) !== input.targetDate) {
+      throw new BadRequestException('targetDate must be a real calendar date');
+    }
+    if (input.targetDate <= todayKey) {
+      throw new BadRequestException('targetDate must be a future date (tomorrow or later)');
+    }
+    if (targetDate.getTime() - startDate.getTime() > 3 * 366 * 24 * 3600 * 1000) {
+      throw new BadRequestException('targetDate can be at most 3 years away');
     }
 
     // Total published bilingual questions available for this exam (scope
@@ -93,7 +107,9 @@ export class StudyPlanService {
     });
 
     const days = Math.max(1, Math.ceil((targetDate.getTime() - startDate.getTime()) / (24 * 3600 * 1000)));
-    const dailyTarget = Math.max(5, Math.min(200, Math.ceil(totalQuestions / days) || 10));
+    // a realistic daily practice target: 25-100 questions in steps of 5 (the old 5-200 range gave 3-month plans a target of
+    // 200 a day, which nobody can hit - and more than a free student's 5 practice sets x 25 questions)
+    const dailyTarget = clampDailyTarget(Math.ceil(totalQuestions / days));
 
     // One active plan per user — replace any existing one so the frontend's
     // "Recreate" flow (same POST /study-plan/create) works as expected.

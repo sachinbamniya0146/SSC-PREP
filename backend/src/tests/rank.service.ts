@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { FeaturesService } from '../features/features.service';
 import { cacheGet, cacheSet } from '../common/cache';
+import { RANKABLE_USER, isRankableRole } from '../common/rankable';
 import {
   RankPlace,
   RankRow,
@@ -19,8 +20,10 @@ const MAX_ROWS = 50_000;
 const DONE = ['SUBMITTED', 'AUTO_SUBMITTED'] as const;
 
 export interface AttemptRank {
-  /** false = this attempt is a retake: it does not change anybody's rank, the numbers below are "practice rank". */
+  /** false = this attempt is a retake (or an admin / staff attempt): it does not change anybody's rank, the numbers below are "practice rank". */
   countsForRank: boolean;
+  /** true = the viewer is an admin / staff account: never listed, never ranked (see common/rankable.ts). */
+  staff: boolean;
   overall: RankPlace;
   state: (RankPlace & { name: string }) | null;
   /** true when the student has not chosen a state yet (the page shows a "choose your state" prompt). */
@@ -39,13 +42,13 @@ export class RankService {
     private readonly features: FeaturesService,
   ) {}
 
-  /** First finished attempt of every active student for one test, best-first. Cached for a minute. */
+  /** First finished attempt of every active STUDENT (not admin / staff) for one test, best-first. Cached for a minute. */
   private async rowsFor(templateId: string): Promise<RankRow[]> {
     const key = `tests:rank:${templateId}`;
     const hit = cacheGet<RankRow[]>(key);
     if (hit) return hit;
     const raw = await this.prisma.testAttempt.findMany({
-      where: { testTemplateId: templateId, status: { in: [...DONE] }, user: { isSuspended: false } },
+      where: { testTemplateId: templateId, status: { in: [...DONE] }, user: { ...RANKABLE_USER } },
       orderBy: { startedAt: 'asc' },
       take: MAX_ROWS,
       select: {
@@ -87,7 +90,7 @@ export class RankService {
         accuracyPercent: true,
         startedAt: true,
         submittedAt: true,
-        user: { select: { state: true } },
+        user: { select: { state: true, role: true } },
       },
     });
     if (!attempt) throw new NotFoundException('Attempt not found');
@@ -98,6 +101,7 @@ export class RankService {
     const rows = await this.rowsFor(attempt.testTemplateId);
     const others = rows.filter((r) => r.userId !== userId);
     const retake = isRetake(rows, userId, attemptId);
+    const staff = !isRankableRole(attempt.user?.role);
     const duration = attempt.startedAt && attempt.submittedAt ? Math.max(0, Math.round((new Date(attempt.submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000)) : 0;
     const mine = { score: attempt.score ?? 0, durationSec: duration };
 
@@ -114,7 +118,8 @@ export class RankService {
     if (!rows.some((r) => r.userId === userId)) scores.push(mine.score);
 
     return {
-      countsForRank: !retake,
+      countsForRank: !retake && !staff,
+      staff,
       overall,
       state,
       stateMissing: !stateName,

@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { FeaturesService } from '../features/features.service';
+import { FREE_BOOKMARK_LIMIT } from '../common/free-limits';
 
 export interface BookmarkListQuery {
   limit?: number;
@@ -68,9 +69,9 @@ export class BookmarksService {
         async (tx) => {
           if (!isPremium) {
             const count = await tx.bookmark.count({ where: { userId } });
-            if (count >= 100) {
+            if (count >= FREE_BOOKMARK_LIMIT) {
               throw new BadRequestException(
-                'Free plan: 100 bookmarks max. Remove some, or upgrade to Premium for unlimited bookmarks.',
+                `Free plan: ${FREE_BOOKMARK_LIMIT} bookmarks max. Remove some, or upgrade to Premium for unlimited bookmarks.`,
               );
             }
           }

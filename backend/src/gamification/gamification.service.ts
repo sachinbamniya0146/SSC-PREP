@@ -6,6 +6,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { cacheGet, cacheSet } from '../common/cache';
+import { RANKABLE_USER, isRankableRole } from '../common/rankable';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30
 
@@ -114,12 +115,15 @@ export class GamificationService {
   async myState(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, fullName: true, currentStreak: true, longestStreak: true, xp: true, coins: true, hintQuota: true, lastPracticeDate: true },
+      select: { id: true, fullName: true, currentStreak: true, longestStreak: true, xp: true, coins: true, hintQuota: true, lastPracticeDate: true, role: true },
     });
     if (!user) throw new BadRequestException('User not found');
+    const { role, ...student } = user;
+    // Admin / staff accounts are not on the board, so they have no rank (and they are not counted in anybody else's rank).
+    const ranked = isRankableRole(role);
 
-    const better = await this.prisma.user.count({ where: { xp: { gt: user.xp }, isSuspended: false } });
-    const total = await this.prisma.user.count({ where: { isSuspended: false } });
+    const better = ranked ? await this.prisma.user.count({ where: { ...RANKABLE_USER, xp: { gt: user.xp } } }) : 0;
+    const total = await this.prisma.user.count({ where: { ...RANKABLE_USER } });
     const today = istDateKey(new Date());
     // Daily-goal progress: questions answered since 00:00 IST today (tests,
     // practice sets and sectionals all write AttemptAnswer rows). Best effort —
@@ -133,23 +137,26 @@ export class GamificationService {
     } catch {
       todayAnswered = 0;
     }
-    return { ...user, rank: better + 1, totalUsers: total, today, todayAnswered };
+    return { ...student, rank: ranked ? better + 1 : null, staff: !ranked, totalUsers: total, today, todayAnswered };
   }
 
   /**
    * Leaderboard: top N by XP (weekly or all-time), plus the caller's row. Rows cached 30s; myRank computed fresh per user.
-   * scope "state" = only students of the caller's own state (State leaderboard). Suspended students never appear.
+   * scope "state" = only students of the caller's own state (State leaderboard). Suspended students never appear,
+   * and neither do admin / staff accounts (see common/rankable.ts); a staff viewer gets `staff: true` and no rank.
    * Names of other students are shortened ("Rahul S.") - this page is visible to every student.
    */
   async leaderboard(userId: string, period: 'all' | 'weekly' = 'all', take = 50, scope: 'india' | 'state' = 'india') {
     const meRow = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true, state: true },
+      select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true, state: true, role: true },
     });
+    const staff = !isRankableRole(meRow?.role);
     const stateName = scope === 'state' ? meRow?.state ?? null : null;
     if (scope === 'state' && !stateName) {
       // the student has not chosen a state yet: the page shows a "choose your state" prompt instead of an empty list
-      return { period, scope, state: null, needState: true, rows: [], myRank: null, me: null };
+      // (a staff account has no place on the board, so it is never asked to choose one)
+      return { period, scope, state: null, needState: !staff, staff, rows: [], myRank: null, me: null };
     }
 
     // BUGFIX: this cache key has no userId in it (by design - the top-N list itself is identical for every viewer, so it's
@@ -157,14 +164,15 @@ export class GamificationService {
     // happened to be the one that missed the cache and recomputed it had their id burned into every row's `isMe` flag for
     // the next 30s. Fix: cache only the anonymous ranking (no isMe), and stamp isMe fresh per-request after reading from cache.
     type BaseRow = { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; state: string | null; rank: number };
-    const cacheKey = `gamification:lb2:${period}:${take}:${stateName ?? 'india'}`;
+    // (lb3: the older lb2 rows could still contain admin accounts)
+    const cacheKey = `gamification:lb3:${period}:${take}:${stateName ?? 'india'}`;
     const cachedRows = cacheGet<BaseRow[]>(cacheKey);
     let baseRows: BaseRow[];
     if (cachedRows) {
       baseRows = cachedRows;
     } else {
       const since = period === 'weekly' ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) : undefined;
-      const where: Prisma.UserWhereInput = { xp: { gt: 0 }, isSuspended: false };
+      const where: Prisma.UserWhereInput = { ...RANKABLE_USER, xp: { gt: 0 } };
       if (since) where.updatedAt = { gte: since };
       if (stateName) where.state = stateName;
       const top = await this.prisma.user.findMany({
@@ -177,17 +185,31 @@ export class GamificationService {
       cacheSet(cacheKey, baseRows, 30_000);
     }
     const rows = baseRows.map((r) => ({ ...r, isMe: r.id === userId }));
-    const rankWhere: Prisma.UserWhereInput = { isSuspended: false };
+    const rankWhere: Prisma.UserWhereInput = { ...RANKABLE_USER };
     if (stateName) rankWhere.state = stateName;
-    const myRank = meRow ? (await this.prisma.user.count({ where: { ...rankWhere, xp: { gt: meRow.xp } } })) + 1 : null;
+    // a staff viewer sees the board but has no place on it
+    const myRank = meRow && !staff ? (await this.prisma.user.count({ where: { ...rankWhere, xp: { gt: meRow.xp } } })) + 1 : null;
     return {
       period,
       scope,
       state: stateName,
       needState: false,
+      staff,
       rows,
       myRank,
-      me: meRow ? { ...meRow, fullName: meRow.fullName, rank: myRank, isMe: true } : null,
+      me: meRow && !staff
+        ? {
+            id: meRow.id,
+            fullName: meRow.fullName,
+            xp: meRow.xp,
+            currentStreak: meRow.currentStreak,
+            longestStreak: meRow.longestStreak,
+            coins: meRow.coins,
+            state: meRow.state,
+            rank: myRank,
+            isMe: true,
+          }
+        : null,
     };
   }
 }

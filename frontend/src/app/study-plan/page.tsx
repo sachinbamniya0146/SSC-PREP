@@ -1,250 +1,202 @@
 "use client";
 
+// Study plan SET-UP page (rewritten Oct 28 2026).
+//
+//  * A student who already has a plan lands on the Prep Board (/study-plan/board) - the old overview here duplicated it with
+//    less accurate numbers. "Change" / "Plan settings" on the board come back here with ?edit=1.
+//  * No plan yet, or ?edit=1: pick the exam and the date by which the syllabus should be finished. Saving replaces the plan's
+//    exam / date / daily target; chapter progress (ticked chapters, test results) is kept.
 import * as React from "react";
 import { useFeatures, FeatureOff } from "@/lib/features";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
 import { useT } from "@/lib/i18n";
-import { ShellHeader } from "@/components/AppShell";
+import { CardSkeletons, ErrorNote, ShellHeader } from "@/components/AppShell";
 
-type PlanData = {
-  plan: {
-    id: string;
-    userId: string;
-    examId: string;
-    subjectId?: string | null;
-    type: string;
-    startDate: string;
-    targetDate: string;
-    dailyTarget: number;
-    currentStreak: number;
-    longestStreak: number;
-    lastPracticeDate?: string | null;
-  };
-  stats?: {
-    totalQuestions: number;
-    remainingDays: number;
-    dailyTarget: number;
-  };
-  progress?: {
-    totalQuestions: number;
-    questionsDone: number;
-    remaining: number;
-    percentComplete: number;
-  };
-};
+type Exam = { id: string; name: string };
+type ExistingPlan = { examId: string; targetDate: string } | null;
 
-type DailyTarget = {
-  hasPlan: boolean;
-  planId?: string;
-  dailyTarget?: number;
-  todayDone?: number;
-  remaining?: number;
-  totalQuestions?: number;
-  remainingDays?: number;
-  streak?: number;
-  targetDate?: string;
-  message?: string;
-};
+/** today's calendar day in India, as YYYY-MM-DD (the server counts days in IST too) */
+const istToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+
+/** `key` + n calendar months; 31 Aug + 6 months = 28/29 Feb, never "3 Mar" */
+function addMonths(key: string, n: number): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1 + n, d));
+  if (dt.getUTCDate() !== d) return new Date(Date.UTC(y, m + n, 0)).toISOString().slice(0, 10);
+  return dt.toISOString().slice(0, 10);
+}
 
 function StudyPlanPageInner() {
   const tr = useT();
-  const [step, setStep] = React.useState<"create" | "view">("view");
-  const [plan, setPlan] = React.useState<PlanData | null>(null);
-  const [daily, setDaily] = React.useState<DailyTarget | null>(null);
-  const [exams, setExams] = React.useState<{ id: string; name: string }[]>([]);
-  const [subjects, setSubjects] = React.useState<{ id: string; name: string }[]>([]);
-  const [selectedExam, setSelectedExam] = React.useState("");
-  const [selectedSubject, setSelectedSubject] = React.useState("");
-  const [duration, setDuration] = React.useState("3"); // months
-  // exact date by which the whole syllabus must be finished (typed or from the calendar)
-  const [targetIso, setTargetIso] = React.useState("");
   const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
+  const [exams, setExams] = React.useState<Exam[]>([]);
+  const [existing, setExisting] = React.useState<ExistingPlan>(null);
+  const [selectedExam, setSelectedExam] = React.useState("");
+  const [months, setMonths] = React.useState<"3" | "6" | "12">("3");
+  // exact date typed / picked by the student; "" = use the month chips
+  const [targetIso, setTargetIso] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [formError, setFormError] = React.useState("");
 
-  const apiBase = API_BASE;
-
-  // BUGFIX (2026-09 audit — same class of bug found across
-  // dashboard/review/quiz/weak-topics): all calls below used raw fetch()
-  // with a manually attached Authorization header instead of fetchAuth(),
-  // so an expired access token would silently break the study plan page
-  // instead of transparently refreshing.
-  const loadPlan = async () => {
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
     try {
-      const planRes = await fetchAuth(`${apiBase}/study-plan`);
-      const planData = planRes.ok && planRes.status !== 204 ? await planRes.json().catch(() => null) : null;
-      const dailyRes = await fetchAuth(`${apiBase}/study-plan/daily-target`);
-      const dailyData = dailyRes.ok && dailyRes.status !== 204 ? await dailyRes.json().catch(() => null) : null;
-      const metaRes = await fetchAuth(`${apiBase}/bank/meta`);
-      const metaData = metaRes.ok ? await metaRes.json().catch(() => null) : null;
-      setPlan(planData ? { plan: planData } : null);
-      setDaily(dailyData && dailyData.hasPlan ? dailyData : null);
-      if (metaData?.exams) setExams(metaData.exams);
-    } catch (e) {
-      console.error(e);
+      const wantsEdit = new URLSearchParams(window.location.search).get("edit") === "1";
+      const planRes = await fetchAuth(`${API_BASE}/study-plan`);
+      // an empty body (no plan yet) is a normal 200/204 - only a real HTTP error is a failure
+      if (!planRes.ok && planRes.status !== 204) throw new Error("plan");
+      const plan = planRes.status === 204 ? null : await planRes.json().catch(() => null);
+      if (plan?.id && !wantsEdit) {
+        window.location.replace("/study-plan/board");
+        return;
+      }
+      const metaRes = await fetchAuth(`${API_BASE}/bank/meta`);
+      if (!metaRes.ok) throw new Error("meta");
+      const meta = await metaRes.json().catch(() => null);
+      setExams(Array.isArray(meta?.exams) ? meta.exams : []);
+      if (plan?.id) {
+        setExisting({ examId: plan.examId, targetDate: String(plan.targetDate).slice(0, 10) });
+        setSelectedExam(plan.examId);
+        setTargetIso(String(plan.targetDate).slice(0, 10));
+      }
+    } catch {
+      setLoadError(tr("Could not load. Check your internet and try again.", "Load nahi hua. Internet check karke dobara try karein."));
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+  React.useEffect(() => {
+    load();
+  }, [load]);
 
-  React.useEffect(() => { loadPlan(); }, []);
+  const effectiveTarget = targetIso || addMonths(istToday(), Number(months));
 
-  const createPlan = async () => {
-    if (!selectedExam) return alert("Please select an exam");
-    let targetStr = targetIso;
-    if (targetStr) {
-      if (new Date(targetStr + "T00:00:00").getTime() <= Date.now()) return alert(tr("Target date must be after today", "Target date aaj ke baad ki honi chahiye"));
-    } else {
-      const d = new Date();
-      d.setMonth(d.getMonth() + parseInt(duration));
-      targetStr = d.toISOString().split("T")[0];
-    }
-    const body: any = { examId: selectedExam, type: "COMBINED", targetDate: targetStr };
-    if (selectedSubject) body.subjectId = selectedSubject;
+  const save = async () => {
+    setFormError("");
+    if (!selectedExam) return setFormError(tr("Please choose your exam.", "Pehle apna exam chunein."));
+    if (effectiveTarget <= istToday()) return setFormError(tr("The target date must be tomorrow or later.", "Target date kal ya uske baad ki honi chahiye."));
+    setBusy(true);
     try {
-      const r = await fetchAuth(`${apiBase}/study-plan/create`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+      const r = await fetchAuth(`${API_BASE}/study-plan/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ examId: selectedExam, type: "COMBINED", targetDate: effectiveTarget }),
       });
-      if (r.ok) { setStep("view"); loadPlan(); }
-      else alert("Failed to create plan");
-    } catch { alert("Error creating plan"); }
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        const msg = Array.isArray(d?.message) ? d.message.join(", ") : d?.message;
+        throw new Error(msg || tr("Could not save the plan. Please try again.", "Plan save nahi hua. Dobara try karein."));
+      }
+      window.location.assign("/study-plan/board");
+    } catch (e: any) {
+      setFormError(e?.message || tr("Could not save the plan. Please try again.", "Plan save nahi hua. Dobara try karein."));
+      setBusy(false);
+    }
   };
 
-  if (loading) return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <p className="text-muted-foreground">Loading...</p>
-    </div>
-  );
+  const fmt = (iso: string) =>
+    new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <ShellHeader />
-
-      <main className="mx-auto max-w-4xl px-4 py-10">
-        <a href="/study-plan/board" className="mb-6 block rounded-xl border border-primary/40 bg-primary/5 p-4 text-sm font-semibold text-primary hover:bg-primary/10">
-          🗓️ My Prep Board — daily target, chapter marking, 9 AM test &amp; weak topics →
-        </a>
-        {step === "create" && (
+      <main className="mx-auto max-w-2xl px-4 py-8">
+        {loading ? (
+          <CardSkeletons count={2} />
+        ) : loadError ? (
+          <ErrorNote onRetry={load} retryLabel={tr("Try again", "Dobara try karein")}>{loadError}</ErrorNote>
+        ) : (
           <>
-            <h1 className="text-2xl font-bold">Create Your Study Plan 📋</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Select exam, duration, and we'll calculate your daily target.</p>
+            {existing && (
+              <a href="/study-plan/board" className="mb-4 inline-block text-sm font-semibold text-primary">← {tr("Back to my Prep Board", "Meri Prep Board par wapas")}</a>
+            )}
+            <h1 className="text-2xl font-bold tracking-tight">
+              {existing ? tr("Change your study plan", "Study plan badlein") : tr("Create your study plan", "Apna study plan banayein")} 📋
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {tr(
+                "Choose your exam and the date by which you want to finish the syllabus. We split it into a daily target: chapters, practice questions and mocks.",
+                "Exam aur woh date chunein jab tak syllabus khatam karna hai. Hum use daily target me baant dete hain: chapters, practice sawal aur mocks.",
+              )}
+            </p>
+            {existing && (
+              <p className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                {tr(
+                  `Your ticked chapters and test results are kept. Current target date: ${fmt(existing.targetDate)}.`,
+                  `Aapke tick kiye chapters aur test results safe rahenge. Abhi ki target date: ${fmt(existing.targetDate)}.`,
+                )}
+              </p>
+            )}
 
-            <div className="card mt-6 space-y-5 p-6">
+            <form
+              className="card mt-5 space-y-5 p-5 sm:p-6"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!busy) save();
+              }}
+              noValidate
+            >
               <div>
-                <label className="text-sm font-medium">Select Exam</label>
-                <select value={selectedExam} onChange={e => setSelectedExam(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm">
-                  <option value="">Choose exam...</option>
-                  {exams.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                <label htmlFor="plan-exam" className="text-sm font-medium">{tr("Your exam", "Aapka exam")}</label>
+                <select
+                  id="plan-exam"
+                  value={selectedExam}
+                  onChange={(e) => setSelectedExam(e.target.value)}
+                  className="mt-1 min-h-[44px] w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm"
+                >
+                  <option value="">{tr("Choose exam…", "Exam chunein…")}</option>
+                  {exams.map((e) => (
+                    <option key={e.id} value={e.id}>{e.name}</option>
+                  ))}
                 </select>
               </div>
-              <div>
-                <label className="text-sm font-medium">{tr("By when do you want to complete the syllabus?", "Syllabus kab tak complete karna hai?")}</label>
-                <div className="mt-2 flex gap-2">
-                  {["3", "6", "12"].map(m => (
-                    <button key={m} onClick={() => { setDuration(m); setTargetIso(""); }}
-                      className={`flex-1 rounded-lg border px-4 py-3 text-sm font-semibold transition ${!targetIso && duration === m ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted"}`}>
-                      {m} Months
-                    </button>
-                  ))}
+
+              <fieldset>
+                <legend className="text-sm font-medium">{tr("Finish the syllabus in", "Syllabus kab tak khatam karna hai")}</legend>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {(["3", "6", "12"] as const).map((m) => {
+                    const on = !targetIso && months === m;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => {
+                          setMonths(m);
+                          setTargetIso("");
+                        }}
+                        className={`min-h-[44px] rounded-lg border px-3 py-2 text-sm font-semibold transition ${on ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted"}`}
+                      >
+                        {m} {tr("months", "mahine")}
+                      </button>
+                    );
+                  })}
                 </div>
-                <p className="mt-3 text-xs text-muted-foreground">{tr("Or pick your exact date (type it or use the 📅 calendar):", "Ya apni exact date chunein (likhein ya 📅 calendar se):")}</p>
+                <p className="mt-3 text-xs text-muted-foreground">{tr("Or pick an exact date (type it or use the 📅 calendar):", "Ya exact date chunein (likhein ya 📅 calendar se):")}</p>
                 <div className="mt-1">
-                  <DateField className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm" value={targetIso} onChange={setTargetIso} placeholder="DD/MM/YYYY" />
+                  <DateField className="min-h-[44px] w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm" value={targetIso} onChange={setTargetIso} placeholder="DD/MM/YYYY" />
                 </div>
-              </div>
-              <button onClick={createPlan} disabled={!selectedExam}
-                className="w-full rounded-xl bg-primary py-3 font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-40">
-                Generate Plan
+                <p className="mt-2 text-xs font-medium">
+                  {tr("Target date", "Target date")}: {fmt(effectiveTarget)}
+                </p>
+              </fieldset>
+
+              {formError && (
+                <p role="alert" className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm font-medium text-danger">{formError}</p>
+              )}
+
+              <button
+                type="submit"
+                disabled={busy || !selectedExam}
+                className="min-h-[48px] w-full rounded-xl bg-primary py-3 font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
+              >
+                {busy ? tr("Saving…", "Save ho raha hai…") : existing ? tr("Save changes", "Badlav save karein") : tr("Create my plan", "Mera plan banayein")}
               </button>
-            </div>
+            </form>
           </>
-        )}
-
-        {step === "view" && !plan && (
-          <div className="card p-10 text-center">
-            <p className="text-4xl">📋</p>
-            <h2 className="mt-4 text-xl font-bold">No Study Plan Yet</h2>
-            <p className="mt-2 text-sm text-muted-foreground">Create a personalised study plan to track your daily progress!</p>
-            <button onClick={() => setStep("create")} className="btn btn-primary mt-6">Create Your Plan</button>
-          </div>
-        )}
-
-        {step === "view" && plan && daily && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-bold">Your Study Plan 🎯</h1>
-              <button onClick={() => setStep("create")} className="btn btn-outline text-sm">Recreate</button>
-            </div>
-
-            {/* Streak + Daily Target */}
-            <div className="grid gap-4 sm:grid-cols-4">
-              <div className="card p-5 text-center">
-                <p className="text-xs text-muted-foreground">🔥 Streak</p>
-                <p className="mt-1 text-3xl font-bold text-warning">{daily.streak || 0} days</p>
-              </div>
-              <div className="card p-5 text-center">
-                <p className="text-xs text-muted-foreground">Today's Target</p>
-                <p className="mt-1 text-3xl font-bold text-primary">{daily.dailyTarget} Q</p>
-              </div>
-              <div className="card p-5 text-center">
-                <p className="text-xs text-muted-foreground">Done Today</p>
-                <p className="mt-1 text-3xl font-bold text-success">{daily.todayDone} Q</p>
-              </div>
-              <div className="card p-5 text-center">
-                <p className="text-xs text-muted-foreground">Remaining</p>
-                <p className="mt-1 text-3xl font-bold">{daily.remaining} Q</p>
-              </div>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="card p-6">
-              <div className="mb-3 flex items-center justify-between text-sm">
-                <span className="font-medium">Progress</span>
-                <span className="text-muted-foreground">{plan.progress?.percentComplete || 0}%</span>
-              </div>
-              <div className="h-4 w-full overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.min(plan.progress?.percentComplete || 0, 100)}%` }} />
-              </div>
-              <div className="mt-3 flex justify-between text-xs text-muted-foreground">
-                <span>{plan.progress?.questionsDone || 0} done</span>
-                <span>Target: {plan.progress?.totalQuestions || 0}</span>
-              </div>
-            </div>
-
-            {/* Plan Details */}
-            {/* BUGFIX: this used to show plan.plan.examId (a raw database ID
-                like "ckx9a2j4b0001...") in the "Exam" row instead of the
-                exam's actual name — the exact tr("exam name is not showing", "exam ka naam nahi aa raha")
-                problem, just showing up here on the study-plan page too. */}
-            <div className="card divide-y divide-border overflow-hidden">
-              {[
-                ["Exam", exams.find((e) => e.id === plan.plan.examId)?.name || plan.plan.examId],
-                ["Type", plan.plan.type === "COMBINED" ? "Combined (All Subjects)" : "Subject-wise"],
-                ["Daily Target", `${plan.plan.dailyTarget} questions`],
-                ["Start Date", new Date(plan.plan.startDate).toLocaleDateString()],
-                ["Target Date", new Date(plan.plan.targetDate).toLocaleDateString()],
-                ["Remaining Days", `${daily.remainingDays} days`],
-                ["Longest Streak", `${plan.plan.longestStreak} days`],
-              ].map(([k, v]) => (
-                <div key={k} className="flex items-center justify-between px-5 py-3">
-                  <span className="text-sm text-muted-foreground">{k}</span>
-                  <span className="text-sm font-semibold">{v}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* CTA */}
-            {/* BUGFIX: this linked to plain "/test" (no ?daily=1), so clicking
-                it never actually started the plan-based Daily Test — it fell
-                through to a generic random 10-question set instead, even
-                though the button text promised "N questions today" tied to
-                the study plan. */}
-            <a href="/test?daily=1" className="block w-full rounded-xl bg-primary py-4 text-center text-lg font-bold text-primary-foreground transition hover:opacity-90">
-              🎯 Practice Now ({daily.dailyTarget} questions today)
-            </a>
-          </div>
         )}
       </main>
     </div>

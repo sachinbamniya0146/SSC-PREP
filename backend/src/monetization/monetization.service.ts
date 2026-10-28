@@ -33,6 +33,8 @@ import { VOCAB_UNLOCK_ALL_PRICE_INR, VOCAB_WORD_UNLOCK_PRICE_INR, skipFeeForStre
 import { grantOrExtendSubscription } from './subscription.util';
 import { couponAmounts, couponProblem, planPricing } from './pricing.util';
 import { FeaturesService } from '../features/features.service';
+import { FREE_BOOKMARK_LIMIT, FREE_MOCKS_PER_PREMIUM_MOCK, PRACTICE_SET_QUESTIONS, chapterPdfPriceInr, freeDailyPracticeLimit } from '../common/free-limits';
+import { cacheGet, cacheSet } from '../common/cache';
 
 interface CashfreeConfig {
   appId: string;
@@ -54,9 +56,21 @@ type OrderInput = {
   couponCode?: string;
 };
 
+/** Response of GET /payments/benefits (see MonetizationService.benefits). */
+export interface PlanBenefits {
+  free: {
+    practiceSetsPerDay: number;
+    practiceSetQuestions: number;
+    bookmarks: number;
+    triesPerPremiumMock: number;
+    chapterPdfPriceInr: number;
+  };
+  premiumMockCount: number;
+}
+
 const round2 = (n: number) => Math.round(n * 100) / 100;
 // Chapter-PDF price used to be a bare `1` in two places (order + fulfilment).
-const CHAPTER_PDF_PRICE_INR = Number(process.env.CHAPTER_PDF_PRICE_INR) > 0 ? Number(process.env.CHAPTER_PDF_PRICE_INR) : 1;
+const CHAPTER_PDF_PRICE_INR = chapterPdfPriceInr();
 const RECONCILE_EVERY_MS = 5 * 60 * 1000;
 const ORDER_TTL_MINUTES = 30;
 
@@ -185,6 +199,37 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
     });
     const now = new Date();
     return rows.map((p) => ({ ...p, pricing: planPricing(p, now) }));
+  }
+
+  /**
+   * GET /payments/benefits - the numbers behind the "Free vs Premium" table on the Premium page.
+   * They come from common/free-limits.ts, the same file the services that enforce the limits import, so the page can
+   * never promise something the server does not do. `premiumMockCount` lets the page hide the "premium mock series"
+   * row while no such mock exists (every PYQ mock is free).
+   */
+  async benefits() {
+    const key = 'payments:benefits:v1';
+    const hit = cacheGet<PlanBenefits>(key);
+    if (hit) return hit;
+    const out = await this.benefitsUncached();
+    cacheSet(key, out, 5 * 60_000);
+    return out;
+  }
+
+  private async benefitsUncached(): Promise<PlanBenefits> {
+    const premiumMockCount = await this.prisma.testTemplate.count({
+      where: { isActive: true, isPremium: true, NOT: { id: { startsWith: 'pyq-' } } },
+    });
+    return {
+      free: {
+        practiceSetsPerDay: freeDailyPracticeLimit(),
+        practiceSetQuestions: PRACTICE_SET_QUESTIONS,
+        bookmarks: FREE_BOOKMARK_LIMIT,
+        triesPerPremiumMock: FREE_MOCKS_PER_PREMIUM_MOCK,
+        chapterPdfPriceInr: CHAPTER_PDF_PRICE_INR,
+      },
+      premiumMockCount,
+    };
   }
 
   async mySubscription(userId: string) {

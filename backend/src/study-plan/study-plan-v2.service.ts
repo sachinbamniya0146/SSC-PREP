@@ -18,6 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { istDateKey } from '../gamification/gamification.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { applyAttemptToChapters, CHAPTER_COMPLETE_PCT } from './study-plan-progress.util';
+import { activeStreak, bucketAnswered, clampDailyTarget, istDayStart, istKey, lastDayKeys, paceOf } from './study-plan-pace.util';
 
 interface BiMsg {
   en: string;
@@ -700,9 +701,45 @@ export class StudyPlanV2Service {
     }
     const todayChapters = [...weak, ...interleaved].slice(0, chaptersPerDay);
 
-    const practiceTarget = Math.max(25, plan.dailyTarget || 25);
+    // 25-100 a day: plans made before Oct 28 2026 may still carry a stored target of up to 200
+    const practiceTarget = clampDailyTarget(plan.dailyTarget || 25);
     const pyqPerWeek = daysLeft > 45 ? 1 : daysLeft > 21 ? 2 : daysLeft > 7 ? 3 : 7;
     const total = board.summary.total || 1;
+
+    // ---- what the student has actually done (real rows only) ----
+    const todayKey = istKey(new Date());
+    const dayStart = istDayStart(todayKey);
+    const keys = lastDayKeys(todayKey, 30);
+    const [attempts, chaptersToday] = await Promise.all([
+      // one row per attempt started in the last 30 IST days, with how many questions were answered in it
+      // (same rule as the dashboard's "today's goal": answered = a chosen option, counted on the day the attempt started)
+      this.prisma.testAttempt.findMany({
+        where: { userId, startedAt: { gte: istDayStart(keys[0]) } },
+        select: { startedAt: true, _count: { select: { answers: { where: { selectedOption: { not: null } } } } } },
+        take: 3000,
+      }),
+      this.prisma.studyPlanChapter.count({
+        where: { userId, OR: [{ selfMarkedAt: { gte: dayStart } }, { completedAt: { gte: dayStart } }] },
+      }),
+    ]);
+    const counts = bucketAnswered(attempts.map((a) => ({ startedAt: a.startedAt, answered: a._count.answers })));
+    const answeredToday = counts.get(todayKey) ?? 0;
+    const week = keys.slice(-7).map((k) => ({
+      day: k,
+      answered: counts.get(k) ?? 0,
+      goalMet: (counts.get(k) ?? 0) >= practiceTarget,
+      isToday: k === todayKey,
+    }));
+    const streakDays = activeStreak(counts, todayKey, 30);
+    const pace = paceOf({
+      totalChapters: board.summary.total,
+      completeChapters: board.summary.complete,
+      selfMarkedChapters: board.summary.selfMarked,
+      startKey: istKey(plan.startDate),
+      targetKey: istKey(plan.targetDate),
+      todayKey,
+    });
+    const revision = await this.revisionToday(userId).catch(() => null);
 
     return {
       exam: board.exam,
@@ -717,8 +754,26 @@ export class StudyPlanV2Service {
         practiceSets: Math.ceil(practiceTarget / 25),
         pyqTestsPerWeek: pyqPerWeek,
         pyqTestsRecommendedTotal: Math.ceil((daysLeft / 7) * pyqPerWeek),
+        // progress against the targets above
+        answeredToday,
+        chaptersDoneToday: chaptersToday,
       },
-      revision: await this.revisionToday(userId).catch(() => null),
+      streakDays,
+      goalDaysThisWeek: week.filter((d) => d.goalMet).length,
+      week,
+      pace,
+      subjectProgress: board.subjects.map((s: any) => {
+        const testable = s.chapters.filter((c: any) => c.testable);
+        return {
+          id: s.id,
+          name: s.name,
+          nameHindi: s.nameHindi ?? null,
+          total: testable.length,
+          complete: testable.filter((c: any) => c.status === 'COMPLETE').length,
+          weak: testable.filter((c: any) => c.status === 'WEAK').length,
+        };
+      }).filter((s: any) => s.total > 0),
+      revision,
       message: {
         en: `${daysLeft} day(s) left. Today: study ${chaptersPerDay} chapter(s), practise ${practiceTarget} questions, and take ${pyqPerWeek} PYQ mock(s) this week.`,
         hi: `${daysLeft} दिन बाकी हैं। आज: ${chaptersPerDay} चैप्टर पढ़ें, ${practiceTarget} प्रश्न प्रैक्टिस करें, और इस हफ़्ते ${pyqPerWeek} PYQ मॉक दें।`,

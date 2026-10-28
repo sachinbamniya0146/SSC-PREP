@@ -9,7 +9,8 @@ import { useT } from "@/lib/i18n";
 import { ShellHeader } from "@/components/AppShell";
 
 type Row = { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number; state?: string | null; isMe?: boolean };
-type LB = { period: string; scope: "india" | "state"; state: string | null; needState: boolean; rows: Row[]; myRank: number | null; me: Row | null };
+// `staff` = the viewer is an admin / staff account: they can look at the board but are not on it (no rank row)
+type LB = { period: string; scope: "india" | "state"; state: string | null; needState: boolean; staff?: boolean; rows: Row[]; myRank: number | null; me: Row | null };
 
 export default function LeaderboardPage() {
   const tr = useT();
@@ -109,7 +110,13 @@ export default function LeaderboardPage() {
           </div>
         )}
 
-        {data?.me && !data.needState && (
+        {data?.staff && (
+          <p className="mt-6 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+            {tr("You are signed in as staff. Admin and staff accounts are not ranked — this board shows students only.", "Aap staff account se login hain. Admin / staff ki rank nahi hoti — ye board sirf students ka hai.")}
+          </p>
+        )}
+
+        {data?.me && !data.needState && !data.staff && (
           <div className="mt-6 flex items-center justify-between rounded-2xl border border-primary/30 bg-primary/5 p-5">
             <div>
               <p className="text-xs text-muted-foreground">{scope === "state" && data.state ? `${tr("Rank in", "Rank")} ${data.state}` : tr("Your rank", "Aapki rank")}</p>

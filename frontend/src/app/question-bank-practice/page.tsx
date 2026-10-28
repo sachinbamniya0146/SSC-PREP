@@ -427,7 +427,9 @@ export default function QuestionBankPracticePage() {
               {starting ? "Starting…" : "🚀 Start Practice"}
             </button>
             <p className="text-center text-xs text-muted-foreground">
-              The first {taxonomy?.freeSetsPerScope ?? 3} sets are free (for each chapter / topic / sub-topic); after that you need Premium — 🔥 weak topics are always free.
+              {quota?.premium
+                ? "Premium: unlimited practice sets every day."
+                : `Free: ${quota?.dailyLimit ?? "a few"} practice sets per day (any chapter / topic / sub-topic) — 🔥 weak topics are always free and do not use up your sets. Premium removes the daily limit.`}
             </p>
           </div>
         )}

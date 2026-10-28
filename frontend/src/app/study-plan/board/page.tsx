@@ -2,7 +2,7 @@
 
 // Study Plan v2 board (NEW — Sep 29 2026)
 //
-//  Aaj    — days left, today's chapters/practice/PYQ target from the exam date.
+//  Aaj    — days left, pace, today's tasks with real progress, last 7 days, subject progress (components/PlanToday.tsx).
 //  Chapters — tick the chapters you finished; a customised full-pattern test on
 //            exactly those chapters is scheduled for tomorrow 9:00 AM (IST).
 //  Test   — live countdown, what to revise (subject > chapters), Start at 9 AM.
@@ -12,6 +12,8 @@ import * as React from "react";
 import { useFeatures, FeatureOff } from "@/lib/features";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import BiMessage from "@/components/BiMessage";
+import PlanToday, { type PlanTodayData } from "@/components/PlanToday";
+import { CardSkeletons, ErrorNote, ShellHeader } from "@/components/AppShell";
 import { useT } from "@/lib/i18n";
 
 type Bi = { en: string; hi: string };
@@ -21,14 +23,6 @@ type Board = {
   summary: { total: number; complete: number; weak: number; selfMarked: number; pending: number };
   plan: { daysLeft: number } | null;
   subjects: { id: string; name: string; nameHindi?: string | null; chapters: Chapter[] }[];
-};
-type Today = {
-  exam: { name: string };
-  daysLeft: number;
-  revisionReserveDays: number;
-  progress: { total: number; complete: number; weak: number; pct: number };
-  today: { chaptersToStudy: { id: string; name: string; subject: string; status: string }[]; chaptersPerDay: number; practiceQuestions: number; practiceSets: number; pyqTestsPerWeek: number };
-  message: Bi;
 };
 type UpcomingTest = {
   id: string;
@@ -60,7 +54,8 @@ function StudyPlanBoardPageInner() {
   const tr = useT();
   const [tab, setTab] = React.useState<"today" | "chapters" | "test" | "weak">("today");
   const [noPlan, setNoPlan] = React.useState<Bi | null>(null);
-  const [today, setToday] = React.useState<Today | null>(null);
+  const [today, setToday] = React.useState<PlanTodayData | null>(null);
+  const [loading, setLoading] = React.useState(true);
   const [board, setBoard] = React.useState<Board | null>(null);
   const [upcoming, setUpcoming] = React.useState<UpcomingTest | null>(null);
   const [lastResult, setLastResult] = React.useState<{ id: string; scorePct: number | null } | null>(null);
@@ -81,30 +76,39 @@ function StudyPlanBoardPageInner() {
 
   const loadAll = React.useCallback(async () => {
     setError("");
-    const t = await get("/study-plan/today");
-    if (!t.ok) {
-      if (t.d?.code === "NO_PLAN") setNoPlan(t.d.messages);
-      else setError(t.d?.message || tr("Could not load", "Load nahi hua"));
-      return;
-    }
-    setNoPlan(null);
-    setToday(t.d);
-    const [b, u] = await Promise.all([get("/study-plan/chapters"), get("/study-plan/test/upcoming")]);
-    if (b.ok) setBoard(b.d);
-    if (u.ok) {
-      setUpcoming(u.d.test);
-      setLastResult(u.d.lastResult);
-      setLoadedAt(Date.now());
+    try {
+      const t = await get("/study-plan/today");
+      if (!t.ok) {
+        if (t.d?.code === "NO_PLAN") setNoPlan(t.d.messages);
+        else setError(t.d?.message || tr("Could not load your plan", "Plan load nahi hua"));
+        return;
+      }
+      setNoPlan(null);
+      setToday(t.d);
+      const [b, u] = await Promise.all([get("/study-plan/chapters"), get("/study-plan/test/upcoming")]);
+      if (b.ok) setBoard(b.d);
+      if (u.ok) {
+        setUpcoming(u.d.test);
+        setLastResult(u.d.lastResult);
+        setLoadedAt(Date.now());
+      }
+    } catch {
+      setError(tr("No connection — check your internet and try again", "Connection nahi mila — internet check karke dobara try karein"));
+    } finally {
+      setLoading(false);
     }
   }, []);
   React.useEffect(() => {
     loadAll();
   }, [loadAll]);
 
+  // the 1-second clock only matters for the 9 AM countdown, so it only runs while that tab is open
   React.useEffect(() => {
+    if (tab !== "test" || !upcoming) return;
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [tab, upcoming]);
 
   React.useEffect(() => {
     if (upcoming || !lastResult) return;
@@ -153,97 +157,51 @@ function StudyPlanBoardPageInner() {
   const canStart = !!upcoming && msLeft === 0;
 
   const tabBtn = (id: typeof tab, label: string) => (
-    <button key={id} onClick={() => setTab(id)} className={`flex-1 rounded-lg px-2 py-2 text-xs font-semibold ${tab === id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{label}</button>
+    <button
+      key={id}
+      type="button"
+      role="tab"
+      id={`plan-tab-${id}`}
+      aria-selected={tab === id}
+      aria-controls="plan-panel"
+      onClick={() => setTab(id)}
+      className={`min-h-[44px] flex-1 rounded-lg px-2 py-2 text-xs font-semibold transition ${tab === id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"}`}
+    >
+      {label}
+    </button>
   );
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-2xl items-center justify-between">
-          <a href="/study-plan" className="text-sm font-semibold">← Study Plan</a>
-          <span className="text-sm font-bold">🗓️ My Prep Board</span>
-        </div>
-      </header>
+      <ShellHeader />
       <main className="mx-auto max-w-2xl px-4 py-6">
-        {noPlan ? (
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h1 className="text-xl font-bold tracking-tight">🗓️ {tr("My Prep Board", "Meri Prep Board")}</h1>
+          {!noPlan && (
+            <a href="/study-plan?edit=1" className="text-xs font-semibold text-primary underline">{tr("Plan settings", "Plan badlein")}</a>
+          )}
+        </div>
+        {loading ? (
+          <CardSkeletons count={3} />
+        ) : noPlan ? (
           <div className="text-center">
             <BiMessage msg={noPlan} tone="warn" />
-            <a href="/study-plan" className="btn mt-4 inline-block bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">Set target exam & date →</a>
+            <a href="/study-plan?edit=1" className="btn mt-4 inline-block bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">{tr("Set target exam & date →", "Target exam aur date chunein →")}</a>
           </div>
+        ) : !today ? (
+          <ErrorNote onRetry={() => { setLoading(true); loadAll(); }} retryLabel={tr("Try again", "Dobara try karein")}>
+            {error || tr("Could not load your plan", "Plan load nahi hua")}
+          </ErrorNote>
         ) : (
           <>
-            <div className="flex gap-2">{tabBtn("today", "Aaj")}{tabBtn("chapters", "Chapters")}{tabBtn("test", "9 AM Test")}{tabBtn("weak", "Weak")}</div>
-            {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+            <div role="tablist" aria-label={tr("Prep board sections", "Prep board ke hisse")} className="flex gap-2">
+              {tabBtn("today", tr("Today", "Aaj"))}{tabBtn("chapters", "Chapters")}{tabBtn("test", tr("9 AM Test", "9 AM Test"))}{tabBtn("weak", "Weak")}
+            </div>
+            {error && <p role="alert" className="mt-3 text-sm text-danger">{error}</p>}
+            <div id="plan-panel" role="tabpanel" aria-labelledby={`plan-tab-${tab}`}>
 
             {/* ------------------------------------------------ Aaj / Today */}
-            {tab === "today" && today && (
-              <div className="mt-4 space-y-4">
-                <div className="rounded-2xl border border-border bg-card p-5">
-                  <div className="flex items-end justify-between">
-                    <div>
-                      <p className="text-xs text-muted-foreground">{today.exam.name}</p>
-                      <p className="text-3xl font-bold">{today.daysLeft} <span className="text-base font-semibold">days left</span></p>
-                    </div>
-                    <p className="text-sm font-semibold">{today.progress.complete}/{today.progress.total} chapters ✅</p>
-                  </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-emerald-500" style={{ width: `${today.progress.pct}%` }} /></div>
-                  {today.revisionReserveDays > 0 && <p className="mt-2 text-xs text-muted-foreground">Last {today.revisionReserveDays} days = revision + full mocks.</p>}
-                </div>
-                <BiMessage msg={today.message} />
-                {/* NEW (Oct 3 2026): compulsory daily revision of completed chapters (50 questions, mixed subjects) */}
-                {(() => {
-                  const rv = (today as any).revision as
-                    | { available: boolean; testId?: string | null; doneToday?: boolean; scorePct?: number | null; chapters?: { id: string; name: string; subject: string }[]; subjects?: string[]; completeChapters?: number; revisedTodayCount?: number; notRevisedInWeek?: number; syllabusCycleDays?: number; message?: { en: string; hi: string } }
-                    | null
-                    | undefined;
-                  if (!rv) return null;
-                  if (!rv.available) {
-                    return (
-                      <div className="rounded-xl border border-dashed border-border bg-card p-4 text-sm">
-                        <h2 className="font-bold">🔁 Daily Revision (required)</h2>
-                        <p className="mt-1 text-xs text-muted-foreground">{rv.message?.en}</p>
-                      </div>
-                    );
-                  }
-                  return (
-                    <div className={`rounded-xl border p-4 ${rv.doneToday ? "border-emerald-500/40 bg-emerald-500/5" : "border-amber-500/50 bg-amber-500/5"}`}>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h2 className="text-sm font-bold">🔁 Today's Revision — 50 questions</h2>
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${rv.doneToday ? "bg-emerald-500/15 text-emerald-700" : "bg-amber-500/20 text-amber-700"}`}>{rv.doneToday ? "✅ DONE" : "REQUIRED"}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">{rv.subjects?.join(" · ")} — {rv.chapters?.length} of your {rv.completeChapters} completed chapters today. {rv.notRevisedInWeek ? `${rv.notRevisedInWeek} chapter(s) have not been revised for 7 days.` : "All chapters were revised this week."} The full syllabus cycles in about {rv.syllabusCycleDays} days.</p>
-                      <ul className="mt-2 flex flex-wrap gap-1.5">
-                        {rv.chapters?.map((c) => <li key={c.id} className="rounded-md bg-background px-2 py-0.5 text-[11px]">{c.name}</li>)}
-                      </ul>
-                      {rv.doneToday ? (
-                        <p className="mt-3 text-sm font-semibold text-emerald-700">Today's revision is done{rv.scorePct != null ? ` — score ${rv.scorePct}%` : ""}. Well done! 🎉</p>
-                      ) : (
-                        <a href={`/test?plantest=${rv.testId}`} className="mt-3 block rounded-lg bg-amber-600 px-4 py-3 text-center text-sm font-bold text-white">{tr("Start revision →", "Revision shuru karein →")}</a>
-                      )}
-                    </div>
-                  );
-                })()}
-                <div className="rounded-xl border border-border bg-card p-4">
-                  <h2 className="text-sm font-bold">📖 Chapters to study today</h2>
-                  {today.today.chaptersToStudy.length === 0 ? (
-                    <p className="mt-2 text-sm text-muted-foreground">Sab chapters complete! 🎉 Ab full mocks do.</p>
-                  ) : (
-                    <ul className="mt-2 space-y-1.5">
-                      {today.today.chaptersToStudy.map((c) => (
-                        <li key={c.id} className="flex items-center justify-between gap-2 text-sm">
-                          <span className="min-w-0 truncate">{c.status === "WEAK" && "⚠️ "}{c.name} <span className="text-xs text-muted-foreground">· {c.subject}</span></span>
-                          <a href={`/question-bank-practice?${qs({ chapterId: c.id })}`} className="shrink-0 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">Practice</a>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="grid grid-cols-2 gap-3 text-center text-sm">
-                  <a href="/question-bank-practice" className="rounded-xl border border-border bg-card p-4"><div className="text-2xl font-bold">{today.today.practiceQuestions}</div><div className="text-xs text-muted-foreground">practice questions / day ({today.today.practiceSets} sets)</div></a>
-                  <a href="/year-wise" className="rounded-xl border border-border bg-card p-4"><div className="text-2xl font-bold">{today.today.pyqTestsPerWeek}</div><div className="text-xs text-muted-foreground">PYQ mocks / week</div></a>
-                </div>
-              </div>
-            )}
+            {tab === "today" && <PlanToday data={today} onOpenChapters={() => setTab("chapters")} />}
 
             {/* ------------------------------------------------- Chapters */}
             {tab === "chapters" && board && (
@@ -389,6 +347,7 @@ function StudyPlanBoardPageInner() {
                 )}
               </div>
             )}
+            </div>
           </>
         )}
       </main>

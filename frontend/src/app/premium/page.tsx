@@ -7,6 +7,7 @@ import { fetchAuth, API_BASE } from "@/lib/api";
 import { startCashfreeCheckout } from "@/lib/vocab-pay";
 import { useT } from "@/lib/i18n";
 import { ShellHeader, PageHeading, CardSkeletons } from "@/components/AppShell";
+import PlanCompare from "@/components/PlanCompare";
 
 type PlanPricing = {
   regularInr: number;
@@ -144,6 +145,12 @@ export default function PremiumPage() {
     loadData();
   }, [loadData]);
 
+  // "/premium#compare" (the plan pill on the dashboard): the section only exists after loading, so scroll to it then
+  React.useEffect(() => {
+    if (loading || typeof window === "undefined" || window.location.hash !== "#compare") return;
+    document.getElementById("compare")?.scrollIntoView({ block: "start" });
+  }, [loading]);
+
   // Price per month (at today's selling price) → used for the "best value" badge and per-month hint.
   const perMonth = (p: Plan) => priceOf(p).perMonthInr;
   const bestValueId = React.useMemo(() => {
@@ -271,7 +278,7 @@ export default function PremiumPage() {
       <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
         <PageHeading
           title={tr("Premium", "Premium")}
-          subtitle={tr("Unlimited practice, all mocks and detailed solutions. Plans stack, so renewing early never wastes time.", "Unlimited practice, saare mocks aur detailed solutions. Plans stack hote hain, isliye jaldi renew karne se time waste nahi hota.")}
+          subtitle={tr("Unlimited practice sets, bookmarks and chapter PDFs. Plans stack, so renewing early never wastes time.", "Unlimited practice sets, bookmarks aur chapter PDFs. Plans stack hote hain, isliye jaldi renew karne se time waste nahi hota.")}
           actions={<Link href="/premium/history" className="btn btn-outline btn-sm">{tr("Payment history", "Payment history")}</Link>}
         />
         {loadError && (
@@ -292,7 +299,7 @@ export default function PremiumPage() {
 
         {hasActive && subscription?.plan && (
           <div
-            className={`mb-8 rounded-xl border p-5 ${
+            className={`mb-8 rounded-xl border p-4 ${
               subscription.expiringSoon ? "border-warning/40 bg-warning/10" : "border-success/30 bg-success/10"
             }`}
           >
@@ -325,18 +332,19 @@ export default function PremiumPage() {
         )}
 
         {!subscription?.active && (
-          <div className="mb-8 rounded-xl border border-warning/30 bg-warning/10 p-5">
-            <p className="font-semibold text-warning">
-              {subscription?.lastEndedAt ? tr("Your plan has expired", "Aapka plan khatam ho chuka hai") : "Free Tier"}
+          <div className={`mb-8 rounded-xl border p-4 ${subscription?.lastEndedAt ? "border-warning/30 bg-warning/10" : "border-border bg-card"}`}>
+            <p className="font-semibold">
+              {subscription?.lastEndedAt ? tr("Your plan has expired", "Aapka plan khatam ho chuka hai") : tr("You are on the Free plan", "Aap Free plan par hain")}
             </p>
-            <p className="text-sm text-foreground/80">
+            <p className="mt-1 text-sm text-foreground/80">
               {subscription?.lastEndedAt
                 ? `${tr("Expired on", "Khatam hua")} ${fmtDate(subscription.lastEndedAt)}. `
                 : ""}
               {tr(
-                "Free users get 3 practice sets for every subject / chapter. Get a plan for unlimited access.",
-                "Free me har subject/chapter ke 3 practice sets milte hain. Unlimited access ke liye plan lein.",
-              )}
+                "All previous-year mock tests, weak-topic practice, the study planner and your result analysis stay free. A plan removes the daily practice limit and adds a few extra tools.",
+                "Saare previous-year mock tests, weak-topic practice, study planner aur result analysis free rehte hain. Plan daily practice limit hata deta hai aur kuch extra tools deta hai.",
+              )}{" "}
+              <a href="#compare" className="font-semibold text-primary underline">{tr("See exactly what is free and what is paid", "Dekhein kya free hai aur kya paid")}</a>
             </p>
           </div>
         )}
@@ -527,25 +535,8 @@ export default function PremiumPage() {
           </section>
         )}
 
-        {/* Features */}
-        <section>
-          <h2 className="mb-5 text-2xl font-bold">{tr("What you get", "Premium me kya milta hai")}</h2>
-          <div className="grid gap-4 md:grid-cols-3">
-            {[
-              ["Unlimited Practice", "No limit on question bank practice sets"],
-              ["All Mock Tests", "All premium mocks, with detailed analytics"],
-              ["Chapter PDFs", "Download all chapter PDFs and answer keys"],
-              ["Weak Areas Practice", "Targeted practice built from your mistakes"],
-              ["Progress Analytics", "Topic-wise performance tracking and recommendations"],
-              ["Priority Support", "Faster responses and dedicated help"],
-            ].map(([t, d]) => (
-              <div key={t} className="card p-4">
-                <h4 className="mb-1 font-semibold">{t}</h4>
-                <p className="text-sm text-muted-foreground">{d}</p>
-              </div>
-            ))}
-          </div>
-        </section>
+        {/* Free vs Premium (numbers come from GET /payments/benefits) */}
+        <PlanCompare />
       </main>
     </div>
   );

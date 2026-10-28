@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { istDateKey } from '../gamification/gamification.service';
 import { markChapterFromPractice } from '../study-plan/study-plan-progress.util';
 import { PUBLISHED_QUESTION_WHERE, PRACTICE_QUESTION_WHERE, PYQ_QUESTION_WHERE } from '../common/question-visibility';
+import { freeDailyPracticeLimit } from '../common/free-limits';
 
 export interface PracticeQuestion {
   id: string;
@@ -71,7 +72,7 @@ export class QuestionBankPracticeService {
   // NEW (Sep 29 2026): free students get 5 practice sets per IST day (a set =
   // one topic / sub-topic / chapter practice of 25 questions); the Rs 19 plan
   // is unlimited. Weak-topic remediation practice never consumes this quota.
-  private readonly FREE_DAILY_PRACTICE_LIMIT = Math.max(1, parseInt(process.env.FREE_DAILY_PRACTICE_LIMIT || '5', 10) || 5);
+  private readonly FREE_DAILY_PRACTICE_LIMIT = freeDailyPracticeLimit();
 
   constructor(
     private prisma: PrismaService,

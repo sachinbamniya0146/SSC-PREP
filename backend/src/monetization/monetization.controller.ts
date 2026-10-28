@@ -13,6 +13,11 @@ export class MonetizationController {
     return this.service.listPlans();
   }
 
+  @Get('benefits')
+  benefits() {
+    return this.service.benefits();
+  }
+
   @Get('subscription')
   mySubscription(@CurrentUser() user: { userId: string }) {
     return this.service.mySubscription(user.userId);

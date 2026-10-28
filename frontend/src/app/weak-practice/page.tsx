@@ -92,7 +92,7 @@ export default function WeakPracticePage() {
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         setError(d.code === "PREMIUM_REQUIRED"
-          ? "Free users can only practice 3 sets per chapter — upgrade to Premium for unlimited practice."
+          ? "You have used today's free practice sets — they renew tomorrow. Premium removes the daily limit."
           : `Failed: ${d.message || r.status}`);
         return;
       }

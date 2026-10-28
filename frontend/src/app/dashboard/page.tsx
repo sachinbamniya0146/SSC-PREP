@@ -1,6 +1,7 @@
 "use client";
 
 import PlanTestBanner from "@/components/PlanTestBanner";
+import PremiumStatus, { type PlanState } from "@/components/PremiumStatus";
 import * as React from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { API_BASE, fetchAuth } from "@/lib/api";
@@ -23,7 +24,9 @@ export default function DashboardPage() {
     xp: number;
     coins: number;
     hintQuota: number;
-    rank: number;
+    // null for an admin / staff account: they are not on the leaderboard and have no rank
+    rank: number | null;
+    staff?: boolean;
     totalUsers?: number;
     today?: string;
     todayAnswered?: number;
@@ -60,7 +63,8 @@ export default function DashboardPage() {
   const [examsWithQuestions, setExamsWithQuestions] = React.useState<
     Array<{ id: string; name: string; count: number; patternYear: string | null; totalQuestions: number | null; durationMinutes: number | null }>
   >([]);
-  const [subscription, setSubscription] = React.useState<{ active: boolean; plan?: { name: string; priceInr: number }; endsAt?: string } | null>(null);
+  // null = still loading (the plan pill shows a fixed-size placeholder), then { active, admin?, plan?, endsAt?, daysLeft?, expiringSoon? }
+  const [subscription, setSubscription] = React.useState<PlanState>(null);
 
   // NEW: shared helper — pulls a "(2024)"-style year out of an ExamPattern
   // name if present, otherwise falls back to the full pattern name as-is
@@ -258,13 +262,14 @@ export default function DashboardPage() {
               <div className="mt-5 flex flex-wrap gap-2">
                 <a href="/question-bank-practice" className="btn btn-primary">{tr("Start practice", "Practice shuru karein")}</a>
                 <a href="/mocks" className="btn btn-outline">{tr("Take a mock", "Mock dein")}</a>
+                <PremiumStatus subscription={subscription} className="self-center" />
               </div>
             </div>
             <dl className="grid grid-cols-3 gap-3 sm:gap-4">
               {[
                 { l: "Day streak", v: gami ? gami.currentStreak : "—", tone: "text-accent" },
                 { l: "XP", v: gami ? gami.xp : "—", tone: "text-primary" },
-                { l: "Rank", v: gami ? `#${gami.rank}` : "—", tone: "text-foreground" },
+                { l: "Rank", v: gami && gami.rank != null ? `#${gami.rank}` : "—", tone: "text-foreground" },
               ].map((x) => (
                 <div key={x.l} className="min-w-[5.5rem] rounded-xl border border-border bg-background/80 px-4 py-3 text-center backdrop-blur">
                   <dd className={`text-2xl font-extrabold tabular-nums leading-none sm:text-3xl ${x.tone}`}>{x.v}</dd>
@@ -368,9 +373,9 @@ export default function DashboardPage() {
           </a>
         )}
 
-        {/* Exam picker + plan */}
-        <div className="mt-8 grid gap-6 lg:grid-cols-3">
-          <section className="card p-6 lg:col-span-2">
+        {/* Exam picker (the plan is now a small pill in the greeting card, see PremiumStatus) */}
+        <div className="mt-8">
+          <section className="card p-6">
             <div className="flex items-baseline justify-between gap-3">
               <h2 className="text-lg font-bold">Choose your exam</h2>
               <span className="text-xs text-muted-foreground">PYQs · mocks · sectional</span>
@@ -407,28 +412,6 @@ export default function DashboardPage() {
               </div>
             )}
           </section>
-
-          <a
-            href="/premium"
-            className={`card card-hover flex flex-col justify-between p-6 ${
-              subscription?.active ? "border-success/40 bg-success/[0.05]" : "border-primary/30 bg-gradient-to-br from-primary/[0.08] to-transparent"
-            }`}
-          >
-            <div>
-              <span className={`badge ${subscription?.active ? "badge-success" : "badge-primary"}`}>
-                {subscription?.active ? "Active" : "Upgrade"}
-              </span>
-              <h2 className="mt-3 text-lg font-bold">{subscription?.active ? "Premium active" : "Go Premium"}</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {subscription?.active
-                  ? `${subscription.plan?.name || "Plan"}${subscription.endsAt ? ` — until ${new Date(subscription.endsAt).toLocaleDateString()}` : ""}`
-                  : "Unlimited mocks, sectional tests & PYQs."}
-              </p>
-            </div>
-            <span className={`mt-5 text-sm font-semibold ${subscription?.active ? "text-success" : "text-primary"}`}>
-              {subscription?.active ? "Manage plan →" : "See plans & pricing →"}
-            </span>
-          </a>
         </div>
 
         {/* Main practice entry */}
@@ -460,7 +443,7 @@ export default function DashboardPage() {
           </a>
           <a href="/mocks" className="card card-hover p-5">
             <h3 className="font-semibold">Mock Tests</h3>
-            <p className="mt-1.5 text-sm text-muted-foreground">Full-length timed mocks, a few free per exam.</p>
+            <p className="mt-1.5 text-sm text-muted-foreground">{tr("Full-length timed mocks — every previous-year paper is free.", "Full-length timed mocks — har previous-year paper free hai.")}</p>
           </a>
           <a href="/sectional" className="card card-hover p-5">
             <h3 className="font-semibold">Sectional Practice</h3>

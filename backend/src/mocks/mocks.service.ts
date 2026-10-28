@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank, PYQ_MOCK_PRICE_INR } from '../common/pyq-mock-pricing';
+import { FREE_MOCKS_PER_PREMIUM_MOCK } from '../common/free-limits';
 
-const FREE_MOCKS_PER_EXAM = 2;
+const FREE_MOCKS_PER_EXAM = FREE_MOCKS_PER_PREMIUM_MOCK;
 const OFFER_DAYS = 15;
 const OFFER_PRICE_INR = 10;
 

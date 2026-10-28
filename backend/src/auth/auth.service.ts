@@ -22,6 +22,7 @@ import { OtpService } from './otp.service';
 import { ReferralService } from '../referral/referral.service';
 import { istDateKey } from '../gamification/gamification.service';
 import { suspendedMessage } from '../common/support-contact';
+import { FREE_BOOKMARK_LIMIT } from '../common/free-limits';
 
 // BUGFIX: must stay in sync with the IST-day-boundary fix in
 // quiz/quiz.service.ts getToday() — that's what actually creates/reads
@@ -589,7 +590,7 @@ export class AuthService implements OnModuleInit {
       isPremium,
       plan: isPremium ? (user?.role === 'ADMIN' ? 'ADMIN' : 'PREMIUM') : 'FREE',
       subscription,
-      bookmarks: { used: bookmarkCount, limit: isPremium ? null : 100 },
+      bookmarks: { used: bookmarkCount, limit: isPremium ? null : FREE_BOOKMARK_LIMIT },
       dailyQuiz: todayQuiz ?? { taken: false },
       message: isPremium
         ? undefined
