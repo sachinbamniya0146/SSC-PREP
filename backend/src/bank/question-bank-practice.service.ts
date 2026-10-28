@@ -6,7 +6,7 @@ import { ATTEMPT_DONE } from '../common/attempt-status';
 import { istDateKey } from '../gamification/gamification.service';
 import { markChapterFromPractice } from '../study-plan/study-plan-progress.util';
 import { PUBLISHED_QUESTION_WHERE, PRACTICE_QUESTION_WHERE, PYQ_QUESTION_WHERE } from '../common/question-visibility';
-import { freeDailyPracticeLimit } from '../common/free-limits';
+import { freeDailyPracticeLimit, planPriceInr } from '../common/free-limits';
 
 export interface PracticeQuestion {
   id: string;
@@ -74,6 +74,8 @@ export class QuestionBankPracticeService {
   // one topic / sub-topic / chapter practice of 25 questions); the Rs 19 plan
   // is unlimited. Weak-topic remediation practice never consumes this quota.
   private readonly FREE_DAILY_PRACTICE_LIMIT = freeDailyPracticeLimit();
+  // price named in the limit message and the quota response (env PLAN_PRICE_INR, default 19; text only, the charge comes from the plans table)
+  private readonly PLAN_PRICE_INR = planPriceInr();
 
   constructor(
     private prisma: PrismaService,
@@ -227,16 +229,16 @@ export class QuestionBankPracticeService {
         const usedToday = await this.countQuotaPracticeStartsToday(userId);
         if (usedToday >= this.FREE_DAILY_PRACTICE_LIMIT) {
           throw new ForbiddenException({
-            message: `Free limit reached: ${this.FREE_DAILY_PRACTICE_LIMIT} practice sets per day. Get the ₹19 plan for unlimited practice.`,
+            message: `Free limit reached: ${this.FREE_DAILY_PRACTICE_LIMIT} practice sets per day. Get the ₹${this.PLAN_PRICE_INR} plan for unlimited practice.`,
             code: 'PREMIUM_REQUIRED',
             reason: 'DAILY_FREE_LIMIT',
             messages: {
-              en: `You have used your ${this.FREE_DAILY_PRACTICE_LIMIT} free practice sets for today. Upgrade for just ₹19 to practice unlimited topics, sub-topics and chapters every day.`,
-              hi: `आज के आपके ${this.FREE_DAILY_PRACTICE_LIMIT} मुफ़्त प्रैक्टिस सेट पूरे हो गए। सिर्फ़ ₹19 में अपग्रेड करें और रोज़ अनलिमिटेड टॉपिक, सब-टॉपिक और चैप्टर प्रैक्टिस करें।`,
+              en: `You have used your ${this.FREE_DAILY_PRACTICE_LIMIT} free practice sets for today. Upgrade for just ₹${this.PLAN_PRICE_INR} to practice unlimited topics, sub-topics and chapters every day.`,
+              hi: `आज के आपके ${this.FREE_DAILY_PRACTICE_LIMIT} मुफ़्त प्रैक्टिस सेट पूरे हो गए। सिर्फ़ ₹${this.PLAN_PRICE_INR} में अपग्रेड करें और रोज़ अनलिमिटेड टॉपिक, सब-टॉपिक और चैप्टर प्रैक्टिस करें।`,
             },
             freeDailyLimit: this.FREE_DAILY_PRACTICE_LIMIT,
             usedToday,
-            planPriceInr: 19,
+            planPriceInr: this.PLAN_PRICE_INR,
             freeSetsUsed: usedToday,
             nextSetNumber: scopeSets + 1,
           });
@@ -559,7 +561,7 @@ export class QuestionBankPracticeService {
         const usedToday = await this.countQuotaPracticeStartsToday(userId);
         if (usedToday >= this.FREE_DAILY_PRACTICE_LIMIT) {
           throw new ForbiddenException({
-            message: `Free limit reached: ${this.FREE_DAILY_PRACTICE_LIMIT} practice sets per day. Get the ₹19 plan for unlimited practice.`,
+            message: `Free limit reached: ${this.FREE_DAILY_PRACTICE_LIMIT} practice sets per day. Get the ₹${this.PLAN_PRICE_INR} plan for unlimited practice.`,
             code: 'PREMIUM_REQUIRED',
             reason: 'DAILY_FREE_LIMIT',
           });
@@ -628,7 +630,7 @@ export class QuestionBankPracticeService {
       dailyLimit: premium ? null : this.FREE_DAILY_PRACTICE_LIMIT,
       usedToday: used,
       remainingToday: premium ? null : Math.max(0, this.FREE_DAILY_PRACTICE_LIMIT - used),
-      planPriceInr: 19,
+      planPriceInr: this.PLAN_PRICE_INR,
     };
   }
 

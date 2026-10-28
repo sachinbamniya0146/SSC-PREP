@@ -1,4 +1,4 @@
-import { FREE_BOOKMARK_LIMIT, FREE_MOCKS_PER_PREMIUM_MOCK, PRACTICE_SET_QUESTIONS, chapterPdfPriceInr, freeDailyPracticeLimit } from './free-limits';
+import { FREE_BOOKMARK_LIMIT, FREE_MOCKS_PER_PREMIUM_MOCK, PRACTICE_SET_QUESTIONS, chapterPdfPriceInr, freeDailyPracticeLimit, planPriceInr } from './free-limits';
 import { RANKABLE_USER, isRankableRole } from './rankable';
 
 describe('free limits', () => {
@@ -13,6 +13,15 @@ describe('free limits', () => {
     expect(chapterPdfPriceInr({})).toBe(1);
     expect(chapterPdfPriceInr({ CHAPTER_PDF_PRICE_INR: '3' })).toBe(3);
     expect(chapterPdfPriceInr({ CHAPTER_PDF_PRICE_INR: '-2' })).toBe(1);
+  });
+
+  it('the plan price quoted in the limit message defaults to Rs 19 and follows PLAN_PRICE_INR, bad values fall back', () => {
+    expect(planPriceInr({})).toBe(19);
+    expect(planPriceInr({ PLAN_PRICE_INR: '29' })).toBe(29);
+    expect(planPriceInr({ PLAN_PRICE_INR: '49.9' })).toBe(49);
+    expect(planPriceInr({ PLAN_PRICE_INR: '0' })).toBe(19);
+    expect(planPriceInr({ PLAN_PRICE_INR: '-5' })).toBe(19);
+    expect(planPriceInr({ PLAN_PRICE_INR: 'free' })).toBe(19);
   });
 
   it('the documented constants', () => {

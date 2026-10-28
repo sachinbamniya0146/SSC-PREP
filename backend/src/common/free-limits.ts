@@ -24,6 +24,15 @@ export function freeDailyPracticeLimit(env: Record<string, string | undefined> =
   return Math.max(1, Number.isFinite(n) ? n : 5);
 }
 
+/**
+ * The price quoted in the "free limit reached" message (env PLAN_PRICE_INR, default 19; whole rupees, never below 1).
+ * It is TEXT only: what a student is really charged comes from the Premium plans in the database, so keep this equal to the cheapest plan.
+ */
+export function planPriceInr(env: Record<string, string | undefined> = process.env): number {
+  const n = Math.floor(Number(env.PLAN_PRICE_INR));
+  return Number.isFinite(n) && n >= 1 ? n : 19;
+}
+
 /** Price of one chapter PDF for a free student (env CHAPTER_PDF_PRICE_INR, default 1). Premium includes every chapter PDF. */
 export function chapterPdfPriceInr(env: Record<string, string | undefined> = process.env): number {
   const n = Number(env.CHAPTER_PDF_PRICE_INR);
