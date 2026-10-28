@@ -259,7 +259,7 @@ export class TestsService {
 
 // Score and finalize an in-progress attempt. Server-authoritative:
 //  - only the owning user may submit
-//  - a second submit is rejected (one attempt per instance)
+//  - a second submit returns the finished result unchanged (idempotent; one attempt per instance, scored once)
 //  - answers after expiresAt are dropped (auto-submit at expiry scores the
 //    answers ALREADY PERSISTED via autosave — a late client payload is ignored)
 //  - scoring recomputes everything from the DB answer key
@@ -278,8 +278,17 @@ async submitAttempt(
     where: { id: attemptId, userId },
   });
   if (!attempt) throw new BadRequestException('Attempt not found');
-  if (attempt.status === 'SUBMITTED') {
-    throw new BadRequestException('Attempt already submitted');
+  if (attempt.status === 'SUBMITTED' || attempt.status === 'AUTO_SUBMITTED') {
+    // IDEMPOTENT SUBMIT (28 Oct 2026, session 21): a second submit — the student's retry after a slow / lost response,
+    // the offline queue replaying, a second tab — is NOT an error. It gets the already-finished result back, exactly
+    // as the first submit returned it. Nothing is re-scored, no answer row is touched, no XP / PDF is sent again
+    // (all of that only happens for the request that wins the IN_PROGRESS -> SUBMITTED claim below). Whatever answers
+    // the repeat carries are ignored: the first accepted submit is final.
+    return {
+      ...(await this.loadAttemptResult(attempt.id)),
+      expired: attempt.submittedAt != null && attempt.expiresAt != null && attempt.submittedAt > attempt.expiresAt,
+      alreadySubmitted: true,
+    };
   }
   const now = new Date();
   const expired = attempt.expiresAt != null && now > attempt.expiresAt;
@@ -448,14 +457,7 @@ async submitAttempt(
     },
   });
 
-  const loadUpdated = () =>
-    this.prisma.testAttempt.findUniqueOrThrow({
-      where: { id: attempt.id },
-      include: {
-        testTemplate: { select: { id: true, title: true, totalQuestions: true, totalMarks: true } },
-        answers: { select: { questionId: true, selectedOption: true, isCorrect: true, timeSpentSeconds: true } },
-      },
-    });
+  const loadUpdated = () => this.loadAttemptResult(attempt.id);
 
   if (claim.count === 0) {
     // A racing request already finalized this attempt between our read and
@@ -520,6 +522,17 @@ async submitAttempt(
   this.notifyTelegramAttemptPdf(userId, updated.id).catch(() => undefined);
 
   return { ...updated, expired };
+}
+
+// The finished attempt as the submit response / the "already submitted" replay returns it (one shape for both).
+private loadAttemptResult(attemptId: string) {
+  return this.prisma.testAttempt.findUniqueOrThrow({
+    where: { id: attemptId },
+    include: {
+      testTemplate: { select: { id: true, title: true, totalQuestions: true, totalMarks: true } },
+      answers: { select: { questionId: true, selectedOption: true, isCorrect: true, timeSpentSeconds: true } },
+    },
+  });
 }
 
 // Requirement 5, part (a) helper — gate + send. Mirrors the exact

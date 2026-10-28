@@ -271,6 +271,10 @@ export default function TestPage() {
   // Offline-safe submit: true while the final submit is queued on the device waiting for internet.
   const [offlinePending, setOfflinePending] = React.useState(false);
   const [online, setOnline] = React.useState(true);
+  // Autosave status pill ("Saved / Saving / Not saved yet") and the soft tab-switch notice (count only, no punishment).
+  const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved" | "retry">("idle");
+  const [tabAways, setTabAways] = React.useState(0);
+  const [tabNoticeOpen, setTabNoticeOpen] = React.useState(false);
 
   // Current user id — needed only for the report/chat feature (ReportQuestion
   // component below needs to know "am I the sender of this message" so it
@@ -893,6 +897,44 @@ export default function TestPage() {
     };
   }, []);
 
+  // ---- Leaving the page by accident (back button, refresh, closing the tab) during a server-timed exam: the browser asks first.
+  // The answers are autosaved and the clock keeps running on the server either way; this only prevents a slip.
+  // Not armed while navigating to the result, while a submit is running, or while the finished test waits for internet.
+  React.useEffect(() => {
+    if (phase !== "exam" || !attemptId || offlinePending) return;
+    const guard = (e: BeforeUnloadEvent) => {
+      if (navigatingRef.current || submittingRef.current) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [phase, attemptId, offlinePending]);
+
+  // ---- Soft tab-switch notice: counts how often the student left this tab for more than 1.5 s and tells them. No penalty.
+  React.useEffect(() => {
+    if (phase !== "exam" || !attemptId) return;
+    let hiddenAt = 0;
+    const onVis = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (hiddenAt && Date.now() - hiddenAt > 1500) {
+        setTabAways((n) => n + 1);
+        setTabNoticeOpen(true);
+      }
+      hiddenAt = 0;
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [phase, attemptId]);
+  React.useEffect(() => {
+    if (!tabNoticeOpen) return;
+    const t = window.setTimeout(() => setTabNoticeOpen(false), 8000);
+    return () => window.clearTimeout(t);
+  }, [tabNoticeOpen, tabAways]);
+
   const retryQueuedSubmit = React.useCallback(async () => {
     const id = typeof window !== "undefined" ? sessionStorage.getItem("ssc_active_attempt") : null;
     const done = await flushPendingSubmits();
@@ -928,6 +970,7 @@ export default function TestPage() {
       if (held !== null && !(questionId in answers)) diff.push({ questionId, selectedOption: null });
     }
     if (diff.length === 0) return;
+    setSaveState("saving");
     let retry: ReturnType<typeof setTimeout> | null = null;
     const timer = setTimeout(async () => {
       try {
@@ -938,11 +981,16 @@ export default function TestPage() {
         });
         if (r.ok) {
           for (const d of diff) saved.set(d.questionId, d.selectedOption);
+          setSaveState("saved");
         } else if (r.status >= 500 || r.status === 429) {
+          setSaveState("retry");
           retry = setTimeout(() => setSaveTick((n) => n + 1), 8000);
+        } else {
+          setSaveState("idle");
         }
         // other 4xx (attempt already submitted / not found): retrying can never succeed
       } catch {
+        setSaveState("retry");
         // offline / network drop: autosave stays best-effort (the device draft + the final submit are authoritative), try again shortly
         retry = setTimeout(() => setSaveTick((n) => n + 1), 8000);
       }
@@ -1966,6 +2014,19 @@ export default function TestPage() {
           </div>
         </div>
       )}
+      {tabNoticeOpen && (
+        <div className="pointer-events-none fixed inset-x-0 top-16 z-[55] flex justify-center px-4" role="status" aria-live="polite">
+          <div className="pointer-events-auto flex max-w-md items-start gap-3 rounded-xl border border-warning/40 bg-card px-4 py-3 text-sm shadow-lg">
+            <p>
+              <b>{tr("You left the test window", "Aap test window se bahar gaye")}</b> ({tabAways} {tabAways === 1 ? tr("time", "baar") : tr("times", "baar")}).{" "}
+              {tr("Your time kept running. Please stay on this screen.", "Aapka samay chalta raha. Kripya isi screen par rahein.")}
+            </p>
+            <button type="button" onClick={() => setTabNoticeOpen(false)} className="shrink-0 rounded-md border border-border px-2 py-0.5 text-xs font-semibold hover:bg-muted" aria-label={tr("Dismiss", "Band karo")}>
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
       {/* TOP BAR */}
       <div className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur-lg">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3" style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}>
@@ -2004,6 +2065,27 @@ export default function TestPage() {
               <button onClick={togglePause} className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted sm:px-3">
                 {paused ? "▶ Resume" : "⏸ Pause"}
               </button>
+            )}
+            {isExamMode && attemptId && (saveState !== "idle" || !online) && (
+              <span
+                role="status"
+                aria-live="polite"
+                className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-semibold ${
+                  !online || saveState === "retry" ? "text-warning" : saveState === "saved" ? "text-success" : "text-muted-foreground"
+                }`}
+                title={!online ? tr("Offline - answers are kept on this device", "Offline - jawab is device par safe hain") : undefined}
+              >
+                <span aria-hidden>{!online || saveState === "retry" ? "⚠" : saveState === "saved" ? "✓" : "⟳"}</span>
+                <span className="hidden sm:inline">
+                  {!online
+                    ? tr("Offline - kept on this device", "Offline - device par safe")
+                    : saveState === "retry"
+                      ? tr("Not saved yet - retrying", "Abhi save nahi hua - dobara koshish")
+                      : saveState === "saved"
+                        ? tr("Saved", "Save ho gaya")
+                        : tr("Saving…", "Save ho raha…")}
+                </span>
+              </span>
             )}
             {planOk && secClock ? (
               <div className="flex items-center gap-2">
@@ -2097,14 +2179,16 @@ export default function TestPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <BookmarkButton questionId={q.id} size="sm" />
-                  <span className="badge badge-info">EN + हिंदी</span>
+                  {(q.questionTextHindi || q.options.some((o) => !!o.textHi)) && <ReviewLangToggle lang={revLang} onChange={setRevLang} />}
                 </div>
               </div>
-              <h2 className="mt-4 break-words text-base font-semibold leading-relaxed">
-                {q.questionText}
-              </h2>
-              {q.questionTextHindi && (
-                <p className="mt-2 border-l-2 border-primary/40 pl-3 text-[15px] font-hindi leading-relaxed text-muted-foreground">
+              {(revLang !== "hi" || !q.questionTextHindi) && (
+                <h2 className="mt-4 break-words text-base font-semibold leading-relaxed">
+                  {q.questionText}
+                </h2>
+              )}
+              {q.questionTextHindi && revLang !== "en" && (
+                <p className={revLang === "hi" ? "mt-4 break-words text-base font-hindi font-semibold leading-relaxed" : "mt-2 border-l-2 border-primary/40 pl-3 text-[15px] font-hindi leading-relaxed text-muted-foreground"}>
                   {q.questionTextHindi}
                 </p>
               )}
@@ -2141,8 +2225,8 @@ export default function TestPage() {
                           </span>
                         ) : (
                           <>
-                            <span>{o.text}</span>
-                            {o.textHi && (
+                            {(revLang !== "hi" || !o.textHi) && <span>{o.text}</span>}
+                            {o.textHi && revLang !== "en" && (
                               <span className={`mt-1 block border-l-2 pl-3 font-hindi ${active ? "border-primary-foreground/50 text-primary-foreground/90" : "border-border text-muted-foreground"}`}>
                                 {o.textHi}
                               </span>
