@@ -22,7 +22,6 @@ type Mock = {
   isPyq?: boolean;
   year?: number | null;
   shift?: string | null;
-  examDate?: string | null;
   // NEW (26 Oct 2026): date-wise + tier-wise mocks (TIER_1 / TIER_2, PAPER_1.. for Tier 2).
   examTier?: string | null;
   tierPaper?: string | null;
@@ -34,11 +33,11 @@ type ExamOption = { id: string; name: string; count: number };
 type Filter = "all" | "free" | "locked" | "pyq";
 type TierFilter = "all" | "TIER_1" | "TIER_2";
 
-// "2025-09" -> "September 2025" (locale-independent so server and browser agree)
-const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-function monthLabel(key: string): string {
-  const m = /^(\d{4})-(\d{2})$/.exec(key);
-  return m ? `${MONTH_NAMES[Number(m[2]) - 1] ?? key} ${m[1]}` : "";
+// The mock name ends with "Set 3" (see backend common/pyq-mock-title.ts): papers of the same year + shift are told apart by it.
+// Students never get the real exam date: only the admin sees that.
+function setNoOf(title: string): number {
+  const m = /Set (\d+)\s*$/.exec(title);
+  return m ? Number(m[1]) : 0;
 }
 function tierLabel(tier?: string | null): string {
   return tier === "TIER_1" ? "Tier 1" : tier === "TIER_2" ? "Tier 2" : "";
@@ -62,13 +61,6 @@ function loadCashfreeSdk(): Promise<any> {
     document.body.appendChild(script);
   });
   return cashfreeSdkPromise;
-}
-
-function formatDate(iso?: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
 export default function MocksPage() {
@@ -193,22 +185,22 @@ export default function MocksPage() {
     pyqByYear.get(y)!.push(m);
   }
   for (const list of Array.from(pyqByYear.values())) {
-    list.sort((a, b) => String(b.examDate ?? "").localeCompare(String(a.examDate ?? "")) || String(a.shift ?? "").localeCompare(String(b.shift ?? "")));
+    list.sort((a, b) => String(a.examTier ?? "").localeCompare(String(b.examTier ?? "")) || String(a.shift ?? "~").localeCompare(String(b.shift ?? "~")) || setNoOf(a.title) - setNoOf(b.title));
   }
   const pyqYears = Array.from(pyqByYear.keys()).sort((a, b) => b - a);
-  // Inside a year: newest month first; list is already newest-date-first. Mocks without a date share one headless group.
-  const groupByMonth = (list: Mock[]) => {
+  // Inside a year: one block per shift (Shift 1, Shift 2 ...), papers inside it as Set 1, Set 2 ... A paper with no shift goes last.
+  const groupByShift = (list: Mock[]) => {
     const groups: { key: string; label: string; items: Mock[] }[] = [];
     for (const m of list) {
-      const key = /^\d{4}-\d{2}/.test(m.examDate ?? "") ? String(m.examDate).slice(0, 7) : "";
+      const key = m.shift ?? "";
       let g = groups.find((x) => x.key === key);
       if (!g) {
-        g = { key, label: monthLabel(key), items: [] };
+        g = { key, label: key, items: [] };
         groups.push(g);
       }
       g.items.push(m);
     }
-    return groups.sort((a, b) => b.key.localeCompare(a.key));
+    return groups.sort((a, b) => (a.key || "~").localeCompare(b.key || "~"));
   };
   const others = visible.filter((m) => !m.isPyq);
 
@@ -221,7 +213,7 @@ export default function MocksPage() {
 
   const renderMock = (m: Mock) => {
     const paperNo = m.examTier === "TIER_2" && m.tierPaper ? `${t("Paper", "Paper")} ${m.tierPaper.slice(-1)}` : "";
-    const meta = [m.isPyq && m.shift ? m.shift : "", paperNo, m.isPyq ? formatDate(m.examDate) : ""].filter(Boolean).join(" · ");
+    const meta = [m.isPyq && m.shift ? m.shift : "", paperNo].filter(Boolean).join(" · ");
     return (
       <div key={m.id} className="card card-hover flex flex-wrap items-center justify-between gap-x-4 gap-y-3 p-4 sm:p-5">
         <div className="min-w-0 flex-1">
@@ -393,15 +385,15 @@ export default function MocksPage() {
             />
           ) : null}
 
-          {/* Real PYQ papers grouped Year > Date > Shift. One card = one real shift. */}
+          {/* Real PYQ papers grouped Year > Shift. One card = one real paper ("Set n"); the exam date is admin-only. */}
           {pyqYears.map((y) => (
             <section key={y} aria-label={`${y || "Other"} previous year papers`}>
               <h2 className="mb-3 flex items-baseline gap-2 text-lg font-bold">
                 {y || t("Other", "Anya")}
                 <span className="text-sm font-medium text-muted-foreground">{t("Previous year papers", "Pichle saal ke papers")} · {pyqByYear.get(y)!.length}</span>
               </h2>
-              {groupByMonth(pyqByYear.get(y)!).map((g) => (
-                <div key={g.key || "nodate"} className="mb-4 last:mb-0">
+              {groupByShift(pyqByYear.get(y)!).map((g) => (
+                <div key={g.key || "noshift"} className="mb-4 last:mb-0">
                   {g.label ? (
                     <h3 className="mb-2 text-sm font-semibold text-muted-foreground">
                       {g.label} <span className="font-normal">({g.items.length} {g.items.length === 1 ? t("paper", "paper") : t("papers", "papers")})</span>

@@ -23,9 +23,9 @@ import {
   PaperParts,
   effectiveTierPaper,
   templateIdForPaper,
-  titleForPaper,
   yearOfDate,
 } from '../common/pyq-paper-key';
+import { studentMockTitle } from '../common/pyq-mock-title';
 
 /** The few Prisma delegates the builder uses (structural, so a fake can stand in for it in tests). */
 export interface PaperBuilderPrisma {
@@ -100,6 +100,8 @@ export async function legacyPaperCeiling(
 export async function buildKeyedPaper(
   prisma: PaperBuilderPrisma,
   parts: PaperParts,
+  /** `setNo` = the "Set n" of the student-facing name (see common/pyq-mock-title.ts). Callers that know it pass it; default 1. */
+  opts: { setNo?: number } = {},
 ): Promise<{ templateId: string; built: number; target: number; live: boolean } | null> {
   const tierPaper = effectiveTierPaper(parts.tierPaper);
   const shift = parts.shift ? parts.shift : null;
@@ -150,7 +152,8 @@ export async function buildKeyedPaper(
   );
   const durationMinutes = pattern?.durationMinutes ?? Math.max(10, Math.round(built * 0.6));
   const common = {
-    title: titleForPaper(examName, { ...parts, tierPaper }),
+    // students never see the exam date: year + shift + Set n (the admin sees the date in its own column)
+    title: studentMockTitle(examName, { examTier: parts.examTier, tierPaper, year: yearOfDate(parts.examDate) ?? null, shift }, opts.setNo ?? 1),
     totalQuestions: built,
     totalMarks,
     durationMinutes,
@@ -175,7 +178,7 @@ export async function buildKeyedPaper(
     create: {
       id: templateId,
       ...common,
-      description: `Real ${examName} ${parts.examTier === 'TIER_2' ? 'Tier 2' : 'Tier 1'} paper, ${parts.examDate}${shift ? ` · ${shift}` : ''}. Composed exactly as it appeared on the day, question-for-question.`,
+      description: `Real ${examName} ${parts.examTier === 'TIER_2' ? 'Tier 2' : 'Tier 1'} paper${shift ? `, ${shift}` : ''}. Composed exactly as it appeared on the day, question-for-question.`,
       type: 'SHIFT_WISE',
       isPremium: false, // all auto-created PYQ mocks are free — see common/pyq-mock-pricing.ts
       isActive: nowComplete,

@@ -7,6 +7,7 @@ import { GamificationService } from '../gamification/gamification.service';
 import { cacheClearPrefix, cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank } from '../common/pyq-mock-pricing';
+import { withoutExamDate } from '../common/pyq-mock-title';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows, dedupeKeyedPaperRows } from '../common/pyq-paper';
 import { KEYED_PAPER_CEILING, effectiveTierPaper, isKeyedTemplateId } from '../common/pyq-paper-key';
 import { legacyPaperCeiling } from '../bank/pyq-paper-builder';
@@ -844,11 +845,14 @@ async saveAnswers(
   async listAvailable() {
     const cached = cacheGet<any>('tests:list');
     if (cached) return cached;
-    const out = await this.prisma.testTemplate.findMany({
-      where: { isActive: true },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
+    // students never see the real exam date of a PYQ paper (29 Oct 2026)
+    const out = (
+      await this.prisma.testTemplate.findMany({
+        where: { isActive: true },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      })
+    ).map(withoutExamDate);
     cacheSet('tests:list', out, 300_000);
     return out;
   }
@@ -992,7 +996,6 @@ async saveAnswers(
                 id: true,
                 questionNo: true, // global serial (was mapped below but never selected -> always undefined)
                 paperQuestionNo: true, // number printed in the real paper
-                examDate: true,
                 questionText: true,
                 questionTextHindi: true,
                 questionDiagramType: true, // Session 22 — Venn/figure stem diagrams
@@ -1081,7 +1084,6 @@ async saveAnswers(
         questionText: q.questionText,
         questionNo: (q as any).questionNo,
         paperQuestionNo: (q as any).paperQuestionNo ?? null,
-        examDate: (q as any).examDate ?? null,
         questionTextHindi: q.questionTextHindi,
         questionDiagramType: (q as any).questionDiagramType ?? null,
         questionDiagramLabels: (q as any).questionDiagramLabels ?? null,
@@ -1120,7 +1122,7 @@ async saveAnswers(
 
     return {
       ...attempt,
-      testTemplate,
+      testTemplate: withoutExamDate(testTemplate), // the real exam date is for the admin only
       sectionPlan: plan,
       testTemplateId: attempt.testTemplateId,
       rank,

@@ -33,7 +33,6 @@ type Bm = {
     topic?: string | null;
     year?: number | null;
     shift?: string | null;
-    examDate?: string | null;
   };
   myAnswer?: { selectedOption: string | null; isCorrect: boolean; attemptId: string } | null;
   note?: string | null;
@@ -336,7 +335,6 @@ function Card(props: {
           {q.questionNo ? <span className="rounded-md bg-muted px-2 py-0.5 font-bold text-foreground">Q#{q.questionNo}</span> : null}
           <span>
             {q.examName || "SSC"} {q.year || ""}
-            {q.examDate ? ` · ${q.examDate}` : ""}
             {q.shift ? ` · ${q.shift} shift` : ""}
             {q.subject ? ` · ${q.subject}` : ""}
             {q.chapter ? ` › ${q.chapter}` : ""}

@@ -161,7 +161,6 @@ export class BookmarksService {
               topic: { select: { name: true } },
               year: true,
               shift: true,
-              examDate: true,
               examTier: true,
             },
           },
@@ -264,7 +263,6 @@ export class BookmarksService {
             topic: r.question.topic?.name ?? null,
             year: r.question.year,
             shift: r.question.shift,
-            examDate: r.question.examDate ?? null,
             examTier: r.question.examTier ?? null,
           },
           // What the student answered the last time (finished tests only) - lets the page say "you marked B, correct is C".

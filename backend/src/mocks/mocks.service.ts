@@ -113,8 +113,8 @@ export class MocksService {
     });
 
     // NEW (Sep 29 2026): PYQ-mock category meta so the UI can auto-group
-    // Exam > Year > Date > Shift. Real papers only — one card per real shift.
-    const metaById = new Map(tests.map((t: any) => [t.id, { examId: t.examId ?? null, year: t.year ?? null, shift: t.shift ?? null, examDate: t.examDate ?? null, examTier: t.examTier ?? null, tierPaper: t.tierPaper ?? null, isPyq: isPyqAutoMockId(t.id) }]));
+    // Exam > Year > Shift (29 Oct 2026: the exam date is NOT sent to students any more). Real papers only — one card per real shift.
+    const metaById = new Map(tests.map((t: any) => [t.id, { examId: t.examId ?? null, year: t.year ?? null, shift: t.shift ?? null, examTier: t.examTier ?? null, tierPaper: t.tierPaper ?? null, isPyq: isPyqAutoMockId(t.id) }]));
     const mocksWithMeta = mocks.map((m: any) => ({ ...m, ...(metaById.get(m.id) ?? {}) }));
 
     return {

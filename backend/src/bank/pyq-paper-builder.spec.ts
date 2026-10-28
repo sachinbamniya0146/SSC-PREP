@@ -75,7 +75,8 @@ describe('buildKeyedPaper: one mock per paper, growing as subjects are uploaded'
     expect(tpl.totalQuestions).toBe(100);
     expect(tpl.isActive).toBe(true);
     expect(tpl.isPremium).toBe(false);
-    expect(tpl.title).toBe('SSC CGL Tier 1 — 12 Sep 2025 · Shift 2');
+    expect(tpl.title).toBe('SSC CGL 2025 · Tier 1 · Shift 2 · Set 1'); // students never see the exam date
+    expect(tpl.title).not.toMatch(/12|Sep/);
     expect(tpl.examTier).toBe('TIER_1');
     expect(tpl.year).toBe(2025);
   });
@@ -106,7 +107,7 @@ describe('buildKeyedPaper: one mock per paper, growing as subjects are uploaded'
     expect(a!.built).toBe(30);
     expect(b!.built).toBe(30);
     expect(f.templates.size).toBe(2);
-    expect(f.templates.get(b!.templateId)!.title).toBe('SSC CGL Tier 2 · Paper 1 — 12 Sep 2025');
+    expect(f.templates.get(b!.templateId)!.title).toBe('SSC CGL 2025 · Tier 2 · Paper 1 · Set 1');
   });
 
   it('different shift = different mock', async () => {
@@ -312,5 +313,15 @@ describe('titleLocked: a hand-typed mock name survives later uploads', () => {
     f.add(30, {}, 'maths');
     await buildKeyedPaper(f.prisma, T1);
     expect(f.templates.get(id)!.title).not.toBe('old auto title');
+  });
+});
+
+describe('student-facing name: year + shift + Set n, never the exam date', () => {
+  it('uses the Set number the caller passes (default Set 1)', async () => {
+    const f = fakePrisma();
+    f.add(10, {}, 'a');
+    const r = await buildKeyedPaper(f.prisma, T1, { setNo: 3 });
+    expect(f.templates.get(r!.templateId)!.title).toBe('SSC CGL 2025 · Tier 1 · Shift 2 · Set 3');
+    expect(f.templates.get(r!.templateId)!.description).not.toMatch(/2025-09-12/);
   });
 });

@@ -20,7 +20,6 @@ type ReviewQuestion = {
   questionId: string;
   questionNo?: number | null;
   paperQuestionNo?: number | null;
-  examDate?: string | null;
   questionText: string;
   questionTextHindi: string | null;
   // Session 22 — Venn/figure diagram support (see DiagramVenn.tsx)
@@ -476,7 +475,6 @@ function QuestionReview({ q, index, lang, showPaperNo }: { q: ReviewQuestion; in
         <p className="text-xs text-muted-foreground">
           Q{showPaperNo && q.paperQuestionNo != null ? q.paperQuestionNo : index + 1} · {q.marks || 2} marks{q.examName ? ` · ${q.examName}` : ""}
           {q.year ? ` · ${q.year}` : ""}
-          {q.examDate ? ` · ${q.examDate}` : ""}
           {q.shift ? ` · ${q.shift}` : ""}
           {q.chapter ? ` · ${q.chapter}` : ""}
           {q.topic ? ` › ${q.topic}` : ""}

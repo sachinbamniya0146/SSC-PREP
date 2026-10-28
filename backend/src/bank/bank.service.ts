@@ -1315,7 +1315,7 @@ export class BankService implements OnModuleInit {
         exam: r.exam?.name ?? null,
         year: r.year,
         shift: r.shift,
-        paperCode: r.paperCode ?? null,
+        // paperCode (SSC-CGL-T-I-12-Sep-2025-S2) carries the exam date: admin only, not sent to students (29 Oct 2026)
         subject: r.subject?.name ?? null,
         // FIX ("chapter mein bhi topic hona tha jaise English mein Noun,
         // Pronoun") — Topic model (Chapter → Topic → SubTopic) already

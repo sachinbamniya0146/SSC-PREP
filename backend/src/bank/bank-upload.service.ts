@@ -17,12 +17,16 @@ import {
   PaperParts,
   buildPaperKey,
   derivePaperCode,
+  effectiveTierPaper,
   normalizeExamTier,
   normalizeTierPaper,
   parsePaperKey,
   parsePaperQuestionNo,
+  templateIdForPaper,
   yearOfDate,
 } from '../common/pyq-paper-key';
+import { studentMockTitle } from '../common/pyq-mock-title';
+import { setNumberForPaper } from './pyq-mock-titles';
 import { pickQuestionsSheetName } from '../common/excel-sheet';
 import { normalizeShiftOrUndefined } from '../common/shift';
 import { compareQuestions } from '../common/duplicate-compare';
@@ -106,12 +110,6 @@ function normalizeTaxonomyName(raw: string): string {
 }
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-/** "2025-09-12" -> "12 Sep 2025" */
-function formatExamDate(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-  return m ? `${parseInt(m[3], 10)} ${MONTHS_SHORT[parseInt(m[2], 10) - 1] ?? m[2]} ${m[1]}` : iso;
-}
 
 /**
  * Accepts the date formats admins actually type into Excel and returns
@@ -1072,7 +1070,16 @@ export class BankUploadService {
    * The logic lives in pyq-paper-builder.ts (unit-tested without a database); this is the Nest entry point.
    */
   async rebuildKeyedPaper(parts: PaperParts): Promise<{ templateId: string; built: number; target: number; live: boolean } | null> {
-    return buildKeyedPaper(this.prisma as any, parts);
+    // students see "year + shift + Set n", never the exam date: find this paper's Set number first
+    const setNo = await setNumberForPaper(this.prisma as any, {
+      id: templateIdForPaper(parts),
+      examId: parts.examId,
+      year: yearOfDate(parts.examDate) ?? null,
+      shift: parts.shift ? parts.shift : null,
+      examTier: parts.examTier,
+      tierPaper: effectiveTierPaper(parts.tierPaper),
+    });
+    return buildKeyedPaper(this.prisma as any, parts, { setNo });
   }
 
   // Slugifies a paperCode (e.g. "SSC-CGL-T-I-12-Sep-2025-S1") into a safe
@@ -1120,7 +1127,8 @@ export class BankUploadService {
       }),
     ]);
     // 27 Oct 2026: ceiling follows the ExamPattern (was a hard 100) — same helper the serving path uses.
-    const ceiling = await legacyPaperCeiling(this.prisma as any, examId, candidateRows.find((r) => r.examTier) ?? undefined);
+    const tierRow = candidateRows.find((r) => r.examTier);
+    const ceiling = await legacyPaperCeiling(this.prisma as any, examId, tierRow ?? undefined);
     const keptRows = dedupeAndCapPaperRows(candidateRows, ceiling);
     const actualCount = keptRows.length;
     if (actualCount < BankUploadService.MIN_PAPER_QUESTIONS) return; // not enough APPROVED rows yet to bother creating/keeping this live
@@ -1133,8 +1141,11 @@ export class BankUploadService {
       if (!legacyExists) return;
     }
     const examName = exam?.name ?? 'SSC';
-    // With a real exam date the title is human ("SSC CGL 2025 — 12 Sep 2025 · Shift 1"); otherwise the old paperCode title.
-    const title = examDate ? `${examName} ${year} — ${formatExamDate(examDate)} · ${shift}` : `${examName} — ${effectiveCode}`;
+    // Students see "SSC CGL 2025 · Shift 1 · Set 2" (year + shift), never the exam date or a paperCode that holds the date.
+    const legacyTier = tierRow?.examTier ?? null;
+    const legacyTierPaper = tierRow?.tierPaper ?? null;
+    const setNo = await setNumberForPaper(this.prisma as any, { id: templateId, examId, year, shift, examTier: legacyTier, tierPaper: legacyTierPaper });
+    const title = studentMockTitle(examName, { examTier: legacyTier, tierPaper: legacyTierPaper, year, shift }, setNo);
     // Sum marks over the SAME kept (deduped + capped) rows, not the raw
     // candidate set — otherwise totalMarks would still reflect the
     // dropped duplicate/overflow rows even after totalQuestions was fixed.
