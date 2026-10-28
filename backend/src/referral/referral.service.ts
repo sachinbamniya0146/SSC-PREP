@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { randomBytes } from 'crypto';
 import { ReferralConfigService } from './referral-config.service';
 import { ReferralConfig, commissionPctFor, maskName, releaseAt, round2, welcomeDiscountFor } from './referral-config';
+import { OPEN_WD_STATUSES, STUDENT_FAILED_NOTE } from './withdrawal.util';
 
 const RELEASE_EVERY_MS = 10 * 60_000;
 type ApplyReason = 'EMPTY' | 'INVALID' | 'SELF' | 'ALREADY_REFERRED' | 'ALREADY_PURCHASED' | 'CIRCULAR' | 'DISABLED';
@@ -492,7 +493,7 @@ export class ReferralService implements OnModuleInit, OnModuleDestroy {
         orderBy: { availableAt: 'asc' },
         select: { availableAt: true, commissionInr: true },
       }),
-      this.prisma.withdrawalRequest.count({ where: { userId, status: { in: ['REQUESTED', 'APPROVED', 'PROCESSING'] } } }),
+      this.prisma.withdrawalRequest.count({ where: { userId, status: { in: [...OPEN_WD_STATUSES] } } }),
       this.prisma.payoutMethod.findUnique({ where: { userId }, select: { id: true } }),
     ]);
 
@@ -670,62 +671,96 @@ export class ReferralService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('Add a UPI ID or bank account first before requesting a withdrawal');
     }
 
-    const open = await this.prisma.withdrawalRequest.count({ where: { userId, status: { in: ['REQUESTED', 'APPROVED', 'PROCESSING'] } } });
-    if (open > 0) throw new BadRequestException('You already have a withdrawal in progress. Wait for it to finish before requesting another.');
+    // Lock this student's wallet row for the length of the transaction: two taps (or two tabs) at the same moment
+    // are handled one after the other, so "one open request" and "never more than the balance" both really hold.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "referral_wallets" WHERE "userId" = ${userId} FOR UPDATE`;
 
-    const claim = await this.prisma.referralWallet.updateMany({
-      where: { userId, balanceInr: { gte: roundedAmount }, isSuspended: false },
-      data: { balanceInr: { decrement: roundedAmount } },
-    });
-    if (claim.count === 0) {
-      throw new BadRequestException('Insufficient withdrawable balance. Commission becomes withdrawable after its hold period.');
-    }
+      const open = await tx.withdrawalRequest.count({ where: { userId, status: { in: [...OPEN_WD_STATUSES] } } });
+      if (open > 0) throw new BadRequestException('You already have a withdrawal in progress. Wait for it to finish before requesting another.');
 
-    return this.prisma.withdrawalRequest.create({
-      data: {
-        userId,
-        amountInr: roundedAmount,
-        payoutMethodType: payoutMethod.type,
-        upiId: payoutMethod.upiId,
-        bankAccountNo: payoutMethod.bankAccountNo,
-        bankIfsc: payoutMethod.bankIfsc,
-        bankAccountName: payoutMethod.bankAccountName,
-      },
+      const claim = await tx.referralWallet.updateMany({
+        where: { userId, balanceInr: { gte: roundedAmount }, isSuspended: false },
+        data: { balanceInr: { decrement: roundedAmount } },
+      });
+      if (claim.count === 0) {
+        throw new BadRequestException('Insufficient withdrawable balance. Commission becomes withdrawable after its hold period.');
+      }
+
+      return tx.withdrawalRequest.create({
+        data: {
+          userId,
+          amountInr: roundedAmount,
+          payoutMethodType: payoutMethod.type,
+          upiId: payoutMethod.upiId,
+          bankAccountNo: payoutMethod.bankAccountNo,
+          bankIfsc: payoutMethod.bankIfsc,
+          bankAccountName: payoutMethod.bankAccountName,
+        },
+        select: { id: true, amountInr: true, status: true, createdAt: true },
+      });
     });
+    return created;
   }
 
+  /**
+   * The student's own withdrawals. The note is only ever something meant for the student: the rejection reason,
+   * or a fixed sentence for a failed transfer (never the raw gateway text).
+   */
   async getMyWithdrawals(userId: string) {
-    return this.prisma.withdrawalRequest.findMany({
+    const rows = await this.prisma.withdrawalRequest.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
+      take: 100,
       select: {
         id: true,
         amountInr: true,
         status: true,
         payoutMethodType: true,
         adminNote: true,
+        paymentRef: true,
+        approvedAt: true,
+        paidAt: true,
+        rejectedAt: true,
         processedAt: true,
         createdAt: true,
       },
     });
+    return rows.map((r) => {
+      const note = r.status === 'FAILED' ? STUDENT_FAILED_NOTE : r.status === 'REJECTED' || r.status === 'PAID' ? r.adminNote : null;
+      return {
+        id: r.id,
+        amountInr: r.amountInr,
+        status: r.status,
+        payoutMethodType: r.payoutMethodType,
+        adminNote: note, // kept for older screens
+        note,
+        paymentRef: r.status === 'PAID' ? r.paymentRef : null,
+        approvedAt: r.approvedAt,
+        paidAt: r.paidAt,
+        rejectedAt: r.rejectedAt,
+        processedAt: r.processedAt,
+        createdAt: r.createdAt,
+      };
+    });
   }
 
-  /** Cancel a still-pending (REQUESTED) withdrawal — refunds the hold back to wallet. */
+  /**
+   * Cancel a still-pending (REQUESTED) withdrawal - the amount goes back to the wallet. The status change and the
+   * refund are one conditional step, so a tap that races with the admin's reject / approve can never refund twice.
+   */
   async cancelWithdrawal(userId: string, withdrawalId: string) {
-    const w = await this.prisma.withdrawalRequest.findUnique({ where: { id: withdrawalId } });
-    if (!w || w.userId !== userId) throw new NotFoundException('Withdrawal request not found');
-    if (w.status !== 'REQUESTED') throw new BadRequestException('Only a pending request can be cancelled');
-
-    await this.prisma.$transaction([
-      this.prisma.withdrawalRequest.update({
-        where: { id: withdrawalId },
-        data: { status: 'REJECTED', adminNote: 'Cancelled by user', processedAt: new Date() },
-      }),
-      this.prisma.referralWallet.update({
-        where: { userId },
-        data: { balanceInr: { increment: w.amountInr } },
-      }),
-    ]);
-    return { ok: true };
+    return this.prisma.$transaction(async (tx) => {
+      const w = await tx.withdrawalRequest.findUnique({ where: { id: withdrawalId } });
+      if (!w || w.userId !== userId) throw new NotFoundException('Withdrawal request not found');
+      const now = new Date();
+      const claim = await tx.withdrawalRequest.updateMany({
+        where: { id: withdrawalId, userId, status: 'REQUESTED' },
+        data: { status: 'REJECTED', adminNote: 'Cancelled by you', rejectedAt: now, processedAt: now },
+      });
+      if (claim.count !== 1) throw new BadRequestException('Only a request that is still waiting can be cancelled. It may just have been approved - refresh the page.');
+      await tx.referralWallet.update({ where: { userId }, data: { balanceInr: { increment: w.amountInr } } });
+      return { ok: true };
+    });
   }
 }

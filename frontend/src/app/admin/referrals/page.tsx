@@ -45,8 +45,30 @@ type WithdrawalRow = {
   bankAccountName: string | null;
   adminNote: string | null;
   cashfreeTransferId: string | null;
+  paymentRef: string | null;
+  gatewayStatus: string | null;
   createdAt: string;
+  approvedAt: string | null;
+  paidAt: string | null;
+  rejectedAt: string | null;
+  flaggedFriends: number;
   user: { id: string; fullName: string; email: string; phone: string | null };
+};
+
+type Bucket = { count: number; amountInr: number };
+type WdStats = {
+  awaiting: Bucket;
+  sanctioned: Bucket;
+  processing: Bucket;
+  paid: Bucket;
+  rejected: Bucket;
+  sanctionedTotal: Bucket;
+  toPay: Bucket;
+  paidToday: Bucket;
+  paidLast30Days: Bucket;
+  oldestAwaitingHours: number | null;
+  payoutMode: "MANUAL" | "CASHFREE";
+  mismatch: { walletTotalInr: number; paidRowsInr: number; differenceInr: number } | null;
 };
 
 type EarningRow = {
@@ -96,9 +118,32 @@ const WD_BADGE: Record<string, string> = {
   REQUESTED: "badge badge-warning", APPROVED: "badge badge-info", PROCESSING: "badge badge-info",
   PAID: "badge badge-success", REJECTED: "badge badge-danger", FAILED: "badge badge-danger",
 };
+const WD_LABEL: Record<string, string> = {
+  REQUESTED: "Waiting", APPROVED: "Sanctioned", PROCESSING: "Sending", PAID: "Paid", REJECTED: "Rejected", FAILED: "Failed",
+};
+const fmtDT = (d: string | null) => (d ? new Date(d).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+
+/** A spreadsheet would run a cell that starts with = + - @ as a formula: neutralise it. */
+const csvCell = (v: unknown) => {
+  let t = String(v ?? "");
+  if (/^[=+\-@]/.test(t)) t = `'${t}`;
+  return `"${t.replace(/"/g, '""')}"`;
+};
+
 const EARN_BADGE: Record<string, string> = { PENDING: "badge badge-warning", AVAILABLE: "badge badge-success", REVERSED: "badge badge-danger" };
 
-type Dialog = { title: string; body?: string; ask?: string; confirmLabel: string; danger?: boolean; minLen?: number; run: (text: string) => Promise<void> };
+type Dialog = {
+  title: string;
+  body?: string;
+  /** text box (reason / note) */
+  ask?: string;
+  minLen?: number;
+  /** single-line box above it (the UTR); required when set */
+  refLabel?: string;
+  confirmLabel: string;
+  danger?: boolean;
+  run: (text: string, ref: string) => Promise<void>;
+};
 
 export default function AdminReferralsPage() {
   const [tab, setTab] = React.useState<"withdrawals" | "commissions" | "referrals" | "rules">("withdrawals");
@@ -107,6 +152,9 @@ export default function AdminReferralsPage() {
   const [withdrawals, setWithdrawals] = React.useState<WithdrawalRow[]>([]);
   const [earnings, setEarnings] = React.useState<EarningRow[]>([]);
   const [wdFilter, setWdFilter] = React.useState("REQUESTED");
+  const [wdSearch, setWdSearch] = React.useState("");
+  const [wdQuery, setWdQuery] = React.useState(""); // wdSearch after the admin stopped typing
+  const [wdStats, setWdStats] = React.useState<WdStats | null>(null);
   const [earnFilter, setEarnFilter] = React.useState("review");
   const [search, setSearch] = React.useState("");
   const [loading, setLoading] = React.useState(true);
@@ -114,6 +162,7 @@ export default function AdminReferralsPage() {
   const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
   const [dialog, setDialog] = React.useState<Dialog | null>(null);
   const [dialogText, setDialogText] = React.useState("");
+  const [dialogRef, setDialogRef] = React.useState("");
   const [dialogBusy, setDialogBusy] = React.useState(false);
 
   const [cfg, setCfg] = React.useState<Config | null>(null);
@@ -132,9 +181,16 @@ export default function AdminReferralsPage() {
     if (r.ok) setReferrals(await r.json());
   }, [search]);
   const loadWithdrawals = React.useCallback(async () => {
-    const r = await fetchAuth(`${API_BASE}/admin/withdrawals${wdFilter ? `?status=${wdFilter}` : ""}`);
-    if (r.ok) setWithdrawals(await r.json());
-  }, [wdFilter]);
+    const qs = new URLSearchParams();
+    if (wdFilter) qs.set("status", wdFilter);
+    if (wdQuery.trim()) qs.set("q", wdQuery.trim());
+    const [list, stats] = await Promise.all([
+      fetchAuth(`${API_BASE}/admin/withdrawals${qs.toString() ? `?${qs}` : ""}`),
+      fetchAuth(`${API_BASE}/admin/withdrawals/stats`),
+    ]);
+    if (list.ok) setWithdrawals(await list.json());
+    if (stats.ok) setWdStats(await stats.json());
+  }, [wdFilter, wdQuery]);
   const loadEarnings = React.useCallback(async () => {
     const r = await fetchAuth(`${API_BASE}/admin/referral-program/earnings?filter=${earnFilter}`);
     if (r.ok) setEarnings(await r.json());
@@ -155,6 +211,20 @@ export default function AdminReferralsPage() {
 
   const refreshAll = () => Promise.all([loadOverview(), loadWithdrawals(), loadEarnings(), loadReferrals()]);
 
+  React.useEffect(() => {
+    const t = window.setTimeout(() => setWdQuery(wdSearch), 350);
+    return () => window.clearTimeout(t);
+  }, [wdSearch]);
+
+  // keep the queue fresh while the admin has the Withdrawals tab open (another admin / the status job may change rows)
+  React.useEffect(() => {
+    if (tab !== "withdrawals") return;
+    const t = window.setInterval(() => {
+      if (!document.hidden) void Promise.all([loadWithdrawals(), loadOverview()]);
+    }, 60_000);
+    return () => window.clearInterval(t);
+  }, [tab, loadWithdrawals, loadOverview]);
+
   async function call(id: string | null, url: string, body: unknown, okText: (d: any) => string) {
     setBusyId(id);
     try {
@@ -165,10 +235,11 @@ export default function AdminReferralsPage() {
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d?.message || "Action failed");
-      say(true, okText(d));
+      say(!d?.uncertain, okText(d));
       await refreshAll();
     } catch (e) {
       say(false, (e as Error).message);
+      void refreshAll(); // the request may already have been handled by someone else - show the real state
     } finally {
       setBusyId(null);
     }
@@ -176,18 +247,45 @@ export default function AdminReferralsPage() {
 
   const ask = (d: Dialog) => {
     setDialogText("");
+    setDialogRef("");
     setDialog(d);
   };
+  const dialogReady = (d: Dialog) => (d.minLen ?? 0) <= dialogText.trim().length && (!d.refLabel || dialogRef.trim().length >= 6);
   const runDialog = async () => {
-    if (!dialog) return;
-    if ((dialog.minLen ?? 0) > dialogText.trim().length) return;
+    if (!dialog || dialogBusy || !dialogReady(dialog)) return;
     setDialogBusy(true);
     try {
-      await dialog.run(dialogText.trim());
+      await dialog.run(dialogText.trim(), dialogRef.trim());
       setDialog(null);
     } finally {
       setDialogBusy(false);
     }
+  };
+
+  const copy = async (text: string, what: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      say(true, `${what} copied.`);
+    } catch {
+      say(false, "Could not copy - select the text and copy it by hand.");
+    }
+  };
+
+  const exportCsv = () => {
+    const head = ["Requested", "Name", "Email", "Phone", "Amount INR", "Status", "Method", "UPI / account", "IFSC", "Account holder", "Sanctioned", "Paid", "UTR / reference", "Note"];
+    const rows = withdrawals.map((w) => [
+      w.createdAt, w.user.fullName, w.user.email, w.user.phone ?? "", w.amountInr, WD_LABEL[w.status], w.payoutMethodType === "UPI" ? "UPI" : "Bank",
+      w.payoutMethodType === "UPI" ? w.upiId ?? "" : w.bankAccountNo ?? "", w.bankIfsc ?? "", w.bankAccountName ?? "", w.approvedAt ?? "", w.paidAt ?? "", w.paymentRef ?? "", w.adminNote ?? "",
+    ]);
+    const csv = [head, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `withdrawals-${wdFilter || "all"}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
 
   const saveSettings = async () => {
@@ -273,87 +371,263 @@ export default function AdminReferralsPage() {
         {/* ---------------- Withdrawals ---------------- */}
         {tab === "withdrawals" && (
           <div className="mt-5">
-            <div className="flex flex-wrap gap-2">
-              {["REQUESTED", "APPROVED", "PROCESSING", "PAID", "REJECTED", "FAILED", ""].map((s) => (
-                <button key={s || "ALL"} onClick={() => setWdFilter(s)} className={`rounded-full px-3 py-1 text-xs font-semibold ${wdFilter === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}>
-                  {s || "ALL"}
+            {wdStats && (
+              <>
+                <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Withdrawal numbers">
+                  <Card
+                    label="Waiting for you"
+                    value={inr(wdStats.awaiting.amountInr)}
+                    sub={`${wdStats.awaiting.count} request${wdStats.awaiting.count === 1 ? "" : "s"}${wdStats.oldestAwaitingHours !== null ? ` · oldest ${wdStats.oldestAwaitingHours < 1 ? "under 1 h" : `${wdStats.oldestAwaitingHours} h`}` : ""}`}
+                    tone={wdStats.awaiting.count ? "text-warning" : ""}
+                  />
+                  <Card
+                    label="Sanctioned - still to pay"
+                    value={inr(wdStats.toPay.amountInr)}
+                    sub={`${wdStats.sanctioned.count} not sent · ${wdStats.processing.count} sending`}
+                    tone={wdStats.toPay.count ? "text-primary" : ""}
+                  />
+                  <Card
+                    label="Paid"
+                    value={inr(wdStats.paid.amountInr)}
+                    sub={`${wdStats.paid.count} paid · today ${inr(wdStats.paidToday.amountInr)} · 30 days ${inr(wdStats.paidLast30Days.amountInr)}`}
+                    tone="text-success"
+                  />
+                  <Card
+                    label="Sanctioned in total"
+                    value={inr(wdStats.sanctionedTotal.amountInr)}
+                    sub={`${wdStats.sanctionedTotal.count} sanctioned · ${inr(wdStats.rejected.amountInr)} returned (${wdStats.rejected.count})`}
+                  />
+                </section>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Payout mode:{" "}
+                  <b>{wdStats.payoutMode === "CASHFREE" ? "Cashfree (automatic transfer)" : "Manual - you pay from your UPI / bank app and record the UTR"}</b>
+                </p>
+                {wdStats.mismatch && (
+                  <p role="alert" className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+                    Check the books: wallets say {inr(wdStats.mismatch.walletTotalInr)} was paid out, but the paid requests add up to {inr(wdStats.mismatch.paidRowsInr)}
+                    {" "}(difference {inr(wdStats.mismatch.differenceInr)}).
+                  </p>
+                )}
+              </>
+            )}
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              {(
+                [
+                  ["REQUESTED", wdStats?.awaiting.count],
+                  ["APPROVED", wdStats?.sanctioned.count],
+                  ["PROCESSING", wdStats?.processing.count],
+                  ["PAID", wdStats?.paid.count],
+                  ["REJECTED", undefined],
+                  ["FAILED", undefined],
+                  ["", undefined],
+                ] as [string, number | undefined][]
+              ).map(([s, n]) => (
+                <button
+                  key={s || "ALL"}
+                  onClick={() => setWdFilter(s)}
+                  aria-pressed={wdFilter === s}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${wdFilter === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground"}`}
+                >
+                  {s ? WD_LABEL[s] : "All"}
+                  {n ? ` (${n})` : ""}
                 </button>
               ))}
+              <input
+                value={wdSearch}
+                onChange={(e) => setWdSearch(e.target.value)}
+                placeholder="Search name, email, UPI, UTR…"
+                aria-label="Search withdrawals"
+                className={`${field} ml-auto max-w-[240px]`}
+              />
+              <button className="btn btn-outline btn-sm" disabled={withdrawals.length === 0} onClick={exportCsv}>
+                Download CSV
+              </button>
             </div>
+
             {loading ? (
               <p className="mt-6 text-sm text-muted-foreground">Loading…</p>
             ) : withdrawals.length === 0 ? (
-              <p className="mt-6 text-sm text-muted-foreground">No withdrawal requests in this status.</p>
+              <p className="mt-6 text-sm text-muted-foreground">No withdrawal requests here.</p>
             ) : (
               <div className="mt-4 space-y-3">
-                {withdrawals.map((w) => (
-                  <div key={w.id} className="card p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="font-semibold">
-                          <a href={`/admin/referrals/${w.user.id}`} className="hover:underline">{w.user.fullName}</a>{" "}
-                          <span className="font-normal text-muted-foreground">({w.user.email})</span>
-                        </p>
-                        <p className="mt-1 text-2xl font-bold text-primary">{inr(w.amountInr)}</p>
-                        <p className="mt-1 break-all text-xs text-muted-foreground">
-                          {w.payoutMethodType === "UPI" ? `UPI: ${w.upiId}` : `Bank: ${w.bankAccountName} · ${w.bankAccountNo} · ${w.bankIfsc}`}
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Requested {new Date(w.createdAt).toLocaleString("en-IN")}
-                          {w.cashfreeTransferId ? ` · Cashfree transfer: ${w.cashfreeTransferId}` : ""}
-                        </p>
-                        {w.adminNote && <p className="mt-1 text-xs italic text-muted-foreground">Note: {w.adminNote}</p>}
+                {withdrawals.map((w) => {
+                  const dest = w.payoutMethodType === "UPI" ? w.upiId ?? "" : w.bankAccountNo ?? "";
+                  const busy = busyId === w.id;
+                  const cashfree = wdStats?.payoutMode === "CASHFREE";
+                  const markPaid = (title: string) =>
+                    ask({
+                      title,
+                      body: `Confirm you have already sent ${inr(w.amountInr)} to ${w.payoutMethodType === "UPI" ? w.upiId : `${w.bankAccountName} (${w.bankAccountNo})`}. Enter the UTR / transaction reference from your payment app - the student sees it.`,
+                      refLabel: "UTR / transaction reference",
+                      ask: "Note (optional, the student sees it)",
+                      minLen: 0,
+                      confirmLabel: "Yes, it is paid",
+                      run: (note, ref) => call(w.id, `/admin/withdrawals/${w.id}/mark-paid`, { reference: ref, ...(note ? { note } : {}) }, () => "Marked as paid."),
+                    });
+                  return (
+                    <div key={w.id} className="card p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-semibold">
+                            <a href={`/admin/referrals/${w.user.id}`} className="hover:underline">{w.user.fullName}</a>{" "}
+                            <span className="font-normal text-muted-foreground">({w.user.email}{w.user.phone ? ` · ${w.user.phone}` : ""})</span>
+                          </p>
+                          <p className="mt-1 text-2xl font-bold text-primary">{inr(w.amountInr)}</p>
+                          <p className="mt-1 break-all text-sm">
+                            {w.payoutMethodType === "UPI" ? (
+                              <>UPI: <b>{w.upiId}</b></>
+                            ) : (
+                              <>Bank: <b>{w.bankAccountName}</b> · {w.bankAccountNo} · {w.bankIfsc}</>
+                            )}{" "}
+                            {dest && (
+                              <button className="ml-1 text-xs font-medium text-primary underline" onClick={() => void copy(dest, w.payoutMethodType === "UPI" ? "UPI ID" : "Account number")}>
+                                Copy
+                              </button>
+                            )}
+                            {w.payoutMethodType === "BANK_ACCOUNT" && w.bankIfsc && (
+                              <button className="ml-2 text-xs font-medium text-primary underline" onClick={() => void copy(w.bankIfsc ?? "", "IFSC")}>
+                                Copy IFSC
+                              </button>
+                            )}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Requested {fmtDT(w.createdAt)}
+                            {w.approvedAt ? ` → Sanctioned ${fmtDT(w.approvedAt)}` : ""}
+                            {w.paidAt ? ` → Paid ${fmtDT(w.paidAt)}` : ""}
+                            {w.rejectedAt ? ` → ${w.status === "FAILED" ? "Failed" : "Rejected"} ${fmtDT(w.rejectedAt)}` : ""}
+                          </p>
+                          {w.paymentRef && <p className="mt-1 text-xs">UTR / reference: <b className="font-mono">{w.paymentRef}</b></p>}
+                          {w.cashfreeTransferId && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Cashfree transfer {w.cashfreeTransferId}{w.gatewayStatus ? ` · ${w.gatewayStatus}` : ""}
+                            </p>
+                          )}
+                          {w.adminNote && <p className="mt-1 text-xs italic text-muted-foreground">Note: {w.adminNote}</p>}
+                          {w.flaggedFriends > 0 && (
+                            <p className="mt-1 text-xs font-medium text-warning">
+                              ⚑ {w.flaggedFriends} of this student&apos;s friends {w.flaggedFriends === 1 ? "is" : "are"} flagged (same device etc.) -{" "}
+                              <a href={`/admin/referrals/${w.user.id}`} className="underline">check before paying</a>
+                            </p>
+                          )}
+                        </div>
+                        <span className={WD_BADGE[w.status]}>{WD_LABEL[w.status]}</span>
                       </div>
-                      <span className={WD_BADGE[w.status]}>{w.status}</span>
+
+                      {w.status === "REQUESTED" && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            disabled={busy}
+                            className="btn btn-primary btn-sm"
+                            onClick={() => call(w.id, `/admin/withdrawals/${w.id}/approve`, undefined, (d) => d.message || "Sanctioned.")}
+                          >
+                            {busy ? "Working…" : "Approve (sanction)"}
+                          </button>
+                          <button
+                            disabled={busy}
+                            className="btn btn-outline btn-sm text-danger"
+                            onClick={() =>
+                              ask({
+                                title: `Reject ${inr(w.amountInr)} for ${w.user.fullName}?`,
+                                body: "The amount goes back to the student's withdrawable balance. Tell them why:",
+                                ask: "Reason (shown to the student)",
+                                confirmLabel: "Reject request",
+                                danger: true,
+                                minLen: 3,
+                                run: (reason) => call(w.id, `/admin/withdrawals/${w.id}/reject`, { reason }, () => "Rejected - the amount is back in the student's wallet."),
+                              })
+                            }
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+
+                      {w.status === "APPROVED" && (
+                        <div className="mt-3">
+                          <p className="mb-2 text-xs text-muted-foreground">
+                            Sanctioned. {cashfree ? "Send it through Cashfree, or pay it yourself and record the UTR." : "Pay it from your UPI / bank app, then record the UTR."}
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {cashfree && (
+                              <button
+                                disabled={busy}
+                                className="btn btn-primary btn-sm"
+                                onClick={() =>
+                                  ask({
+                                    title: `Send ${inr(w.amountInr)} through Cashfree?`,
+                                    body: `${inr(w.amountInr)} will be transferred to ${w.payoutMethodType === "UPI" ? w.upiId : w.bankAccountName} right away. It can only be sent once.`,
+                                    confirmLabel: "Send now",
+                                    run: () => call(w.id, `/admin/withdrawals/${w.id}/pay`, undefined, (d) => d.message || "Sent to Cashfree."),
+                                  })
+                                }
+                              >
+                                Send via Cashfree
+                              </button>
+                            )}
+                            <button disabled={busy} className={`btn btn-sm ${cashfree ? "btn-outline" : "btn-primary"}`} onClick={() => markPaid("Mark as paid?")}>
+                              Mark as paid (enter UTR)
+                            </button>
+                            <button
+                              disabled={busy}
+                              className="btn btn-outline btn-sm text-danger"
+                              onClick={() =>
+                                ask({
+                                  title: `Take back the sanction and reject ${inr(w.amountInr)}?`,
+                                  body: "Nothing has been paid. The amount goes back to the student's withdrawable balance. Tell them why:",
+                                  ask: "Reason (shown to the student)",
+                                  confirmLabel: "Reject request",
+                                  danger: true,
+                                  minLen: 3,
+                                  run: (reason) => call(w.id, `/admin/withdrawals/${w.id}/reject`, { reason }, () => "Rejected - the amount is back in the student's wallet."),
+                                })
+                              }
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {w.status === "PROCESSING" && (
+                        <div className="mt-3">
+                          <p className="mb-2 text-xs font-medium text-warning">
+                            The money is on its way through Cashfree. Do not pay this again by hand unless the Cashfree dashboard shows it failed.
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              disabled={busy}
+                              className="btn btn-primary btn-sm"
+                              onClick={() => call(w.id, `/admin/withdrawals/${w.id}/check-status`, undefined, (d) => d.message || "Checked.")}
+                            >
+                              {busy ? "Checking…" : "Check status"}
+                            </button>
+                            <button disabled={busy} className="btn btn-outline btn-sm" onClick={() => markPaid("Cashfree shows it as paid?")}>
+                              Mark as paid (enter UTR)
+                            </button>
+                            <button
+                              disabled={busy}
+                              className="btn btn-outline btn-sm text-danger"
+                              onClick={() =>
+                                ask({
+                                  title: `Mark ${inr(w.amountInr)} as failed?`,
+                                  body: "Only do this when the Cashfree dashboard shows this transfer as failed or reversed. The amount goes back to the student's wallet.",
+                                  ask: "What the dashboard shows (kept in the record)",
+                                  confirmLabel: "Mark failed and refund",
+                                  danger: true,
+                                  minLen: 3,
+                                  run: (reason) => call(w.id, `/admin/withdrawals/${w.id}/mark-failed`, { reason }, () => "Marked as failed - the amount is back in the student's wallet."),
+                                })
+                              }
+                            >
+                              Mark failed
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    {w.status === "REQUESTED" && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          disabled={busyId === w.id}
-                          className="btn btn-primary btn-sm"
-                          onClick={() => call(w.id, `/admin/withdrawals/${w.id}/approve`, undefined, (d) => (d.autoPayout ? `Paid automatically via Cashfree (transfer ${d.cfTransferId}).` : d.message || "Approved."))}
-                        >
-                          {busyId === w.id ? "Working…" : "Approve"}
-                        </button>
-                        <button
-                          disabled={busyId === w.id}
-                          className="btn btn-outline btn-sm text-danger"
-                          onClick={() =>
-                            ask({
-                              title: `Reject ${inr(w.amountInr)} for ${w.user.fullName}?`,
-                              body: "The amount goes back to the student's withdrawable balance. Tell them why:",
-                              ask: "Reason (shown to the student)",
-                              confirmLabel: "Reject request",
-                              danger: true,
-                              minLen: 3,
-                              run: (reason) => call(w.id, `/admin/withdrawals/${w.id}/reject`, { reason }, () => "Rejected — the amount is back in the student's wallet."),
-                            })
-                          }
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    )}
-                    {w.status === "APPROVED" && (
-                      <div className="mt-3">
-                        <button
-                          disabled={busyId === w.id}
-                          className="btn btn-primary btn-sm"
-                          onClick={() =>
-                            ask({
-                              title: "Mark as paid?",
-                              body: `Confirm you have already sent ${inr(w.amountInr)} to ${w.payoutMethodType === "UPI" ? w.upiId : w.bankAccountName} by UPI / bank transfer.`,
-                              confirmLabel: "Yes, I sent it",
-                              run: () => call(w.id, `/admin/withdrawals/${w.id}/mark-paid`, undefined, () => "Marked as paid."),
-                            })
-                          }
-                        >
-                          Mark as paid (sent manually)
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -562,17 +836,33 @@ export default function AdminReferralsPage() {
           <div className="card w-full max-w-md p-5 shadow-xl">
             <h2 className="text-lg font-bold">{dialog.title}</h2>
             {dialog.body && <p className="mt-2 text-sm text-muted-foreground">{dialog.body}</p>}
+            {dialog.refLabel && (
+              <>
+                <label htmlFor="dlg-ref" className="mb-1 mt-4 block text-sm font-medium">{dialog.refLabel}</label>
+                <input
+                  id="dlg-ref"
+                  autoFocus
+                  value={dialogRef}
+                  onChange={(e) => setDialogRef(e.target.value.replace(/\s/g, ""))}
+                  maxLength={40}
+                  autoComplete="off"
+                  placeholder="e.g. 412345678901"
+                  className={`${field} font-mono`}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">At least 6 characters. The same UTR cannot be used on two withdrawals.</p>
+              </>
+            )}
             {dialog.ask && (
               <>
                 <label htmlFor="dlg-text" className="mb-1 mt-4 block text-sm font-medium">{dialog.ask}</label>
-                <textarea id="dlg-text" autoFocus rows={3} value={dialogText} onChange={(e) => setDialogText(e.target.value)} className={field} />
+                <textarea id="dlg-text" autoFocus={!dialog.refLabel} rows={3} value={dialogText} onChange={(e) => setDialogText(e.target.value)} className={field} />
               </>
             )}
             <div className="mt-5 flex justify-end gap-2">
               <button className="btn btn-outline" onClick={() => setDialog(null)} disabled={dialogBusy}>Cancel</button>
               <button
                 className={`btn ${dialog.danger ? "bg-danger text-danger-foreground" : "btn-primary"}`}
-                disabled={dialogBusy || (dialog.minLen ?? 0) > dialogText.trim().length}
+                disabled={dialogBusy || !dialogReady(dialog)}
                 onClick={() => void runDialog()}
               >
                 {dialogBusy ? "Working…" : dialog.confirmLabel}

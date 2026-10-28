@@ -1112,8 +1112,17 @@ model WithdrawalRequest {
   cashfreeTransferId String?        // Cashfree Payouts transfer_id, once initiated
   adminNote        String?
   processedByAdminId String?
-  processedAt      DateTime?
+  processedAt      DateTime?        // last time an admin / the payout job moved this request
   createdAt        DateTime         @default(now())
+  // --- sanction -> pay trail (session 18). Back-filled from processedAt for old rows. ---
+  approvedAt       DateTime?        // admin sanctioned the request (REQUESTED -> APPROVED)
+  approvedById     String?
+  paidAt           DateTime?        // money confirmed sent (PAID)
+  paidById         String?
+  rejectedAt       DateTime?        // REJECTED or FAILED: the amount went back to the wallet
+  paymentRef       String?          // UTR / bank reference (typed by admin, or Cashfree's transfer_utr)
+  gatewayStatus    String?          // last status Cashfree reported for this transfer
+  lastCheckedAt    DateTime?        // last time we asked Cashfree about this transfer
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

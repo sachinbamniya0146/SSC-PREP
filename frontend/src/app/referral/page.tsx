@@ -68,7 +68,13 @@ type Withdrawal = {
   amountInr: number;
   status: "REQUESTED" | "APPROVED" | "PROCESSING" | "PAID" | "REJECTED" | "FAILED";
   payoutMethodType: "UPI" | "BANK_ACCOUNT";
-  adminNote: string | null;
+  /** only text meant for the student: rejection reason, a note on the payment, or a fixed sentence for a failed transfer */
+  note: string | null;
+  /** UTR / bank reference, only once paid */
+  paymentRef: string | null;
+  approvedAt: string | null;
+  paidAt: string | null;
+  rejectedAt: string | null;
   processedAt: string | null;
   createdAt: string;
 };
@@ -84,15 +90,17 @@ type PayoutMethod = {
 const inr = (n: number) =>
   `₹${(Math.round(n * 100) / 100).toLocaleString("en-IN", { minimumFractionDigits: Math.round(n * 100) % 100 ? 2 : 0 })}`;
 const fmtDate = (d?: string | null) => (d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "");
+const sumOf = (rows: Withdrawal[], statuses: Withdrawal["status"][]) =>
+  rows.filter((w) => statuses.includes(w.status)).reduce((a, w) => a + w.amountInr, 0);
 const daysUntil = (d: string) => Math.max(0, Math.ceil((new Date(d).getTime() - Date.now()) / 86_400_000));
 
-const WD_BADGE: Record<Withdrawal["status"], { cls: string; label: string }> = {
-  REQUESTED: { cls: "badge badge-warning", label: "Requested" },
-  APPROVED: { cls: "badge badge-info", label: "Approved" },
-  PROCESSING: { cls: "badge badge-info", label: "Sending" },
-  PAID: { cls: "badge badge-success", label: "Paid" },
-  REJECTED: { cls: "badge badge-danger", label: "Rejected" },
-  FAILED: { cls: "badge badge-danger", label: "Failed" },
+const WD_BADGE: Record<Withdrawal["status"], { cls: string; label: [string, string] }> = {
+  REQUESTED: { cls: "badge badge-warning", label: ["Waiting for approval", "Approval ka wait"] },
+  APPROVED: { cls: "badge badge-info", label: ["Approved - payment coming", "Approve ho gaya - payment aa raha hai"] },
+  PROCESSING: { cls: "badge badge-info", label: ["Sending", "Bhej rahe hain"] },
+  PAID: { cls: "badge badge-success", label: ["Paid", "Paid"] },
+  REJECTED: { cls: "badge badge-danger", label: ["Rejected", "Reject"] },
+  FAILED: { cls: "badge badge-danger", label: ["Not sent - money back", "Nahi gaya - paisa wapas"] },
 };
 
 function Stat({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: "success" | "warning" | "primary" }) {
@@ -643,32 +651,73 @@ function ReferralPageInner() {
               </div>
             </div>
 
+            {/* summary of what is where */}
+            {withdrawals.length > 0 && (
+              <div className="grid grid-cols-3 gap-3">
+                <Stat label={tr("Waiting", "Wait me")} value={inr(sumOf(withdrawals, ["REQUESTED"]))} tone="warning" />
+                <Stat label={tr("Approved, coming", "Approve, aa raha")} value={inr(sumOf(withdrawals, ["APPROVED", "PROCESSING"]))} tone="primary" />
+                <Stat label={tr("Paid to you", "Aapko mila")} value={inr(sumOf(withdrawals, ["PAID"]))} tone="success" />
+              </div>
+            )}
+
             {/* history */}
             {withdrawals.length > 0 && (
               <ul className="card divide-y divide-border">
-                {withdrawals.map((w) => (
-                  <li key={w.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                    <div>
-                      <p className="font-bold tabular-nums">{inr(w.amountInr)}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {fmtDate(w.createdAt)} · {w.payoutMethodType === "UPI" ? "UPI" : "Bank"}
-                        {w.adminNote ? ` · ${w.adminNote}` : ""}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={WD_BADGE[w.status].cls}>{WD_BADGE[w.status].label}</span>
-                      {w.status === "REQUESTED" &&
-                        (cancelId === w.id ? (
-                          <>
-                            <button className="btn btn-sm btn-outline" onClick={() => void cancelWithdrawal(w.id)}>{tr("Yes, cancel", "Haan, cancel")}</button>
-                            <button className="btn btn-sm btn-ghost" onClick={() => setCancelId(null)}>{tr("No", "Nahi")}</button>
-                          </>
-                        ) : (
-                          <button className="btn btn-sm btn-outline" onClick={() => setCancelId(w.id)}>{tr("Cancel", "Cancel")}</button>
+                {withdrawals.map((w) => {
+                  const steps: { label: string; at: string | null; done: boolean }[] =
+                    w.status === "REJECTED" || w.status === "FAILED"
+                      ? [
+                          { label: tr("Requested", "Request"), at: w.createdAt, done: true },
+                          { label: w.status === "FAILED" ? tr("Not sent", "Nahi gaya") : tr("Rejected", "Reject"), at: w.rejectedAt, done: true },
+                        ]
+                      : [
+                          { label: tr("Requested", "Request"), at: w.createdAt, done: true },
+                          { label: tr("Approved", "Approve"), at: w.approvedAt, done: w.status !== "REQUESTED" },
+                          { label: tr("Paid", "Paid"), at: w.paidAt, done: w.status === "PAID" },
+                        ];
+                  return (
+                    <li key={w.id} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="font-bold tabular-nums">{inr(w.amountInr)}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {fmtDate(w.createdAt)} · {w.payoutMethodType === "UPI" ? "UPI" : "Bank"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={WD_BADGE[w.status].cls}>{tr(WD_BADGE[w.status].label[0], WD_BADGE[w.status].label[1])}</span>
+                          {w.status === "REQUESTED" &&
+                            (cancelId === w.id ? (
+                              <>
+                                <button className="btn btn-sm btn-outline" onClick={() => void cancelWithdrawal(w.id)}>{tr("Yes, cancel", "Haan, cancel")}</button>
+                                <button className="btn btn-sm btn-ghost" onClick={() => setCancelId(null)}>{tr("No", "Nahi")}</button>
+                              </>
+                            ) : (
+                              <button className="btn btn-sm btn-outline" onClick={() => setCancelId(w.id)}>{tr("Cancel", "Cancel")}</button>
+                            ))}
+                        </div>
+                      </div>
+                      <ol className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" aria-label={tr("Progress", "Progress")}>
+                        {steps.map((st, i) => (
+                          <li key={st.label} className="flex items-center gap-2">
+                            {i > 0 && <span aria-hidden className="text-muted-foreground">→</span>}
+                            <span className={st.done ? (w.status === "REJECTED" || w.status === "FAILED" ? "font-semibold text-danger" : "font-semibold text-success") : "text-muted-foreground"}>
+                              {st.done ? "✓ " : "○ "}
+                              {st.label}
+                              {st.done && st.at ? ` · ${fmtDate(st.at)}` : ""}
+                            </span>
+                          </li>
                         ))}
-                    </div>
-                  </li>
-                ))}
+                      </ol>
+                      {w.paymentRef && (
+                        <p className="mt-1 text-xs">
+                          {tr("UTR / reference", "UTR / reference")}: <b className="font-mono">{w.paymentRef}</b>
+                        </p>
+                      )}
+                      {w.note && <p className="mt-1 text-xs text-muted-foreground">{w.note}</p>}
+                    </li>
+                  );
+                })}
               </ul>
             )}
             {openWithdrawal && <p className="text-xs text-muted-foreground">{tr("One withdrawal at a time. You can request again once this one is finished.", "Ek time par ek hi withdrawal. Ye khatam hone ke baad dobara request kar sakte hain.")}</p>}

@@ -40,7 +40,17 @@ type Detail = {
     reversalNote?: string | null;
     createdAt: string;
   }[];
-  withdrawals: { id: string; amountInr: number; status: string; createdAt: string }[];
+  withdrawals: {
+    id: string;
+    amountInr: number;
+    status: string;
+    createdAt: string;
+    approvedAt?: string | null;
+    paidAt?: string | null;
+    rejectedAt?: string | null;
+    paymentRef?: string | null;
+    adminNote?: string | null;
+  }[];
 };
 
 export default function AdminReferralUserDetailPage() {
@@ -196,8 +206,17 @@ export default function AdminReferralUserDetailPage() {
         <h2 className="mt-8 text-lg font-semibold">Withdrawals ({data.withdrawals.length})</h2>
         <div className="mt-3 divide-y divide-border rounded-2xl border border-border bg-card">
           {data.withdrawals.map((w) => (
-            <div key={w.id} className="flex items-center justify-between px-4 py-3 text-sm">
-              <p>₹{w.amountInr.toFixed(2)} · {new Date(w.createdAt).toLocaleDateString()}</p>
+            <div key={w.id} className="flex items-start justify-between gap-3 px-4 py-3 text-sm">
+              <div>
+                <p>₹{w.amountInr.toFixed(2)} · requested {new Date(w.createdAt).toLocaleDateString("en-IN")}</p>
+                <p className="text-xs text-muted-foreground">
+                  {w.approvedAt ? `Sanctioned ${new Date(w.approvedAt).toLocaleDateString("en-IN")}` : "Not sanctioned"}
+                  {w.paidAt ? ` · Paid ${new Date(w.paidAt).toLocaleDateString("en-IN")}` : ""}
+                  {w.rejectedAt ? ` · Returned ${new Date(w.rejectedAt).toLocaleDateString("en-IN")}` : ""}
+                  {w.paymentRef ? ` · UTR ${w.paymentRef}` : ""}
+                </p>
+                {w.adminNote && <p className="text-xs italic text-muted-foreground">{w.adminNote}</p>}
+              </div>
               <span className="text-xs font-semibold">{w.status}</span>
             </div>
           ))}
