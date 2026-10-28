@@ -18,3 +18,5 @@ They are an aid, NOT a replacement for the GitHub Actions run.
 
 Also useful: `tsc --noEmit --noUnusedLocals --noUnusedParameters` (any TypeScript 5/6) lists unused imports/variables even
 when the packages are not installed - the backend lint rule `@typescript-eslint/no-unused-vars` is an ERROR in CI.
+
+**Spec files are compiled by the real build** (`nest build` includes `*.spec.ts`). When you type-check with `tsconfig.s25.json`-style settings, do NOT filter out spec files; ignore only `Cannot find name describe/it/expect` (no jest types in the sandbox). Session 27 shipped a TS2353 in a spec because of this.

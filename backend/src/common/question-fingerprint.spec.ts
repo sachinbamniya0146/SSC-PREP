@@ -1,7 +1,7 @@
 import { dropDuplicateQuestions, normText, questionFingerprint, rememberQuestions, uniquePool } from './question-fingerprint';
 
 const opt = (...t: string[]) => t.map((text, i) => ({ key: 'ABCD'[i], text }));
-const q = (id: string, questionText: string, options = opt('a', 'b', 'c', 'd'), extra: object = {}) => ({ id, questionText, optionsJson: options, ...extra });
+const q = (id: string, questionText: string, options: unknown[] = opt('a', 'b', 'c', 'd'), extra: object = {}) => ({ id, questionText, optionsJson: options, ...extra });
 
 describe('same question twice', () => {
   it('normalises case, spaces, zero-width characters, full-width forms and a trailing full stop', () => {
