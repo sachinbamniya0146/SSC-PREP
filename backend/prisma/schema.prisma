@@ -774,6 +774,12 @@ model TestAttempt {
   // offline student's late delivery from a connected client trying to edit a closed section.
   lastSyncAt       DateTime?
 
+  // Session 29 (G3) — an admin re-scored this finished attempt after an answer key was corrected. The first score is kept here, so
+  // nothing is ever changed silently; the result page shows the note. All three stay null for an attempt that was never re-scored.
+  rescoredAt         DateTime?
+  scoreBeforeRescore Float?
+  rescoreNote        String?
+
   @@index([userId, status])
   @@index([testTemplateId, status]) // rank/percentile + leaderboard hot path
   @@map("test_attempts")

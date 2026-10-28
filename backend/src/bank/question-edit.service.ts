@@ -481,7 +481,18 @@ export class QuestionEditService {
         /* the edit is saved; the mock refreshes on the next upload */
       }
     }
-    return { ok: true, id, questionNo: existing.questionNo, autoPublished, warnings };
+    // Session 29 (G3): the key changed -> how many finished attempts were scored with the old one? The edit page offers the re-score button.
+    let keyChangedAttempts = 0;
+    if (data.correctAnswer !== undefined && String(data.correctAnswer) !== String(existing.correctAnswer)) {
+      try {
+        keyChangedAttempts = await this.prisma.attemptAnswer.count({
+          where: { questionId: id, selectedOption: { not: null }, testAttempt: { status: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] } } },
+        });
+      } catch {
+        keyChangedAttempts = 0;
+      }
+    }
+    return { ok: true, id, questionNo: existing.questionNo, autoPublished, warnings, keyChangedAttempts };
   }
 
   // ---------------------------------------------------------------------------

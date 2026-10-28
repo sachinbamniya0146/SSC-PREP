@@ -4,7 +4,7 @@ import { Injectable, BadRequestException, Inject, forwardRef } from '@nestjs/com
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { GamificationService } from '../gamification/gamification.service';
-import { cacheGet, cacheSet } from '../common/cache';
+import { cacheClearPrefix, cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { isPyqAutoMockId, rankPyqTemplatesNewestFirst, isPyqMockFreeByRank } from '../common/pyq-mock-pricing';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeAndCapPaperRows, dedupeKeyedPaperRows } from '../common/pyq-paper';
@@ -611,6 +611,71 @@ private async finishAttempt(
   return { ...updated, expired };
 }
 
+// Session 29 (G3) — re-score ONE finished attempt after an answer key was corrected. Only the answers whose verdict flips are touched:
+// right -> wrong costs the question's marks plus its negative, wrong -> right gives both back (marks / negative = the same rule the review shows).
+// Never silent: the first score stays in `scoreBeforeRescore`, a note is stored, an audit-log row is written, all in ONE transaction that only
+// applies if the attempt is still exactly as read here (two admins, or a double click, change it once). Skipped answers never change.
+// `onlyQuestionId` limits the check to one question (the usual case: the admin just fixed that question).
+async rescoreAttempt(attemptId: string, adminId: string | null, opts: { onlyQuestionId?: string } = {}): Promise<{ changed: boolean; before?: number; after?: number; flips?: number }> {
+  const attempt: any = await this.prisma.testAttempt.findFirst({
+    where: { id: attemptId },
+    include: {
+      testTemplate: { select: { examPatternId: true, examId: true, examTier: true, tierPaper: true } },
+      answers: {
+        include: {
+          question: { select: { id: true, correctAnswer: true, marks: true, negativeMarks: true, examId: true, examTier: true, tierPaper: true, subject: { select: { slug: true } } } },
+        },
+      },
+    },
+  });
+  if (!attempt || !isAttemptDone(attempt.status)) return { changed: false };
+  const plan = readSectionPlan(attempt.sectionPlan);
+  const rows: any[] = (attempt.answers as any[]).filter((a) => a.selectedOption != null && (!opts.onlyQuestionId || a.questionId === opts.onlyQuestionId));
+  const scheme = plan ? null : await this.markingSchemeFor(attempt.testTemplate, rows.map((a) => a.question));
+  const norm = (v: unknown) => String(v ?? '').trim().toUpperCase();
+  const flips: { id: string; isCorrect: boolean }[] = [];
+  let score = attempt.score as number;
+  let right = attempt.totalCorrect as number;
+  let wrong = attempt.totalWrong as number;
+  for (const a of rows) {
+    const nowCorrect = norm(a.selectedOption) === norm(a.question.correctAnswer);
+    if (nowCorrect === a.isCorrect) continue;
+    const rule = resolveMarking({ plan, scheme, subjectSlug: a.question.subject?.slug, question: a.question });
+    const swing = rule.marks + rule.negative;
+    flips.push({ id: a.id, isCorrect: nowCorrect });
+    if (nowCorrect) { right++; wrong--; score += swing; } else { right--; wrong++; score -= swing; }
+  }
+  if (flips.length === 0) return { changed: false };
+  score = Math.round(score * 100) / 100;
+  const accuracyPercent = right + wrong > 0 ? Math.round((right / (right + wrong)) * 1000) / 10 : 0;
+  const first = attempt.scoreBeforeRescore ?? attempt.score;
+  const now = new Date();
+  const note = `Answer key corrected for ${flips.length} question(s) on ${now.toISOString().slice(0, 10)}: score ${first} -> ${score}`;
+  const done = await this.prisma.$transaction(async (tx: any) => {
+    const claim = await tx.testAttempt.updateMany({
+      where: { id: attempt.id, score: attempt.score, totalCorrect: attempt.totalCorrect, totalWrong: attempt.totalWrong },
+      data: { score, totalCorrect: right, totalWrong: wrong, accuracyPercent, rescoredAt: now, scoreBeforeRescore: first, rescoreNote: note },
+    });
+    if (claim.count === 0) return false; // someone else changed this attempt meanwhile: leave it, the next run looks again
+    for (const f of flips) await tx.attemptAnswer.update({ where: { id: f.id }, data: { isCorrect: f.isCorrect } });
+    await tx.auditLog.create({
+      data: {
+        ...(adminId ? { userId: adminId } : {}),
+        action: 'ATTEMPT_RESCORED',
+        targetEntity: 'TestAttempt',
+        entityId: attempt.id,
+        metadataJson: { before: attempt.score, after: score, flips: flips.length, questionId: opts.onlyQuestionId ?? null, rightBefore: attempt.totalCorrect, rightAfter: right } as any,
+      },
+    });
+    return true;
+  });
+  if (!done) return { changed: false };
+  // rank / topper / average are cached per test for a minute: show the new numbers at once
+  cacheClearPrefix(`tests:rank:${attempt.testTemplateId}`);
+  cacheClearPrefix(`tests:stats2:${attempt.testTemplateId}`);
+  return { changed: true, before: attempt.score, after: score, flips: flips.length };
+}
+
 // The finished attempt as the submit response / the "already submitted" replay returns it (one shape for both).
 private loadAttemptResult(attemptId: string) {
   return this.prisma.testAttempt.findUniqueOrThrow({
@@ -1002,6 +1067,9 @@ async saveAnswers(
         selectedOption: a.selectedOption,
         correctAnswer: q.correctAnswer,
         isCorrect: a.isCorrect,
+        // Session 29 (G3): true = the answer key was changed after this attempt was scored and the attempt was not re-scored (yet):
+        // the verdict above is the OLD one. The page says so instead of contradicting itself.
+        keyChanged: !!a.selectedOption && (String(a.selectedOption).trim().toUpperCase() === String(q.correctAnswer ?? '').trim().toUpperCase()) !== a.isCorrect,
         isSkipped: !a.selectedOption,
         isMarkedForReview: a.isMarkedForReview,
         timeSpentSeconds: a.timeSpentSeconds,

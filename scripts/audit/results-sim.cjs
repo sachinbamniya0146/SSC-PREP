@@ -303,12 +303,52 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     // =================================================================================================================
     // 3. KNOWN GAPS - documented in AUDIT_RESULTS_ANALYSIS_OCT2026.md, not fixed in this session
     // =================================================================================================================
-    // G3. answer key corrected after the attempt: the review shows the NEW key next to the OLD isCorrect
-    w.questions.find((q) => q.id === 'q1').correctAnswer = 'B';
+    // G3 (closed in session 29). Answer key corrected after the attempt. Sachin's decision: an admin re-scores (never silently).
+    const q1row = () => w.questions.find((q) => q.id === 'q1');
+    q1row().correctAnswer = 'B'; // Asha picked A for q1 and was scored "right" (+2)
     const after = await ask(() => w.svc.attemptDetail('s1', 'a-s1'));
     const q1 = ((after.v && after.v.questions) || []).find((q) => q.questionId === 'q1') || {};
-    gap('G3 answer key corrected after submit: review stays consistent (selected A, key now B, so it must not say "correct")', q1.selectedOption === q1.correctAnswer ? false : q1.isCorrect === true, `selected=${q1.selectedOption} key=${q1.correctAnswer} isCorrect=${q1.isCorrect} (stored score is not re-scored)`);
-    w.questions.find((q) => q.id === 'q1').correctAnswer = 'A';
+    check('G3 before any re-score the review does not contradict itself: the stale verdict is flagged (keyChanged)', q1.keyChanged === true && q1.isCorrect === true, `selected=${q1.selectedOption} key=${q1.correctAnswer} isCorrect=${q1.isCorrect} keyChanged=${q1.keyChanged}`);
+    check('G3 a key that did not change is not flagged', ((after.v && after.v.questions) || []).filter((q) => q.questionId !== 'q1').every((q) => q.keyChanged === false));
+    let rescoreMod = null;
+    try { rescoreMod = require(path.join(backend, 'src/tests/attempt-rescore.service.ts')); } catch (e) { rescoreMod = null; }
+    check('G3 the re-score service exists (attempt-rescore.service.ts)', !!rescoreMod && !!rescoreMod.AttemptRescoreService);
+    if (rescoreMod) {
+      w.answerRows.forEach((r) => { r.id = r.testAttemptId + ':' + r.questionId; });
+      const audit = [];
+      w.prisma.$transaction = async (fn) => fn(w.prisma);
+      w.prisma.auditLog = { create: async ({ data }) => { audit.push(data); return data; } };
+      w.prisma.question.findUnique = async ({ where }) => { const q = w.questions.find((x) => x.id === where.id); return q ? { ...q } : null; };
+      w.prisma.attemptAnswer.update = async ({ where, data }) => { const r = w.answerRows.find((x) => x.id === where.id); Object.assign(r, data); return r; };
+      // a student with a RUNNING attempt that also has a row for q1 (autosave): never touched
+      w.attempts.push({ id: 'a-run3', userId: 's3', testTemplateId: 'T1', status: 'IN_PROGRESS', score: 0, totalCorrect: 0, totalWrong: 0, totalSkipped: 0, expiresAt: new Date(T0 + 3600e3), startedAt: new Date(), user: { id: 's3', role: 'STUDENT' } });
+      w.answerRows.push({ id: 'a-run3:q1', testAttemptId: 'a-run3', questionId: 'q1', selectedOption: 'A', isCorrect: true, timeSpentSeconds: 0, isMarkedForReview: false });
+      const resc = new rescoreMod.AttemptRescoreService(w.prisma, w.svc);
+      const pv = await ask(() => resc.preview('q1'));
+      check('G3 preview changes nothing and counts the finished attempts that used the old key (1 attempt: 1 right -> wrong)', !pv.err && pv.v.attempts === 1 && pv.v.becomeWrong === 1 && pv.v.becomeCorrect === 0 && w.attempts.find((x) => x.id === 'a-s1').score === 4, pv.err ? pv.err.message : JSON.stringify(pv.v));
+      await w.rank.forAttempt('s1', 'a-s1'); // primes the rank cache: the apply must clear it
+      const both = await Promise.all([ask(() => resc.apply('q1', 'admin')), ask(() => resc.apply('q1', 'admin'))]);
+      const att = w.attempts.find((x) => x.id === 'a-s1');
+      const changedTotal = both.reduce((n, r) => n + ((r.v && r.v.changed) || 0), 0);
+      check('G3 re-score (two admins at the same moment): the attempt is changed ONCE: 4 -> 2 (q1 loses its 2 marks), right 2 -> 1, wrong 2 -> 3', changedTotal === 1 && att.score === 2 && att.totalCorrect === 1 && att.totalWrong === 3, `changed=${changedTotal} score=${att.score} r/w=${att.totalCorrect}/${att.totalWrong}`);
+      check('G3 the first score and a note are kept, never silent (scoreBeforeRescore 4, rescoredAt set, note mentions 4 -> 2)', att.scoreBeforeRescore === 4 && !!att.rescoredAt && /4 -> 2/.test(att.rescoreNote || ''), JSON.stringify([att.scoreBeforeRescore, att.rescoreNote]));
+      const logged = audit.filter((x) => x.action === 'ATTEMPT_RESCORED');
+      check('G3 one audit-log row per changed attempt (with before / after) plus a summary row for the question', logged.length === 1 && logged[0].metadataJson.before === 4 && logged[0].metadataJson.after === 2 && audit.some((x) => x.action === 'ATTEMPTS_RESCORED'), JSON.stringify(audit.map((x) => x.action)));
+      const d2 = (await ask(() => w.svc.attemptDetail('s1', 'a-s1'))).v || { questions: [] };
+      const q1b = d2.questions.find((q) => q.questionId === 'q1') || {};
+      check('G3 after the re-score the review is consistent: q1 wrong, no flag, marks add up to the stored score (2)', q1b.isCorrect === false && q1b.keyChanged === false && sumReview(d2.questions) === d2.score && d2.score === 2, `isCorrect=${q1b.isCorrect} sum=${sumReview(d2.questions)} score=${d2.score}`);
+      const card = (await ask(() => w.rank.forAttempt('s1', 'a-s1'))).v;
+      check('G3 rank / average are refreshed at once (the 60 s cache is cleared): average (5 + 2) / 2 = 3.5', card && card.avgScore === 3.5, 'avg=' + (card && card.avgScore));
+      check('G3 a RUNNING attempt with a row for the same question is not touched', w.attempts.find((x) => x.id === 'a-run3').score === 0 && w.answerRows.find((x) => x.id === 'a-run3:q1').isCorrect === true);
+      const again = await ask(() => resc.apply('q1', 'admin'));
+      check('G3 applying again changes nothing (nothing left to re-score)', !again.err && again.v.changed === 0 && att.score === 2 && audit.filter((x) => x.action === 'ATTEMPT_RESCORED').length === 1, JSON.stringify(again.v));
+      q1row().correctAnswer = 'A'; // the admin puts the old key back: the attempt follows, and the FIRST score stays the first score
+      const back = await ask(() => resc.apply('q1', 'admin'));
+      check('G3 key changed back + re-score: score 4 again, scoreBeforeRescore still the very first score (4)', !back.err && back.v.changed === 1 && att.score === 4 && att.scoreBeforeRescore === 4, JSON.stringify(back.v) + ' score=' + att.score);
+      const unknown = await ask(() => resc.preview('nope'));
+      check('G3 unknown question: clear error, nothing happens', !!unknown.err);
+    }
+    q1row().correctAnswer = 'A';
   }
 
   // ---- session 25: the attempt remembers the questions of its paper (TestAttempt.questionSnapshot) ----

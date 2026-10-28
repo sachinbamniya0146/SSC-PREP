@@ -106,6 +106,8 @@ function EditInner() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const [ok, setOk] = React.useState<string[] | null>(null);
+  // Answer key changed and finished attempts used the old key: the admin sees how many and re-scores them with one button (never automatic).
+  const [rescore, setRescore] = React.useState<{ questionId: string; attempts: number; busy: boolean; msg: string } | null>(null);
   const [thank, setThank] = React.useState(true);
   const [dupInfo, setDupInfo] = React.useState<{ questionNo: number; id: string } | null>(null);
 
@@ -236,6 +238,7 @@ function EditInner() {
         if (t.ok && td?.thanked > 0) msgs.push(`🙏 ${td.thanked} student(s) received a thank-you message.`);
       }
       setOk(msgs);
+      setRescore(d.keyChangedAttempts > 0 ? { questionId: id, attempts: d.keyChangedAttempts, busy: false, msg: "" } : null);
       await load(String(d.questionNo));
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
@@ -243,6 +246,25 @@ function EditInner() {
       window.scrollTo({ top: 0, behavior: "smooth" });
     } finally {
       setBusy(false);
+    }
+  };
+
+  // re-score the finished attempts of this question (the server repeats in batches of 200; every change is audit-logged, the first score is kept)
+  const runRescore = async () => {
+    if (!rescore || rescore.busy) return;
+    setRescore({ ...rescore, busy: true, msg: "" });
+    try {
+      let changed = 0;
+      for (let i = 0; i < 50; i++) {
+        const r = await fetchAuth(`${API_BASE}/admin/attempt-rescore/question/${rescore.questionId}`, { method: "POST" });
+        const d = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `HTTP ${r.status}`);
+        changed += d.changed || 0;
+        if (!d.remaining || !d.changed) break;
+      }
+      setRescore({ ...rescore, busy: false, attempts: 0, msg: `✅ ${changed} attempt(s) re-scored. Students see a note on their result.` });
+    } catch (e) {
+      setRescore({ ...rescore, busy: false, msg: `⚠️ ${(e as Error).message}` });
     }
   };
 
@@ -276,6 +298,19 @@ function EditInner() {
         {ok && (
           <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm">
             {ok.map((m, i) => <p key={i} className={i ? "mt-1 text-xs" : "font-semibold text-emerald-700 dark:text-emerald-400"}>{m}</p>)}
+          </div>
+        )}
+
+        {rescore && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            {rescore.attempts > 0 && (
+              <>
+                <p className="font-semibold">The answer key changed. {rescore.attempts} finished attempt(s) answered this question with the old key.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Nothing is re-scored by itself. Re-score changes only the answers that flip, keeps the first score on the attempt, writes the audit log and refreshes the rank.</p>
+                <button type="button" onClick={() => void runRescore()} disabled={rescore.busy} className="mt-2 rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{rescore.busy ? "Re-scoring…" : "Re-score these attempts"}</button>
+              </>
+            )}
+            {rescore.msg && <p className="mt-2 text-xs">{rescore.msg}</p>}
           </div>
         )}
 
