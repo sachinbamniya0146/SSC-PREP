@@ -64,7 +64,7 @@ function world() {
   const byId = (id) => users.find((u) => u.id === id) || null;
   const pick = (u, sel) => { if (!sel) return { ...u }; const o = {}; for (const k of Object.keys(sel)) if (sel[k]) o[k] = u[k]; return o; };
   const attempts = [];
-  const A = (id, userId, score, startMin) => attempts.push({ id, userId, testTemplateId: 'T1', status: 'SUBMITTED', score, accuracyPercent: 50, startedAt: new Date(NOW - 1e7 + startMin * 60000), submittedAt: new Date(NOW - 1e7 + startMin * 60000 + 1800000), user: byId(userId) });
+  const A = (id, userId, score, startMin) => attempts.push({ id, userId, testTemplateId: 'T1', status: 'SUBMITTED', score, accuracyPercent: 50, expiresAt: new Date(NOW - 1e7 + startMin * 60000 + 3600000), startedAt: new Date(NOW - 1e7 + startMin * 60000), submittedAt: new Date(NOW - 1e7 + startMin * 60000 + 1800000), user: byId(userId) });
   A('a-admin', 'admin', 190, 0); A('a-mod', 'mod', 150, 1); A('a-s1', 's1', 120, 2); A('a-s2', 's2', 100, 3); A('a-bad', 'bad', 180, 4);
   const prisma = {
     user: {

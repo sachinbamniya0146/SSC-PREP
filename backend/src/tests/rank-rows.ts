@@ -8,7 +8,7 @@
  * "topper" that could be an admin's test run). So the same screen could say rank 3, topper 190 and average 71 about
  * three different groups of people.
  *
- * Rows = the first finished attempt (SUBMITTED / AUTO_SUBMITTED) of every active student of one test, best first.
+ * Rows = the first finished (SUBMITTED / AUTO_SUBMITTED), server-timed attempt of every active student of one test, best first.
  * Cached for a minute per test, shared by the rank card, the cut-off / toppers box and the attempt review.
  *
  * Kept free of Nest imports and taking a structural Prisma so a fake can stand in for it (scripts/audit/results-sim.cjs).
@@ -27,7 +27,9 @@ export async function loadRankRows(prisma: any, templateId: string): Promise<Ran
   const hit = cacheGet<RankRow[]>(key);
   if (hit) return hit;
   const raw: any[] = await prisma.testAttempt.findMany({
-    where: { testTemplateId: templateId, status: { in: [...RANK_DONE_STATUSES] }, user: { ...RANKABLE_USER } },
+    // Session 29 (G4): only SERVER-TIMED attempts rank. `expiresAt` is stamped by startAttempt(); a row made in one go by
+    // POST /tests/attempts (the practice flow) has none, so it stays in the student's history but never in a rank, topper or average.
+    where: { testTemplateId: templateId, status: { in: [...RANK_DONE_STATUSES] }, expiresAt: { not: null }, user: { ...RANKABLE_USER } },
     orderBy: { startedAt: 'asc' },
     take: RANK_MAX_ROWS,
     select: {

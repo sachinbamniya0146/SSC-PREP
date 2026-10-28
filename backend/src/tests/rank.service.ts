@@ -8,8 +8,10 @@ import { RANK_DONE_STATUSES, loadRankRows } from './rank-rows';
 const DONE = RANK_DONE_STATUSES;
 
 export interface AttemptRank {
-  /** false = this attempt is a retake (or an admin / staff attempt): it does not change anybody's rank, the numbers below are "practice rank". */
+  /** false = this attempt is a retake, an admin / staff attempt or a practice attempt (no server-timed start): it does not change anybody's rank, the numbers below are "practice rank". */
   countsForRank: boolean;
+  /** true = saved in one go by the practice flow (POST /tests/attempts), never timed by the server: kept in the history, not ranked (session 29, G4). */
+  practice: boolean;
   /** true = the viewer is an admin / staff account: never listed, never ranked (see common/rankable.ts). */
   staff: boolean;
   overall: RankPlace;
@@ -46,6 +48,7 @@ export class RankService {
         accuracyPercent: true,
         startedAt: true,
         submittedAt: true,
+        expiresAt: true,
         user: { select: { state: true, role: true } },
       },
     });
@@ -58,6 +61,7 @@ export class RankService {
     const others = rows.filter((r) => r.userId !== userId);
     const retake = isRetake(rows, userId, attemptId);
     const staff = !isRankableRole(attempt.user?.role);
+    const practice = attempt.expiresAt == null;
     const duration = attempt.startedAt && attempt.submittedAt ? Math.max(0, Math.round((new Date(attempt.submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000)) : 0;
     const mine = { score: attempt.score ?? 0, durationSec: duration };
 
@@ -74,7 +78,8 @@ export class RankService {
     if (!rows.some((r) => r.userId === userId)) scores.push(mine.score);
 
     return {
-      countsForRank: !retake && !staff,
+      countsForRank: !retake && !staff && !practice,
+      practice,
       staff,
       overall,
       state,

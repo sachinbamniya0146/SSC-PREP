@@ -526,12 +526,25 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     }
   }
 
-  // G4. POST /tests/attempts (saveAttempt) turns client-sent answers into an instantly SUBMITTED, rankable attempt
+  // G4 (closed in session 29). POST /tests/attempts (saveAttempt) makes an instantly SUBMITTED attempt from client-sent answers: it stays in
+  // the history, but it has no server-timed start (no expiresAt), so it must never rank.
   {
     const w = world();
-    const out = await ask(() => w.svc.saveAttempt('s5', { testTemplateId: 'T1', answers: [{ questionId: 'q1', selectedOption: 'A' }, { questionId: 'q2', selectedOption: 'B' }, { questionId: 'q3', selectedOption: 'C' }, { questionId: 'q4', selectedOption: 'D' }] }));
+    const full = [{ questionId: 'q1', selectedOption: 'A' }, { questionId: 'q2', selectedOption: 'B' }, { questionId: 'q3', selectedOption: 'C' }, { questionId: 'q4', selectedOption: 'D' }];
+    const rankBefore = (await ask(() => w.rank.forAttempt('s2', 'a-s2'))).v;
+    const out = await ask(() => w.svc.saveAttempt('s5', { testTemplateId: 'T1', answers: full }));
     const card = out.v ? (await ask(() => w.rank.forAttempt('s5', out.v.id))).v : null;
-    gap('G4 a client cannot create a finished, ranked attempt without a server-timed start', !!(card && card.countsForRank && card.overall.rank === 1), out.v ? `full marks (${out.v.score}) in 0 s was accepted as a first attempt: rank #${card && card.overall.rank} of ${card && card.overall.outOf}` : String(out.err));
+    check('G4 a practice attempt (saveAttempt, full marks in 0 s) does NOT count for rank; the card says "practice"', !!card && card.countsForRank === false && card.practice === true, out.v ? `countsForRank=${card && card.countsForRank} practice=${card && card.practice} rank=#${card && card.overall.rank}` : String(out.err));
+    check('G4 the practice attempt is still saved: history lists it, the review opens', !!out.v && (await ask(() => w.svc.attemptDetail('s5', out.v.id))).v.questions.length === 4 && (await ask(() => w.svc.myAttempts('s5'))).v.attempts.some((a) => a.id === out.v.id));
+    const rankAfter = (await ask(() => w.rank.forAttempt('s2', 'a-s2'))).v;
+    check('G4 nobody else is pushed down: Ravi\'s rank and the crowd size are unchanged', JSON.stringify(rankBefore.overall) === JSON.stringify(rankAfter.overall) && rankBefore.attempts === rankAfter.attempts, JSON.stringify([rankBefore.overall, rankAfter.overall]));
+    const lb = (await ask(() => w.rank.leaderboard('s2', 'T1'))).v;
+    check('G4 leaderboard, topper and average ignore it (Cheat Boy is not listed, the best score is still 5)', lb.rows.every((r) => !/Cheat/.test(r.name)) && (await ask(() => w.stats.getStats('T1', 's2'))).v.toppers[0].score === 5);
+    // a real timed attempt of the same student is the one that ranks
+    const st = await ask(() => w.svc.startAttempt('s5', 'T1', {}));
+    const sub = await ask(() => w.svc.submitAttempt('s5', st.v.id, { answers: [{ questionId: 'q1', selectedOption: 'A' }] }));
+    const card2 = await ask(() => w.rank.forAttempt('s5', st.v.id));
+    check('G4 the same student\'s TIMED attempt does rank (their first rankable attempt)', !st.err && !sub.err && card2.v && card2.v.countsForRank === true && card2.v.practice === false, st.err ? st.err.message : JSON.stringify(card2.v && card2.v.overall));
   }
 
   // =====================================================================================================================

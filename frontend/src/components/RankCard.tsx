@@ -9,6 +9,8 @@ import { Skeleton } from "@/components/Skeleton";
 type Place = { rank: number; outOf: number; percentile: number };
 export type AttemptRank = {
   countsForRank: boolean;
+  /** saved in one go by the practice flow (no server-timed start): kept in the history, never ranked */
+  practice?: boolean;
   /** the viewer is an admin / staff account: never listed on a board and never counted in a student's rank */
   staff?: boolean;
   overall: Place;
@@ -147,10 +149,15 @@ export default function RankCard({ attemptId, templateId, onRank }: { attemptId:
                 "You are signed in as staff. Admin and staff attempts are shown as a practice rank and are never counted in any student's rank.",
                 "Aap staff account se hain. Admin / staff ke attempt practice rank ki tarah dikhte hain, kisi student ki rank me gine nahi jaate.",
               )
-            : tr(
-                "This is a retake, so it is shown as a practice rank and does not change anyone's real rank.",
-                "Ye retake hai, isliye practice rank dikh rahi hai - asli rank me koi change nahi hota.",
-              )}
+            : data.practice
+              ? tr(
+                  "This was a practice attempt (not a timed mock), so it is shown as a practice rank and does not change anyone's real rank. Take the timed mock to get a real rank.",
+                  "Ye practice attempt tha (timed mock nahi), isliye practice rank dikh rahi hai - asli rank nahi badalti. Asli rank ke liye timed mock do.",
+                )
+              : tr(
+                  "This is a retake, so it is shown as a practice rank and does not change anyone's real rank.",
+                  "Ye retake hai, isliye practice rank dikh rahi hai - asli rank me koi change nahi hota.",
+                )}
           {data.firstAttempt && (
             <>
               {" "}
