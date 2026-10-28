@@ -1,23 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FeaturesService } from '../features/features.service';
-import { cacheGet, cacheSet } from '../common/cache';
-import { RANKABLE_USER, isRankableRole } from '../common/rankable';
-import {
-  RankPlace,
-  RankRow,
-  firstAttemptPerUser,
-  isRetake,
-  placeAmong,
-  shortName,
-  sortRows,
-  standingOf,
-  withRanks,
-} from './rank.util';
+import { isRankableRole } from '../common/rankable';
+import { RankPlace, RankRow, isRetake, placeAmong, shortName, standingOf, withRanks } from './rank.util';
+import { RANK_DONE_STATUSES, loadRankRows } from './rank-rows';
 
-const CACHE_MS = 60_000;
-const MAX_ROWS = 50_000;
-const DONE = ['SUBMITTED', 'AUTO_SUBMITTED'] as const;
+const DONE = RANK_DONE_STATUSES;
 
 export interface AttemptRank {
   /** false = this attempt is a retake (or an admin / staff attempt): it does not change anybody's rank, the numbers below are "practice rank". */
@@ -42,41 +30,9 @@ export class RankService {
     private readonly features: FeaturesService,
   ) {}
 
-  /** First finished attempt of every active STUDENT (not admin / staff) for one test, best-first. Cached for a minute. */
-  private async rowsFor(templateId: string): Promise<RankRow[]> {
-    const key = `tests:rank:${templateId}`;
-    const hit = cacheGet<RankRow[]>(key);
-    if (hit) return hit;
-    const raw = await this.prisma.testAttempt.findMany({
-      where: { testTemplateId: templateId, status: { in: [...DONE] }, user: { ...RANKABLE_USER } },
-      orderBy: { startedAt: 'asc' },
-      take: MAX_ROWS,
-      select: {
-        id: true,
-        userId: true,
-        score: true,
-        accuracyPercent: true,
-        startedAt: true,
-        submittedAt: true,
-        user: { select: { fullName: true, state: true } },
-      },
-    });
-    const rows = sortRows(
-      firstAttemptPerUser(
-        raw.map((r) => ({
-          attemptId: r.id,
-          userId: r.userId,
-          name: r.user?.fullName ?? null,
-          state: r.user?.state ?? null,
-          score: r.score,
-          accuracy: r.accuracyPercent,
-          startedAt: r.startedAt,
-          submittedAt: r.submittedAt,
-        })),
-      ),
-    );
-    cacheSet(key, rows, CACHE_MS);
-    return rows;
+  /** First finished attempt of every active STUDENT (not admin / staff) for one test, best-first. Cached for a minute (rank-rows.ts). */
+  private rowsFor(templateId: string): Promise<RankRow[]> {
+    return loadRankRows(this.prisma, templateId);
   }
 
   async forAttempt(userId: string, attemptId: string): Promise<AttemptRank> {

@@ -69,8 +69,9 @@ export class ReviewService {
     if (questionIds.length === 0) return new Set();
     const attempted = new Set<string>();
 
+    // Session 24: a still-running attempt does not count (its autosaved rows can name any question id) - see bank.service.ts.
     const fromAttempts = await this.prisma.attemptAnswer.findMany({
-      where: { testAttempt: { userId }, questionId: { in: questionIds } },
+      where: { testAttempt: { userId, status: { not: 'IN_PROGRESS' } }, questionId: { in: questionIds } },
       select: { questionId: true },
     });
     for (const a of fromAttempts) attempted.add(a.questionId);

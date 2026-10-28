@@ -2,12 +2,20 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { cacheGet, cacheSet } from '../common/cache';
+import { shortName } from './rank.util';
+import { loadRankRows } from './rank-rows';
 
 /**
  * v6 §6 — per-template stats: attempts, averages, P90 cutoff + top-5 toppers.
  * Aggregated lazily (5-min TTL cache) — no scheduled job / new deps needed.
  * These numbers power the results page (real cutoff instead of the old
  * 40%-of-max heuristic) and topper-compare.
+ *
+ * Session 24 (28 Oct 2026): the crowd is the SAME one the rank card uses (rank-rows.ts): the first finished attempt of
+ * every active student. Before, this counted every attempt of everybody, so an admin's test run was the "topper", a
+ * student's fifth retake counted five times, and the average / cut-off described a different group than the rank
+ * printed next to it. Other students are shown as "Rahul S." (like the leaderboard), only the viewer sees their own
+ * full name, and no user id leaves the server.
  */
 @Injectable()
 export class TestStatsService {
@@ -15,8 +23,26 @@ export class TestStatsService {
 
   constructor(private prisma: PrismaService) {}
 
-  async getStats(templateId: string): Promise<any> {
-    const cached = cacheGet<any>(`tests:stats:${templateId}`);
+  async getStats(templateId: string, viewerId?: string | null): Promise<any> {
+    const stats = await this.load(templateId);
+    const { toppers, ...rest } = stats;
+    return {
+      ...rest,
+      toppers: toppers.map((t: any) => {
+        const isMe = !!viewerId && t.userId === viewerId;
+        return {
+          fullName: isMe ? t.fullName : shortName(t.fullName),
+          score: t.score,
+          accuracyPercent: t.accuracyPercent,
+          durationSec: t.durationSec,
+          isMe,
+        };
+      }),
+    };
+  }
+
+  private async load(templateId: string): Promise<any> {
+    const cached = cacheGet<any>(`tests:stats2:${templateId}`);
     if (cached) return cached;
 
     const template = await this.prisma.testTemplate.findUnique({
@@ -25,18 +51,8 @@ export class TestStatsService {
     });
     if (!template) throw new NotFoundException('Test template not found');
 
-    const done = await this.prisma.testAttempt.findMany({
-      where: { testTemplateId: templateId, status: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] } },
-      select: {
-        score: true,
-        accuracyPercent: true,
-        totalCorrect: true,
-        startedAt: true,
-        submittedAt: true,
-        user: { select: { id: true, fullName: true } },
-      },
-      orderBy: { score: 'desc' },
-    });
+    // best score first (rank.util order: higher score, then the faster finisher)
+    const done = await loadRankRows(this.prisma, templateId);
 
     const n = done.length;
     let avgScore = 0;
@@ -44,9 +60,9 @@ export class TestStatsService {
     let cutoffScore = 0;
     if (n > 0) {
       avgScore = Math.round((done.reduce((s, a) => s + (a.score ?? 0), 0) / n) * 10) / 10;
-      avgAccuracy = Math.round((done.reduce((s, a) => s + (a.accuracyPercent ?? 0), 0) / n) * 10) / 10;
+      avgAccuracy = Math.round((done.reduce((s, a) => s + (a.accuracy ?? 0), 0) / n) * 10) / 10;
       // BUGFIX: P90 cutoff must mark the score that only the TOP 10% of
-      // attempts reach or beat. `done` is sorted `score: 'desc'` (rank 1 =
+      // attempts reach or beat. `done` is sorted best-first (rank 1 =
       // highest score first), so that boundary sits near the START of the
       // array — roughly index floor(n * 0.10) — not near the end.
       // The old code used `Math.floor(n * 0.9)`, which in this
@@ -60,13 +76,11 @@ export class TestStatsService {
     }
 
     const toppers = done.slice(0, 5).map((a) => ({
-      userId: a.user?.id,
-      fullName: a.user?.fullName || 'Student',
+      userId: a.userId,
+      fullName: a.name || 'Student',
       score: a.score ?? 0,
-      accuracyPercent: a.accuracyPercent ?? 0,
-      durationSec:
-        a.startedAt && a.submittedAt ? Math.round((new Date(a.submittedAt).getTime() - new Date(a.startedAt).getTime()) / 1000) : 0,
-      submittedAt: a.submittedAt,
+      accuracyPercent: a.accuracy ?? 0,
+      durationSec: a.durationSec,
     }));
 
     const stats = {
@@ -89,7 +103,7 @@ export class TestStatsService {
       update: payload,
     });
 
-    cacheSet(`tests:stats:${templateId}`, stats, this.TTL);
+    cacheSet(`tests:stats2:${templateId}`, stats, this.TTL);
     return stats;
   }
 }

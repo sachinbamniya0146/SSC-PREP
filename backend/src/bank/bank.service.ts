@@ -87,8 +87,11 @@ export class BankService implements OnModuleInit {
     const attempted = new Set<string>();
     if (!userId || questionIds.length === 0) return attempted;
 
+    // Session 24: an attempt that is still RUNNING does not count. Its autosaved rows exist from the first tap, and a
+    // client can autosave an answer for ANY question id, so counting them let a student unlock the answer key of every
+    // question during a timed mock (bookmarks.service.ts latestAnswers() already skipped running attempts).
     const answeredInAttempts = await this.prisma.attemptAnswer.findMany({
-      where: { testAttempt: { userId }, questionId: { in: questionIds } },
+      where: { testAttempt: { userId, status: { not: 'IN_PROGRESS' } }, questionId: { in: questionIds } },
       select: { questionId: true },
     });
     for (const a of answeredInAttempts) attempted.add(a.questionId);

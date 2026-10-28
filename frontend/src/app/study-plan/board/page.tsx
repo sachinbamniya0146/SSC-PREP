@@ -142,12 +142,12 @@ function StudyPlanBoardPageInner() {
         body: JSON.stringify({ chapterIds: [...picked], complete }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d?.messages?.en || d?.message || tr("Could not mark", "Mark nahi hua"));
+      if (!r.ok) throw new Error(d?.messages?.en ? tr(d.messages.en, d.messages.hi || d.messages.en) : d?.message || tr("Could not mark", "Mark nahi hua"));
       setPicked(new Set());
       await loadAll();
       if (complete) setTab("test");
     } catch (e: any) {
-      setError(e.message || "Failed");
+      setError(e.message || tr("Failed", "Nahi hua"));
     } finally {
       setBusy(false);
     }
@@ -195,7 +195,7 @@ function StudyPlanBoardPageInner() {
         ) : (
           <>
             <div role="tablist" aria-label={tr("Prep board sections", "Prep board ke hisse")} className="flex gap-2">
-              {tabBtn("today", tr("Today", "Aaj"))}{tabBtn("chapters", "Chapters")}{tabBtn("test", tr("9 AM Test", "9 AM Test"))}{tabBtn("weak", "Weak")}
+              {tabBtn("today", tr("Today", "Aaj"))}{tabBtn("chapters", tr("Chapters", "Chapters"))}{tabBtn("test", tr("9 AM Test", "9 AM Test"))}{tabBtn("weak", tr("Weak", "Kamzor"))}
             </div>
             {error && <p role="alert" className="mt-3 text-sm text-danger">{error}</p>}
             <div id="plan-panel" role="tabpanel" aria-labelledby={`plan-tab-${tab}`}>
@@ -208,7 +208,7 @@ function StudyPlanBoardPageInner() {
               <div className="mt-4">
                 <p className="text-xs text-muted-foreground">{tr("Tick the chapters you finished — their test comes tomorrow at 9 AM.", "Jo chapters aapne complete kar liye unhe tick karein — unka test kal subah 9 AM ko aayega.")}</p>
                 <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold">
-                  <span className="text-emerald-600">✅ {board.summary.complete} complete</span><span className="text-blue-600">🕘 {board.summary.selfMarked} awaiting test</span><span className="text-red-600">⚠️ {board.summary.weak} weak</span><span className="text-muted-foreground">⬜ {board.summary.pending} pending</span>
+                  <span className="text-emerald-600">✅ {tr(`${board.summary.complete} complete`, `${board.summary.complete} poore`)}</span><span className="text-blue-600">🕘 {tr(`${board.summary.selfMarked} awaiting test`, `${board.summary.selfMarked} test ka intezaar`)}</span><span className="text-red-600">⚠️ {tr(`${board.summary.weak} weak`, `${board.summary.weak} kamzor`)}</span><span className="text-muted-foreground">⬜ {tr(`${board.summary.pending} pending`, `${board.summary.pending} baaki`)}</span>
                 </div>
                 <div className="mt-4 space-y-4">
                   {board.subjects.map((s) => (
@@ -222,9 +222,9 @@ function StudyPlanBoardPageInner() {
                               <input type="checkbox" disabled={!c.testable || busy || c.status === "COMPLETE"} checked={picked.has(c.id) || locked} onChange={() => (c.status === "SELF_MARKED" ? (setPicked(new Set([c.id])), mark(false)) : toggle(c.id))} />
                               <span className="min-w-0 flex-1 truncate">{c.name}</span>
                               {c.status === "COMPLETE" && <span className="text-xs text-emerald-600">✅ {c.lastScorePct ?? ""}%</span>}
-                              {c.status === "SELF_MARKED" && <span className="text-xs text-blue-600">🕘 test scheduled</span>}
-                              {c.status === "WEAK" && <span className="text-xs text-red-600">⚠️ weak {c.lastScorePct ?? ""}%</span>}
-                              {!c.testable && <span className="text-[10px] text-muted-foreground">no questions yet</span>}
+                              {c.status === "SELF_MARKED" && <span className="text-xs text-blue-600">🕘 {tr("test scheduled", "test tay hai")}</span>}
+                              {c.status === "WEAK" && <span className="text-xs text-red-600">⚠️ {tr("weak", "kamzor")} {c.lastScorePct ?? ""}%</span>}
+                              {!c.testable && <span className="text-[10px] text-muted-foreground">{tr("no questions yet", "abhi questions nahi")}</span>}
                             </label>
                           );
                         })}
@@ -235,7 +235,9 @@ function StudyPlanBoardPageInner() {
                 {picked.size > 0 && (
                   <div className="sticky bottom-3 mt-4 rounded-xl border border-primary/40 bg-background p-3 shadow-lg">
                     <button onClick={() => mark(true)} disabled={busy} className="btn w-full bg-primary py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">
-                      {busy ? "Saving…" : `Mark ${picked.size} chapter(s) complete & schedule tomorrow's 9 AM test`}
+                      {busy
+                        ? tr("Saving…", "Save ho raha hai…")
+                        : tr(`Mark ${picked.size} chapter(s) complete & schedule tomorrow's 9 AM test`, `${picked.size} chapter complete mark karein aur kal 9 AM ka test lagayein`)}
                     </button>
                   </div>
                 )}
@@ -248,18 +250,17 @@ function StudyPlanBoardPageInner() {
                 {!upcoming && (
                   <div className="rounded-xl border border-border bg-card p-5 text-center text-sm">
                     <p>{tr("No test is scheduled. Mark your completed chapters in the Chapters tab.", "Koi test scheduled nahi hai. Chapters tab me complete chapters mark karein.")}</p>
-                    <p className="mt-1 text-muted-foreground">No test scheduled. Mark finished chapters in the Chapters tab.</p>
                   </div>
                 )}
                 {!upcoming && lastDetail && (
                   <div className="space-y-3">
-                    <div className="rounded-xl border border-border bg-card p-4 text-center"><p className="text-xs text-muted-foreground">Last Study-Plan test</p><p className="text-3xl font-bold">{lastDetail.scorePct}%</p></div>
+                    <div className="rounded-xl border border-border bg-card p-4 text-center"><p className="text-xs text-muted-foreground">{tr("Last study-plan test", "Pichla study-plan test")}</p><p className="text-3xl font-bold">{lastDetail.scorePct}%</p></div>
                     <BiMessage msg={lastDetail.message} tone={lastDetail.chapters.some((c) => c.status === "WEAK") ? "warn" : "success"} />
                     <div className="rounded-xl border border-border bg-card p-4 text-sm">
                       {lastDetail.chapters.map((c) => (
                         <div key={c.chapterId} className="flex items-center justify-between py-1">
                           <span className="min-w-0 truncate">{c.name}</span>
-                          <span className={`shrink-0 font-bold ${c.status === "COMPLETE" ? "text-emerald-600" : c.status === "WEAK" ? "text-red-600" : "text-muted-foreground"}`}>{c.correct}/{c.total} · {c.pct}% {c.status === "COMPLETE" ? "✅" : c.status === "WEAK" ? "⚠️ weak" : ""}</span>
+                          <span className={`shrink-0 font-bold ${c.status === "COMPLETE" ? "text-emerald-600" : c.status === "WEAK" ? "text-red-600" : "text-muted-foreground"}`}>{c.correct}/{c.total} · {c.pct}% {c.status === "COMPLETE" ? "✅" : c.status === "WEAK" ? `⚠️ ${tr("weak", "kamzor")}` : ""}</span>
                         </div>
                       ))}
                     </div>
@@ -269,19 +270,19 @@ function StudyPlanBoardPageInner() {
                   <>
                     <div className="rounded-2xl border border-primary/40 bg-primary/5 p-6 text-center">
                       <p className="text-xs text-muted-foreground">{upcoming.examName} · {upcoming.chapterCount} chapters</p>
-                      {canStart ? <p className="mt-1 text-2xl font-bold text-emerald-600">Test is open ✅</p> : <p className="mt-1 font-mono text-4xl font-bold">{cd(msLeft)}</p>}
-                      <p className="mt-1 text-xs text-muted-foreground">{canStart ? "Full exam pattern · real timer" : "tak test khulega / until the test opens (9:00 AM)"}</p>
+                      {canStart ? <p className="mt-1 text-2xl font-bold text-emerald-600">{tr("Test is open", "Test khul gaya")} ✅</p> : <p className="mt-1 font-mono text-4xl font-bold">{cd(msLeft)}</p>}
+                      <p className="mt-1 text-xs text-muted-foreground">{canStart ? tr("Full exam pattern · real timer", "Poora exam pattern · real timer") : tr("until the test opens (9:00 AM)", "9:00 AM par test khulega")}</p>
                       <a
                         href={canStart ? `/test?plantest=${upcoming.id}` : undefined}
                         aria-disabled={!canStart}
                         className={`btn mt-4 inline-block px-6 py-3 text-sm font-semibold ${canStart ? "bg-primary text-primary-foreground" : "pointer-events-none bg-muted text-muted-foreground"}`}
                       >
-                        {upcoming.status === "IN_PROGRESS" ? "▶ Resume test" : "▶ Start test"}
+                        {upcoming.status === "IN_PROGRESS" ? `▶ ${tr("Resume test", "Test jaari rakhein")}` : `▶ ${tr("Start test", "Test shuru karein")}`}
                       </a>
                     </div>
                     <BiMessage msg={upcoming.message} />
                     <div className="rounded-xl border border-border bg-card p-4">
-                      <h2 className="text-sm font-bold">📚 Ye padh lo (revise now)</h2>
+                      <h2 className="text-sm font-bold">📚 {tr("Revise now", "Ye padh lo")}</h2>
                       <div className="mt-2 space-y-3">
                         {upcoming.subjects.map((s) => (
                           <div key={s.subjectId}>
@@ -303,7 +304,7 @@ function StudyPlanBoardPageInner() {
               <div className="mt-4">
                 {weak && weak.exams.length > 0 && (
                   <select value={weakExam} onChange={(e) => setWeakExam(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-                    <option value="">All exams</option>
+                    <option value="">{tr("All exams", "Saare exams")}</option>
                     {weak.exams.map((e) => <option key={e.id} value={e.id}>{e.name} — {e.accuracyPct}% ({e.attempted} Qs)</option>)}
                   </select>
                 )}
@@ -321,18 +322,18 @@ function StudyPlanBoardPageInner() {
                                 <span className="min-w-0 truncate">{c.flaggedWeak && "⚠️ "}{c.name}</span>
                                 <span className={`shrink-0 font-bold ${lvl(c.level)}`}>{c.accuracyPct}%</span>
                               </summary>
-                              <a href={`/question-bank-practice?${qs(c.practice)}`} className="mt-2 inline-block rounded-md bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">💪 Strengthen chapter (25 Qs)</a>
+                              <a href={`/question-bank-practice?${qs(c.practice)}`} className="mt-2 inline-block rounded-md bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">💪 {tr("Strengthen chapter (25 Qs)", "Chapter mazboot karein (25 Qs)")}</a>
                               <div className="mt-2 space-y-1">
                                 {c.topics.map((t) => (
                                   <div key={t.id} className="text-xs">
                                     <div className="flex items-center justify-between gap-2">
                                       <span className="min-w-0 truncate">{t.name}</span>
-                                      <span className="flex shrink-0 items-center gap-2"><b className={lvl(t.level)}>{t.accuracyPct}%</b><a href={`/question-bank-practice?${qs(t.practice)}`} className="text-primary underline">practice</a></span>
+                                      <span className="flex shrink-0 items-center gap-2"><b className={lvl(t.level)}>{t.accuracyPct}%</b><a href={`/question-bank-practice?${qs(t.practice)}`} className="text-primary underline">{tr("practice", "practice")}</a></span>
                                     </div>
                                     {t.subTopics.map((st) => (
                                       <div key={st.id} className="ml-4 flex items-center justify-between gap-2 text-muted-foreground">
                                         <span className="min-w-0 truncate">↳ {st.name}</span>
-                                        <span className="flex shrink-0 items-center gap-2"><b className={lvl(st.level)}>{st.accuracyPct}%</b><a href={`/question-bank-practice?${qs(st.practice)}`} className="text-primary underline">practice</a></span>
+                                        <span className="flex shrink-0 items-center gap-2"><b className={lvl(st.level)}>{st.accuracyPct}%</b><a href={`/question-bank-practice?${qs(st.practice)}`} className="text-primary underline">{tr("practice", "practice")}</a></span>
                                       </div>
                                     ))}
                                   </div>

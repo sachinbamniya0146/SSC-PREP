@@ -64,8 +64,8 @@ export class TestsController {
 
   // v6 §6 — per-template stats: attempts, averages, real cutoff (P90), toppers
   @Get('stats/:templateId')
-  stats(@Param('templateId') templateId: string) {
-    return this.statsService.getStats(templateId);
+  stats(@CurrentUser() user: { userId: string }, @Param('templateId') templateId: string) {
+    return this.statsService.getStats(templateId, user?.userId);
   }
 
   // P1 — student results history

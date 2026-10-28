@@ -145,7 +145,6 @@ export default function AttemptReviewPage() {
 
   // v6 §6 — chapter breakdown, weakest-first (chapter/subject labels)
   const chapterMap = new Map<string, { correct: number; total: number; time: number }>();
-  const sectionMap = new Map<string, { correct: number; total: number; score: number; time: number }>();
   // NEW (Sep 21 2026) — TRUE topic/sub-topic breakdown (drills below chapter
   // level, straight from each question's real topic/subTopic). Older
   // questions with no topic set are grouped under "Other (no topic set)" so
@@ -159,14 +158,6 @@ export default function AttemptReviewPage() {
     if (q.isCorrect) cur.correct += 1;
     cur.time += q.timeSpentSeconds || 0;
     chapterMap.set(t, cur);
-    // section-wise (subject) aggregation for exam-style breakdown
-    const s = q.subject || "General";
-    const sc = sectionMap.get(s) || { correct: 0, total: 0, score: 0, time: 0 };
-    sc.total += 1;
-    if (q.isCorrect) { sc.correct += 1; sc.score += q.marks || 2; }
-    else if (q.selectedOption) sc.score -= q.negativeMarks || 0.5;
-    sc.time += q.timeSpentSeconds || 0;
-    sectionMap.set(s, sc);
     if (q.topic) {
       const rt = realTopicMap.get(q.topic) || { correct: 0, total: 0, time: 0 };
       rt.total += 1;
@@ -182,11 +173,6 @@ export default function AttemptReviewPage() {
       }
     }
   });
-  const sections = Array.from(sectionMap.entries()).map(([name, v]) => ({
-    name,
-    ...v,
-    acc: v.total ? Math.round((v.correct / v.total) * 100) : 0,
-  }));
   const topics = Array.from(chapterMap.entries())
     .map(([name, v]) => ({ name, ...v, acc: v.total ? Math.round((v.correct / v.total) * 100) : 0 }))
     .sort((a, b) => a.acc - b.acc);
@@ -325,7 +311,7 @@ export default function AttemptReviewPage() {
                   </thead>
                   <tbody>
                     {stats.toppers.map((t: any, i: number) => {
-                      const isYou = t.userId === detail.userId;
+                      const isYou = !!t.isMe;
                       return (
                         <tr key={i} className={isYou ? "bg-primary/10 font-semibold" : ""}>
                           <td className="py-1.5 pr-3">{i + 1}</td>

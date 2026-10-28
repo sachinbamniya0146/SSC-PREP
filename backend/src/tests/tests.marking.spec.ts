@@ -149,7 +149,7 @@ describe('marking presets: scoring without a section plan', () => {
       id: 'a1', userId: 'u1', status: 'SUBMITTED', testTemplateId: 'tpl', score: 0, rank: 1, percentile: 100, sectionPlan: null,
       testTemplate: { ...fake.template }, answers,
     });
-    prisma.testAttempt.aggregate = async () => ({ _max: { score: 0, accuracyPercent: 0 } });
+    prisma.testAttempt.findMany = async () => []; // session 24: rank / topper come from the shared peer list (rank-rows.ts)
     const out: any = await fake.svc.attemptDetail('u1', 'a1');
     const bySubject = (slug: string) => out.questions.find((x: any) => x.subject === slug);
     expect([bySubject('quantitative_aptitude').marks, bySubject('quantitative_aptitude').negativeMarks]).toEqual([3, 0]);

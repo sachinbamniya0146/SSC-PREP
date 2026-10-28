@@ -25,6 +25,8 @@ import {
 } from '../common/section-plan';
 import { buildMarkingScheme, resolveMarking, schemeMaxMarks, totalMarksFor, type MarkingScheme } from '../common/marking';
 import { loadMarkingScheme } from './marking-scheme';
+import { loadRankRows, topScoreOf } from './rank-rows';
+import { durationOf, placeAmong, shortName } from './rank.util';
 
 /** Fisher–Yates, in place. Used so a practice set is different on every start (sectional). */
 function shuffleInPlace<T>(arr: T[]): T[] {
@@ -849,32 +851,21 @@ async saveAnswers(
       throw new BadRequestException('Attempt is still in progress — submit it to see the review.');
     }
 
-    // v6 §6 — rank & percentile: aggregate across all attempts of the same template.
-    let rank = attempt.rank;
-    let percentile = attempt.percentile;
-    if (rank == null || percentile == null) {
-      const [better, total] = await Promise.all([
-        this.prisma.testAttempt.count({
-          where: { testTemplateId: attempt.testTemplateId, status: 'SUBMITTED', score: { gt: attempt.score } },
-        }),
-        this.prisma.testAttempt.count({
-          where: { testTemplateId: attempt.testTemplateId, status: 'SUBMITTED' },
-        }),
-      ]);
-      rank = better + 1;
-      percentile = total > 0 ? Math.round((1 - better / total) * 1000) / 10 : 100;
-      // persist for future reads (best-effort, never blocks the response)
-      this.prisma.testAttempt
-        .update({ where: { id: attempt.id }, data: { rank, percentile } })
-        .catch(() => undefined);
-    }
-
-    // v6 §6 — topper comparison: best score + accuracy across all attempts of
-    // this template (motivational benchmark, same-template peer comparison).
-    const topper = await this.prisma.testAttempt.aggregate({
-      where: { testTemplateId: attempt.testTemplateId, status: 'SUBMITTED' },
-      _max: { score: true, accuracyPercent: true },
-    });
+    // v6 §6 — rank, percentile and the "topper" score. Session 24 (28 Oct 2026): all three come from the SAME list the
+    // rank card and the cut-off box use (rank-rows.ts: first finished attempt of every active student). Before, this counted
+    // every attempt of everybody (an admin's test run was the "topper", a retake counted as another student), saved the
+    // rank on first view and never refreshed it, so the hero could print a rank that the rank card contradicted.
+    const peers = await loadRankRows(this.prisma, attempt.testTemplateId);
+    const place = placeAmong(
+      peers.filter((r) => r.userId !== userId),
+      { score: attempt.score, durationSec: durationOf(attempt.startedAt, attempt.submittedAt) },
+    );
+    const rank = place.rank;
+    const percentile = place.percentile;
+    const topper = {
+      score: topScoreOf(peers, userId, attempt.score),
+      accuracyPercent: peers.length ? Math.max(...peers.map((r) => r.accuracy)) : null,
+    };
 
     // P0 — a sectional attempt was scored with the pattern's marks / negative marking, so the review shows those too.
     const plan = readSectionPlan((attempt as any).sectionPlan);
@@ -951,10 +942,7 @@ async saveAnswers(
       testTemplateId: attempt.testTemplateId,
       rank,
       percentile,
-      topper: {
-        score: topper._max.score ?? null,
-        accuracyPercent: topper._max.accuracyPercent ?? null,
-      },
+      topper,
       questions,
       answers: undefined, // flattened into `questions`
     };
@@ -2483,65 +2471,34 @@ async saveAnswers(
 
     const latest = userAttempts[0];
 
-    // Get top 5 toppers
-    const toppers = await this.prisma.testAttempt.findMany({
-      where: { testTemplateId: templateId, status: 'SUBMITTED' },
-      orderBy: { score: 'desc' },
-      take: 5,
-      select: {
-        user: { select: { fullName: true } },
-        score: true,
-        accuracyPercent: true,
-        submittedAt: true,
-        startedAt: true,
-      },
-    });
-
-    // Get average stats
-    const stats = await this.prisma.testAttempt.aggregate({
-      where: { testTemplateId: templateId, status: 'SUBMITTED' },
-      _avg: { score: true, accuracyPercent: true },
-      _max: { score: true, accuracyPercent: true },
-      _count: true,
-    });
-
-    // BUG FIX (audit round 4, item 3): rank and percentile were both INVERTED.
-    // Old code counted attempts with score < yours and called that `percentile`,
-    // then set yourRank = that count + 1 — so a top scorer (almost everyone
-    // below them) ended up with the WORST rank (e.g. rank 10 of 10), and
-    // yourPercentile = (total - belowCount) / total, which for a top scorer
-    // rounds to ~0% ("you beat ~0% of test takers") instead of ~100%.
-    // Correct definitions: rank = 1 + (number of attempts that scored HIGHER
-    // than you); percentile = % of attempts you scored better than (i.e. the
-    // number of attempts with a LOWER score, divided by total).
-    const scoredHigher = await this.prisma.testAttempt.count({
-      where: { testTemplateId: templateId, status: 'SUBMITTED', score: { gt: latest.score } },
-    });
-    const scoredLower = await this.prisma.testAttempt.count({
-      where: { testTemplateId: templateId, status: 'SUBMITTED', score: { lt: latest.score } },
-    });
-    const total = await this.prisma.testAttempt.count({
-      where: { testTemplateId: templateId, status: 'SUBMITTED' },
-    });
+    // Session 24: same crowd as the rank card and the result page (rank-rows.ts: first finished attempt of every active
+    // student). This used to count every attempt of everybody (admin runs, retakes) and listed the top 5 with their FULL
+    // names; other students are now "Rahul S." like on the leaderboard. (No screen calls this route today.)
+    const peers = await loadRankRows(this.prisma, templateId);
+    const myScore = latest.score ?? 0;
+    const place = placeAmong(
+      peers.filter((r) => r.userId !== userId),
+      { score: myScore, durationSec: durationOf(latest.startedAt, latest.submittedAt) },
+    );
+    const mean = (pick: (r: (typeof peers)[number]) => number) =>
+      peers.length ? Math.round((peers.reduce((sum, r) => sum + pick(r), 0) / peers.length) * 10) / 10 : 0;
 
     return {
-      yourScore: latest.score ?? 0,
+      yourScore: myScore,
       yourAccuracy: latest.accuracyPercent ?? 0,
-      yourRank: scoredHigher + 1,
-      yourPercentile: total > 0 ? Math.round((scoredLower / total) * 1000) / 10 : 100,
-      totalAttempts: total,
-      averageScore: Math.round((stats._avg.score || 0) * 10) / 10,
-      averageAccuracy: Math.round((stats._avg.accuracyPercent || 0) * 10) / 10,
-      maxScore: stats._max.score ?? 0,
-      maxAccuracy: stats._max.accuracyPercent ?? 0,
-      toppers: toppers.map((t, i) => ({
+      yourRank: place.rank,
+      yourPercentile: place.percentile,
+      totalAttempts: place.outOf,
+      averageScore: mean((r) => r.score),
+      averageAccuracy: mean((r) => r.accuracy),
+      maxScore: topScoreOf(peers, userId, myScore) ?? 0,
+      maxAccuracy: peers.length ? Math.max(...peers.map((r) => r.accuracy)) : 0,
+      toppers: peers.slice(0, 5).map((r, i) => ({
         rank: i + 1,
-        name: t.user?.fullName || 'Student',
-        score: t.score ?? 0,
-        accuracy: t.accuracyPercent ?? 0,
-        timeTaken: t.startedAt && t.submittedAt
-          ? Math.round((new Date(t.submittedAt).getTime() - new Date(t.startedAt).getTime()) / 1000)
-          : 0,
+        name: r.userId === userId ? r.name : shortName(r.name),
+        score: r.score,
+        accuracy: r.accuracy,
+        timeTaken: r.durationSec,
       })),
     };
   }
