@@ -111,14 +111,6 @@ export const envValidationSchema = Joi.object({
   MEILISEARCH_HOST: Joi.string().allow('').default('http://localhost:7700'),
   MEILISEARCH_MASTER_KEY: Joi.string().allow('').default(''),
 
-  // AI / OpenRouter — optional; provides AI-powered explanations & study plans.
-  // Default model is a FREE OpenRouter endpoint (NVIDIA Nemotron 3 Ultra) —
-  // study-plan.service.ts's FREE_MODELS list always uses free-tier models
-  // only, with automatic fallback if one is rate-limited. Set OPENROUTER_MODEL
-  // only to override with a DIFFERENT free model (must end in ":free").
-  OPENROUTER_API_KEY: Joi.string().allow('').default(''),
-  OPENROUTER_MODEL: Joi.string().allow('').default('nvidia/nemotron-3-ultra-550b-a55b:free'),
-
   // Chat message encryption-at-rest (report-thread + general support chat).
   // Generate with: openssl rand -hex 32
   // See backend/src/common/crypto/message-encryption.ts for the full model.

@@ -32,11 +32,8 @@ import { AdminModule } from './admin/admin.module';
 import { SearchModule } from './search/search.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { SolverModule } from './solver/solver.module';
-import { AIExplanationModule } from './ai-explanation/ai-explanation.module';
-import { AdminApiKeyModule } from './admin-api-keys/admin-api-keys.module';
-import { AiProviderModule } from './ai-provider/ai-provider.module';
 import { PyqDateModule } from './pyq-dates/pyq-date.module';
-import { AiJobsModule } from './ai-jobs/ai-jobs.module';
+import { ExplanationsModule } from './explanations/explanations.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { envValidationSchema } from './config/env.validation';
@@ -98,11 +95,8 @@ import { envValidationSchema } from './config/env.validation';
     ReviewModule,
     ReportErrorModule,
     SupportChatModule,
-    AIExplanationModule,
-    AdminApiKeyModule,
-    AiProviderModule,
     PyqDateModule,
-    AiJobsModule,
+    ExplanationsModule,
   ],
   controllers: [HealthController],
   providers: [

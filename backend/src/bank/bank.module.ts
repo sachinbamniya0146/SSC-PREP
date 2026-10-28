@@ -14,7 +14,6 @@ import { QuestionEditService } from './question-edit.service';
 import { DuplicateReviewController } from './duplicate-review.controller';
 import { PracticeTemplateService } from './practice-template.service';
 import { DuplicateReviewService } from './duplicate-review.service';
-import { AiProviderModule } from '../ai-provider/ai-provider.module';
 import { TaxonomyDedupeService } from './taxonomy-dedupe.service';
 import { TaxonomyDedupeController } from './taxonomy-dedupe.controller';
 import { WeakTopicModule } from '../weak-topics/weak-topic.module';
@@ -27,7 +26,7 @@ import { WeakTopicModule } from '../weak-topics/weak-topic.module';
 // TaxonomyImportService (new) — bulk syllabus/taxonomy importer used by
 // BankUploadController's POST /bank/admin/upload/syllabus-excel route.
 @Module({
-  imports: [AiProviderModule, WeakTopicModule],
+  imports: [WeakTopicModule],
   controllers: [BankController, BankUploadController, BankUploadJobController, BankAdminController, QuestionEditController, DuplicateReviewController, TaxonomyDedupeController],
   providers: [BankService, QuestionBankPracticeService, BankUploadService, BankUploadJobService, TaxonomyImportService, BankAdminService, QuestionEditService, DuplicateReviewService, PracticeTemplateService, TaxonomyDedupeService],
   exports: [TaxonomyDedupeService, BankService, QuestionBankPracticeService, BankUploadService, TaxonomyImportService, BankAdminService, QuestionEditService],

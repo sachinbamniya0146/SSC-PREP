@@ -48,27 +48,8 @@ export class StudyPlanController {
       subjectScores: { subject: string; score: number; total: number }[];
       topicScores: { topic: string; score: number; total: number }[];
     };
-    userApiKey?: string;
   }) {
-    return this.studyPlanService.generateStudyPlan({ userId: 'system', testResults: body.testResults }, body.userApiKey);
-  }
-
-  @Get('model')
-  async getModel() {
-    return {
-      // BUGFIX: default here used to say 'openai/gpt-4o-mini' (paid) even
-      // though the actual call in study-plan.service.ts has now been fixed
-      // to always use free OpenRouter models. Kept in sync with the
-      // FREE_MODELS fallback list there.
-      model: process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free',
-      hasApiKey: !!process.env.OPENROUTER_API_KEY,
-      availableModels: [
-        'nvidia/nemotron-3-ultra-550b-a55b:free',
-        'nvidia/nemotron-3-super-120b-a12b:free',
-        'nvidia/nemotron-3.5-lightning:free',
-        'meta-llama/llama-3.3-70b-instruct:free',
-      ],
-    };
+    return this.studyPlanService.generateStudyPlan({ userId: 'system', testResults: body.testResults });
   }
 
   // ---- Study Plan v2 (Sep 29 2026) ----

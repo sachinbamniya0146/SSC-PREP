@@ -7,7 +7,6 @@ import { API_BASE } from "@/lib/api";
 import DiagramVenn from "@/components/DiagramVenn";
 import WeakTopicPractice from "@/components/WeakTopicPractice";
 import SubjectChapterAnalysis from "@/components/SubjectChapterAnalysis";
-import SolutionVerify from "@/components/SolutionVerify";
 import { ScoreHero, ScoreComparison, TimeAnalysis, SubjectBars, RetryPanel, SectionTimeCard, type SectionPlanLike } from "@/components/ResultsInsights";
 import { StemMedia, QFigure, RichText } from "@/components/QuestionMedia";
 import { useT } from "@/lib/i18n";
@@ -440,18 +439,6 @@ export default function AttemptReviewPage() {
 }
 
 // ---- Sub-components ----
-// Shape returned by GET /ai-explanation/questions/:id — same contract the
-// review page already uses (see frontend/src/app/review/page.tsx).
-type AIExplanation = {
-  explanation: string;
-  explanationHindi: string;
-  stepByStepSolution: string;
-  stepByStepSolutionHindi: string;
-  keyConcepts: string[];
-  keyConceptsHindi: string[];
-  source?: string;
-};
-
 function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; lang: ReviewLang }) {
   const tr = useT();
   const badge = q.isSkipped

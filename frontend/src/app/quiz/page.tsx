@@ -3,7 +3,6 @@
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { ReportQuestion } from "@/components/ReportQuestion";
-import SolutionVerify from "@/components/SolutionVerify";
 import { useT } from "@/lib/i18n";
 
 type QuizQ = {
@@ -18,14 +17,8 @@ type QuizQ = {
   negativeMarks: number;
 };
 
-// BUGFIX (Sachin report, Sep 2026): daily quiz result used to render
-// explanation ONLY from r.explanation/r.explanationHindi — for any question
-// whose explanation was never pre-generated (a large chunk of the bank
-// imported via old parse_*/upload_*.py scripts) that's null, so nothing
-// ever showed. The backend already has an on-demand AI-generate-and-cache
-// endpoint (ai-explanation/questions/:id, same one /review page uses) —
-// this component calls it automatically when the stored explanation is
-// missing, same pattern used on the mock/sectional/daily results page.
+// Daily quiz result: shows the explanation that came with the result; when the result did not carry
+// one, the stored explanation of the question is read from the server (nothing is generated).
 function QuizExplanation({
   questionId,
   explanation,
@@ -46,7 +39,7 @@ function QuizExplanation({
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    fetchAuth(`${API_BASE}/ai-explanation/questions/${questionId}`)
+    fetchAuth(`${API_BASE}/explanations/questions/${questionId}`)
       .then(async (res) => {
         const d = await res.json().catch(() => ({}));
         if (cancelled) return;
@@ -72,14 +65,12 @@ function QuizExplanation({
   }
   return (
     <div className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm leading-relaxed">
-      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
-      {loading && <p className="mt-2 text-muted-foreground">{tr("Preparing the explanation…", "Explanation ban rahi hai…")}</p>}
-      {err && !loading && <p className="mt-2 text-xs text-muted-foreground">{err}</p>}
+      {loading && <p className="mt-2 text-muted-foreground">{tr("Loading the explanation…", "Explanation load ho rahi hai…")}</p>}
+      {err && !loading && <p className="text-xs text-muted-foreground">{err}</p>}
       {ai && !loading && (
-        <div className="mt-2 whitespace-pre-line text-muted-foreground">
+        <div className="whitespace-pre-line text-muted-foreground">
           <p>{ai.stepByStepSolution}</p>
           {ai.stepByStepSolutionHindi && <p className="mt-2">🇮🇳 {ai.stepByStepSolutionHindi}</p>}
-          <SolutionVerify questionId={questionId} source={(ai as any).source ?? "AI_GENERATED"} />
         </div>
       )}
     </div>

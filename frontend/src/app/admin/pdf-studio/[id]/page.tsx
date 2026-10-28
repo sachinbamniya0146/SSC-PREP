@@ -79,20 +79,13 @@ export default function BatchDetailPage() {
   const [busy, setBusy] = React.useState<string>("");
   const [msg, setMsg] = React.useState("");
   const [err, setErr] = React.useState("");
-  // NEW — chapter picker + AI suggestion for each pending question (see
-  // suggestChapter() on the backend for why this exists: OCR-extracted
-  // questions came out with chapterId always null, and this page had no
-  // way to set one before Approve).
+  // Chapter picker for each pending question (OCR-extracted questions come out with
+  // chapterId null, and the admin sets one here before Approve).
   const [chaptersBySubject, setChaptersBySubject] = React.useState<Record<string, { id: string; name: string }[]>>({});
   const [chapterPick, setChapterPick] = React.useState<Record<string, string>>({}); // questionId -> chosen chapterId
-  const [suggesting, setSuggesting] = React.useState<string>("");
-  // NEW (explanation display/edit/generate — see QuestionRow doc-comment
-  // above for why this was missing entirely before). explanationDraft
-  // holds in-progress edits keyed by questionId (same pattern as
-  // chapterPick above); explaining tracks which question's "Generate AI
-  // Explanation" button is currently in flight.
+  // explanationDraft holds in-progress explanation edits keyed by questionId
+  // (same pattern as chapterPick above).
   const [explanationDraft, setExplanationDraft] = React.useState<Record<string, { explanation?: string; explanationHindi?: string }>>({});
-  const [explaining, setExplaining] = React.useState<string>("");
 
   const headers = React.useCallback(() => {
     const t = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") : "";
@@ -231,57 +224,6 @@ export default function BatchDetailPage() {
     },
     [chaptersBySubject, headers],
   );
-
-  const suggestChapterFor = async (q: QuestionRow) => {
-    if (!q.subjectId) {
-      setErr("Is question ka subject set nahi hai — chapter suggest nahi ho sakta.");
-      return;
-    }
-    setSuggesting(q.id);
-    setErr("");
-    try {
-      await ensureChaptersLoaded(q.subjectId);
-      const r = await fetchAuth(`${API_BASE}/admin/pdf-ingestion/questions/${q.id}/suggest-chapter`, {
-        method: "POST",
-        headers: headers(),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        setErr(d?.message || "AI suggestion fail ho gayi — chapter manually chuno.");
-        return;
-      }
-      setChapterPick((prev) => ({ ...prev, [q.id]: d.chapterId }));
-      setMsg(`🤖 Suggested: ${d.chapterName} (confidence: ${d.confidence}) — confirm karke Approve dabao.`);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "AI suggestion fail ho gayi");
-    } finally {
-      setSuggesting("");
-    }
-  };
-
-  const generateExplanationFor = async (q: QuestionRow) => {
-    setExplaining(q.id);
-    setErr("");
-    try {
-      const r = await fetchAuth(`${API_BASE}/admin/pdf-ingestion/questions/${q.id}/explain`, {
-        method: "POST",
-        headers: headers(),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        setErr(d?.message || "AI explanation generate karne mein fail ho gaya — OPENAI_API_KEY set hai ya nahi check karo.");
-        return;
-      }
-      setMsg("🤖 AI explanation generate ho gayi.");
-      // Backend already saved it to the question row — reload so the
-      // freshly-generated explanation/explanationHindi shows up below.
-      load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "AI explanation generate karne mein fail ho gaya");
-    } finally {
-      setExplaining("");
-    }
-  };
 
   const rejectOne = async (id: string) => {
     const reason = prompt("Reject karne ki wajah likho:");
@@ -484,7 +426,7 @@ export default function BatchDetailPage() {
                       {q.aiConfidenceScore != null && ` · AI confidence: ${Math.round(q.aiConfidenceScore * 100)}%`}
                     </p>
 
-                    {/* NEW — chapter picker + AI suggestion. Only shown for
+                    {/* Chapter picker. Only shown for
                         not-yet-approved questions; once approved the
                         chapter is locked in and shown above via q.chapter.name. */}
                     {!q.isApproved && (
@@ -500,18 +442,10 @@ export default function BatchDetailPage() {
                             <option key={c.id} value={c.id}>{c.name}</option>
                           ))}
                         </select>
-                        <button
-                          onClick={() => suggestChapterFor(q)}
-                          disabled={suggesting === q.id || !q.subjectId}
-                          className="rounded-lg border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
-                          title="AI se best-matching chapter suggest karwao"
-                        >
-                          {suggesting === q.id ? "Soch raha hai…" : "🤖 Suggest"}
-                        </button>
                       </div>
                     )}
 
-                    {/* NEW — explanation display/edit/generate (see
+                    {/* Explanation display/edit (see
                         QuestionRow doc-comment above: this field existed in
                         the API response all along but this page never read
                         or rendered it, which is exactly the "explanation
@@ -522,19 +456,11 @@ export default function BatchDetailPage() {
                       <div className="mt-3 space-y-2 rounded-lg border border-border bg-muted/10 p-2">
                         <div className="flex items-center justify-between">
                           <label className="text-xs font-semibold text-muted-foreground">Explanation (English)</label>
-                          <button
-                            onClick={() => generateExplanationFor(q)}
-                            disabled={explaining === q.id}
-                            className="rounded-lg border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
-                            title="AI se explanation generate karwao (OPENAI_API_KEY zaroori hai)"
-                          >
-                            {explaining === q.id ? "Generate ho raha hai…" : "🤖 Generate AI Explanation"}
-                          </button>
                         </div>
                         <textarea
                           value={explanationDraft[q.id]?.explanation ?? q.explanation ?? ""}
                           onChange={(e) => setExplanationDraft((prev) => ({ ...prev, [q.id]: { ...prev[q.id], explanation: e.target.value } }))}
-                          placeholder="Explanation yahaan khaali hai — 'Generate AI Explanation' dabao ya khud type karo"
+                          placeholder="Explanation yahaan khaali hai — khud type karo"
                           className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
                           rows={2}
                         />

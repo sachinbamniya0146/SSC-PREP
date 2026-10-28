@@ -1089,16 +1089,6 @@ export default function AdminPage() {
                 Refer & Earn
               </a>
             )}
-            {access.isAdmin && (
-              <a href="/admin/api-keys" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
-                API Keys
-              </a>
-            )}
-            {access.isAdmin && (
-              <a href="/admin/ai" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
-                AI Jobs
-              </a>
-            )}
             <button onClick={toggleTheme} aria-label="Toggle theme" className="rounded-lg border border-border p-2 text-sm hover:bg-muted">
               {theme === "dark" ? "☀️" : "🌙"}
             </button>
@@ -1229,7 +1219,7 @@ export default function AdminPage() {
             href="/admin/pyq-dates"
             className="mb-3 ml-2 inline-block rounded-lg border border-blue-500/40 bg-blue-500/5 px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-500/10 dark:text-blue-400"
           >
-            📅 PYQ ki exam date + Tier 1/2 AI se map — Date Mapping status →
+            📅 PYQ ki exam date + Tier 1/2 khud daalein — Date Mapping →
           </a>
           )}
           {access.isAdmin && (

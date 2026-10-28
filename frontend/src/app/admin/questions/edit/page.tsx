@@ -6,7 +6,6 @@
 //  * The student's "Report error" screen links here (?q=1042), so a reported question opens in one tap.
 //  * Everything can be changed: text, Hindi, options, answer, question image, SOLUTION image
 //    (optional), exam / year / shift / DATE (type it or pick from the calendar), syllabus place.
-//  * English -> Hindi button (free AI models, admin key pool).
 //  * After saving, students who reported this question get a thank-you ("problem theek ho gayi").
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -105,7 +104,6 @@ function EditInner() {
   const [difficulty, setDifficulty] = React.useState("MEDIUM");
 
   const [busy, setBusy] = React.useState(false);
-  const [translating, setTranslating] = React.useState(false);
   const [error, setError] = React.useState("");
   const [ok, setOk] = React.useState<string[] | null>(null);
   const [thank, setThank] = React.useState(true);
@@ -192,34 +190,6 @@ function EditInner() {
   const chapter = subject?.chapters.find((c) => c.id === chapterId);
   const topic = chapter?.topics.find((t) => t.id === topicId);
   const setOpt = (i: number, patch: Partial<Opt>) => setOptions((o) => o.map((x, j) => (j === i ? { ...x, ...patch } : x)));
-
-  const translate = async () => {
-    if (!questionText.trim() && !options.some((o) => o.text.trim())) {
-      setError("Pehle English question / options likhein, phir translate karein.");
-      return;
-    }
-    const hasHindi = questionTextHindi.trim() || options.some((o) => o.textHi.trim());
-    if (hasHindi && !window.confirm("Hindi text pehle se bhara hai. Naye translation se badal dein?")) return;
-    setTranslating(true);
-    setError("");
-    try {
-      const r = await fetchAuth(`${API_BASE}/bank/admin/manage/translate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ questionText, explanation, options: KEYS.map((k, i) => ({ key: k, text: options[i].text })) }),
-      });
-      const d = await r.json().catch(() => null);
-      if (!r.ok) throw new Error(d?.message || `Translate fail (HTTP ${r.status})`);
-      if (d.questionTextHindi) setQuestionTextHindi(d.questionTextHindi);
-      setOptions((o) => o.map((x, i) => ({ ...x, textHi: d.options?.[KEYS[i]] || x.textHi })));
-      if (d.explanationHindi) setExplanationHindi(d.explanationHindi);
-      setOk([`Hindi translation bhar diya gaya (${d.model || "free model"}). Ek baar padhkar check kar lein, phir Save karein.`]);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setTranslating(false);
-    }
-  };
 
   const save = async (allowDuplicate = false) => {
     setBusy(true);
@@ -399,7 +369,6 @@ function EditInner() {
             <section className="rounded-xl border border-border bg-card p-4">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h2 className="text-sm font-bold">2. Question</h2>
-                <button type="button" onClick={translate} disabled={translating} className="rounded-lg border border-primary px-3 py-1.5 text-xs font-bold text-primary disabled:opacity-50">{translating ? "Translate ho raha…" : "🇮🇳 English → Hindi"}</button>
               </div>
               <label className={lbl}>Question (English)</label>
               <textarea className={inp} rows={3} value={questionText} onChange={(e) => setQuestionText(e.target.value)} />

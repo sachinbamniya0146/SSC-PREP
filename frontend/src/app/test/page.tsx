@@ -10,7 +10,6 @@ import DiagramVenn from "@/components/DiagramVenn";
 import { StemMedia, QFigure } from "@/components/QuestionMedia";
 import { ReportQuestion } from "@/components/ReportQuestion";
 import WeakTopicPractice from "@/components/WeakTopicPractice";
-import SolutionVerify from "@/components/SolutionVerify";
 import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang } from "@/components/SolutionPanel";
 import { useT } from "@/lib/i18n";
 import { sectionIndexAt, sectionRemainingSec, totalMinutes, type SectionPlan, type PatternMeta } from "@/lib/section-plan";
@@ -368,34 +367,29 @@ export default function TestPage() {
   // just fail with a browser alert() once "Start Test" was clicked.
   const [dailyGate, setDailyGate] = React.useState<string | null>(null);
 
-  // practice-mode aids (v6 §5: Show Answer + AI Hint, hint capped at 3/session)
+  // practice-mode aids (v6 §5: Show Answer + Hint, hint capped at 3/session)
   const [showAns, setShowAns] = React.useState<{ [qid: string]: boolean }>({});
-  // BUGFIX (Sachin report, Sep 2026): "Show Answer" used to render ONLY
-  // q.explanation — for any question whose explanation was never
-  // pre-generated (a large chunk of the bank imported via old
-  // parse_*/upload_*.py scripts) that's null, so only "Correct Answer: X"
-  // showed with no explanation at all. Backend already has an on-demand
-  // AI-generate-and-cache endpoint (ai-explanation/questions/:id, same one
-  // /review already uses) — now called here too when the stored
-  // explanation is missing, keyed per question like showAns/hintUsed above.
-  const [aiExp, setAiExp] = React.useState<{
+  // "Show Answer" shows q.explanation when the question carries one; when it does not, the stored
+  // explanation of the question is read from the server (GET /explanations/questions/:id), keyed per question
+  // like showAns/hintUsed above. Nothing is generated.
+  const [storedExp, setStoredExp] = React.useState<{
     [qid: string]: { loading?: boolean; error?: string | null; data?: { stepByStepSolution: string; stepByStepSolutionHindi?: string; source?: string } };
   }>({});
-  const fetchAiExplanation = async (qid: string) => {
-    setAiExp((p) => ({ ...p, [qid]: { ...p[qid], loading: true, error: null } }));
+  const fetchStoredExplanation = async (qid: string) => {
+    setStoredExp((p) => ({ ...p, [qid]: { ...p[qid], loading: true, error: null } }));
     try {
-      const res = await fetch(`${apiBase()}/ai-explanation/questions/${qid}`, { headers: getAuthHeaders() });
+      const res = await fetch(`${apiBase()}/explanations/questions/${qid}`, { headers: getAuthHeaders() });
       const d = await res.json().catch(() => ({}));
-      if (res.ok) setAiExp((p) => ({ ...p, [qid]: { loading: false, data: d } }));
-      else setAiExp((p) => ({ ...p, [qid]: { loading: false, error: d.message || tr("An explanation is not available yet.", "Explanation abhi available nahi hai.") } }));
+      if (res.ok) setStoredExp((p) => ({ ...p, [qid]: { loading: false, data: d } }));
+      else setStoredExp((p) => ({ ...p, [qid]: { loading: false, error: d.message || tr("An explanation is not available yet.", "Explanation abhi available nahi hai.") } }));
     } catch {
-      setAiExp((p) => ({ ...p, [qid]: { loading: false, error: tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi.") } }));
+      setStoredExp((p) => ({ ...p, [qid]: { loading: false, error: tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi.") } }));
     }
   };
   const [hintUsed, setHintUsed] = React.useState<{ [qid: string]: boolean }>({});
   const [hintQuota, setHintQuota] = React.useState(3);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
-  // FIX (exam-integrity bug): "Show Answer" / "AI Hint" were rendering on
+  // FIX (exam-integrity bug): "Show Answer" / "Hint" were rendering on
   // EVERY test — including server-authoritative timed exams (sectional,
   // year-wise, full mock) — which let a student see the correct answer
   // mid-attempt and defeats the entire point of a mock test. This flag is
@@ -2193,7 +2187,7 @@ export default function TestPage() {
                     mode: reporting doesn't reveal the correct answer or
                     otherwise affect exam integrity. */}
                 {currentUserId && <ReportQuestion questionId={q.id} currentUserId={currentUserId} compact />}
-                {/* Show Answer / AI Hint are practice-only aids. Hidden in
+                {/* Show Answer / Hint are practice-only aids. Hidden in
                     isExamMode (sectional / year-wise / full mock — any
                     server-authoritative timed attempt) so a real exam can't
                     be cheated mid-attempt. */}
@@ -2202,7 +2196,7 @@ export default function TestPage() {
                     onClick={() => {
                       const willShow = !showAns[q.id];
                       setShowAns((p) => ({ ...p, [q.id]: willShow }));
-                      if (willShow && !q.explanation && !aiExp[q.id]) fetchAiExplanation(q.id);
+                      if (willShow && !q.explanation && !storedExp[q.id]) fetchStoredExplanation(q.id);
                     }}
                     className={`btn ${showAns[q.id] ? "btn-success" : "btn-outline"}`}
                   >
@@ -2218,9 +2212,9 @@ export default function TestPage() {
                     }}
                     disabled={hintUsed[q.id] || hintQuota <= 0}
                     className="btn btn-outline disabled:opacity-40"
-                    title="Free AI Hint (3 per session)"
+                    title="Free hint (3 per session)"
                   >
-                    {hintUsed[q.id] ? "Hint shown ✓" : hintQuota <= 0 ? "Hint used all (3/3)" : `💡 AI Hint (${hintQuota} left)`}
+                    {hintUsed[q.id] ? "Hint shown ✓" : hintQuota <= 0 ? "Hint used all (3/3)" : `💡 Hint (${hintQuota} left)`}
                   </button>
                 )}
                 <div className="flex-1" />
@@ -2257,20 +2251,19 @@ export default function TestPage() {
                   )}
                   {showAns[q.id] && !q.explanation && (
                     <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                      <span className="mr-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">🤖 AI-generated</span>
-                      {aiExp[q.id]?.loading && <p className="mt-1">{tr("Preparing the explanation…", "Explanation ban rahi hai…")}</p>}
-                      {aiExp[q.id]?.error && (
+                      {storedExp[q.id]?.loading && <p className="mt-1">{tr("Loading the explanation…", "Explanation load ho rahi hai…")}</p>}
+                      {storedExp[q.id]?.error && (
                         <p className="mt-1">
-                          {aiExp[q.id]?.error}{" "}
-                          <button onClick={() => fetchAiExplanation(q.id)} className="font-semibold text-primary underline">Retry</button>
+                          {storedExp[q.id]?.error}{" "}
+                          <button onClick={() => fetchStoredExplanation(q.id)} className="font-semibold text-primary underline">Retry</button>
                         </p>
                       )}
-                      {aiExp[q.id]?.data && (
+                      {storedExp[q.id]?.data && (
                         <div className="mt-1">
-                          <p className="whitespace-pre-line">{aiExp[q.id]!.data!.stepByStepSolution}</p>
-                          {aiExp[q.id]!.data!.stepByStepSolutionHindi && (
+                          <p className="whitespace-pre-line">{storedExp[q.id]!.data!.stepByStepSolution}</p>
+                          {storedExp[q.id]!.data!.stepByStepSolutionHindi && (
                             <p className="mt-2 whitespace-pre-line border-t border-primary/20 pt-2">
-                              🇮🇳 {aiExp[q.id]!.data!.stepByStepSolutionHindi}
+                              🇮🇳 {storedExp[q.id]!.data!.stepByStepSolutionHindi}
                             </p>
                           )}
                         </div>

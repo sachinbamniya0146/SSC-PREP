@@ -62,7 +62,7 @@ const pricing = [
     price: "₹11",
     period: "/month",
     blurb: "Everything you need to practise daily.",
-    features: ["Unlimited chapter & topic tests", "All PYQ papers", "Full analytics", "AI recommendations"],
+    features: ["Unlimited chapter & topic tests", "All PYQ papers", "Full analytics", "Weak-topic practice"],
     highlight: false,
   },
   {

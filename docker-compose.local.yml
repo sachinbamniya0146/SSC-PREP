@@ -56,7 +56,6 @@ services:
       ADMIN_EMAIL: admin@sscprephub.in
       ADMIN_PASSWORD: Admin@123456
       ADMIN_PASSWORDS: '["Admin@123456"]'
-      OPENROUTER_API_KEY: ""
     ports:
       - "127.0.0.1:4000:4000"
     volumes:

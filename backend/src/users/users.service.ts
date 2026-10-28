@@ -2,8 +2,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-// Fields safe to return to the client — never selects passwordHash or the
-// raw openrouterApiKey.
+// Fields safe to return to the client — never selects passwordHash.
 const PUBLIC_USER_SELECT = {
   id: true,
   email: true,
@@ -27,7 +26,7 @@ const PUBLIC_USER_SELECT = {
 const DONE_STATUSES = ['SUBMITTED', 'AUTO_SUBMITTED'] as const;
 
 /**
- * User profile, preferences, and personal-OpenRouter-key management.
+ * User profile and preferences.
  * Backs UsersController's /users/me* routes.
  */
 @Injectable()
@@ -180,30 +179,5 @@ export class UserService {
     }
     // phone uniqueness + language normalisation live in updatePreferences()
     return this.updatePreferences(userId, { phone: body.phone, preferredLanguage: body.preferredLanguage });
-  }
-
-  /** Save (or clear, when apiKey is null) the user's personal OpenRouter key. */
-  async updateOpenrouterApiKey(userId: string, apiKey: string | null) {
-    const trimmed = apiKey?.trim() || null;
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { openrouterApiKey: trimmed },
-    });
-    return this.getOpenrouterApiKeyStatus(userId);
-  }
-
-  /** Whether a personal key is saved, plus a masked preview — never the raw key. */
-  async getOpenrouterApiKeyStatus(userId: string): Promise<{ hasOpenrouterApiKey: boolean; maskedKey: string | null }> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { openrouterApiKey: true },
-    });
-    if (!user) throw new NotFoundException('User not found');
-
-    const key = user.openrouterApiKey;
-    if (!key) return { hasOpenrouterApiKey: false, maskedKey: null };
-
-    const maskedKey = key.length <= 8 ? '••••' : `${key.slice(0, 4)}${'•'.repeat(6)}${key.slice(-4)}`;
-    return { hasOpenrouterApiKey: true, maskedKey };
   }
 }

@@ -3,7 +3,6 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SearchService } from '../search/search.service';
-import { AiProviderService } from '../ai-provider/ai-provider.service';
 import { BankAdminService, AdminQuestionFilter } from './bank-admin.service';
 import { BankUploadService } from './bank-upload.service';
 import { normalizeMathText, normalizeQuestionMath } from '../common/math-text';
@@ -20,7 +19,6 @@ import { normalizeExamTier, normalizeTierPaper, parsePaperQuestionNo } from '../
 //                          Old values are saved as a QuestionVersion.
 //   * bulkUpdateMeta()   — set exam / year / shift / exam-date on MANY questions
 //   * filterOptions()    — real years / shifts / dates that exist (dropdowns)
-//   * translateToHindi() — English -> Hindi through the admin free-model key pool
 //   * fixMath()          — rewrite old "2^2" questions into "2²"
 // =============================================================================
 
@@ -49,7 +47,6 @@ export class QuestionEditService {
     private readonly admin: BankAdminService,
     private readonly upload: BankUploadService,
     private readonly search: SearchService,
-    private readonly aiProvider: AiProviderService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -628,63 +625,6 @@ export class QuestionEditService {
       shifts: shifts.map((s) => ({ shift: s.shift as string, count: s._count._all })),
       examDates: dates.map((d) => ({ examDate: d.examDate as string, count: d._count._all })),
     };
-  }
-
-  // ---------------------------------------------------------------------------
-  // English -> Hindi (admin key pool, free models only)
-  // ---------------------------------------------------------------------------
-
-  async translateToHindi(body: { questionText?: string; options?: { key: string; text?: string }[]; explanation?: string }) {
-    const questionText = String(body?.questionText ?? '').trim();
-    const explanation = String(body?.explanation ?? '').replace(SOLUTION_IMG_G, '').trim();
-    const options = (Array.isArray(body?.options) ? body.options : [])
-      .map((o) => ({ key: String(o?.key ?? '').toUpperCase(), text: String(o?.text ?? '').trim() }))
-      .filter((o) => OPTION_KEYS.includes(o.key as any));
-    if (!questionText && !explanation && !options.some((o) => o.text)) {
-      throw new BadRequestException('Translate karne ke liye English question / options / explanation likhein.');
-    }
-    const payload = {
-      questionText,
-      options: Object.fromEntries(options.map((o) => [o.key, o.text])),
-      explanation,
-    };
-    const prompt = [
-      'You translate Indian SSC competitive-exam questions from English into Hindi (Devanagari script).',
-      'Rules:',
-      '- Keep every number, formula, symbol, unit, option letter and proper noun exactly as they are (names of people/places may be written in Devanagari).',
-      '- Do NOT solve the question and do NOT add or remove information. Translate only.',
-      '- Use the standard Hindi terms used in SSC Hindi-medium papers.',
-      '- If a field is empty, return an empty string for it.',
-      '- Reply with ONE JSON object only, no markdown, with exactly these keys:',
-      '{"questionTextHindi": string, "options": {"A": string, "B": string, "C": string, "D": string}, "explanationHindi": string}',
-      '',
-      'English input:',
-      JSON.stringify(payload),
-    ].join('\n');
-
-    const result = await this.aiProvider.generate(prompt, { jsonResponse: true, feature: 'QUESTION_HINDI_TRANSLATE' });
-    const parsed = this.parseJsonLoose(result.content);
-    if (!parsed) throw new BadRequestException('AI ka jawab samajh nahi aaya — dobara try karein.');
-    const opts: Record<string, string> = {};
-    for (const k of OPTION_KEYS) opts[k] = normalizeMathText(String(parsed?.options?.[k] ?? '').trim());
-    return {
-      questionTextHindi: normalizeMathText(String(parsed?.questionTextHindi ?? '').trim()),
-      options: opts,
-      explanationHindi: normalizeMathText(String(parsed?.explanationHindi ?? '').trim()),
-      model: result.model,
-    };
-  }
-
-  private parseJsonLoose(text: string): any | null {
-    const t = String(text ?? '').replace(/```json|```/gi, '').trim();
-    const a = t.indexOf('{');
-    const b = t.lastIndexOf('}');
-    if (a < 0 || b <= a) return null;
-    try {
-      return JSON.parse(t.slice(a, b + 1));
-    } catch {
-      return null;
-    }
   }
 
   // ---------------------------------------------------------------------------

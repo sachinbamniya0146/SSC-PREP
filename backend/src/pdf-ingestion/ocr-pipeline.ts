@@ -138,25 +138,4 @@ export class OcrPipeline {
       try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
     }
   }
-
-  /** Vision LLM fallback: use GPT-4V to read a page image and return structured text */
-  static async visionOcr(pageImgPath: string, apiKey: string, baseUrl: string): Promise<string> {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const OpenAI = require('openai').OpenAI;
-    const client = new OpenAI({ apiKey, baseURL: baseUrl });
-    const imgB64 = fs.readFileSync(pageImgPath).toString('base64');
-    const completion = await client.chat.completions.create({
-      model: 'gpt-4-vision-preview',
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'text', text: 'Read all text from this image. Output plain text only.' },
-          { type: 'image_url', image_url: { url: `data:image/png;base64,${imgB64}` } }
-        ]
-      }],
-      max_tokens: 2000,
-      temperature: 0.1,
-    });
-    return completion.choices?.[0]?.message?.content || '';
-  }
 }

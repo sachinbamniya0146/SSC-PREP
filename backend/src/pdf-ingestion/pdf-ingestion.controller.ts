@@ -24,7 +24,6 @@ import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-use
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { PdfIngestionService } from './pdf-ingestion.service';
-import { ExplanationGenerationService } from './explanation-generation.service';
 import {
   UploadPdfDto,
   AdminApproveQuestionDto,
@@ -42,7 +41,6 @@ import {
 export class PdfIngestionController {
   constructor(
     private readonly service: PdfIngestionService,
-    private readonly explanationService: ExplanationGenerationService,
     private readonly prisma: PrismaService,
     private readonly auditService: AuditLogService,
   ) {}
@@ -162,23 +160,6 @@ export class PdfIngestionController {
   @ApiOperation({ summary: 'Get ingestion pipeline stats' })
   async getStats() {
     return this.service.getPipelineStats();
-  }
-
-  @Post('questions/:id/explain')
-  @ApiOperation({ summary: 'Generate AI explanation for a question (English + Hindi)' })
-  async explainQuestion(@Param('id') id: string) {
-    await this.explanationService.generateExplanationForQuestion(id);
-    return { success: true, message: 'AI explanation generated and saved' };
-  }
-
-  // NEW — AI chapter suggestion for the review queue (see the service
-  // method's own comment for the full rationale). Returns a suggestion
-  // only; nothing is written until the admin actually calls approveQuestion
-  // with the chosen chapterId.
-  @Post('questions/:id/suggest-chapter')
-  @ApiOperation({ summary: 'AI-suggest the most likely chapter for a pending question (does not save anything)' })
-  async suggestChapter(@Param('id') id: string) {
-    return this.service.suggestChapter(id);
   }
 
   // v1 §7.4 — human review-gate control: move a question through

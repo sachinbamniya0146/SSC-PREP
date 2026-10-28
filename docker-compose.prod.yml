@@ -78,39 +78,6 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # Free self-hosted web search for PYQ date mapping (no API key, no daily cap). Internal only.
-  searxng:
-    image: searxng/searxng:latest
-    container_name: ssc-searxng
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    environment:
-      SEARXNG_SECRET: ${SEARXNG_SECRET:-ssc-searxng-local-secret-change-me}
-      SEARXNG_BASE_URL: http://searxng:8080/
-      # tiny VPS: one worker, few threads
-      GRANIAN_WORKERS: "1"
-      GRANIAN_BLOCKING_THREADS: "2"
-      UWSGI_WORKERS: "1"
-      UWSGI_THREADS: "2"
-    volumes:
-      - ./searxng:/etc/searxng:rw
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 40s
-    restart: unless-stopped
-
   backend:
     image: ghcr.io/sachinbamniya0146/ssc-prep-backend:latest
     container_name: ssc-backend
@@ -125,7 +92,6 @@ services:
       # Only Docker-internal hostnames stay here — these are NOT secrets
       REDIS_HOST: redis
       MEILISEARCH_HOST: http://meilisearch:7700
-      SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
       # Image-question fallback when R2/S3 is not configured: keep uploads on the
       # persistent ./files host mount so they survive container rebuilds.
       UPLOADS_DIR: /app/files/uploads

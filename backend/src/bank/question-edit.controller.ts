@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -8,7 +8,7 @@ import { BankAdminService } from './bank-admin.service';
 import { QuestionEditService } from './question-edit.service';
 
 // =============================================================================
-// Admin: open / edit ONE question, change details of many, translate, fix math.
+// Admin: open / edit ONE question, change details of many, fix math.
 // (NEW — Oct 3 2026)  Same guard rules as the rest of /bank/admin/manage.
 // =============================================================================
 @Controller('bank/admin/manage')
@@ -50,13 +50,6 @@ export class QuestionEditController {
   @Get('filter-options')
   filterOptions(@Query('examId') examId?: string) {
     return this.edit.filterOptions(examId || undefined);
-  }
-
-  // body: { questionText?, options?: [{key,text}], explanation? }  ->  Hindi version
-  @Post('translate')
-  translate(@Body() body: any) {
-    if (!body) throw new BadRequestException('Body required');
-    return this.edit.translateToHindi(body);
   }
 
   @Post('fix-math')

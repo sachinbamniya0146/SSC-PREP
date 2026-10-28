@@ -26,7 +26,6 @@ interface StudyPlanRequest {
     subjectScores: { subject: string; score: number; total: number }[];
     topicScores: { topic: string; score: number; total: number }[];
   };
-  userOpenRouterKey?: string;
 }
 
 interface StudyPlanResponse {
@@ -43,108 +42,12 @@ interface StudyPlanResponse {
 export class StudyPlanService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async generateStudyPlan(request: StudyPlanRequest, userOpenRouterKey?: string): Promise<StudyPlanResponse> {
-    const { testResults } = request;
-    const accuracy = testResults.totalQuestions > 0 ? (testResults.correctAnswers / testResults.totalQuestions) * 100 : 0;
-    const apiKey = userOpenRouterKey || process.env.OPENROUTER_API_KEY;
-
-    if (!apiKey) {
-      return this.generateBasicStudyPlan(testResults);
-    }
-
-    try {
-      const prompt = `Create a study plan based on these test results:
-Total: ${testResults.totalQuestions}, Correct: ${testResults.correctAnswers} (${accuracy.toFixed(1)}%)
-Subjects: ${testResults.subjectScores.map(s => `${s.subject}: ${s.score}/${s.total}`).join(', ')}
-Topics: ${testResults.topicScores.map(t => `${t.topic}: ${t.score}/${t.total}`).join(', ')}
-
-Return JSON:
-{
-  "plan": "Study plan in English",
-  "planHindi": "Study plan in Hindi",
-  "focusAreas": ["weak areas"],
-  "focusAreasHindi": ["कमजोर areas"],
-  "dailySchedule": [{"day": 1, "topic": "topic", "duration": 60, "priority": "high"}],
-  "tips": ["tips in English"],
-  "tipsHindi": ["tips in Hindi"]
-}`;
-
-      const content = await this.callOpenRouterFree(apiKey, prompt);
-      if (!content) throw new Error('Empty response');
-
-      return JSON.parse(content);
-    } catch {
-      return this.generateBasicStudyPlan(testResults);
-    }
-  }
-
   /**
-   * FREE-MODELS-ONLY OpenRouter call, with automatic fallback.
-   *
-   * BUGFIX: this used to hardcode `model: 'openai/gpt-4o-mini'` directly in
-   * the fetch body — a PAID model — completely ignoring both the
-   * OPENROUTER_MODEL env var (which env.validation.ts defines but nothing
-   * actually read) and the user's stated intent to only ever use
-   * OpenRouter's free tier. That's also the real reason env.validation.ts
-   * looked "different" from what was actually happening: the schema had a
-   * model setting that the code silently never used.
-   *
-   * Now: always picks from a FREE_MODELS list (env override first, then
-   * NVIDIA Nemotron 3 Ultra — 550B/1M-context, currently OpenRouter's
-   * strongest free model — then smaller free fallbacks). Free-tier
-   * endpoints are rate-limited, so on a 429 or any error this tries the
-   * next model in the list before giving up to the offline
-   * generateBasicStudyPlan() fallback.
+   * Quick rule-based plan from one set of test results (no AI, no external call):
+   * weak topics = topics under 60 % accuracy, worst first.
    */
-  private readonly FREE_MODELS = [
-    process.env.OPENROUTER_MODEL, // optional env override — must itself end in ":free"
-    'nvidia/nemotron-3-ultra-550b-a55b:free',
-    'nvidia/nemotron-3-super-120b-a12b:free',
-    'nvidia/nemotron-3.5-lightning:free',
-    'meta-llama/llama-3.3-70b-instruct:free',
-  ].filter((m): m is string => !!m && m.trim() !== '');
-
-  private async callOpenRouterFree(apiKey: string, prompt: string): Promise<string | undefined> {
-    let lastError: unknown;
-    for (const model of this.FREE_MODELS) {
-      try {
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'HTTP-Referer': 'https://sscprephub.in',
-            'X-Title': 'SSC Prep Hub',
-          },
-          body: JSON.stringify({
-            model,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.3,
-            max_tokens: 2000,
-            response_format: { type: 'json_object' },
-          }),
-        });
-
-        if (response.status === 429) {
-          // Free-tier rate limit hit — try the next free model instead of failing.
-          lastError = new Error(`${model} rate-limited (429)`);
-          continue;
-        }
-        if (!response.ok) {
-          lastError = new Error(`${model} AI API error: ${response.status}`);
-          continue;
-        }
-
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
-        if (content) return content;
-        lastError = new Error(`${model} returned empty content`);
-      } catch (err) {
-        lastError = err;
-      }
-    }
-    if (lastError) throw lastError;
-    return undefined;
+  async generateStudyPlan(request: StudyPlanRequest): Promise<StudyPlanResponse> {
+    return this.generateBasicStudyPlan(request.testResults);
   }
 
   // ============================================================
@@ -393,10 +296,10 @@ Return JSON:
         ? 'Good progress! Focus on weak areas. Practice 100+ questions daily.'
         : 'Excellent! Focus on advanced topics and time management.',
       planHindi: accuracy < 50
-        ? 'बुनियादी बतों पर ध्यान दें। रोज़ 80+ प्रश्न अभ्यאस करें।'
+        ? 'बुनियादी बातों पर ध्यान दें। रोज़ 80+ प्रश्नों का अभ्यास करें।'
         : accuracy < 75
-        ? 'अचछी प़्रगति! कमज़ोर areas पर ध्यान दें।'
-        : 'उतकृष्ट! उन्नत विषयों पर ध्यान दें।',
+        ? 'अच्छी प्रगति! कमज़ोर क्षेत्रों पर ध्यान दें। रोज़ 100+ प्रश्नों का अभ्यास करें।'
+        : 'उत्कृष्ट! उन्नत विषयों और समय-प्रबंधन पर ध्यान दें।',
       focusAreas: weakTopics,
       focusAreasHindi: weakTopics,
       dailySchedule: weakTopics.slice(0, 5).map((topic, i) => ({
@@ -406,7 +309,7 @@ Return JSON:
         priority: 'high' as const,
       })),
       tips: ['Practice daily', 'Focus on weak areas', 'Take mock tests'],
-      tipsHindi: ['रोज़ाना अभ्यास करें', 'कमज़ोर areas पर ध्यान दें', 'Mock tests लें'],
+      tipsHindi: ['रोज़ाना अभ्यास करें', 'कमज़ोर क्षेत्रों पर ध्यान दें', 'मॉक टेस्ट दें'],
     };
   }
 }

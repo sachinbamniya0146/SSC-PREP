@@ -50,7 +50,7 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "SSC Prep Hub — India's Most Advanced SSC Practice Platform",
   description:
-    "SSC CGL, CHSL, CPO, MTS, GD mock tests, PYQ papers, daily practice, AI analytics and study material in Hindi & English.",
+    "SSC CGL, CHSL, CPO, MTS, GD mock tests, PYQ papers, daily practice, performance analytics and study material in Hindi & English.",
   keywords:
     "SSC CGL mock test, SSC CHSL PYQ, SSC practice, SSC mock test free, SSC CGL previous year paper",
   manifest: "/manifest.webmanifest",

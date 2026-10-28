@@ -1,65 +1,31 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { AiProviderService } from '../ai-provider/ai-provider.service';
-import { AdminApiKeyService } from '../admin-api-keys/admin-api-keys.service';
 import { BankUploadService } from '../bank/bank-upload.service';
-import { PyqDateSearchService, Evidence } from './pyq-date-search.service';
-import {
-  PassRecord,
-  PassVerdict,
-  Tier,
-  buildQueries,
-  cleanQuestionText,
-  dateAppearsInText,
-  decideFromPasses,
-  detectTier,
-  isValidIsoDate,
-  minAgreeFor,
-  normalizeTier,
-  parsePassAnswer,
-  stripHtml,
-  toIsoDate,
-  words,
-} from './pyq-date.util';
+import { Tier, cleanQuestionText, isValidIsoDate, normalizeTier, toIsoDate } from './pyq-date.util';
 
 /**
- * PYQ date mapping (NEW Oct 7 2026).
+ * PYQ exam dates (manual).
  *
- * Every PYQ question (a question with a `year`) that has no exam date is looked up on the internet:
- *   1. it waits `minAgeMinutes` (5) after upload,
- *   2. for each of `passes` (5) verification passes: a DIFFERENT web search -> evidence text ->
- *      a FREE OpenRouter model reads ONLY that evidence and answers with the exam date,
- *   3. a pass counts only if the date is really written in the evidence AND its year matches the question's year,
- *   4. >= 3 of 5 passes on the same date -> the date is written to Question.examDate (and Tier 1/2 to examTier),
- *      anything weaker goes to "needs review" for the admin. Nothing is guessed.
+ * The admin types the real exam date (and Tier 1 / Tier 2) of a PYQ question by hand. There is NO
+ * automatic internet search and NO AI any more. Old rows written by the earlier automatic finder
+ * (status MAPPED / NEEDS_REVIEW / NOT_FOUND / FAILED / PENDING) stay in the table so nothing is lost:
+ * the admin can still accept or reject an old proposed date, or overwrite it with a hand-typed one.
+ *
+ * "UNMAPPED" (a virtual status) = PYQ questions (year set) that have no exam date and no row yet.
  */
 
-export const PYQ_FEATURE = 'PYQ_DATE_MAPPING';
-const TICK_MS = 45_000;
-const STUCK_MS = 15 * 60 * 1000;
-// NEW (Oct 14 2026): one worker round now keeps going until the queue is empty (or this many questions,
-// or this much time) instead of doing 1-5 questions and then sleeping 45 s.
-const MAX_QUESTIONS_PER_RUN = 150;
-const MAX_RUN_MS = 25 * 60 * 1000;
-// keys busy (rate limit) -> look again after this many minutes (was 8)
-const BUSY_RETRY_MIN = 3;
 const STATUSES = ['PENDING', 'RUNNING', 'MAPPED', 'NEEDS_REVIEW', 'NOT_FOUND', 'FAILED', 'MANUAL'] as const;
 export type MapStatus = (typeof STATUSES)[number];
 
 interface QuestionForRun {
   id: string;
-  questionNo: number;
-  questionText: string;
-  questionTextHindi: string | null;
-  optionsJson: unknown;
+  examId: string | null;
   year: number | null;
   shift: string | null;
   paperCode: string | null;
   examDate: string | null;
   examTier: string | null;
-  examId: string | null;
-  exam: { name: string; slug: string; code: string } | null;
 }
 
 interface PaperKey {
@@ -69,205 +35,18 @@ interface PaperKey {
   paperCode: string | null;
 }
 
-class AbortRun extends Error {
-  constructor(message: string, readonly noKeys = false) {
-    super(message);
-  }
-}
-
 @Injectable()
-export class PyqDateService implements OnModuleInit, OnModuleDestroy {
+export class PyqDateService {
   private readonly logger = new Logger(PyqDateService.name);
-  private timer: NodeJS.Timeout | null = null;
-  private busy = false;
-  private current: { questionNo: number; questionId: string; pass: number; passes: number; startedAt: number; stage: 'search' | 'ai'; query?: string } | null = null;
-  /** live counters of the run that is going on now (or of the last one) — shown on the admin screen */
-  private run: { startedAt: number; finishedAt: number | null; processed: number; mapped: number; review: number; notFound: number; failed: number; trigger: string } | null = null;
-  private wakeAgain = false;
-  /** all keys were busy: the automatic rounds rest until this time (a new key / "run now" ends the rest at once) */
-  private pausedUntil = 0;
-  private lastPruneAt = 0;
   private readonly touchedPapers = new Map<string, PaperKey>();
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly ai: AiProviderService,
-    private readonly keys: AdminApiKeyService,
     private readonly bankUpload: BankUploadService,
-    private readonly search: PyqDateSearchService,
   ) {}
 
-  // ------------------------------------------------------------------ lifecycle
-
-  async onModuleInit() {
-    if ((process.env.PYQ_DATE_WORKER || '').toLowerCase() === 'off') {
-      this.logger.warn('PYQ date worker is OFF (PYQ_DATE_WORKER=off).');
-      return;
-    }
-    try {
-      // a restart kills a run half-way: put those rows back in the queue
-      const r = await this.prisma.pyqDateMap.updateMany({
-        where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - 3 * 60 * 1000) } },
-        data: { status: 'PENDING' },
-      });
-      if (r.count) this.logger.log(`Re-queued ${r.count} interrupted PYQ date jobs.`);
-    } catch (e) {
-      this.logger.warn(`PYQ date worker start-up check failed (is the migration applied?): ${(e as Error).message}`);
-    }
-    this.timer = setInterval(() => void this.tick(false), TICK_MS);
-    this.timer.unref?.();
-    // key added / switched on / passed a live test -> start working immediately, do not wait for the next round
-    this.keys.onKeysReady(() => void this.wake());
-  }
-
-  /**
-   * A usable AI key just appeared. Questions that were put back "for later" because every key was busy/missing
-   * are made due right now and a run is started at once.
-   */
-  async wake(): Promise<void> {
-    if ((process.env.PYQ_DATE_WORKER || '').toLowerCase() === 'off') return;
-    try {
-      this.pausedUntil = 0;
-      await this.prisma.pyqDateMap.updateMany({ where: { status: 'PENDING', nextRunAt: { gt: new Date() } }, data: { nextRunAt: new Date() } });
-      const pending = await this.prisma.pyqDateMap.count({ where: { status: 'PENDING' } });
-      const cfg = await this.getConfig();
-      if (pending === 0 && !cfg.autoRun) return;
-      if (this.busy) {
-        this.wakeAgain = true; // the current run may be about to give up because of the old key state
-        return;
-      }
-      this.kick();
-    } catch (e) {
-      this.logger.warn(`wake failed: ${(e as Error).message}`);
-    }
-  }
-
-  onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
-  }
-
-  // ------------------------------------------------------------------ config
-
-  async getConfig() {
-    return this.prisma.pyqDateConfig.upsert({ where: { id: 'default' }, create: { id: 'default' }, update: {} });
-  }
-
-  async updateConfig(dto: { autoRun?: boolean; minAgeMinutes?: number; batchSize?: number; passes?: number }) {
-    const data: Prisma.PyqDateConfigUpdateInput = {};
-    if (typeof dto.autoRun === 'boolean') data.autoRun = dto.autoRun;
-    const num = (v: unknown, min: number, max: number, label: string) => {
-      const n = Number(v);
-      if (!Number.isFinite(n) || n < min || n > max) throw new BadRequestException(`${label}: ${min} se ${max} ke beech hona chahiye.`);
-      return Math.floor(n);
-    };
-    if (dto.minAgeMinutes !== undefined) data.minAgeMinutes = num(dto.minAgeMinutes, 0, 1440, 'minAgeMinutes');
-    if (dto.batchSize !== undefined) data.batchSize = num(dto.batchSize, 1, 5, 'batchSize');
-    if (dto.passes !== undefined) data.passes = num(dto.passes, 3, 5, 'passes');
-    await this.getConfig();
-    return this.prisma.pyqDateConfig.update({ where: { id: 'default' }, data });
-  }
-
-  // ------------------------------------------------------------------ worker
-
-  /** Starts a run right now (also when auto-run is off). Returns immediately; the run continues in the background. */
-  kick(limit?: number): { started: boolean; reason?: string } {
-    if (this.busy) return { started: false, reason: 'Worker abhi chal raha hai — status page par progress dekhein.' };
-    setImmediate(() => void this.tick(true, limit));
-    return { started: true };
-  }
-
-  async tick(force: boolean, limitOverride?: number): Promise<void> {
-    if (this.busy) return;
-    let cfg;
-    try {
-      cfg = await this.getConfig();
-    } catch {
-      return; // DB / migration not ready yet
-    }
-    if (!force && !cfg.autoRun) return;
-    if (!force && Date.now() < this.pausedUntil) return;
-    this.pausedUntil = 0;
-    this.busy = true;
-    let message = '';
-    const trigger = force ? (limitOverride ? 'manual (limit)' : 'manual') : 'auto';
-    this.run = { startedAt: Date.now(), finishedAt: null, processed: 0, mapped: 0, review: 0, notFound: 0, failed: 0, trigger };
-    try {
-      // stuck-run recovery (a crash while RUNNING)
-      await this.prisma.pyqDateMap.updateMany({ where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - STUCK_MS) } }, data: { status: 'PENDING' } });
-
-      let discovered = 0;
-      if (cfg.autoRun) discovered = await this.discover(cfg.minAgeMinutes);
-
-      // keep going until the queue is empty, the keys are busy, or the per-run cap is reached
-      let lastRoundMessage = '';
-      for (;;) {
-        const res = await this.processBatch(limitOverride ?? cfg.batchSize);
-        this.run.processed += res.processed;
-        this.run.mapped += res.mapped;
-        this.run.review += res.review;
-        this.run.notFound += res.notFound;
-        this.run.failed += res.failed;
-        if (res.message) lastRoundMessage = res.message;
-        await this.flushPapers();
-        if (res.processed > 0) {
-          await this.writeProgress(`Chal raha: ${this.run.processed} question ho chuke (${this.run.mapped} date lagi, ${this.run.review} review, ${this.run.notFound} nahi mili).`);
-        }
-        if (res.processed === 0 || res.message) break; // nothing due / keys busy
-        if (limitOverride) break; // "run now" with an explicit limit = exactly one batch
-        if (this.run.processed >= MAX_QUESTIONS_PER_RUN || Date.now() - this.run.startedAt > MAX_RUN_MS) break;
-      }
-      if (this.run.processed > 0) {
-        message = `${this.run.processed} question process hue (${this.run.mapped} mapped, ${this.run.review} review, ${this.run.notFound} not found).`;
-        if (lastRoundMessage) message += ` ${lastRoundMessage}`;
-      } else {
-        message = lastRoundMessage || (discovered ? `${discovered} naye PYQ queue me aaye.` : '');
-      }
-
-      if (Date.now() - this.lastPruneAt > 24 * 3600 * 1000) {
-        this.lastPruneAt = Date.now();
-        await this.keys.pruneUsageLog(90);
-      }
-    } catch (e) {
-      message = `Worker error: ${(e as Error).message}`.slice(0, 300);
-      this.logger.error(message);
-    } finally {
-      this.busy = false;
-      this.current = null;
-      if (this.run) this.run.finishedAt = Date.now();
-      await this.writeProgress(message || 'Koi kaam pending nahi.', true);
-      if (this.wakeAgain) {
-        this.wakeAgain = false;
-        setTimeout(() => void this.wake(), 500);
-      }
-    }
-  }
-
-  private async writeProgress(message: string, finished = false) {
-    try {
-      await this.prisma.pyqDateConfig.update({
-        where: { id: 'default' },
-        data: { lastMessage: message.slice(0, 500), ...(finished ? { lastTickAt: new Date() } : {}) },
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  /** New PYQ questions (year set, no date) older than minAge that are not in the queue yet -> PENDING. */
-  private async discover(minAgeMinutes: number): Promise<number> {
-    const cutoff = new Date(Date.now() - minAgeMinutes * 60_000);
-    const rows = await this.prisma.question.findMany({
-      where: this.unmappedWhere({ createdAtLte: cutoff }),
-      select: { id: true },
-      orderBy: { createdAt: 'asc' },
-      take: 500,
-    });
-    if (rows.length === 0) return 0;
-    const r = await this.prisma.pyqDateMap.createMany({ data: rows.map((x) => ({ questionId: x.id })), skipDuplicates: true });
-    return r.count;
-  }
-
-  private unmappedWhere(f: { createdAtLte?: Date; examId?: string; subjectId?: string; chapterId?: string; year?: number } = {}): Prisma.QuestionWhereInput {
+  /** PYQ questions (year set) that have no exam date and no row in the date table yet. */
+  private unmappedWhere(f: { examId?: string; subjectId?: string; chapterId?: string; year?: number } = {}): Prisma.QuestionWhereInput {
     return {
       year: f.year ?? { not: null },
       isActive: true,
@@ -276,296 +55,7 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
       ...(f.chapterId ? { chapterId: f.chapterId } : {}),
       OR: [{ examDate: null }, { examDate: '' }],
       pyqDateMap: { is: null },
-      ...(f.createdAtLte ? { createdAt: { lte: f.createdAtLte } } : {}),
     };
-  }
-
-  private async processBatch(limit: number): Promise<{ processed: number; mapped: number; review: number; notFound: number; failed: number; message?: string }> {
-    const out = { processed: 0, mapped: 0, review: 0, notFound: 0, failed: 0, message: undefined as string | undefined };
-    const pool = await this.keys.getRotationPool('openrouter');
-    const pending = await this.prisma.pyqDateMap.count({ where: { status: 'PENDING', nextRunAt: { lte: new Date() } } });
-    if (pending === 0) return out;
-    if (pool.length === 0) {
-      out.message = 'Koi active OpenRouter key nahi hai — Admin → API Keys me key daalein, tab PYQ date mapping chalegi.';
-      return out;
-    }
-    const due = await this.prisma.pyqDateMap.findMany({
-      where: { status: 'PENDING', nextRunAt: { lte: new Date() } },
-      orderBy: { createdAt: 'asc' },
-      take: Math.max(1, limit),
-      select: { id: true },
-    });
-    for (const d of due) {
-      const claimed = await this.prisma.pyqDateMap.updateMany({
-        where: { id: d.id, status: 'PENDING' },
-        data: { status: 'RUNNING', startedAt: new Date(), attempts: { increment: 1 }, lastError: null },
-      });
-      if (claimed.count !== 1) continue;
-      const r = await this.processOne(d.id);
-      if (r.abort) {
-        out.message = r.message;
-        if (!/Koi AI key nahi/.test(r.message ?? '')) this.pausedUntil = Date.now() + BUSY_RETRY_MIN * 60_000;
-        break;
-      }
-      out.processed++;
-      if (r.status === 'MAPPED') out.mapped++;
-      else if (r.status === 'NEEDS_REVIEW') out.review++;
-      else if (r.status === 'NOT_FOUND') out.notFound++;
-      else if (r.status === 'FAILED') out.failed++;
-    }
-    return out;
-  }
-
-  // ------------------------------------------------------------------ one question
-
-  private buildPrompt(q: QuestionForRun, evidenceText: string): string {
-    const opts = (Array.isArray(q.optionsJson) ? (q.optionsJson as Array<{ key?: string; text?: string }>) : [])
-      .map((o) => `${o.key ?? '?'}) ${stripHtml(String(o.text ?? '')).slice(0, 120)}`)
-      .join('   ');
-    return [
-      'You verify the EXAM DATE of an Indian SSC previous-year question using ONLY the web evidence below.',
-      'Never guess and never use your own memory: if the evidence does not show the date, say found=false.',
-      '',
-      `QUESTION (stored as: exam="${q.exam?.name ?? 'SSC'}", year=${q.year ?? 'unknown'}, shift="${q.shift ?? 'unknown'}"):`,
-      cleanQuestionText(q.questionText).slice(0, 600),
-      opts ? `OPTIONS: ${opts}` : '',
-      '',
-      'WEB EVIDENCE (search results and text taken from the pages):',
-      evidenceText,
-      '',
-      'TASK: find the calendar date on which the SSC exam paper / shift that contained this question was held.',
-      'RULES:',
-      '- Use ONLY a date that is written in the evidence above, exactly as shown there.',
-      '- It must be the exam date of that shift — NOT the article publish date, notification date, admit-card date or result date.',
-      '- Prefer sources marked "QUESTION_FOUND_ON_THIS_PAGE: YES" and the line "NEAREST_DATE_ABOVE_QUESTION".',
-      '- "tier" is "TIER_1" or "TIER_2" only when the evidence says so, otherwise null.',
-      '',
-      'Reply with ONE JSON object only (no markdown, no explanation):',
-      '{"found": true|false, "examDate": "YYYY-MM-DD" or null, "year": <number or null>, "tier": "TIER_1"|"TIER_2"|null, "shift": "Shift 1" or null, "sourceIndex": <the [n] number of the source you used or null>, "quote": "<exact words copied from the evidence that show the date, max 160 chars>", "confidence": <0 to 1>}',
-    ]
-      .filter((l) => l !== '')
-      .join('\n');
-  }
-
-  private async processOne(mapId: string): Promise<{ abort: boolean; status?: MapStatus; message?: string }> {
-    const map = await this.prisma.pyqDateMap.findUnique({
-      where: { id: mapId },
-      include: {
-        question: {
-          select: {
-            id: true, questionNo: true, questionText: true, questionTextHindi: true, optionsJson: true, year: true, shift: true,
-            paperCode: true, examDate: true, examTier: true, examId: true,
-            exam: { select: { name: true, slug: true, code: true } },
-          },
-        },
-      },
-    });
-    if (!map || !map.question) return { abort: false };
-    const q = map.question as QuestionForRun;
-    const cfg = await this.getConfig();
-    const passesN = Math.max(3, Math.min(5, cfg.passes));
-    const minAgree = minAgreeFor(passesN);
-    const verifyExisting = !!q.examDate;
-
-    if (!q.year) {
-      await this.finish(mapId, 'NOT_FOUND', { note: 'Is question me year nahi hai — ye PYQ nahi hai, isliye date map nahi hogi.' });
-      return { abort: false, status: 'NOT_FOUND' };
-    }
-
-    const priorTier: Tier | null = detectTier(q.paperCode, q.exam?.name, q.exam?.slug, q.exam?.code) ?? normalizeTier(q.examTier);
-    const options = (Array.isArray(q.optionsJson) ? q.optionsJson : []) as Array<{ key?: string; text?: string }>;
-    const queries = buildQueries(
-      { questionText: q.questionText, questionTextHindi: q.questionTextHindi, options, examName: q.exam?.name ?? 'SSC', examCode: q.exam?.code ?? null, year: q.year, shift: q.shift, tier: priorTier },
-      passesN,
-    );
-    const questionKey = words(cleanQuestionText(q.questionText), 0, 14);
-
-    const passes: PassRecord[] = [];
-    let abort: AbortRun | null = null;
-    const runStartedAt = Date.now();
-
-    for (let i = 0; i < passesN; i++) {
-      const query = queries[i % queries.length];
-      this.current = { questionNo: q.questionNo, questionId: q.id, pass: i + 1, passes: passesN, startedAt: runStartedAt, stage: 'search', query: query.slice(0, 140) };
-      const t0 = Date.now();
-      const rec: PassRecord = {
-        index: i + 1, query, verdict: 'no_results', examDate: null, year: null, tier: null, shift: null, quote: null, sourceUrl: null,
-        confidence: null, strong: false, hits: 0, evidenceChars: 0, sources: [], ms: 0,
-      };
-      let ev: Evidence;
-      try {
-        ev = await this.search.gather(query, questionKey);
-      } catch (e) {
-        rec.verdict = 'search_failed';
-        rec.reason = (e as Error).message?.slice(0, 200) || 'search error';
-        rec.ms = Date.now() - t0;
-        passes.push(rec);
-        continue;
-      }
-      rec.hits = ev.hits;
-      rec.evidenceChars = ev.text.length;
-      rec.strong = ev.strong;
-      rec.sources = ev.sources.slice(0, 6);
-      if (ev.hits === 0) {
-        rec.verdict = ev.failed ? 'search_failed' : 'no_results';
-        rec.reason = ev.error;
-        rec.ms = Date.now() - t0;
-        passes.push(rec);
-        continue;
-      }
-
-      this.current = { ...this.current, stage: 'ai' };
-      try {
-        const res = await this.ai.generate(this.buildPrompt(q, ev.text), { jsonResponse: true, maxTokens: 700, feature: PYQ_FEATURE, modelOffset: i });
-        rec.model = res.model;
-        rec.keyName = res.adminKeyName ?? null;
-        const parsed = parsePassAnswer(res.content);
-        let verdict: PassVerdict;
-        if (!parsed) {
-          verdict = 'error';
-          rec.reason = 'AI ka jawab samajh nahi aaya';
-        } else {
-          rec.examDate = parsed.examDate;
-          rec.year = parsed.year;
-          rec.tier = parsed.tier;
-          rec.shift = parsed.shift;
-          rec.quote = parsed.quote;
-          rec.confidence = parsed.confidence;
-          rec.sourceUrl = parsed.sourceIndex ? ev.sources[parsed.sourceIndex - 1]?.url ?? null : null;
-          if (!parsed.found || !parsed.examDate) verdict = 'no_date';
-          else if (!dateAppearsInText(parsed.examDate, ev.text)) {
-            verdict = 'unsupported';
-            rec.reason = 'AI ne jo date batayi wo evidence text me likhi nahi thi — reject';
-          } else if (!this.yearMatches(q.year, +parsed.examDate.slice(0, 4), priorTier ?? parsed.tier)) {
-            verdict = 'year_mismatch';
-            rec.reason = `Date ka year ${parsed.examDate.slice(0, 4)} hai, question ka year ${q.year}`;
-          } else verdict = 'accepted';
-        }
-        rec.verdict = verdict;
-      } catch (e) {
-        if (e instanceof ServiceUnavailableException) {
-          const msg = String((e.getResponse() as { message?: string })?.message ?? e.message);
-          abort = new AbortRun(msg, /add nahi hai/i.test(msg));
-          rec.verdict = 'error';
-          rec.reason = msg.slice(0, 200);
-          rec.ms = Date.now() - t0;
-          passes.push(rec);
-          break;
-        }
-        rec.verdict = 'error';
-        rec.reason = (e as Error).message?.slice(0, 200) || 'AI error';
-      }
-      rec.ms = Date.now() - t0;
-      passes.push(rec);
-    }
-
-    // ---- every AI key busy / none: put the question back, do NOT count it as a failure
-    if (abort) {
-      await this.prisma.pyqDateMap.update({
-        where: { id: mapId },
-        data: {
-          status: 'PENDING',
-          nextRunAt: new Date(Date.now() + (abort.noKeys ? 30 : BUSY_RETRY_MIN) * 60_000),
-          attempts: { decrement: 1 },
-          lastError: abort.message.slice(0, 400),
-          passesJson: passes as unknown as Prisma.InputJsonValue,
-          passesDone: passes.length,
-        },
-      });
-      return { abort: true, message: abort.noKeys
-        ? 'Koi AI key nahi hai — key daalte hi kaam apne aap shuru ho jayega.'
-        : `AI keys abhi busy/band hain — ${BUSY_RETRY_MIN} minute baad dobara try hoga (nayi key daalte hi turant).` };
-    }
-
-    // ---- search engines blocked for every pass: retry later (3 tries), then FAILED
-    if (passes.length > 0 && passes.every((p) => p.verdict === 'search_failed')) {
-      const failedFinally = map.attempts >= 3;
-      await this.prisma.pyqDateMap.update({
-        where: { id: mapId },
-        data: {
-          status: failedFinally ? 'FAILED' : 'PENDING',
-          nextRunAt: new Date(Date.now() + 20 * 60_000),
-          lastError: 'Internet search sabhi passes me fail/blocked raha',
-          note: failedFinally ? 'Search engines 3 baar block/fail — server ka internet ya search block check karein.' : 'Search block/fail — 20 minute baad dobara try hoga.',
-          passesJson: passes as unknown as Prisma.InputJsonValue,
-          passesDone: passes.length,
-          finishedAt: new Date(),
-        },
-      });
-      return { abort: false, status: failedFinally ? 'FAILED' : 'PENDING' };
-    }
-
-    const vote = decideFromPasses(passes, minAgree, q.year, priorTier);
-    const sources = Array.from(new Map(passes.filter((p) => p.verdict === 'accepted' && p.sourceUrl).map((p) => [p.sourceUrl!, { url: p.sourceUrl!, date: p.examDate }])).values()).slice(0, 6);
-    const common = {
-      examTier: vote.tier,
-      proposedDate: vote.date,
-      proposedYear: vote.year,
-      agreeCount: vote.agree,
-      passesDone: passes.length,
-      confidence: vote.confidence,
-      passesJson: passes as unknown as Prisma.InputJsonValue,
-      sourcesJson: sources as unknown as Prisma.InputJsonValue,
-      verifyExisting,
-    };
-
-    // keep a reliably known tier (exam / paper code) even when no date could be proven
-    const tierToStore = vote.tier && !q.examTier ? vote.tier : null;
-
-    if (vote.decision === 'MAPPED' && vote.date) {
-      if (verifyExisting) {
-        if (q.examDate === vote.date) {
-          await this.finish(mapId, 'MAPPED', { ...common, note: `Pehle se lagi date ${vote.date} internet se verify ho gayi. ${vote.note}` });
-          if (tierToStore) await this.prisma.question.update({ where: { id: q.id }, data: { examTier: tierToStore } });
-          return { abort: false, status: 'MAPPED' };
-        }
-        await this.finish(mapId, 'NEEDS_REVIEW', { ...common, note: `Question me date ${q.examDate} lagi hai par internet par ${vote.date} mili (${vote.note}) — admin check kare, auto-change nahi kiya.` });
-        return { abort: false, status: 'NEEDS_REVIEW' };
-      }
-      const conflict = await this.paperConflict(q, vote.date);
-      if (conflict) {
-        await this.finish(mapId, 'NEEDS_REVIEW', {
-          ...common,
-          note: `Is paper (exam+year+shift) ke ${conflict.total} questions me zyada tar date ${conflict.date} hai, par is question ke liye ${vote.date} mili — ek paper ek hi date par hona chahiye, admin check kare.`,
-        });
-        return { abort: false, status: 'NEEDS_REVIEW' };
-      }
-      await this.applyDate(q, vote.date, vote.tier, mapId, { ...common, note: vote.note });
-      return { abort: false, status: 'MAPPED' };
-    }
-
-    if (tierToStore && priorTier) await this.prisma.question.update({ where: { id: q.id }, data: { examTier: tierToStore } });
-    await this.finish(mapId, vote.decision, { ...common, note: vote.note });
-    return { abort: false, status: vote.decision };
-  }
-
-  /** the exam year may differ from the calendar year of a Tier 2 paper (e.g. CGL 2024 Tier 2 was held in Jan 2025) */
-  private yearMatches(questionYear: number, dateYear: number, tier: Tier | null): boolean {
-    if (dateYear === questionYear) return true;
-    return tier === 'TIER_2' && dateYear === questionYear + 1;
-  }
-
-  private async finish(mapId: string, status: MapStatus, data: Partial<Prisma.PyqDateMapUncheckedUpdateInput> & { note?: string }) {
-    await this.prisma.pyqDateMap.update({
-      where: { id: mapId },
-      data: { ...data, status, finishedAt: new Date(), lastError: null } as Prisma.PyqDateMapUncheckedUpdateInput,
-    });
-  }
-
-  /** Same paper (exam + year + shift + paperCode) must have ONE date: compare with the date most of its questions already carry. */
-  private async paperConflict(q: QuestionForRun, date: string): Promise<{ date: string; count: number; total: number } | null> {
-    if (!q.examId || !q.year || !q.shift) return null;
-    const rows = await this.prisma.question.groupBy({
-      by: ['examDate'],
-      where: { examId: q.examId, year: q.year, shift: q.shift, paperCode: q.paperCode ?? null, examDate: { not: null }, id: { not: q.id } },
-      _count: { _all: true },
-    });
-    const valid = rows.filter((r) => r.examDate && r.examDate !== '');
-    const total = valid.reduce((s, r) => s + r._count._all, 0);
-    if (total < 3) return null;
-    const top = valid.sort((a, b) => b._count._all - a._count._all)[0];
-    if (top.examDate !== date && top._count._all / total >= 0.6) return { date: top.examDate!, count: top._count._all, total };
-    return null;
   }
 
   private markPaper(q: Pick<QuestionForRun, 'examId' | 'year' | 'shift' | 'paperCode'>) {
@@ -575,13 +65,7 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async applyDate(q: QuestionForRun, date: string, tier: Tier | null, mapId: string, extra: Record<string, unknown>) {
-    // NEW (Oct 15 2026): the OLD values go to AiChange so Admin -> AI can Undo this write (single + bulk)
-    const changes: Prisma.AiChangeCreateManyInput[] = [
-      { questionId: q.id, field: 'examDate', oldValue: { v: q.examDate ?? null }, newValue: { v: date }, source: 'PYQ_DATE' },
-    ];
-    if (tier && !q.examTier) changes.push({ questionId: q.id, field: 'examTier', oldValue: { v: q.examTier ?? null }, newValue: { v: tier }, source: 'PYQ_DATE' });
     await this.prisma.$transaction([
-      this.prisma.aiChange.createMany({ data: changes }),
       this.prisma.question.update({ where: { id: q.id }, data: { examDate: date, ...(tier && !q.examTier ? { examTier: tier } : {}) } }),
       this.prisma.pyqDateMap.update({
         where: { id: mapId },
@@ -591,7 +75,7 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
     this.markPaper(q);
   }
 
-  /** After a batch: make the shift-wise mock test of every touched paper show the (majority) real date. */
+  /** After a change: make the shift-wise mock test of every touched paper show the (majority) real date. */
   private async flushPapers() {
     const papers = Array.from(this.touchedPapers.values());
     this.touchedPapers.clear();
@@ -612,49 +96,8 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
 
   // ------------------------------------------------------------------ admin actions
 
-  /**
-   * Put questions in the queue now (ignores the 5-minute wait).
-   *  scope "unmapped": all PYQ questions without a date (+ optional exam/subject/chapter/year filter)
-   *  scope "ids"     : exactly these question ids (re-runs them; with verifyExisting a dated question is only checked)
-   *  scope "retry"   : every row currently in `statuses` (default FAILED + NOT_FOUND)
-   */
-  async enqueue(dto: { scope?: string; ids?: string[]; examId?: string; subjectId?: string; chapterId?: string; year?: number; statuses?: string[]; verifyExisting?: boolean }) {
-    const scope = dto.scope || 'unmapped';
-    const LIMIT = 20000;
-    if (scope === 'ids') {
-      const ids = Array.from(new Set((dto.ids ?? []).filter((x) => typeof x === 'string'))).slice(0, 2000);
-      if (!ids.length) throw new BadRequestException('Koi question id nahi mili.');
-      const found = await this.prisma.question.findMany({ where: { id: { in: ids }, year: { not: null } }, select: { id: true, examDate: true } });
-      let queued = 0;
-      for (const f of found) {
-        const verify = !!dto.verifyExisting || !!f.examDate;
-        await this.prisma.pyqDateMap.upsert({
-          where: { questionId: f.id },
-          create: { questionId: f.id, verifyExisting: verify },
-          update: { status: 'PENDING', nextRunAt: new Date(), attempts: 0, note: null, lastError: null, verifyExisting: verify },
-        });
-        queued++;
-      }
-      return { queued, skipped: ids.length - found.length };
-    }
-    if (scope === 'retry') {
-      const st = (dto.statuses?.length ? dto.statuses : ['FAILED', 'NOT_FOUND']).filter((s) => (STATUSES as readonly string[]).includes(s) && s !== 'RUNNING');
-      const r = await this.prisma.pyqDateMap.updateMany({ where: { status: { in: st } }, data: { status: 'PENDING', nextRunAt: new Date(), attempts: 0, note: null, lastError: null } });
-      return { queued: r.count, skipped: 0 };
-    }
-    // unmapped
-    const rows = await this.prisma.question.findMany({
-      where: this.unmappedWhere({ examId: dto.examId, subjectId: dto.subjectId, chapterId: dto.chapterId, year: dto.year }),
-      select: { id: true },
-      orderBy: { createdAt: 'asc' },
-      take: LIMIT,
-    });
-    if (rows.length) await this.prisma.pyqDateMap.createMany({ data: rows.map((x) => ({ questionId: x.id })), skipDuplicates: true });
-    return { queued: rows.length, skipped: 0 };
-  }
-
   async acceptProposed(questionId: string) {
-    const map = await this.prisma.pyqDateMap.findUnique({ where: { questionId }, include: { question: { select: { id: true, examId: true, year: true, shift: true, paperCode: true, examTier: true, examDate: true, questionNo: true, questionText: true, questionTextHindi: true, optionsJson: true, exam: { select: { name: true, slug: true, code: true } } } } } });
+    const map = await this.prisma.pyqDateMap.findUnique({ where: { questionId }, include: { question: { select: { id: true, examId: true, year: true, shift: true, paperCode: true, examTier: true, examDate: true } } } });
     if (!map) throw new NotFoundException('Is question ki date-mapping entry nahi mili.');
     if (!map.proposedDate || !isValidIsoDate(map.proposedDate)) throw new BadRequestException('Koi proposed date nahi hai.');
     const q = map.question as QuestionForRun;
@@ -692,9 +135,7 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
   // ------------------------------------------------------------------ read APIs for the admin screen
 
   async overview() {
-    const cfg = await this.getConfig();
-    const dayAgo = new Date(Date.now() - 24 * 3600 * 1000);
-    const [byStatus, pyqTotal, pyqWithDate, notQueued, tierGroups, byExamRows, usage, pool, recentDone, lastUse, pendingNow] = await Promise.all([
+    const [byStatus, pyqTotal, pyqWithDate, notQueued, tierGroups, byExamRows] = await Promise.all([
       this.prisma.pyqDateMap.groupBy({ by: ['status'], _count: { _all: true } }),
       this.prisma.question.count({ where: { year: { not: null }, isActive: true } }),
       this.prisma.question.count({ where: { year: { not: null }, isActive: true, examDate: { not: null }, NOT: { examDate: '' } } }),
@@ -707,22 +148,12 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN exams e ON e.id = q."examId"
         GROUP BY e.name, m.status
         ORDER BY e.name`,
-      this.prisma.aiUsageLog.groupBy({ by: ['success'], where: { feature: PYQ_FEATURE, createdAt: { gte: dayAgo } }, _count: { _all: true } }),
-      this.keys.getPoolHealth(),
-      this.prisma.pyqDateMap.findMany({ where: { startedAt: { not: null }, finishedAt: { not: null }, status: { in: ['MAPPED', 'NEEDS_REVIEW', 'NOT_FOUND'] } }, orderBy: { finishedAt: 'desc' }, take: 30, select: { startedAt: true, finishedAt: true } }),
-      this.prisma.aiUsageLog.findFirst({ where: { feature: PYQ_FEATURE }, orderBy: { createdAt: 'desc' }, select: { createdAt: true, keyName: true, model: true, success: true } }),
-      this.prisma.pyqDateMap.count({ where: { status: 'PENDING' } }),
     ]);
 
     const counts: Record<string, number> = {};
     for (const s of STATUSES) counts[s] = 0;
     for (const g of byStatus) counts[g.status] = g._count._all;
-
-    const durations = recentDone.map((r) => (r.finishedAt!.getTime() - r.startedAt!.getTime()) / 1000).filter((d) => d > 0 && d < 3600);
-    const avgSec = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
-    // one question takes avgSec of work + its share of the 45 s pause between worker rounds
-    const perQuestionSec = avgSec ? avgSec + TICK_MS / 1000 / Math.max(1, cfg.batchSize) : null;
-    const etaMinutes = perQuestionSec ? Math.round(((pendingNow + notQueued) * perQuestionSec) / 60) : null;
+    counts.UNMAPPED = notQueued;
 
     const examMap = new Map<string, Record<string, number>>();
     for (const r of byExamRows) {
@@ -731,42 +162,17 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
       e[r.status] = r.n;
       examMap.set(k, e);
     }
-    const or = pool.find((p) => p.provider === 'openrouter');
-    const okToday = usage.find((u) => u.success)?._count._all ?? 0;
-    const failToday = usage.find((u) => !u.success)?._count._all ?? 0;
 
     return {
-      config: cfg,
-      worker: {
-        enabled: (process.env.PYQ_DATE_WORKER || '').toLowerCase() !== 'off',
-        busy: this.busy,
-        current: this.current ? { ...this.current, elapsedSec: Math.round((Date.now() - this.current.startedAt) / 1000) } : null,
-        run: this.run
-          ? { ...this.run, elapsedSec: Math.round(((this.run.finishedAt ?? Date.now()) - this.run.startedAt) / 1000) }
-          : null,
-        lastTickAt: cfg.lastTickAt,
-        lastMessage: cfg.lastMessage,
-        avgSecondsPerQuestion: avgSec ? Math.round(avgSec) : null,
-        etaMinutes,
-      },
-      totals: { pyqTotal, pyqWithDate, pyqWithoutDate: pyqTotal - pyqWithDate, notQueued, queuePending: pendingNow },
+      totals: { pyqTotal, pyqWithDate, pyqWithoutDate: pyqTotal - pyqWithDate, notQueued },
       counts,
       tiers: tierGroups.map((t) => ({ tier: t.examTier ?? 'UNKNOWN', count: t._count._all })),
       byExam: Array.from(examMap.entries()).map(([exam, c]) => ({ exam, counts: c })),
-      ai: {
-        keys: { active: or?.active ?? 0, total: or?.total ?? 0 },
-        callsLast24h: okToday + failToday,
-        successLast24h: okToday,
-        failedLast24h: failToday,
-        lastUsedAt: lastUse?.createdAt ?? null,
-        lastKeyName: lastUse?.keyName ?? null,
-        lastModel: lastUse?.model ?? null,
-        lastSuccess: lastUse?.success ?? null,
-      },
     };
   }
 
   async listItems(f: { status?: string; examId?: string; subjectId?: string; chapterId?: string; year?: number; tier?: string; q?: string; skip?: number; take?: number }) {
+    if (f.status === 'UNMAPPED') return this.listUnmapped(f);
     const questionWhere: Prisma.QuestionWhereInput = {};
     if (f.examId) questionWhere.examId = f.examId;
     if (f.subjectId) questionWhere.subjectId = f.subjectId;
@@ -811,6 +217,64 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /** Virtual status "UNMAPPED": PYQ questions without a date and without a row yet (shaped like the table rows). */
+  private async listUnmapped(f: { examId?: string; subjectId?: string; chapterId?: string; year?: number; tier?: string; q?: string; skip?: number; take?: number }) {
+    const where: Prisma.QuestionWhereInput = { ...this.unmappedWhere({ examId: f.examId, subjectId: f.subjectId, chapterId: f.chapterId, year: f.year }) };
+    if (f.tier) where.examTier = f.tier;
+    const search = (f.q || '').trim();
+    if (search) {
+      if (/^\d{1,9}$/.test(search)) where.questionNo = parseInt(search, 10);
+      else where.questionText = { contains: search, mode: 'insensitive' };
+    }
+    const take = Math.max(1, Math.min(f.take ?? 30, 100));
+    const [total, rows] = await Promise.all([
+      this.prisma.question.count({ where }),
+      this.prisma.question.findMany({
+        where,
+        orderBy: [{ year: 'desc' }, { questionNo: 'asc' }],
+        skip: Math.max(0, f.skip ?? 0),
+        take,
+        select: {
+          id: true, questionNo: true, questionText: true, year: true, shift: true, examDate: true, examTier: true, paperCode: true, updatedAt: true,
+          exam: { select: { name: true } }, subject: { select: { name: true } }, chapter: { select: { name: true } },
+        },
+      }),
+    ]);
+    return {
+      total,
+      rows: rows.map((r) => ({
+        id: r.id,
+        questionId: r.id,
+        status: 'UNMAPPED',
+        examTier: r.examTier,
+        proposedDate: null,
+        proposedYear: null,
+        agreeCount: 0,
+        passesDone: 0,
+        confidence: null,
+        note: null,
+        attempts: 0,
+        lastError: null,
+        verifyExisting: false,
+        finishedAt: null,
+        appliedAt: null,
+        updatedAt: r.updatedAt,
+        question: {
+          questionNo: r.questionNo,
+          questionText: cleanQuestionText(r.questionText).slice(0, 220),
+          year: r.year,
+          shift: r.shift,
+          examDate: r.examDate,
+          examTier: r.examTier,
+          paperCode: r.paperCode,
+          exam: r.exam,
+          subject: r.subject,
+          chapter: r.chapter,
+        },
+      })),
+    };
+  }
+
   async getItem(questionId: string) {
     const m = await this.prisma.pyqDateMap.findUnique({
       where: { questionId },
@@ -825,11 +289,5 @@ export class PyqDateService implements OnModuleInit, OnModuleDestroy {
     });
     if (!m) throw new NotFoundException('Is question ki date-mapping entry nahi mili.');
     return m;
-  }
-
-  testSearch(q: string) {
-    const query = String(q || '').trim();
-    if (query.length < 3) throw new BadRequestException('Search text likhein.');
-    return this.search.diagnose(query.slice(0, 240));
   }
 }

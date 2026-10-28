@@ -174,7 +174,7 @@ export default function PremiumPage() {
       <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
         <PageHeading
           title={tr("Premium", "Premium")}
-          subtitle={tr("Unlimited practice, all mocks and AI solutions. Plans stack, so renewing early never wastes time.", "Unlimited practice, saare mocks aur AI solutions. Plans stack hote hain, isliye jaldi renew karne se time waste nahi hota.")}
+          subtitle={tr("Unlimited practice, all mocks and detailed solutions. Plans stack, so renewing early never wastes time.", "Unlimited practice, saare mocks aur detailed solutions. Plans stack hote hain, isliye jaldi renew karne se time waste nahi hota.")}
           actions={<Link href="/premium/history" className="btn btn-outline btn-sm">{tr("Payment history", "Payment history")}</Link>}
         />
         {loadError && (
