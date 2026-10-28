@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { WeakTopicService } from '../weak-topics/weak-topic.service';
-import { Injectable, BadRequestException, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AttemptStatus, Prisma } from '@prisma/client';
-import { cacheGet, cacheSet } from '../common/cache';
+import { cacheClearPrefix, cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
+import { findTaxonomyTwin, makeTaxonomySlug } from '../common/taxonomy-key';
+import { uniqueSlug } from '../common/taxonomy-merge';
 
 export interface QuestionCard {
   id: string;
@@ -1088,25 +1090,54 @@ export class BankService implements OnModuleInit {
     });
   }
 
-  async createTopic(chapterId: string, name: string, nameHindi?: string): Promise<{ id: string; name: string; slug: string; chapterId: string }> {
+  /**
+   * Idempotent by NAME, not just slug (Oct 27 2026 — "ek chapter me same topic double nahi"): "Percentage", "Percentages",
+   * "percentage " and "Percentage (प्रतिशत)" all resolve to the one row. A close-but-different name (e.g. a typo) is only
+   * flagged: with `strict` (admin form) it throws SIMILAR_TOPIC so the admin can confirm; bulk uploads create it and the
+   * Duplicate-topics panel lists it for review.
+   */
+  async createTopic(
+    chapterId: string,
+    name: string,
+    nameHindi?: string,
+    opts?: { strict?: boolean },
+  ): Promise<{ id: string; name: string; slug: string; chapterId: string }> {
     const chapter = await this.prisma.chapter.findUnique({ where: { id: chapterId } });
     if (!chapter) throw new BadRequestException(`Chapter not found: ${chapterId}`);
     const trimmedName = (name ?? '').trim();
     if (!trimmedName) throw new BadRequestException('Topic name is required');
-    const slug = trimmedName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '') || 'topic';
-    const existing = await this.prisma.topic.findUnique({ where: { chapterId_slug: { chapterId, slug } } });
-    if (existing) {
+    const siblings = await this.prisma.topic.findMany({ where: { chapterId }, select: { id: true, name: true, nameHindi: true, slug: true, chapterId: true } });
+    const twin = findTaxonomyTwin(siblings, trimmedName, nameHindi);
+    if (twin && twin.kind !== 'similar') {
       // Backfill Hindi name if it was missing before (e.g. an earlier manual
       // createTopic call didn't have it, and a later Excel import does).
-      if (nameHindi && !(existing as any).nameHindi) {
-        return this.prisma.topic.update({ where: { id: existing.id }, data: { nameHindi } });
+      if (nameHindi && !twin.row.nameHindi) {
+        const upd = await this.prisma.topic.update({ where: { id: twin.row.id }, data: { nameHindi } });
+        cacheClearPrefix('bank:topics');
+        return upd;
       }
-      return existing;
+      return twin.row;
     }
-    return this.prisma.topic.create({ data: { chapterId, name: trimmedName, nameHindi: nameHindi || null, slug } });
+    if (twin && opts?.strict) {
+      throw new ConflictException({
+        code: 'SIMILAR_TOPIC',
+        message: `Is chapter me "${twin.row.name}" naam ka topic pehle se hai — kya ye wahi hai? Wahi hai to use hi chunein; alag hai to "force" ke saath dobara save karein.`,
+        similar: { id: twin.row.id, name: twin.row.name },
+      });
+    }
+    const slug = uniqueSlug(makeTaxonomySlug(trimmedName, nameHindi, 'topic'), new Set(siblings.map((t) => t.slug)));
+    try {
+      const created = await this.prisma.topic.create({ data: { chapterId, name: trimmedName, nameHindi: nameHindi || null, slug } });
+      cacheClearPrefix('bank:topics');
+      return created;
+    } catch (e) {
+      // two requests created the same topic at once → the unique (chapterId, slug) caught it; return the winner
+      if ((e as { code?: string })?.code === 'P2002') {
+        const winner = await this.prisma.topic.findUnique({ where: { chapterId_slug: { chapterId, slug } } });
+        if (winner) return winner;
+      }
+      throw e;
+    }
   }
 
   // ---- Admin sub-topic management ----
@@ -1130,23 +1161,61 @@ export class BankService implements OnModuleInit {
     });
   }
 
-  async createSubTopic(topicId: string, name: string, nameHindi?: string): Promise<{ id: string; name: string; slug: string; topicId: string }> {
+  /**
+   * Same rule one level down: a sub-topic exists once per CHAPTER. Same name under the same topic → reused. Same name under
+   * a sibling topic of this chapter → admin form (`strict`) is told where it already lives; bulk uploads create it under the
+   * requested topic and the Duplicate-topics panel merges it later.
+   */
+  async createSubTopic(
+    topicId: string,
+    name: string,
+    nameHindi?: string,
+    opts?: { strict?: boolean },
+  ): Promise<{ id: string; name: string; slug: string; topicId: string }> {
     const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) throw new BadRequestException(`Topic not found: ${topicId}`);
     const trimmedName = (name ?? '').trim();
     if (!trimmedName) throw new BadRequestException('Sub-topic name is required');
-    const slug = trimmedName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '') || 'subtopic';
-    const existing = await this.prisma.subTopic.findUnique({ where: { topicId_slug: { topicId, slug } } });
-    if (existing) {
-      if (nameHindi && !(existing as any).nameHindi) {
-        return this.prisma.subTopic.update({ where: { id: existing.id }, data: { nameHindi } });
+    const inChapter = await this.prisma.subTopic.findMany({
+      where: { topic: { chapterId: topic.chapterId } },
+      select: { id: true, name: true, nameHindi: true, slug: true, topicId: true },
+    });
+    const here = inChapter.filter((x) => x.topicId === topicId);
+    const twin = findTaxonomyTwin(here, trimmedName, nameHindi);
+    if (twin && twin.kind !== 'similar') {
+      if (nameHindi && !twin.row.nameHindi) {
+        const upd = await this.prisma.subTopic.update({ where: { id: twin.row.id }, data: { nameHindi } });
+        cacheClearPrefix('bank:subtopics');
+        return upd;
       }
-      return existing;
+      return twin.row;
     }
-    return this.prisma.subTopic.create({ data: { topicId, name: trimmedName, nameHindi: nameHindi || null, slug } });
+    if (opts?.strict) {
+      const elsewhere = findTaxonomyTwin(inChapter.filter((x) => x.topicId !== topicId), trimmedName, nameHindi);
+      const hit = twin ?? elsewhere;
+      if (hit) {
+        throw new ConflictException({
+          code: 'SIMILAR_SUBTOPIC',
+          message:
+            hit === elsewhere && elsewhere?.kind !== 'similar'
+              ? `"${hit.row.name}" sub-topic is chapter ke dusre topic me pehle se hai — wahi use karein ya pehle use merge karein.`
+              : `Is chapter me "${hit.row.name}" naam ka sub-topic pehle se hai — kya ye wahi hai? Alag hai to "force" ke saath dobara save karein.`,
+          similar: { id: hit.row.id, name: hit.row.name },
+        });
+      }
+    }
+    const slug = uniqueSlug(makeTaxonomySlug(trimmedName, nameHindi, 'subtopic'), new Set(here.map((x) => x.slug)));
+    try {
+      const created = await this.prisma.subTopic.create({ data: { topicId, name: trimmedName, nameHindi: nameHindi || null, slug } });
+      cacheClearPrefix('bank:subtopics');
+      return created;
+    } catch (e) {
+      if ((e as { code?: string })?.code === 'P2002') {
+        const winner = await this.prisma.subTopic.findUnique({ where: { topicId_slug: { topicId, slug } } });
+        if (winner) return winner;
+      }
+      throw e;
+    }
   }
 
   async deleteSubTopic(id: string) {

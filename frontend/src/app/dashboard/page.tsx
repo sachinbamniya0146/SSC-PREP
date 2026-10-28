@@ -280,6 +280,10 @@ export default function DashboardPage() {
                 <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Topic Management</div>
                 <div className="mt-0.5 text-xs text-muted-foreground">Chapter ke andar topics banayein for topic-level analysis</div>
               </a>
+              <a href="/admin/duplicate-topics" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
+                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Duplicate Topics</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">Same topic/sub-topic ke copies dhundo aur merge karo (undo ke saath)</div>
+              </a>
               {/* NEW ("admin pura ek ek question ko dekh paye"): every
                   Excel/CSV/JSON/Word bulk-upload question that goes
                   PENDING (missing Hindi translation) had no review queue

@@ -9,6 +9,7 @@ import * as mammoth from 'mammoth';
 import { createHash } from 'crypto';
 import { normalizeDiagramType, parseDiagramLabels, DIAGRAM_TYPES } from './diagram-types';
 import { cacheClearPrefix } from '../common/cache';
+import { normalizeTaxonomyKey } from '../common/taxonomy-key';
 import { PUBLISHED_QUESTION_WHERE, isHindiExemptSubjectSlug, kindWhere, QuestionKind } from '../common/question-visibility';
 import { dedupeAndCapPaperRows } from '../common/pyq-paper';
 import { analyzeKeyedPaper, buildKeyedPaper, legacyPaperCeiling, KeyedPaperDetail } from './pyq-paper-builder';
@@ -100,7 +101,8 @@ function splitBilingualCell(raw: string): { en: string; hi: string | null } {
 // case/whitespace-insensitive) so it can be looked up against chapters
 // that already exist, the same way the slug lookup already does.
 function normalizeTaxonomyName(raw: string): string {
-  return splitBilingualCell(raw).en.toLowerCase().replace(/\s+/g, ' ').trim();
+  // Oct 27 2026: ONE shared normaliser (plural, "&"/and, punctuation) — same one BankService.createTopic() matches on.
+  return normalizeTaxonomyKey(splitBilingualCell(raw).en);
 }
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

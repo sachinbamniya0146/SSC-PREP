@@ -230,11 +230,22 @@ export default function TopicManagementPage() {
     setCreateMsg("");
     try {
       const countBefore = topics.length;
-      const r = await fetchAuth(`${API_BASE}/bank/admin/topics`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chapterId: selectedChapterId, name: trimmed, nameHindi: newNameHindi.trim() || undefined }),
-      });
+      const post = (force: boolean) =>
+        fetchAuth(`${API_BASE}/bank/admin/topics`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chapterId: selectedChapterId, name: trimmed, nameHindi: newNameHindi.trim() || undefined, force }),
+        });
+      let r = await post(false);
+      if (r.status === 409) {
+        // similar-but-different name already in this chapter → let the admin decide (never a silent duplicate)
+        const d = await r.clone().json().catch(() => ({}));
+        if (d?.code === "SIMILAR_TOPIC" && window.confirm(`${d.message}\n\nPhir bhi naya topic banayein?`)) r = await post(true);
+        else if (d?.code === "SIMILAR_TOPIC") {
+          setCreateErr(`"${d?.similar?.name ?? "existing topic"}" pehle se hai — naya nahi banaya.`);
+          return;
+        }
+      }
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         setCreateErr(d?.message || `HTTP ${r.status}`);

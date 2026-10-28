@@ -32,6 +32,17 @@
 import { PrismaClient } from '@prisma/client';
 import XLSXModule from 'xlsx';
 import fs from 'fs';
+import { createRequire } from 'module';
+
+// Oct 27 2026 — SAME normaliser as the app (backend/src/common/taxonomy-key.ts, compiled to dist/). Never re-implement it here.
+const require = createRequire(import.meta.url);
+let taxKey;
+try {
+  taxKey = require('../dist/common/taxonomy-key.js');
+} catch {
+  console.error('❌ dist/common/taxonomy-key.js nahi mila — pehle `npm run build` chalao (container me dist already hota hai).');
+  process.exit(1);
+}
 
 // The xlsx package ships as CJS; under plain Node ESM (this script runs as
 // a standalone .mjs via `node scripts/provision-from-excel.mjs`, same as
@@ -44,6 +55,8 @@ const XLSX = XLSXModule.default ?? XLSXModule;
 const prisma = new PrismaClient();
 
 function slugify(name) {
+  // Hindi-only names used to all become "item" → use the shared, hash-based slug for those
+  if (!/[a-z0-9]/i.test(String(name))) return taxKey.makeTaxonomySlug(String(name), null, 'item');
   return (
     String(name)
       .toLowerCase()
@@ -234,9 +247,17 @@ async function main() {
     const topicSlug = slugify(topicLabel);
     // A dry-run placeholder chapterId was never really written, so there's
     // nothing real to look up yet — skip straight to "would create".
-    const bySlug = chapterId.toString().startsWith('dry-run-placeholder:')
-      ? null
-      : await prisma.topic.findUnique({ where: { chapterId_slug: { chapterId, slug: topicSlug } } });
+    let bySlug = null;
+    if (!chapterId.toString().startsWith('dry-run-placeholder:')) {
+      bySlug = await prisma.topic.findUnique({ where: { chapterId_slug: { chapterId, slug: topicSlug } } });
+      if (!bySlug) {
+        // same topic under another spelling ("Percentages", "Profit & Loss") → reuse, never add a second copy
+        const sibs = await prisma.topic.findMany({ where: { chapterId }, select: { id: true, name: true, nameHindi: true } });
+        const twin = taxKey.findTaxonomyTwin(sibs, topicLabel, null);
+        if (twin && twin.kind !== 'similar') bySlug = twin.row;
+        else if (twin) console.log(`⚠️  "${topicLabel}" bahut similar hai existing "${twin.row.name}" se — naya bana raha hu; baad me Admin → Duplicate topics me dekh lena.`);
+      }
+    }
     if (bySlug) {
       topicLabelToId.set(topicLabel, bySlug.id);
       reused.topics.push(`"${topicLabel}" -> existing topic (id ${bySlug.id})`);
@@ -259,9 +280,15 @@ async function main() {
       continue;
     }
     const subTopicSlug = slugify(subTopicLabel);
-    const existing = topicId.toString().startsWith('dry-run-placeholder:')
-      ? null
-      : await prisma.subTopic.findFirst({ where: { topicId, slug: subTopicSlug } });
+    let existing = null;
+    if (!topicId.toString().startsWith('dry-run-placeholder:')) {
+      existing = await prisma.subTopic.findFirst({ where: { topicId, slug: subTopicSlug } });
+      if (!existing) {
+        const sibs = await prisma.subTopic.findMany({ where: { topicId }, select: { id: true, name: true, nameHindi: true } });
+        const twin = taxKey.findTaxonomyTwin(sibs, subTopicLabel, null);
+        if (twin && twin.kind !== 'similar') existing = twin.row;
+      }
+    }
     if (existing) continue;
     if (!dryRun) {
       await prisma.subTopic.create({ data: { topicId, name: subTopicLabel, slug: subTopicSlug } });

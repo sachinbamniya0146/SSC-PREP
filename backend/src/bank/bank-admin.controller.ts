@@ -124,8 +124,8 @@ export class BankAdminController {
     return this.admin.mergeChapter(id, body.targetId);
   }
   @Post('topics/:id/merge')
-  mergeTopic(@Param('id') id: string, @Body() body: any) {
+  mergeTopic(@Req() req: any, @Param('id') id: string, @Body() body: any) {
     if (!body?.targetId) throw new BadRequestException('targetId required');
-    return this.admin.mergeTopic(id, body.targetId);
+    return this.admin.mergeTopic(id, body.targetId, this.adminId(req));
   }
 }

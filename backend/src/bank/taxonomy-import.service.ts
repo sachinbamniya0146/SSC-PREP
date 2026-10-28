@@ -26,6 +26,8 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
+import { findTaxonomyTwin, makeTaxonomySlug } from '../common/taxonomy-key';
+import { uniqueSlug } from '../common/taxonomy-merge';
 import { cacheClearPrefix } from '../common/cache';
 
 interface ParsedSubTopic {
@@ -336,7 +338,11 @@ export class TaxonomyImportService {
         chapterCount++;
 
         for (const t of c.topics) {
-          const topicSlug = this.slugify(t.name);
+          // Oct 27 2026: match an existing topic by NORMALISED NAME first ("Percentages" == "Percentage"), so a re-import
+          // can never add a second copy under another spelling; the slug upsert below only runs for genuinely new topics.
+          const topicSiblings = await this.prisma.topic.findMany({ where: { chapterId: chapterRow.id }, select: { id: true, name: true, nameHindi: true, slug: true } });
+          const topicTwin = findTaxonomyTwin(topicSiblings, t.name, t.nameHindi);
+          const topicSlug = topicTwin && topicTwin.kind !== 'similar' ? topicTwin.row.slug : uniqueSlug(makeTaxonomySlug(t.name, t.nameHindi, 'topic'), new Set(topicSiblings.map((x) => x.slug)));
           const topicRow = await this.prisma.topic.upsert({
             where: { chapterId_slug: { chapterId: chapterRow.id, slug: topicSlug } },
             create: { chapterId: chapterRow.id, name: t.name, nameHindi: t.nameHindi, slug: topicSlug },
@@ -345,7 +351,9 @@ export class TaxonomyImportService {
           topicCount++;
 
           for (const st of t.subTopics) {
-            const subTopicSlug = this.slugify(st.name);
+            const subSiblings = await this.prisma.subTopic.findMany({ where: { topicId: topicRow.id }, select: { id: true, name: true, nameHindi: true, slug: true } });
+            const subTwin = findTaxonomyTwin(subSiblings, st.name, st.nameHindi);
+            const subTopicSlug = subTwin && subTwin.kind !== 'similar' ? subTwin.row.slug : uniqueSlug(makeTaxonomySlug(st.name, st.nameHindi, 'subtopic'), new Set(subSiblings.map((x) => x.slug)));
             await this.prisma.subTopic.upsert({
               where: { topicId_slug: { topicId: topicRow.id, slug: subTopicSlug } },
               create: { topicId: topicRow.id, name: st.name, nameHindi: st.nameHindi, slug: subTopicSlug },

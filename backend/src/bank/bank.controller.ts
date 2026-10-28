@@ -204,11 +204,11 @@ export class BankController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
   @Department('QUESTIONS', 'PRACTICE')
-  createTopic(@Body() body: { chapterId: string; name: string; nameHindi?: string }) {
+  createTopic(@Body() body: { chapterId: string; name: string; nameHindi?: string; force?: boolean }) {
     if (!body?.chapterId || !body?.name) {
       throw new BadRequestException('chapterId and name are required');
     }
-    return this.bank.createTopic(body.chapterId, body.name, body.nameHindi);
+    return this.bank.createTopic(body.chapterId, body.name, body.nameHindi, { strict: !body.force });
   }
 
   // Phase 2 (Sep 2026) — admin sub-topic management, mirrors chapters/topics above.
@@ -224,11 +224,11 @@ export class BankController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MODERATOR')
   @Department('QUESTIONS', 'PRACTICE')
-  createSubTopic(@Body() body: { topicId: string; name: string; nameHindi?: string }) {
+  createSubTopic(@Body() body: { topicId: string; name: string; nameHindi?: string; force?: boolean }) {
     if (!body?.topicId || !body?.name) {
       throw new BadRequestException('topicId and name are required');
     }
-    return this.bank.createSubTopic(body.topicId, body.name, body.nameHindi);
+    return this.bank.createSubTopic(body.topicId, body.name, body.nameHindi, { strict: !body.force });
   }
 
   @Delete('admin/subtopics/:id')

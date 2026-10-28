@@ -3,6 +3,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { cacheClearPrefix } from '../common/cache';
+import { findTaxonomyTwin } from '../common/taxonomy-key';
+import { TaxonomyDedupeService } from './taxonomy-dedupe.service';
 import { PUBLISHED_QUESTION_WHERE, QuestionKind, kindWhere, parseQuestionKind } from '../common/question-visibility';
 
 // =============================================================================
@@ -68,7 +70,10 @@ const MAX_BULK = 5000;
 
 @Injectable()
 export class BankAdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly dedupe: TaxonomyDedupeService,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // helpers
@@ -569,7 +574,8 @@ export class BankAdminService {
     ]);
     const dstBySlug = new Map(dstSubs.map((s) => [s.slug, s]));
     for (const s of srcSubs) {
-      const twin = dstBySlug.get(s.slug);
+      const keyHit = findTaxonomyTwin(dstSubs, s.name, s.nameHindi);
+      const twin = (keyHit && keyHit.kind !== 'similar' ? keyHit.row : undefined) ?? dstBySlug.get(s.slug);
       if (twin) {
         await tx.question.updateMany({ where: { subTopicId: s.id }, data: { subTopicId: twin.id } });
         if (!twin.nameHindi && s.nameHindi) await tx.subTopic.update({ where: { id: twin.id }, data: { nameHindi: s.nameHindi } });
@@ -589,18 +595,14 @@ export class BankAdminService {
     await tx.topic.delete({ where: { id: srcTopicId } });
   }
 
-  /** Merge one topic into another topic of the SAME chapter. */
-  async mergeTopic(sourceId: string, targetId: string) {
-    if (sourceId === targetId) throw new BadRequestException('Source aur target topic same hain');
-    const [src, dst] = await Promise.all([
-      this.prisma.topic.findUnique({ where: { id: sourceId } }),
-      this.prisma.topic.findUnique({ where: { id: targetId } }),
-    ]);
-    if (!src || !dst) throw new NotFoundException('Topic not found');
-    if (src.chapterId !== dst.chapterId) throw new BadRequestException('Sirf ek hi chapter ke andar ke topics merge ho sakte hain');
-    await this.prisma.$transaction(async (tx) => this.mergeTopicInTx(tx, sourceId, targetId), { timeout: 60000 });
+  /**
+   * Merge one topic (source) into another topic (target) of the SAME chapter. Goes through TaxonomyDedupeService so the merge
+   * also repoints practice sets / weak-topic rows, reindexes search and is written to the undo log.
+   */
+  async mergeTopic(sourceId: string, targetId: string, adminId?: string) {
+    const res = await this.dedupe.mergeTopics(targetId, sourceId, adminId);
     this.clearCaches();
-    return { merged: true };
+    return { merged: true, logId: res.logId, questionsMoved: res.questionsMoved };
   }
 
   /**
@@ -628,7 +630,8 @@ export class BankAdminService {
         let topicsMerged = 0;
         let topicsMoved = 0;
         for (const t of srcTopics) {
-          const twin = dstBySlug.get(t.slug);
+          const keyHit = findTaxonomyTwin(dstTopics, t.name, t.nameHindi);
+          const twin = (keyHit && keyHit.kind !== 'similar' ? keyHit.row : undefined) ?? dstBySlug.get(t.slug);
           if (twin) {
             await this.mergeTopicInTx(tx, t.id, twin.id);
             topicsMerged++;

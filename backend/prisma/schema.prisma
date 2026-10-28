@@ -340,6 +340,27 @@ model SubTopic {
   @@map("sub_topics")
 }
 
+// NEW (Oct 27 2026) — audit trail of every topic / sub-topic merge ("ek chapter me same topic ek hi baar").
+// `payload` holds exactly what was moved/deleted, so an admin can UNDO a merge from Admin → Duplicate topics.
+model TaxonomyMergeLog {
+  id             String    @id @default(uuid())
+  kind           String    // TOPIC | SUBTOPIC
+  chapterId      String?
+  survivorId     String
+  loserId        String
+  survivorName   String
+  loserName      String
+  questionsMoved Int       @default(0)
+  payload        Json
+  actorId        String?
+  createdAt      DateTime  @default(now())
+  undoneAt       DateTime?
+
+  @@index([createdAt])
+  @@index([survivorId])
+  @@map("taxonomy_merge_logs")
+}
+
 // ================= PDF IMPORT & QUESTION PIPELINE =================
 
 model SourcePdf {
