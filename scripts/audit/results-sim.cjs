@@ -20,9 +20,10 @@ const gap = (name, stillOpen, info = '') => { console.log((stillOpen ? 'GAP  ' :
 
 class BadRequestException extends Error {}
 class NotFoundException extends Error {}
+class ForbiddenException extends Error {}
 const noop = () => () => {};
 const nestStub = new Proxy(
-  { BadRequestException, NotFoundException, ConflictException: class extends Error {}, Logger: class { log() {} warn() {} error() {} } },
+  { BadRequestException, NotFoundException, ForbiddenException, ConflictException: class extends Error {}, Logger: class { log() {} warn() {} error() {} } },
   { get: (t, k) => (k in t ? t[k] : noop) },
 );
 const origLoad = Module._load;
@@ -41,6 +42,7 @@ const { RankService } = require(path.join(backend, 'src/tests/rank.service.ts'))
 const { TestStatsService } = require(path.join(backend, 'src/tests/test-stats.service.ts'));
 const { BankService } = require(path.join(backend, 'src/bank/bank.service.ts'));
 const { ReviewService } = require(path.join(backend, 'src/review/review.service.ts'));
+const { ExplanationsService } = require(path.join(backend, 'src/explanations/explanations.service.ts'));
 const { cacheClearAll } = require(path.join(backend, 'src/common/cache.ts'));
 
 // ---- a tiny Prisma `where` evaluator: equality, in, gt/gte/lt/lte, not, nested relation objects ----
@@ -395,6 +397,65 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     check('review gate: after the attempt is SUBMITTED the answered questions unlock', r2.size === 3, 'unlocked=' + JSON.stringify([...r2]));
     const other = await bankGate('s2', ['q1']);
     check("another student's attempts never unlock anything for you", other.size === 0, 'unlocked=' + JSON.stringify([...other]));
+  }
+
+  // =====================================================================================================================
+  // 5. session 27: skipped questions of a finished practice test can show their right option; the same question is not served twice
+  // =====================================================================================================================
+  {
+    const w = world();
+    // a finished practice test: q1 answered, q2 skipped (saved without an answer), q3 never part of it
+    const spy = { calls: [] };
+    w.svc.weakTopics = { recordAnswers: async (u, a, rows) => { spy.calls.push(rows); } };
+    const out = await ask(() => w.svc.saveAttempt('s3', { testTemplateId: 'T1', answers: [{ questionId: 'q1', selectedOption: 'A', timeSpentSeconds: 4 }, { questionId: 'q2', selectedOption: null, timeSpentSeconds: 0 }] }));
+    const at = out.v || {};
+    check('practice test save: 1 right, 0 wrong, 1 skipped; the skipped question is stored as a row without an answer', !out.err && at.totalCorrect === 1 && at.totalSkipped === 1 && w.answerRows.some((r) => r.questionId === 'q2' && r.selectedOption === null && r.isCorrect === false), out.err ? out.err.message : JSON.stringify([at.totalCorrect, at.totalWrong, at.totalSkipped]));
+    check('practice test save: weak topics are fed with the answered question only (as before)', spy.calls.length === 1 && spy.calls[0].length === 1 && spy.calls[0][0].questionId === 'q1', JSON.stringify(spy.calls.map((c) => c.map((r) => r.questionId))));
+
+    const ex = new ExplanationsService(w.prisma);
+    w.prisma.questionBankSet = { findMany: async () => [] };
+    w.prisma.question.findUnique = async ({ where }) => { const q = w.questions.find((x) => x.id === where.id); return q ? { ...q } : null; };
+    w.prisma.attemptAnswer.findFirst = async ({ where }) => { const r = (await w.prisma.attemptAnswer.findMany({ where })).find(() => true); return r || null; };
+    const keys = await ask(() => ex.getAnswerKeys('s3', 'STUDENT', ['q1', 'q2', 'q3']));
+    check('answer keys: the skipped question q2 (and answered q1) of a finished test come back, q3 (never attempted) does not', !keys.err && JSON.stringify(keys.v) === JSON.stringify({ q1: 'A', q2: 'B' }), keys.err ? keys.err.message : JSON.stringify(keys.v));
+    const other = await ask(() => ex.getAnswerKeys('s2', 'STUDENT', ['q1', 'q2', 'q3']));
+    check("answer keys: another student's attempts unlock nothing for you", !other.err && Object.keys(other.v).length === 0, JSON.stringify(other.v));
+    // a RUNNING attempt must not unlock anything (autosave accepts any question id)
+    w.attempts.push({ id: 'a-run', userId: 's5', testTemplateId: 'T1', status: 'IN_PROGRESS', score: 0, startedAt: new Date(), expiresAt: new Date(T0 + 3600e3), user: { id: 's5', role: 'STUDENT' } });
+    w.answerRows.push({ testAttemptId: 'a-run', questionId: 'q3', selectedOption: 'A', isCorrect: false, timeSpentSeconds: 0 });
+    const run = await ask(() => ex.getAnswerKeys('s5', 'STUDENT', ['q3']));
+    check('answer keys: autosaved rows of a RUNNING attempt unlock nothing', !run.err && Object.keys(run.v).length === 0, JSON.stringify(run.v));
+    const run2 = await ask(() => ex.getExplanation('q3', 's5', 'STUDENT'));
+    check('explanation of a question: a RUNNING attempt does not unlock it either', !!run2.err && /Attempt this question first/.test(run2.err.message), run2.err ? run2.err.message : 'it returned the explanation!');
+    const adm = await ask(() => ex.getAnswerKeys('admin', 'ADMIN', ['q1', 'q2', 'q3']));
+    check('answer keys: an admin gets every key', !adm.err && Object.keys(adm.v).length === 3, JSON.stringify(adm.v));
+    const many = await ask(() => ex.getAnswerKeys('admin', 'ADMIN', Array.from({ length: 500 }, (_, i) => 'x' + i)));
+    check('answer keys: at most 200 ids are looked at, junk input is harmless', !many.err, many.err ? many.err.message : '');
+    const none = await ask(() => ex.getAnswerKeys('s3', 'STUDENT', [null, 5, '']));
+    check('answer keys: empty / junk list gives {}', !none.err && Object.keys(none.v).length === 0);
+    // the explanation response carries the right option (behind the same gate)
+    w.questions.find((q) => q.id === 'q1').explanation = 'because 1';
+    const gx = await ask(() => ex.getExplanation('q1', 's3', 'STUDENT'));
+    check('explanation of an attempted question also carries the right option', !gx.err && gx.v.correctAnswer === 'A', gx.err ? gx.err.message : JSON.stringify(gx.v && gx.v.correctAnswer));
+  }
+  {
+    // the same question twice in the bank (another row, same text + options in another order) is served once
+    const mkRow = (id, year, text, opts) => ({ id, year, questionText: text, questionTextHindi: 'hi', optionsJson: opts.map((t, i) => ({ key: 'ABCD'[i], text: t })), subject: { slug: 'english' }, chapter: { name: 'c' }, exam: { name: 'e' }, correctAnswer: 'A', explanation: null, explanationHindi: null, createdAt: new Date(2026, 0, 1) });
+    const rows = [mkRow('d1', 2024, 'Select the synonym of BRAVE.', ['Bold', 'Weak', 'Shy', 'Lazy']), mkRow('d2', 2023, 'select the synonym of brave', ['Lazy', 'Shy', 'Weak', 'Bold'])];
+    for (let i = 0; i < 12; i++) rows.push(mkRow('u' + i, 2020 + (i % 4), 'Unique question number ' + i, ['p' + i, 'q', 'r', 's']));
+    const w = world();
+    w.prisma.question.findMany = async () => rows.map((r) => ({ ...r }));
+    const sec = await ask(() => w.svc.sectional('subj', 10));
+    const qs = (sec.v && sec.v.questions) || [];
+    const brave = qs.filter((q) => /brave/i.test(q.questionText)).length;
+    check('practice set (sectional): 10 questions, the same question is not in it twice', !sec.err && qs.length === 10 && brave <= 1 && new Set(qs.map((q) => q.id)).size === 10, sec.err ? sec.err.message : `count=${qs.length} copies of BRAVE=${brave}`);
+    let worst = 0;
+    for (let i = 0; i < 30; i++) { const g = await BankService.prototype.getSet.call({ prisma: w.prisma }, { count: 10 }); worst = Math.max(worst, g.questions.filter((q) => /brave/i.test(q.questionText)).length); }
+    check('random set (bank getSet): the same question never appears twice (30 draws)', worst <= 1, 'most copies seen in one set: ' + worst);
+    const tiny = rows.slice(0, 2);
+    w.prisma.question.findMany = async () => tiny.map((r) => ({ ...r }));
+    const sm = await ask(() => w.svc.sectional('subj', 5));
+    check('a tiny bank (only the two copies) still serves a set: nothing is blocked', !sm.err && ((sm.v && sm.v.questions) || []).length >= 1, sm.err ? sm.err.message : '');
   }
 
   console.log('\n' + (gaps ? `${gaps} known gap(s) are still open (printed as GAP, documented in AUDIT_RESULTS_ANALYSIS_OCT2026.md)` : 'no open gaps'));

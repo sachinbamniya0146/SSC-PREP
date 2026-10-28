@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { WeakTopicService } from '../weak-topics/weak-topic.service';
+import { dropDuplicateQuestions } from '../common/question-fingerprint';
 import { Injectable, BadRequestException, ConflictException, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AttemptStatus, Prisma } from '@prisma/client';
@@ -1683,7 +1684,9 @@ export class BankService implements OnModuleInit {
       orderBy: { createdAt: 'asc' },
       take: 1000,
     });
-    const shuffled = rows.slice().sort(() => Math.random() - 0.5).slice(0, takeN);
+    // Session 27: the same content (another row of the same question) is shown once; a small bank keeps what it has
+    const distinct = dropDuplicateQuestions(rows);
+    const shuffled = (distinct.length >= Math.min(takeN, rows.length) ? distinct : rows).slice().sort(() => Math.random() - 0.5).slice(0, takeN);
     return {
       count: shuffled.length,
       questions: shuffled.map((r: any) => ({

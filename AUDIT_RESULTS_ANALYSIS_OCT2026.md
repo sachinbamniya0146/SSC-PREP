@@ -6,6 +6,8 @@ Method: read the code (`tests.service.ts`, `rank.service.ts`, `test-stats.servic
 run the REAL service files against an in-memory fake database: `scripts/audit/results-sim.cjs`.
 Line numbers are for the tree AFTER session 24. Nothing here was seen in a real browser or on a real Postgres.
 
+Session 27 note: the practice path (non-timed sets) used to leave skipped questions without a right option in the review; fixed, see `UPDATE_REVIEW_KEYS_DEDUPE_OCT2026.md`. The explanation gate also ignored `IN_PROGRESS` only in the bank / review services; `explanations.service.ts` has the same rule now.
+
 Session 25 note: G1, G1b and G2 are fixed for the auto-built PYQ papers and the year-wise tests (see `UPDATE_ATTEMPT_PAPER_OCT2026.md`); they stay open for attempts that have no stored question list.
 
 Legend: **exists** = already correct (proved by the sim where it says so) - **FIXED S24** = was wrong, fixed and proved - **GAP** = known weakness, NOT fixed, the sim prints it as `GAP` -

@@ -456,9 +456,12 @@ function QuestionReview({ q, index, lang, showPaperNo }: { q: ReviewQuestion; in
         <p className="text-xs text-muted-foreground">
           Q{showPaperNo && q.paperQuestionNo != null ? q.paperQuestionNo : index + 1} · {q.marks || 2} marks{q.examName ? ` · ${q.examName}` : ""}
           {q.year ? ` · ${q.year}` : ""}
+          {q.examDate ? ` · ${q.examDate}` : ""}
+          {q.shift ? ` · ${q.shift}` : ""}
           {q.chapter ? ` · ${q.chapter}` : ""}
           {q.topic ? ` › ${q.topic}` : ""}
           {q.subTopic ? ` › ${q.subTopic}` : ""}
+          {q.questionNo != null ? ` · ID #${q.questionNo}` : ""}
         </p>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">⏱ {fmtTime(q.timeSpentSeconds || 0)}</span>

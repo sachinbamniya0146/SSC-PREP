@@ -278,6 +278,7 @@ export function SolutionPanel({
   explanationHindi,
   source,
   lang,
+  onCorrectKey,
 }: {
   questionId: string;
   correctKey?: string | null;
@@ -286,12 +287,17 @@ export function SolutionPanel({
   explanationHindi?: string | null;
   source?: string | null;
   lang: ReviewLang;
+  /** called when the panel had to read the right option from the server (the page did not know it): lets the page tick the option too */
+  onCorrectKey?: (key: string) => void;
 }) {
   const [data, setData] = React.useState<AiData | null>(
     explanation || explanationHindi ? { explanation, explanationHindi, source } : null,
   );
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const onKeyRef = React.useRef(onCorrectKey);
+  onKeyRef.current = onCorrectKey;
+  const [serverKey, setServerKey] = React.useState<string>(""); // the right option as read from the server when the page did not pass one
   const [noSolution, setNoSolution] = React.useState(false); // 404 = this question has no stored solution (retry is pointless)
 
   // props can arrive after first render (post-submit fetch) - adopt them when we have nothing yet
@@ -305,6 +311,11 @@ export function SolutionPanel({
     try {
       const res = await fetchAuth(`${API_BASE}/explanations/questions/${questionId}`);
       const d = await res.json().catch(() => ({}));
+      const fetchedKey = typeof d?.correctAnswer === "string" ? d.correctAnswer.trim().toUpperCase() : "";
+      if (res.ok && fetchedKey) {
+        setServerKey(fetchedKey);
+        onKeyRef.current?.(fetchedKey);
+      }
       if (res.ok && (d?.explanation || d?.explanationHindi)) setData({ explanation: d.explanation, explanationHindi: d.explanationHindi, source: d.source ?? null });
       else {
         setNoSolution(res.status === 404);
@@ -344,10 +355,10 @@ export function SolutionPanel({
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="text-sm font-bold">💡 Solution</h4>
         {badge && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge.c}`}>{badge.t}</span>}
-        {correctKey && (
+        {(correctKey || serverKey) && (
           <span className="ml-auto rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-bold text-success">
-            Answer: {correctKey}
-            {correctLabel ? ` — ${correctLabel}` : ""}
+            Answer: {correctKey || serverKey}
+            {correctKey && correctLabel ? ` — ${correctLabel}` : ""}
           </span>
         )}
       </div>

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { dropDuplicateQuestions } from '../common/question-fingerprint';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { istDateKey } from '../gamification/gamification.service';
@@ -249,9 +250,12 @@ export class DailyTestService {
       orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
       take: 1000,
     });
-    const valid = rows.filter(
+    const usable = rows.filter(
       (r) => Array.isArray(r.optionsJson) && r.optionsJson.length >= 2 && r.optionsJson.every((o: any) => o?.text || o?.diagramType || o?.imageUrl),
     );
+    // Session 27: the same content (another row of the same question) is picked once; a small pool keeps what it has
+    const distinct = dropDuplicateQuestions(usable);
+    const valid = distinct.length >= Math.min(n, usable.length) ? distinct : usable;
     const byYear = new Map<number, string[]>();
     for (const r of valid) {
       const y = r.year ?? 0;

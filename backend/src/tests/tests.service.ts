@@ -28,6 +28,7 @@ import { loadMarkingScheme } from './marking-scheme';
 import { loadRankRows, topScoreOf } from './rank-rows';
 import { durationOf, placeAmong, shortName } from './rank.util';
 import { hasCanonicalPaper, paperQuestionIds, readPaperSnapshot } from './attempt-paper';
+import { dropDuplicateQuestions, rememberQuestions, uniquePool } from '../common/question-fingerprint';
 
 /** Fisher–Yates, in place. Used so a practice set is different on every start (sectional). */
 function shuffleInPlace<T>(arr: T[]): T[] {
@@ -782,7 +783,9 @@ async saveAnswers(
 
     // NEW (Oct 3 2026): sets that are scored by /bank/practice/set/:id/complete (practiceSetId given) update weak topics there.
     if (!(input as any).practiceSetId) {
-      this.weakTopics.recordAnswers(userId, null, scoredAnswers).catch(() => undefined);
+      // Session 27: the practice page now also sends the questions the student skipped (rows with no answer, so their key and
+      // solution can be opened in the review); weak topics keep being fed by the answered ones only, as before.
+      this.weakTopics.recordAnswers(userId, null, scoredAnswers.filter((a) => a.selectedOption != null)).catch(() => undefined);
     }
 
     const attempt = await this.prisma.testAttempt.create({
@@ -1102,6 +1105,7 @@ async saveAnswers(
     const slugToId = new Map(subs.map((s) => [s.slug.toLowerCase(), s.id]));
 
     const usedAcross = new Set<string>();
+    const usedFp = new Set<string>(); // content of the questions already picked for earlier sections (same question, other row)
     const out: any[] = [];
     for (const sec of sections) {
       const subjectId = slugToId.get(sec.subjectSlug);
@@ -1152,8 +1156,10 @@ async saveAnswers(
         sec.q = validRows.length;
         sec.marks = Math.round((sec.marks * sec.q) / originalQ);
       }
+      // Session 27: the same question must not be picked twice (another row of the same content, in this or an earlier section) - unless the bank is too small
+      const pool = uniquePool(validRows, usedFp, sec.q);
       const byYear = new Map<number, any[]>();
-      for (const r of validRows) {
+      for (const r of pool) {
         if (usedAcross.has(r.id)) continue;
         const y = r.year ?? 0;
         if (!byYear.has(y)) byYear.set(y, []);
@@ -1179,12 +1185,13 @@ async saveAnswers(
         if (!added) break;
       }
       if (picked.length < sec.q) {
-        for (const r of validRows) {
+        for (const r of pool) {
           if (picked.length >= sec.q) break;
           if (!usedAcross.has(r.id) && !picked.includes(r)) picked.push(r);
         }
       }
       picked.forEach((r) => usedAcross.add(r.id));
+      rememberQuestions(usedFp, picked);
       const ruleOf = (r: any) => resolveMarking({ plan: strictPlan, scheme, subjectSlug: sec.subjectSlug, question: r });
       const secMarks = strictPlan || scheme ? Math.round(picked.slice(0, sec.q).reduce((a: number, r: any) => a + ruleOf(r).marks, 0) * 100) / 100 : sec.marks;
       out.push({
@@ -1530,6 +1537,7 @@ async saveAnswers(
     const scheme = await this.markingSchemeFor({ examId: famExam.id }, []);
 
     const usedAcross = new Set<string>();
+    const usedFp = new Set<string>(); // content of the questions already picked for earlier sections (same question, other row)
     const out: any[] = [];
     for (const sec of sections) {
       const subjectId = slugToId.get(sec.subjectSlug);
@@ -1557,8 +1565,10 @@ async saveAnswers(
       );
       if (validRows.length < sec.q) throw new BadRequestException(`Not enough 4-option bilingual questions for ${sec.name} (${validRows.length}/${sec.q})`);
       // multi-year round-robin + cross-section dedup
+      // Session 27: same-content rows are skipped too (see paper())
+      const pool = uniquePool(validRows, usedFp, sec.q);
       const byYear = new Map<number, any[]>();
-      for (const r of validRows) {
+      for (const r of pool) {
         if (usedAcross.has(r.id)) continue; // never reuse a question across sections
         const y = r.year ?? 0;
         if (!byYear.has(y)) byYear.set(y, []);
@@ -1584,12 +1594,13 @@ async saveAnswers(
         if (!added) break;
       }
       if (picked.length < sec.q) {
-        for (const r of validRows) {
+        for (const r of pool) {
           if (picked.length >= sec.q) break;
           if (!usedAcross.has(r.id) && !picked.includes(r)) picked.push(r);
         }
       }
       picked.forEach((r) => usedAcross.add(r.id));
+      rememberQuestions(usedFp, picked);
       const ruleOf = (r: any) => resolveMarking({ scheme, subjectSlug: sec.subjectSlug, question: r });
       out.push({
         part: sec.part,
@@ -1675,6 +1686,9 @@ async saveAnswers(
       take: 1000,
     });
     if (rows.length === 0) throw new BadRequestException('No bilingual questions for this subject');
+    // Session 27: one row per content (the same PYQ can sit in the bank twice) - the newest year's copy is kept; a small bank keeps what it has
+    const distinct = dropDuplicateQuestions(rows);
+    if (distinct.length >= Math.min(take, rows.length)) rows.splice(0, rows.length, ...distinct);
 
     // Multi-year spread: group by year, pick round-robin across years with per-year
     // pointers (distinct rows => dedup by QID inherent). Year-missing bucket = 0.

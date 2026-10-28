@@ -317,6 +317,9 @@ export default function TestPage() {
   const [explanations, setExplanations] = React.useState<{
     [qid: string]: { correctAnswer: string; explanation: string | null; explanationHindi: string | null; explanationSource: string | null };
   }>({});
+  // Session 27: the right option of questions the student SKIPPED in a practice test (they have no per-question result), read from
+  // POST /explanations/keys once the attempt is saved, or from the solution panel when it is opened.
+  const [fetchedKeys, setFetchedKeys] = React.useState<{ [qid: string]: string }>({});
   const [finalScore, setFinalScore] = React.useState(0);
   const [reviewOpen, setReviewOpen] = React.useState(false);
   // v7 §1.1 — results-screen state MUST live at component top level
@@ -1347,7 +1350,13 @@ export default function TestPage() {
       const answersPayload = [];
       for (const q of qs) {
         const a = res[q.id];
-        if (!a) { skipped++; continue; }
+        if (!a) {
+          skipped++;
+          // Session 27: a skipped question is saved too (no answer) - the server then lets the student open its right option and solution
+          // in the review. A question that WAS answered but could not be scored (network) keeps the chosen option; the server scores it.
+          answersPayload.push({ questionId: q.id, selectedOption: answers[q.id] ?? null, isCorrect: false, timeSpentSeconds: timeSpent[q.id] || 0 });
+          continue;
+        }
         if (a.correct) correct++;
         else wrong++;
         answersPayload.push({
@@ -1374,6 +1383,17 @@ export default function TestPage() {
           practiceSetId: practiceSetIdRef.current || undefined,
         }),
       });
+      // the right options of the skipped questions, for the review list (one request; locked / unknown ids simply come back missing)
+      const missing = qs.filter((q) => !res[q.id]).map((q) => q.id);
+      if (missing.length > 0) {
+        const kr = await fetchAuth(`${apiBase()}/explanations/keys`, {
+          method: "POST",
+          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ questionIds: missing }),
+        });
+        const kd = await kr.json().catch(() => ({}));
+        if (kr.ok && kd?.keys && typeof kd.keys === "object") setFetchedKeys((p) => ({ ...p, ...(kd.keys as { [qid: string]: string }) }));
+      }
     } catch {
       // history save is best-effort — ignore failures
     }
@@ -1818,7 +1838,7 @@ export default function TestPage() {
                 // for the practice path (/sectional, chapter-wise, /bank/set)
                 // which never goes through the explanations map.
                 const ex = explanations[q.id];
-                const correctKey = (ex?.correctAnswer || a?.correctAnswer || "").trim().toUpperCase();
+                const correctKey = (ex?.correctAnswer || a?.correctAnswer || fetchedKeys[q.id] || "").trim().toUpperCase();
                 const correctOpt = q.options.find((o) => (o.key || "").trim().toUpperCase() === correctKey);
                 const correctLabel = pickOpt(correctOpt) || (correctKey ? `Option ${correctKey}` : null);
                 // `a` (= result[q.id], filled from /bank/attempt above) is now
@@ -1839,6 +1859,7 @@ export default function TestPage() {
                         <div className="flex flex-wrap items-center gap-2 text-[11px]">
                           {q.chapter && <span className="rounded bg-muted px-1.5 py-0.5 font-semibold text-muted-foreground">{q.chapter}</span>}
                           {q.examName && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-semibold text-amber-600">{q.examName}{q.year ? ` ${q.year}` : ""}{q.shift ? ` · ${q.shift}` : ""}</span>}
+                          {q.questionNo != null && <span className="rounded bg-muted px-1.5 py-0.5 font-mono font-semibold text-muted-foreground" title="Question ID - quote it when you report a question">Q#{q.questionNo}</span>}
                           {spent > 0 && <span className="text-muted-foreground">⏱ {spent}s</span>}
                         </div>
                         <p className="mt-1 text-sm font-medium line-clamp-2">{revLang === "hi" && q.questionTextHindi ? q.questionTextHindi : q.questionText}</p>
@@ -1906,6 +1927,7 @@ export default function TestPage() {
                           explanationHindi={explHi}
                           source={ex?.explanationSource ?? a?.explanationSource ?? null}
                           lang={revLang}
+                          onCorrectKey={(k) => setFetchedKeys((p) => (p[q.id] === k ? p : { ...p, [q.id]: k }))}
                         />
                       </div>
                     )}
