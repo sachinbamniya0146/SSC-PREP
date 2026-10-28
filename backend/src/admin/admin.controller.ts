@@ -624,7 +624,9 @@ export class AdminController {
     const current = await this.prisma.coupon.findUnique({ where: { id } });
     if (!current) throw new NotFoundException('Coupon not found');
     // the code itself and usesCount can never be changed from here
-    const { code: _code, usesCount: _uses, ...rest } = (body ?? {}) as Record<string, unknown>;
+    const rest: Record<string, unknown> = { ...(body ?? {}) };
+    delete rest.code;
+    delete rest.usesCount;
     const r = checkCouponInput(rest, true, {
       discountPct: current.discountPct,
       discountInr: current.discountInr,
