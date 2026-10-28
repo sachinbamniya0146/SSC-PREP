@@ -7,8 +7,8 @@
 export const ATTEMPT_DONE_STATUSES = ['SUBMITTED', 'AUTO_SUBMITTED'] as const;
 export type AttemptDoneStatus = (typeof ATTEMPT_DONE_STATUSES)[number];
 
-/** Prisma `where` fragment: `status: ATTEMPT_DONE` */
-export const ATTEMPT_DONE = { in: [...ATTEMPT_DONE_STATUSES] } as const;
+/** Prisma `where` fragment: `status: ATTEMPT_DONE`. NOT `as const`: Prisma's `in` wants a mutable array (CI error TS2322 in S29). */
+export const ATTEMPT_DONE: { in: AttemptDoneStatus[] } = { in: [...ATTEMPT_DONE_STATUSES] };
 
 export function isAttemptDone(status: unknown): boolean {
   return status === 'SUBMITTED' || status === 'AUTO_SUBMITTED';
