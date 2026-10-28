@@ -25,9 +25,10 @@ export class TestsController {
 
   // P0 — server-authoritative timed session: start (stamps startedAt+expiresAt)
   @Post('attempts/start')
-  startAttempt(@CurrentUser() user: { userId: string }, @Body() body: { testTemplateId: string; scribe?: boolean }) {
+  startAttempt(@CurrentUser() user: { userId: string }, @Body() body: { testTemplateId: string; scribe?: boolean; fromPaper?: boolean }) {
     // `scribe` = extra-time accessibility option; only has an effect on strict-sectional patterns that offer it.
-    return this.testsService.startAttempt(user.userId, body.testTemplateId, { scribe: body.scribe === true });
+    // `fromPaper` = the client got its questions from GET /tests/paper/:id (the /test?template= page): the server then ties the attempt to that paper.
+    return this.testsService.startAttempt(user.userId, body.testTemplateId, { scribe: body.scribe === true, fromPaper: body.fromPaper === true });
   }
 
   // P0 — submit a timed attempt (server-enforced expiry + server-side scoring)

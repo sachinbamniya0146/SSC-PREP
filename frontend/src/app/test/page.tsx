@@ -664,7 +664,7 @@ export default function TestPage() {
             const ar = await fetchAuth(`${apiBase()}/tests/attempts/start`, {
               method: "POST",
               headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-              body: JSON.stringify({ testTemplateId: tplId, ...(patternMeta?.scribeAvailable && scribe ? { scribe: true } : {}) }),
+              body: JSON.stringify({ testTemplateId: tplId, fromPaper: true, ...(patternMeta?.scribeAvailable && scribe ? { scribe: true } : {}) }),
             });
             ad = await ar.json();
             if (ar.ok && ad?.id) {

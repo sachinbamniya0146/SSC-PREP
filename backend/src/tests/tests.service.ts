@@ -213,7 +213,7 @@ export class TestsService {
   // Begin a timed attempt: server stamps startedAt + expiresAt from the
   // template duration. The client may render a countdown from expiresAt but
   // cannot extend it — submission after expiry is capped server-side.
-  async startAttempt(userId: string, testTemplateId: string, opts: { scribe?: boolean; questionIds?: string[] } = {}) {
+  async startAttempt(userId: string, testTemplateId: string, opts: { scribe?: boolean; questionIds?: string[]; fromPaper?: boolean } = {}) {
     const template = await this.prisma.testTemplate.findUnique({
       where: { id: testTemplateId },
       include: { examPattern: true },
@@ -248,7 +248,7 @@ export class TestsService {
     const expiresAt = new Date(now.getTime() + (plan ? plan.totalMs : (template.durationMinutes || 60) * 60 * 1000));
     // Session 25: the attempt remembers the questions of its paper (see attempt-paper.ts). Autosave / submit then accept only those,
     // and every question the student never touched is counted as skipped. null = no list (other composers): behaviour as before.
-    const paperIds = await this.paperIdsFor(userId, template, opts.questionIds);
+    const paperIds = await this.paperIdsFor(userId, template, opts.questionIds, opts.fromPaper === true);
     const attempt = await this.prisma.testAttempt.create({
       data: {
         userId,
@@ -266,9 +266,11 @@ export class TestsService {
 
   // The question ids a NEW attempt is tied to: the list the caller composed itself (year-wise start), else the canonical paper of an
   // auto-built PYQ template, else null. Never throws: a paper that cannot be composed leaves the attempt without a list, as before.
-  private async paperIdsFor(userId: string, template: { id: string; type: string }, given?: string[]): Promise<string[] | null> {
+  private async paperIdsFor(userId: string, template: { id: string; type: string }, given?: string[], fromPaper = false): Promise<string[] | null> {
     if (Array.isArray(given)) return readPaperSnapshot(given);
-    if (!hasCanonicalPaper(template)) return null;
+    // fromPaper: the /test?template= page says it loaded paper(template) - true for every template it opens. A client that does not say so
+    // (the CGL sectional page composes its exam elsewhere) gets a list only for the auto-built PYQ papers.
+    if (!fromPaper && !hasCanonicalPaper(template)) return null;
     try {
       return readPaperSnapshot(paperQuestionIds(await this.paper(userId, template.id)));
     } catch {

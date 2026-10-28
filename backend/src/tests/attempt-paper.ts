@@ -32,7 +32,8 @@ export function readPaperSnapshot(raw: unknown): string[] | null {
 /**
  * Templates whose questions the student gets from `GET /tests/paper/:id` and from nowhere else: the auto-built PYQ papers
  * (`pyq-<slug>` and the date-wise `pyq-k-...`, type SHIFT_WISE). For these the paper composer is the single source, so its list is the paper.
- * Other templates (generic full mocks, the CGL sectional page ...) are served by other composers: no list is guessed for them.
+ * For any other template the caller must say so (`fromPaper` on `POST /tests/attempts/start`, sent by the /test?template= page); a client that
+ * gets its questions elsewhere (the CGL sectional page) sends nothing and no list is guessed for it.
  */
 export function hasCanonicalPaper(template: { id: string; type: string } | null | undefined): boolean {
   return !!template && template.type === 'SHIFT_WISE' && template.id.startsWith('pyq-');

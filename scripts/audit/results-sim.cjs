@@ -311,7 +311,7 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     w.answerRows.push({ testAttemptId: 'a-s3', questionId: 'q1', selectedOption: 'A', isCorrect: true, timeSpentSeconds: 5, isMarkedForReview: false });
     const r = (await ask(() => w.svc.submitAttempt('s3', 'a-s3', { answers: ALL4 }))).v || {};
     const total = (r.totalCorrect || 0) + (r.totalWrong || 0) + (r.totalSkipped || 0);
-    gap('G1 attempt without a stored list (older attempts, generic full mocks, CGL sectional page): right + wrong + skipped = question count (4)', total !== w.template.totalQuestions, `totals add up to ${total} of ${w.template.totalQuestions}`);
+    gap('G1 attempt without a stored list (older attempts, CGL sectional page): right + wrong + skipped = question count (4)', total !== w.template.totalQuestions, `totals add up to ${total} of ${w.template.totalQuestions}`);
   }
 
   // G2 (closed for papers with a stored list). Autosave of ids that are not in the paper
@@ -354,9 +354,11 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     const s2 = await ask(() => w2.svc.startAttempt('s3', 'pyq-x'));
     check('start of an auto-built PYQ paper (SHIFT_WISE, pyq-...): the list is the composed paper', !s2.err && JSON.stringify(snap2(s2.v && s2.v.id)) === JSON.stringify(PAPER) && paperCalls === 1, s2.err ? s2.err.message : JSON.stringify(snap2(s2.v && s2.v.id)));
     const s3 = await ask(() => w2.svc.startAttempt('s5', 'T1'));
-    check('start of any other template (generic mock, CGL sectional page): no list is guessed, paper() is not even asked', !s3.err && snap2(s3.v && s3.v.id) == null && paperCalls === 1, s3.err ? s3.err.message : 'snapshot=' + JSON.stringify(snap2(s3.v && s3.v.id)));
+    check('start of any other template WITHOUT the fromPaper flag (CGL sectional page): no list is guessed, paper() is not even asked', !s3.err && snap2(s3.v && s3.v.id) == null && paperCalls === 1, s3.err ? s3.err.message : 'snapshot=' + JSON.stringify(snap2(s3.v && s3.v.id)));
+    const s3b = await ask(() => w2.svc.startAttempt('s3', 'T1', { fromPaper: true }));
+    check('start of a template from the /test?template= page (fromPaper): the list is the composed paper, also for a generic mock', !s3b.err && JSON.stringify(snap2(s3b.v && s3b.v.id)) === JSON.stringify(PAPER) && paperCalls === 2, s3b.err ? s3b.err.message : JSON.stringify(snap2(s3b.v && s3b.v.id)));
     w2.svc.paper = async () => { throw new BadRequestException('Pattern needs questions for: Reasoning'); };
-    const s4 = await ask(() => w2.svc.startAttempt('s2', 'pyq-x'));
+    const s4 = await ask(() => w2.svc.startAttempt('s2', 'pyq-x', { fromPaper: true }));
     check('start when the paper cannot be composed: the attempt still starts, without a list', !s4.err && snap2(s4.v && s4.v.id) == null, s4.err ? s4.err.message : '');
   }
 
