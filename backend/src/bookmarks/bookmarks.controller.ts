@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { BookmarksService } from './bookmarks.service';
@@ -14,8 +14,27 @@ export class BookmarksController {
   }
 
   @Get()
-  list(@CurrentUser() user: { userId: string }) {
-    return this.bookmarks.list(user.userId);
+  list(
+    @CurrentUser() user: { userId: string },
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+    @Query('subjectId') subjectId?: string,
+    @Query('q') q?: string,
+    @Query('wrongOnly') wrongOnly?: string,
+  ) {
+    return this.bookmarks.list(user.userId, {
+      limit: limit ? Number(limit) : undefined,
+      offset: offset ? Number(offset) : undefined,
+      subjectId: subjectId || undefined,
+      q: q || undefined,
+      wrongOnly: wrongOnly === '1' || wrongOnly === 'true',
+    });
+  }
+
+  // Every bookmarked question id (stars in the test screen / review). Declared before ':questionId/...' routes.
+  @Get('ids')
+  ids(@CurrentUser() user: { userId: string }) {
+    return this.bookmarks.ids(user.userId);
   }
 
   @Post(':questionId/note')
@@ -38,7 +57,7 @@ export class BookmarksController {
   // sessionStorage('ssc_sectional_set') and opens /test?sectional=1, same as
   // every other practice flow.
   @Get('practice-set')
-  practiceSet(@CurrentUser() user: { userId: string }) {
-    return this.bookmarks.practiceSet(user.userId);
+  practiceSet(@CurrentUser() user: { userId: string }, @Query('subjectId') subjectId?: string) {
+    return this.bookmarks.practiceSet(user.userId, subjectId || undefined);
   }
 }

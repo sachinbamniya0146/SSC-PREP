@@ -1,4 +1,5 @@
 "use client";
+import { BookmarkButton } from "@/components/BookmarkButton";
 import { fetchAuth } from "@/lib/api";
 import { saveDraft, loadDraft, clearDraft, queueSubmit, flushPendingSubmits, saveAttemptStart, loadAttemptStart, clearAttemptStartById } from "@/lib/submit-queue";
 import { Logo } from "@/components/Logo";
@@ -36,6 +37,8 @@ type UgQ = {
   // CBT section name (from the mock paper blueprint), used for the section tabs
   section?: string | null;
   questionNo?: number | string | null;
+  // number printed in the real exam paper (keyed PYQ papers only)
+  paperQuestionNo?: number | null;
   examName?: string | null;
   year?: number | null;
   shift?: string | null;
@@ -628,6 +631,7 @@ export default function TestPage() {
                 id: qq.id,
                 section: s.name || null,
                 questionNo: qq.questionNo ?? null,
+                paperQuestionNo: qq.paperQuestionNo ?? null,
                 questionText: qq.questionText,
                 questionTextHindi: qq.questionTextHindi,
                 questionDiagramType: qq.questionDiagramType,
@@ -2080,6 +2084,7 @@ export default function TestPage() {
             <motion.div key={q.id} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.2 }} className="card p-3 sm:p-6">
               <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
                 <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                  {q.paperQuestionNo != null ? <span className="rounded-md bg-primary px-2 py-0.5 text-xs font-extrabold text-primary-foreground" title="Question number in the real exam paper">Paper Q{q.paperQuestionNo}</span> : null}
                   {(q as any).questionNo ? <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-extrabold" title="Question number — report karte waqt yahi number batayein">Q#{(q as any).questionNo}</span> : null}
                   <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-bold text-primary">{q.chapter || "General"}</span>
                   <span className="text-xs text-muted-foreground">Question {idx + 1} of {questions.length}</span>
@@ -2090,7 +2095,10 @@ export default function TestPage() {
                   )}
                   <span className="rounded-md bg-success/15 px-2 py-0.5 text-xs font-bold text-success">+{q.marks ?? 1} / −{q.negativeMarks ?? 0.25}</span>
                 </div>
-                <span className="badge badge-info">EN + हिंदी</span>
+                <div className="flex items-center gap-2">
+                  <BookmarkButton questionId={q.id} size="sm" />
+                  <span className="badge badge-info">EN + हिंदी</span>
+                </div>
               </div>
               <h2 className="mt-4 break-words text-base font-semibold leading-relaxed">
                 {q.questionText}

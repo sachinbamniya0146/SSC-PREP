@@ -10,6 +10,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { OAuth2Client } from 'google-auth-library';
+import { FeaturesService } from '../features/features.service';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'crypto';
 import * as jwt from 'jsonwebtoken';
@@ -86,6 +87,7 @@ export class AuthService implements OnModuleInit {
     private readonly otp: OtpService,
     private readonly referralService: ReferralService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly features: FeaturesService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -223,6 +225,8 @@ export class AuthService implements OnModuleInit {
     platform: 'WEB' | 'APP' = 'WEB',
     referralCode?: string,
   ): Promise<Authenticated> {
+    // Feature controller: admin can close new registrations (existing students keep logging in).
+    await this.features.assertEnabled('signup', 'New registrations are paused right now. Please try again later.');
     const normalized = email.toLowerCase().trim();
     const normalizedPhone = phone.trim();
     
@@ -385,6 +389,7 @@ export class AuthService implements OnModuleInit {
     const email = payload.email.toLowerCase().trim();
     let user = await this.prisma.user.findUnique({ where: { email: email } });
     if (!user) {
+      await this.features.assertEnabled('signup', 'New registrations are paused right now. Please try again later.');
       user = await this.prisma.user.create({
         data: {
           email,
@@ -512,6 +517,7 @@ export class AuthService implements OnModuleInit {
           isEmailVerified: true,
           avatarUrl: true,
           preferredLanguage: true,
+          state: true,
           createdAt: true,
           _count: { select: { testAttempts: true, bookmarks: true } },
           subscriptions: {

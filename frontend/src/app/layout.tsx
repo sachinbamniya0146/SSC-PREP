@@ -14,6 +14,7 @@ import NavTracker from "@/components/NavTracker";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import AppStatus from "@/components/AppStatus";
 import { ReferralCapture } from "@/components/ReferralCapture";
+import AnnouncementBar from "@/components/AnnouncementBar";
 
 // FIX (Sep 2026 — "hindi font me mistake ho rahi hai matrao ki"): the app
 // referenced 'Noto Sans Devanagari' by NAME in a CSS variable, but never
@@ -101,6 +102,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         <ThemeProvider>
+          <AnnouncementBar />
           {children}
           <SupportChatMount />
           <PushNotificationMount />

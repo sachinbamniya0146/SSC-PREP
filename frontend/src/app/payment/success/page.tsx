@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Suspense } from "react";
 import { useT } from "@/lib/i18n";
+import { useFeatures } from "@/lib/features";
 import { PurchaseCelebration, type CelebrationPlan } from "@/components/PurchaseCelebration";
 
 function PaymentSuccessContent() {
@@ -16,6 +17,7 @@ function PaymentSuccessContent() {
   const [kind, setKind] = React.useState<string | null>(null);
   const [plan, setPlan] = React.useState<CelebrationPlan>(null);
   const [celebrate, setCelebrate] = React.useState(false);
+  const { on: featureOn } = useFeatures();
 
   // Cashfree migration: we no longer read a payment status/hash out of the
   // URL and trust it — the URL only tells us WHICH order_id to ask about.
@@ -113,7 +115,7 @@ function PaymentSuccessContent() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex items-center justify-center px-4">
-      {celebrate && status === "success" && (
+      {celebrate && status === "success" && featureOn("celebrations") && (
         <PurchaseCelebration kind={kind} plan={plan} orderId={searchParams.get("order_id") || ""} onClose={() => setCelebrate(false)} />
       )}
       <div className="max-w-md w-full text-center">

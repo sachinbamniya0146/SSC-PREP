@@ -3,6 +3,7 @@
 // calendar days extends the streak; a gap resets it to 1. XP is awarded on test
 // submissions (10/correct) and daily quiz (8/correct), with streak multipliers.
 import { Injectable, BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { cacheGet, cacheSet } from '../common/cache';
 
@@ -117,8 +118,8 @@ export class GamificationService {
     });
     if (!user) throw new BadRequestException('User not found');
 
-    const better = await this.prisma.user.count({ where: { xp: { gt: user.xp } } });
-    const total = await this.prisma.user.count();
+    const better = await this.prisma.user.count({ where: { xp: { gt: user.xp }, isSuspended: false } });
+    const total = await this.prisma.user.count({ where: { isSuspended: false } });
     const today = istDateKey(new Date());
     // Daily-goal progress: questions answered since 00:00 IST today (tests,
     // practice sets and sectionals all write AttemptAnswer rows). Best effort —
@@ -135,46 +136,66 @@ export class GamificationService {
     return { ...user, rank: better + 1, totalUsers: total, today, todayAnswered };
   }
 
-  /** Leaderboard: top N by XP (weekly or all-time), plus the caller's row. Rows cached 30s; myRank computed fresh per user. */
-  async leaderboard(userId: string, period: 'all' | 'weekly' = 'all', take = 50) {
-    // BUGFIX: this cache key has no userId in it (by design — the top-N
-    // list itself is identical for every viewer, so it's shared across
-    // users for 30s to cut DB load). The bug was baking `isMe` into the
-    // CACHED rows: whichever user's request happened to be the one that
-    // missed the cache and recomputed it had their id burned into every
-    // row's `isMe` flag for the next 30s. Every other user hitting the
-    // cache in that window would see the "You" badge on a stranger's row
-    // (or miss it entirely on their own row, even if they were top 50).
-    // Fix: cache only the anonymous ranking (no isMe), and stamp isMe
-    // fresh per-request after reading from cache.
-    const cacheKey = `gamification:lb:${period}:${take}`;
-    const cachedRows = cacheGet<{ id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number }[]>(cacheKey);
-    let baseRows: { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number }[];
+  /**
+   * Leaderboard: top N by XP (weekly or all-time), plus the caller's row. Rows cached 30s; myRank computed fresh per user.
+   * scope "state" = only students of the caller's own state (State leaderboard). Suspended students never appear.
+   * Names of other students are shortened ("Rahul S.") - this page is visible to every student.
+   */
+  async leaderboard(userId: string, period: 'all' | 'weekly' = 'all', take = 50, scope: 'india' | 'state' = 'india') {
+    const meRow = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true, state: true },
+    });
+    const stateName = scope === 'state' ? meRow?.state ?? null : null;
+    if (scope === 'state' && !stateName) {
+      // the student has not chosen a state yet: the page shows a "choose your state" prompt instead of an empty list
+      return { period, scope, state: null, needState: true, rows: [], myRank: null, me: null };
+    }
+
+    // BUGFIX: this cache key has no userId in it (by design - the top-N list itself is identical for every viewer, so it's
+    // shared across users for 30s to cut DB load). The bug was baking `isMe` into the CACHED rows: whichever user's request
+    // happened to be the one that missed the cache and recomputed it had their id burned into every row's `isMe` flag for
+    // the next 30s. Fix: cache only the anonymous ranking (no isMe), and stamp isMe fresh per-request after reading from cache.
+    type BaseRow = { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; state: string | null; rank: number };
+    const cacheKey = `gamification:lb2:${period}:${take}:${stateName ?? 'india'}`;
+    const cachedRows = cacheGet<BaseRow[]>(cacheKey);
+    let baseRows: BaseRow[];
     if (cachedRows) {
       baseRows = cachedRows;
     } else {
       const since = period === 'weekly' ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) : undefined;
-      const where = since ? { xp: { gt: 0 }, updatedAt: { gte: since } } : { xp: { gt: 0 } };
+      const where: Prisma.UserWhereInput = { xp: { gt: 0 }, isSuspended: false };
+      if (since) where.updatedAt = { gte: since };
+      if (stateName) where.state = stateName;
       const top = await this.prisma.user.findMany({
         where,
         orderBy: { xp: 'desc' },
         take,
-        select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true },
+        select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true, state: true },
       });
-      baseRows = top.map((r, i) => ({ ...r, rank: i + 1 }));
+      baseRows = top.map((r, i) => ({ ...r, fullName: shortLeaderName(r.fullName), rank: i + 1 }));
       cacheSet(cacheKey, baseRows, 30_000);
     }
     const rows = baseRows.map((r) => ({ ...r, isMe: r.id === userId }));
-    const me = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, fullName: true, xp: true, currentStreak: true, longestStreak: true, coins: true },
-    });
-    const myRank = me ? (await this.prisma.user.count({ where: { xp: { gt: me.xp } } })) + 1 : null;
+    const rankWhere: Prisma.UserWhereInput = { isSuspended: false };
+    if (stateName) rankWhere.state = stateName;
+    const myRank = meRow ? (await this.prisma.user.count({ where: { ...rankWhere, xp: { gt: meRow.xp } } })) + 1 : null;
     return {
       period,
+      scope,
+      state: stateName,
+      needState: false,
       rows,
       myRank,
-      me: me ? { ...me, rank: myRank, isMe: true } : null,
+      me: meRow ? { ...meRow, fullName: meRow.fullName, rank: myRank, isMe: true } : null,
     };
   }
+}
+
+/** "Rahul Sharma" -> "Rahul S."  (the leaderboard is visible to every student). */
+export function shortLeaderName(full: string): string {
+  const parts = (full || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'Student';
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`;
 }

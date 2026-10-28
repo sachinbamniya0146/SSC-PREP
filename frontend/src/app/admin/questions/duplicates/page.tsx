@@ -51,6 +51,9 @@ type Item = {
   crossPaper?: boolean;
   crossPaperLabels?: string[];
   suggestedAction?: Action | null;
+  /** decided by the 24-hour auto-publish rules, not by a person */
+  autoResolved?: boolean;
+  autoReason?: string | null;
   sourceRow: number | null;
   uploadBatchId: string | null;
   createdAt: string;
@@ -151,6 +154,133 @@ function QuestionColumn({ title, q, diffs, missing }: { title: string; q: QView 
           <span className="text-xs text-muted-foreground">No solution</span>
         )}
       </Field>
+    </div>
+  );
+}
+
+type AutoCfg = { enabled: boolean; afterHours: number; includeSimilar: boolean };
+type AutoRun = { at: string; trigger: "auto" | "manual"; keptNew: number; keptExisting: number; keptBoth: number; needsHuman: number; failed: number };
+type AutoPreview = { pending: number; due: number; notDueYet: number; keepBoth: number; keepExisting: number; keepNew: number; needsHuman: number; cappedAt: number | null };
+
+/** 24-hour auto-publish: duplicates nobody answered are decided by safe rules; every decision is marked "Auto" and can be undone. */
+function AutoPublishCard({ onRan }: { onRan: () => void }) {
+  const [cfg, setCfg] = React.useState<AutoCfg | null>(null);
+  const [log, setLog] = React.useState<AutoRun[]>([]);
+  const [prev, setPrev] = React.useState<AutoPreview | null>(null);
+  const [open, setOpen] = React.useState(false);
+  const [busy, setBusy] = React.useState("");
+  const [note, setNote] = React.useState<{ ok: boolean; text: string } | null>(null);
+  const [hours, setHours] = React.useState("24");
+
+  const jsonOrThrow = async (r: Response) => {
+    const d = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
+    return d;
+  };
+
+  const load = React.useCallback(async () => {
+    try {
+      const d = await jsonOrThrow(await fetchAuth(`${API_BASE}/bank/admin/auto-publish`));
+      setCfg(d.config);
+      setLog(d.log || []);
+      setHours(String(d.config.afterHours));
+      setPrev(await jsonOrThrow(await fetchAuth(`${API_BASE}/bank/admin/auto-publish/preview`)));
+    } catch (e) {
+      setNote({ ok: false, text: e instanceof Error ? e.message : "Could not load auto-publish" });
+    }
+  }, []);
+  React.useEffect(() => { void load(); }, [load]);
+
+  const save = async (patch: Partial<AutoCfg>) => {
+    setBusy("save");
+    setNote(null);
+    try {
+      const d = await jsonOrThrow(await fetchAuth(`${API_BASE}/bank/admin/auto-publish`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }));
+      setCfg(d.config);
+      setHours(String(d.config.afterHours));
+      setNote({ ok: true, text: "Saved." });
+      setPrev(await jsonOrThrow(await fetchAuth(`${API_BASE}/bank/admin/auto-publish/preview`)));
+    } catch (e) {
+      setNote({ ok: false, text: e instanceof Error ? e.message : "Could not save" });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const runNow = async () => {
+    if (!window.confirm("Run the auto-publish rules now on every duplicate that is older than the waiting time?")) return;
+    setBusy("run");
+    setNote(null);
+    try {
+      const d = await jsonOrThrow(await fetchAuth(`${API_BASE}/bank/admin/auto-publish/run`, { method: "POST" }));
+      const r = d.summary as AutoRun | null;
+      setNote({ ok: true, text: r ? `Done: ${r.keptNew} new kept, ${r.keptExisting} old kept, ${r.keptBoth} both kept, ${r.needsHuman} need you${r.failed ? `, ${r.failed} failed` : ""}.` : "Nothing to do." });
+      await load();
+      onRan();
+    } catch (e) {
+      setNote({ ok: false, text: e instanceof Error ? e.message : "Run failed" });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  if (!cfg) return note ? <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">{note.text}</div> : null;
+
+  return (
+    <div className="rounded-xl border border-violet-500/40 bg-violet-500/5 p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-[220px] flex-1 text-sm">
+          <div className="font-bold">🤖 Auto-publish after {cfg.afterHours}h <span className={`ml-1 rounded px-1.5 py-0.5 text-[11px] ${cfg.enabled ? "bg-emerald-500/15 text-emerald-600" : "bg-muted text-muted-foreground"}`}>{cfg.enabled ? "ON" : "OFF"}</span></div>
+          <div className="text-xs text-muted-foreground">
+            A duplicate nobody answered for {cfg.afterHours} hour(s) is decided by safe rules - same question in another paper: keep both; identical copy: keep the old one;
+            old one not live: publish the new one. If the question, options or answer differ, <b>you</b> decide, always. Every automatic decision is marked 🤖 Auto and can be undone.
+          </div>
+          {prev && (
+            <div className="mt-1 text-xs">
+              Waiting: <b>{prev.pending}</b> · ready for auto now: <b>{prev.due}</b> (new {prev.keepNew}, old {prev.keepExisting}, both {prev.keepBoth}; <b>{prev.needsHuman}</b> need you)
+              {prev.cappedAt ? ` · preview capped at ${prev.cappedAt}` : ""}
+            </div>
+          )}
+        </div>
+        <button onClick={() => setOpen((v) => !v)} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold" aria-expanded={open}>{open ? "Hide settings" : "Settings & history"}</button>
+        <button onClick={runNow} disabled={!!busy} className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40">{busy === "run" ? "Running…" : "Run now"}</button>
+      </div>
+
+      {open && (
+        <div className="mt-3 space-y-3 border-t border-violet-500/30 pt-3 text-sm">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={cfg.enabled} disabled={!!busy} onChange={(e) => save({ enabled: e.target.checked })} />
+            Switched on (runs by itself every 15 minutes)
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs font-semibold">Wait for a person (hours, 0-168)</label>
+            <input type="number" min={0} max={168} value={hours} onChange={(e) => setHours(e.target.value)} className="w-20 border bg-background px-2 py-1 text-sm" />
+            <button onClick={() => save({ afterHours: Number(hours) })} disabled={!!busy || hours === "" || Number(hours) === cfg.afterHours} className="rounded border border-border px-2 py-1 text-xs font-semibold disabled:opacity-40">Save hours</button>
+          </div>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-1" checked={cfg.includeSimilar} disabled={!!busy} onChange={(e) => save({ includeSimilar: e.target.checked })} />
+            <span>Also decide “similar” copies whose only difference is the solution, picture or paper question number (the newer paper&apos;s copy is kept). <span className="text-xs text-muted-foreground">Off by default.</span></span>
+          </label>
+          <p className="text-xs text-muted-foreground">Auto-publish never bypasses the Hindi check: a question without its Hindi version still waits for it.</p>
+          {log.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead><tr className="text-muted-foreground"><th className="pr-3">When</th><th className="pr-3">By</th><th className="pr-3">New</th><th className="pr-3">Old</th><th className="pr-3">Both</th><th className="pr-3">Need you</th><th>Failed</th></tr></thead>
+                <tbody>
+                  {log.map((r, i) => (
+                    <tr key={i}><td className="pr-3">{new Date(r.at).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}</td><td className="pr-3">{r.trigger === "auto" ? "🤖 auto" : "you"}</td><td className="pr-3">{r.keptNew}</td><td className="pr-3">{r.keptExisting}</td><td className="pr-3">{r.keptBoth}</td><td className="pr-3">{r.needsHuman}</td><td>{r.failed}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+      {note && <p role="status" className={`mt-2 text-xs ${note.ok ? "text-emerald-600" : "text-red-600"}`}>{note.text}</p>}
     </div>
   );
 }
@@ -497,6 +627,8 @@ export default function DuplicateReviewPage() {
           <div className={`rounded-lg border p-3 text-sm ${msg.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10" : "border-red-500/40 bg-red-500/10"}`}>{msg.text}</div>
         )}
 
+        <AutoPublishCard onRan={() => { setPage(0); void refreshAll(0); }} />
+
         {(counts?.pending ?? 0) > 0 && (
           <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-primary/50 bg-primary/5 p-3">
             <div className="min-w-[220px] flex-1 text-sm">
@@ -600,6 +732,7 @@ export default function DuplicateReviewPage() {
                 </span>
                 <span className="rounded bg-muted px-2 py-0.5 text-[11px]">{upload ? "Upload" : "Bank scan"}</span>
                 {!pending && <span className="rounded bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">{STATUS_TEXT[it.status] ?? it.status}</span>}
+                {!pending && it.autoResolved && <span title={it.autoReason ?? "Decided automatically"} className="rounded bg-violet-500/15 px-2 py-0.5 text-[11px] font-semibold text-violet-600 dark:text-violet-400">🤖 Auto{it.autoReason ? `: ${it.autoReason}` : ""}</span>}
                 {it.differenceLabels.length > 0 && (
                   <span className="text-xs text-amber-700 dark:text-amber-400">Alag: {it.differenceLabels.join(", ")}</span>
                 )}

@@ -64,7 +64,7 @@ export const ADMIN_NAV: Group[] = [
     title: "Students & support",
     items: [
       { href: "/admin/users", label: "Users", icon: "users", show: admin },
-      { href: "/admin/support-chat", label: "Support chat", icon: "chat", show: (a) => a.can("SUPPORT"), badge: "chats" },
+      { href: "/admin/support-chat", label: "Help desk", icon: "chat", show: (a) => a.can("SUPPORT"), badge: "chats" },
       { href: "/admin/error-reports", label: "Error reports", icon: "flag", show: (a) => a.can("SUPPORT"), badge: "reports" },
       { href: "/admin/notifications", label: "Notifications", icon: "bell", show: admin },
     ],
@@ -108,6 +108,7 @@ export const ADMIN_NAV: Group[] = [
   {
     title: "Team",
     items: [
+      { href: "/admin/features", label: "Feature controller", icon: "grid", show: admin },
       { href: "/admin/staff", label: "Staff access", icon: "shield", show: admin },
       { href: "/admin/help", label: "Admin help", icon: "help", show: () => true },
     ],

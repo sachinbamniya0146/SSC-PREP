@@ -4,10 +4,29 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
+import { FeaturesService } from '../features/features.service';
+
+export interface BookmarkListQuery {
+  limit?: number;
+  offset?: number;
+  subjectId?: string;
+  q?: string;
+  /** only questions the student got wrong (or skipped) the last time they saw them in a test */
+  wrongOnly?: boolean;
+}
 
 @Injectable()
 export class BookmarksService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private features: FeaturesService,
+  ) {}
+
+  /** Every bookmarked question id of this student (no paging) - the test screen and the review paint their stars from it. */
+  async ids(userId: string) {
+    const rows = await this.prisma.bookmark.findMany({ where: { userId }, select: { questionId: true }, take: 20000 });
+    return { ids: rows.map((r) => r.questionId) };
+  }
 
   /** Toggle bookmark on a question. Returns the new state. */
   async toggle(userId: string, questionId: string) {
@@ -21,6 +40,8 @@ export class BookmarksService {
       await this.prisma.bookmark.delete({ where: { userId_questionId: { userId, questionId } } });
       return { bookmarked: false };
     }
+    // Feature controller: removing is always allowed, adding follows the admin's switch.
+    await this.features.assertEnabled('bookmarks');
 
     // v2 §16 — entitlement guard: free users get 100 bookmarks; premium unlimited.
     const user = await this.prisma.user.findUnique({
@@ -72,88 +93,118 @@ export class BookmarksService {
   }
 
   /**
-   * List my bookmarks with question details.
+   * List my bookmarks with question details (paged: `limit` <= 100, `offset`; optional subject / text / wrong-only filters).
    *
-   * FIX (answer/explanation leak): previously every bookmarked question
-   * unconditionally returned correctAnswer + explanation, regardless of
-   * whether the student had ever actually attempted it. Since a question
-   * can be bookmarked straight from browse/chapter-PYQ mode (before
-   * answering anything), this let a student see the answer key for any
-   * question in the bank just by tapping "bookmark" — bypassing the exact
-   * "reveal only after answered/skipped/completed" gate that practice mode
-   * (question-bank-practice.service.ts) enforces deliberately.
+   * FIX (answer/explanation leak): the answer + explanation of a bookmarked question are revealed only once the student
+   * has a genuine FINISHED attempt record for it - a submitted test / sectional / daily test (AttemptAnswer) or a
+   * question-bank practice set that includes an answer. An attempt that is still IN_PROGRESS does NOT count: before this
+   * fix a student could bookmark a question in the middle of a live exam, open the Bookmarks page in a second tab and
+   * read the key. Also applies PUBLISHED_QUESTION_WHERE so a question suspended after an error-report can't keep
+   * surfacing in a student's saved list.
    *
-   * Fix: only reveal correctAnswer/explanation for questions the student
-   * has a genuine attempt record for — either a scored TestAttempt
-   * (mock/sectional/daily-test, via AttemptAnswer) or an in-progress/
-   * completed question-bank practice set that includes an answer for that
-   * question. Everything else in the payload (question text, options,
-   * exam/subject metadata) is safe to always show, since none of that is
-   * the answer itself.
-   *
-   * Also applies PUBLISHED_QUESTION_WHERE so a question suspended after an
-   * error-report can't keep surfacing (with or without the answer) in a
-   * student's saved bookmarks list.
+   * 29 Oct 2026: the old hard cap of 100 rows (silently hiding everything older, even for premium students) is gone;
+   * each row now carries the real paper question number, the student's last answer and where it came from.
    */
-  async list(userId: string) {
-    const rows = await this.prisma.bookmark.findMany({
-      where: { userId, question: { ...PUBLISHED_QUESTION_WHERE } },
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-      include: {
-        // NEW (Sep 2026) — pull each user's own note for the bookmarked
-        // question (if any) in the same query, so the Bookmarks page can
-        // show/edit it inline without a second round trip per question.
-        question: {
-          select: {
-            id: true,
-            questionText: true,
-            questionTextHindi: true,
-            questionDiagramType: true,
-            questionDiagramLabels: true,
-            questionImageUrl: true,
-            optionsJson: true,
-            correctAnswer: true,
-            explanation: true,
-            exam: { select: { name: true } },
-            subject: { select: { name: true } },
-            year: true,
-            shift: true,
+  async list(userId: string, query: BookmarkListQuery = {}) {
+    const limit = Math.min(Math.max(Math.floor(query.limit ?? 50), 1), 100);
+    const offset = Math.max(Math.floor(query.offset ?? 0), 0);
+
+    const questionWhere: Prisma.QuestionWhereInput = { ...PUBLISHED_QUESTION_WHERE };
+    if (query.subjectId) questionWhere.subjectId = query.subjectId;
+    const text = (query.q ?? '').trim();
+    if (text) {
+      const or: Prisma.QuestionWhereInput[] = [
+        { questionText: { contains: text, mode: 'insensitive' } },
+        { questionTextHindi: { contains: text, mode: 'insensitive' } },
+        { chapter: { name: { contains: text, mode: 'insensitive' } } },
+        { topic: { name: { contains: text, mode: 'insensitive' } } },
+      ];
+      if (/^\d{1,9}$/.test(text)) or.push({ questionNo: Number(text) }, { paperQuestionNo: Number(text) });
+      questionWhere.OR = or;
+    }
+
+    // "Wrong in my last test": narrow to the questions whose latest finished attempt was wrong / skipped.
+    if (query.wrongOnly) {
+      const mine = await this.prisma.bookmark.findMany({ where: { userId }, select: { questionId: true }, take: 20000 });
+      const latest = await this.latestAnswers(userId, mine.map((m) => m.questionId));
+      const wrongIds = [...latest.entries()].filter(([, a]) => !a.isCorrect).map(([id]) => id);
+      questionWhere.id = { in: wrongIds };
+    }
+
+    const where: Prisma.BookmarkWhereInput = { userId, question: questionWhere };
+    const [total, rows, facetRows] = await Promise.all([
+      this.prisma.bookmark.count({ where }),
+      this.prisma.bookmark.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+        include: {
+          question: {
+            select: {
+              id: true,
+              questionNo: true,
+              paperQuestionNo: true,
+              questionText: true,
+              questionTextHindi: true,
+              questionDiagramType: true,
+              questionDiagramLabels: true,
+              questionImageUrl: true,
+              optionsJson: true,
+              correctAnswer: true,
+              explanation: true,
+              explanationHindi: true,
+              exam: { select: { name: true } },
+              subject: { select: { name: true } },
+              chapter: { select: { name: true } },
+              topic: { select: { name: true } },
+              year: true,
+              shift: true,
+              examDate: true,
+              examTier: true,
+            },
           },
         },
-      },
-    });
+      }),
+      // subject chips for the filter bar (all bookmarks, not only this page)
+      this.prisma.bookmark.findMany({
+        where: { userId, question: { ...PUBLISHED_QUESTION_WHERE } },
+        select: { question: { select: { subjectId: true, subject: { select: { name: true } } } } },
+        take: 20000,
+      }),
+    ]);
+
+    const subjectCounts = new Map<string, { id: string; name: string; count: number }>();
+    for (const f of facetRows) {
+      const id = f.question.subjectId;
+      const cur = subjectCounts.get(id) ?? { id, name: f.question.subject?.name ?? 'Other', count: 0 };
+      cur.count += 1;
+      subjectCounts.set(id, cur);
+    }
+    const subjects = [...subjectCounts.values()].sort((a, b) => b.count - a.count);
 
     if (rows.length === 0) {
-      return { count: 0, bookmarks: [] };
+      return { count: 0, total, offset, limit, hasMore: false, subjects, bookmarks: [] };
     }
 
     // Notes for these exact bookmarked questions (one query, not N+1).
+    const questionIds = rows.map((r) => r.questionId);
     const noteRows = await this.prisma.userNote.findMany({
-      where: { userId, questionId: { in: rows.map((r) => r.questionId) } },
+      where: { userId, questionId: { in: questionIds } },
       select: { questionId: true, noteText: true, updatedAt: true },
     });
     const noteMap = new Map(noteRows.map((n) => [n.questionId, n]));
 
-    const questionIds = rows.map((r) => r.questionId);
+    // Source 1: finished test attempts (mock / sectional / daily-test share AttemptAnswer) - with the student's own last answer.
+    const latest = await this.latestAnswers(userId, questionIds);
+    const attemptedSet = new Set(latest.keys());
 
-    // Source 1: has the student answered this question in any scored test
-    // attempt (mock / sectional / daily-test — all share AttemptAnswer)?
-    const answeredInAttempts = await this.prisma.attemptAnswer.findMany({
-      where: { testAttempt: { userId }, questionId: { in: questionIds } },
-      select: { questionId: true },
-    });
-    const attemptedSet = new Set(answeredInAttempts.map((a) => a.questionId));
-
-    // Source 2: has the student answered it inside a question-bank practice
-    // set (answers is a { [questionId]: selectedOption } JSON blob)?
+    // Source 2: has the student answered it inside a question-bank practice set
+    // (answers is a { [questionId]: selectedOption } JSON blob)?
     if (attemptedSet.size < questionIds.length) {
       const practiceSets = await this.prisma.questionBankSet.findMany({
-        // Prisma 5.x: a nullable Json column can't be filtered with a plain
-        // `null` literal (TS2322) — it must be one of Prisma.DbNull /
-        // Prisma.JsonNull / Prisma.AnyNull. AnyNull excludes both possible
-        // "no value" representations (SQL NULL and a stored literal JSON
-        // null), which is exactly the "has answers" behavior this had before.
+        // Prisma 5.x: a nullable Json column can't be filtered with a plain `null` literal (TS2322) - AnyNull excludes both
+        // "no value" representations (SQL NULL and a stored literal JSON null).
         where: { userId, answers: { not: Prisma.AnyNull } },
         select: { answers: true },
       });
@@ -171,12 +222,21 @@ export class BookmarksService {
 
     return {
       count: rows.length,
+      total,
+      offset,
+      limit,
+      hasMore: offset + rows.length < total,
+      subjects,
       bookmarks: rows.map((r) => {
         const canReveal = attemptedSet.has(r.questionId);
+        const mine = latest.get(r.questionId) ?? null;
         return {
           bookmarkedAt: r.createdAt,
           question: {
             id: r.question.id,
+            // the global serial (used when reporting an error) and the number printed in the real paper
+            questionNo: r.question.questionNo,
+            paperQuestionNo: r.question.paperQuestionNo ?? null,
             questionText: r.question.questionText,
             questionTextHindi: r.question.questionTextHindi,
             questionDiagramType: (r.question as any).questionDiagramType ?? null,
@@ -186,26 +246,49 @@ export class BookmarksService {
               ? (r.question.optionsJson as any[]).map((o: any) => ({
                   key: o.key,
                   text: o.text,
+                  textHi: o.textHi ?? null,
                   diagramType: o.diagramType ?? null,
                   diagramLabels: o.diagramLabels ?? null,
                   imageUrl: o.imageUrl ?? null,
                 }))
               : [],
-            // Only present once the student has actually attempted this
-            // question elsewhere — null otherwise, never sent early.
+            // Only present once the student has actually attempted this question elsewhere - null otherwise, never sent early.
             correctAnswer: canReveal ? r.question.correctAnswer : null,
             explanation: canReveal ? r.question.explanation : null,
+            explanationHindi: canReveal ? r.question.explanationHindi : null,
             attempted: canReveal,
             examName: r.question.exam?.name,
             subject: r.question.subject?.name,
+            chapter: r.question.chapter?.name ?? null,
+            topic: r.question.topic?.name ?? null,
             year: r.question.year,
             shift: r.question.shift,
+            examDate: r.question.examDate ?? null,
+            examTier: r.question.examTier ?? null,
           },
+          // What the student answered the last time (finished tests only) - lets the page say "you marked B, correct is C".
+          myAnswer: mine ? { selectedOption: mine.selectedOption, isCorrect: mine.isCorrect, attemptId: mine.attemptId } : null,
           note: noteMap.get(r.questionId)?.noteText ?? null,
           noteUpdatedAt: noteMap.get(r.questionId)?.updatedAt ?? null,
         };
       }),
     };
+  }
+
+  /** Latest answer per question from FINISHED attempts only (an attempt still running never counts). */
+  private async latestAnswers(userId: string, questionIds: string[]) {
+    const out = new Map<string, { selectedOption: string | null; isCorrect: boolean; attemptId: string }>();
+    if (questionIds.length === 0) return out;
+    const rows = await this.prisma.attemptAnswer.findMany({
+      where: { questionId: { in: questionIds }, testAttempt: { userId, status: { not: 'IN_PROGRESS' } } },
+      orderBy: { testAttempt: { startedAt: 'desc' } },
+      select: { questionId: true, selectedOption: true, isCorrect: true, testAttemptId: true },
+      take: 20000,
+    });
+    for (const r of rows) {
+      if (!out.has(r.questionId)) out.set(r.questionId, { selectedOption: r.selectedOption, isCorrect: r.isCorrect, attemptId: r.testAttemptId });
+    }
+    return out;
   }
 
   /** Delete my note on a question. No-op (not an error) if there wasn't one. */
@@ -230,9 +313,9 @@ export class BookmarksService {
    * handles answering, scoring and revealing the explanation per question,
    * no new code needed there.
    */
-  async practiceSet(userId: string) {
+  async practiceSet(userId: string, subjectId?: string) {
     const bookmarks = await this.prisma.bookmark.findMany({
-      where: { userId, question: { ...PUBLISHED_QUESTION_WHERE } },
+      where: { userId, question: { ...PUBLISHED_QUESTION_WHERE, ...(subjectId ? { subjectId } : {}) } },
       select: { questionId: true },
     });
     if (bookmarks.length === 0) {

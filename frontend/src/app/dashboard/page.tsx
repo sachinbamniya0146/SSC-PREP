@@ -6,9 +6,11 @@ import { AppHeader } from "@/components/AppHeader";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { PERMISSION_INFO, StaffPermission } from "@/lib/permissions";
 import { useT } from "@/lib/i18n";
+import { useFeatures } from "@/lib/features";
 
 export default function DashboardPage() {
   const tr = useT();
+  const { on } = useFeatures();
   const [user, setUser] = React.useState<{
     fullName: string;
     email: string;
@@ -202,6 +204,7 @@ export default function DashboardPage() {
               <h1 className="mt-1 text-3xl font-extrabold tracking-tight sm:text-4xl">{firstName}</h1>
 
               {/* Daily goal */}
+              {on("dailyGoal") && (
               <div className="mt-4 max-w-md">
                 <div className="flex items-baseline justify-between text-sm">
                   <span className="font-semibold">
@@ -241,6 +244,7 @@ export default function DashboardPage() {
                   ))}
                 </div>
               </div>
+              )}
 
               {streakAtRisk && (
                 <p className="mt-4 inline-flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm font-medium">
@@ -308,6 +312,7 @@ export default function DashboardPage() {
                 </p>
               )}
             </a>
+            {on("vocabulary") && (
             <a href="/vocabulary" className="card card-hover p-5">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold">📖 {tr("Vocabulary", "Vocabulary")}</h3>
@@ -317,6 +322,7 @@ export default function DashboardPage() {
                 {tr("Pick up where you stopped. Words you unlock stay unlocked.", "Jahan ruke the wahin se shuru karein. Unlock hue words unlock hi rehte hain.")}
               </p>
             </a>
+            )}
           </section>
         )}
 
@@ -442,10 +448,12 @@ export default function DashboardPage() {
         {/* Study tools */}
         <h2 className="mb-3 mt-10 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Study tools</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {on("studyPlan") && (
           <a href="/study-plan/board" className="card card-hover border-primary/40 bg-primary/[0.05] p-5">
             <h3 className="font-semibold">🗓️ My Study Planner</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">{tr("Target exam + date, mark chapters, tomorrow's 9 AM test, daily revision.", "Target exam + date, chapters mark karein, kal 9 AM ka test, roz ka revision.")}</p>
           </a>
+          )}
           <a href="/weak-topics" className="card card-hover border-danger/30 bg-danger/[0.04] p-5">
             <h3 className="font-semibold">🎯 My Weak List</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">{tr("Chapters / topics / sub-topics you got wrong — strengthen them one by one.", "Galat hue chapter / topic / sub-topic — ek-ek ko strong karein.")}</p>
@@ -466,18 +474,21 @@ export default function DashboardPage() {
             <h3 className="font-semibold">Year-wise PYQ Test</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Choose exam + year, narrow to subject or chapter.</p>
           </a>
+          {on("vocabulary") && (
           <a href="/vocabulary" className="card card-hover p-5">
             <h3 className="font-semibold">📖 Vocabulary Mastery</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">Learn one word at a time — quiz, 95%+ to unlock the next.</p>
           </a>
+          )}
         </div>
 
         {/* Utilities */}
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
           {[
             { t: "Weak areas practice", d: "Auto-generated from your wrong & skipped questions.", h: "/weak-practice", c: "Start practice →" },
-            { t: "Leaderboard", d: "Climb the ranks with XP from tests & daily quizzes.", h: "/leaderboard", c: "View leaderboard →" },
-            { t: "Refer & earn", d: "Free subscription when 10 friends buy using your code.", h: "/referral", c: "Invite friends →" },
+            ...(on("leaderboard") ? [{ t: "Leaderboard", d: "Climb the ranks with XP from tests & daily quizzes. See your State rank too.", h: "/leaderboard", c: "View leaderboard →" }] : []),
+            { t: "My bookmarks", d: "Questions you starred in tests and reviews - with notes and a one-tap practice set.", h: "/bookmarks", c: "Open bookmarks →" },
+            ...(on("referral") ? [{ t: "Refer & earn", d: "Free subscription when 10 friends buy using your code.", h: "/referral", c: "Invite friends →" }] : []),
           ].map((u) => (
             <div key={u.h} className="card p-5">
               <h3 className="text-sm font-semibold">{u.t}</h3>

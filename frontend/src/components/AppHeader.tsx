@@ -6,7 +6,9 @@ import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { logoutAndClear } from "@/lib/session-cache";
 import { useAccess } from "@/lib/permissions";
+import { useFeatures } from "@/lib/features";
 
+const NAV_FLAG: Record<string, string> = { "/vocabulary": "vocabulary", "/leaderboard": "leaderboard" };
 const nav = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/mocks", label: "Mock Tests" },
@@ -20,6 +22,8 @@ const nav = [
 export function AppHeader({ name }: { name?: string }) {
   const path = usePathname() || "";
   const access = useAccess();
+  const { on } = useFeatures();
+  const navItems = nav.filter((l) => !NAV_FLAG[l.href] || on(NAV_FLAG[l.href]));
   const [open, setOpen] = React.useState(false);
   const [menu, setMenu] = React.useState(false);
   const ref = React.useRef<HTMLDivElement | null>(null);
@@ -45,7 +49,7 @@ export function AppHeader({ name }: { name?: string }) {
             <Logo size={32} />
           </a>
           <nav className="hidden items-center gap-1 lg:flex" aria-label="Main">
-            {nav.map((l) => {
+            {navItems.map((l) => {
               const active = path === l.href || (l.href !== "/dashboard" && path.startsWith(l.href + "/"));
               return (
                 <a
@@ -84,8 +88,10 @@ export function AppHeader({ name }: { name?: string }) {
                 {[
                   ...(access.isStaff ? [{ href: "/admin", label: access.isAdmin ? "Admin console" : "Staff workspace" }] : []),
                   { href: "/profile", label: "My profile" },
+                  { href: "/bookmarks", label: "★ Bookmarks" },
                   { href: "/premium", label: "Premium plans" },
-                  { href: "/referral", label: "Refer & earn" },
+                  ...(on("referral") ? [{ href: "/referral", label: "Refer & earn" }] : []),
+                  { href: "/help", label: "Help Center" },
                   { href: "/settings/telegram", label: "Telegram" },
                 ].map((i) => (
                   <a key={i.href} href={i.href} role="menuitem" className="block rounded-lg px-3 py-2 text-sm hover:bg-muted">
@@ -115,7 +121,7 @@ export function AppHeader({ name }: { name?: string }) {
       {open && (
         <nav className="border-t border-border bg-background lg:hidden" aria-label="Mobile">
           <div className="container-page grid grid-cols-2 gap-1 py-2">
-            {[...nav, ...(access.isStaff ? [{ href: "/admin", label: "Admin" }] : [])].map((l) => (
+            {[...navItems, ...(access.isStaff ? [{ href: "/admin", label: "Admin" }] : [])].map((l) => (
               <a key={l.href} href={l.href} className="rounded-lg px-3 py-3 text-sm font-medium hover:bg-muted">
                 {l.label}
               </a>

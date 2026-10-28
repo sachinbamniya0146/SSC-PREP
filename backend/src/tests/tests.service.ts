@@ -795,6 +795,9 @@ async saveAnswers(
             question: {
               select: {
                 id: true,
+                questionNo: true, // global serial (was mapped below but never selected -> always undefined)
+                paperQuestionNo: true, // number printed in the real paper
+                examDate: true,
                 questionText: true,
                 questionTextHindi: true,
                 questionDiagramType: true, // Session 22 — Venn/figure stem diagrams
@@ -866,7 +869,13 @@ async saveAnswers(
     const scheme = plan ? null : await this.markingSchemeFor(attempt.testTemplate, attempt.answers.map((a) => a.question));
 
     // v6 §6 — per-question review data, ordered with topic/exam labels.
-    const questions = attempt.answers.map((a) => {
+    // A paper whose every question carries its printed number is shown in that real order (rows saved by autosave are
+    // not guaranteed to come back in paper order). Other tests keep the stored order.
+    const orderedAnswers = [...attempt.answers];
+    if (orderedAnswers.length > 0 && orderedAnswers.every((a) => (a.question as any).paperQuestionNo != null)) {
+      orderedAnswers.sort((x, y) => ((x.question as any).paperQuestionNo as number) - ((y.question as any).paperQuestionNo as number));
+    }
+    const questions = orderedAnswers.map((a) => {
       const q = a.question;
       const sectionIndex = plan ? sectionIndexForSubject(plan, (q as any).subject?.slug) : null;
       const rule = resolveMarking({ plan, scheme, subjectSlug: (q as any).subject?.slug, question: q });
@@ -887,6 +896,8 @@ async saveAnswers(
         questionId: q.id,
         questionText: q.questionText,
         questionNo: (q as any).questionNo,
+        paperQuestionNo: (q as any).paperQuestionNo ?? null,
+        examDate: (q as any).examDate ?? null,
         questionTextHindi: q.questionTextHindi,
         questionDiagramType: (q as any).questionDiagramType ?? null,
         questionDiagramLabels: (q as any).questionDiagramLabels ?? null,
@@ -1143,6 +1154,7 @@ async saveAnswers(
           id: r.id,
           questionText: r.questionText,
           questionNo: (r as any).questionNo,
+          paperQuestionNo: (r as any).paperQuestionNo ?? null,
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1546,6 +1558,7 @@ async saveAnswers(
           id: r.id,
           questionText: r.questionText,
           questionNo: (r as any).questionNo,
+          paperQuestionNo: (r as any).paperQuestionNo ?? null,
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1665,6 +1678,7 @@ async saveAnswers(
       id: r.id,
       questionText: r.questionText,
       questionNo: (r as any).questionNo,
+      paperQuestionNo: (r as any).paperQuestionNo ?? null,
       questionTextHindi: r.questionTextHindi,
       questionDiagramType: r.questionDiagramType ?? null,
       questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -1843,6 +1857,7 @@ async saveAnswers(
         id: r.id,
         questionText: r.questionText,
         questionNo: (r as any).questionNo,
+        paperQuestionNo: (r as any).paperQuestionNo ?? null,
         questionTextHindi: r.questionTextHindi,
         questionDiagramType: r.questionDiagramType ?? null,
         questionDiagramLabels: r.questionDiagramLabels ?? null,
@@ -2028,6 +2043,7 @@ async saveAnswers(
           id: r.id,
           questionText: r.questionText,
           questionNo: (r as any).questionNo,
+          paperQuestionNo: (r as any).paperQuestionNo ?? null,
           questionTextHindi: r.questionTextHindi,
           questionDiagramType: r.questionDiagramType ?? null,
           questionDiagramLabels: r.questionDiagramLabels ?? null,

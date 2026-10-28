@@ -8,6 +8,7 @@
 //  * filters (All / Open / Mastered / Locked) + search so a long list is easy to move around in;
 //  * progress ring, today's plan and daily goal in one glance.
 import * as React from "react";
+import { useFeatures, FeatureOff } from "@/lib/features";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import BiMessage from "@/components/BiMessage";
 import { AppShell, CardSkeletons, ErrorNote, PageHeading } from "@/components/AppShell";
@@ -71,7 +72,7 @@ function Ring({ pct }: { pct: number }) {
   );
 }
 
-export default function VocabularyHubPage() {
+function VocabularyHubPageInner() {
   const tr = useT();
   const [words, setWords] = React.useState<WordCard[]>([]);
   const [totalWords, setTotalWords] = React.useState(0);
@@ -330,4 +331,10 @@ export default function VocabularyHubPage() {
       )}
     </AppShell>
   );
+}
+
+export default function VocabularyHubPage() {
+  const { on, loaded } = useFeatures();
+  if (loaded && !on("vocabulary")) return <FeatureOff title="Vocabulary is switched off for now" />;
+  return <VocabularyHubPageInner />;
 }

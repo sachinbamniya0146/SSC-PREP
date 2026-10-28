@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizeState } from '../common/indian-states';
 
 // Fields safe to return to the client — never selects passwordHash.
 const PUBLIC_USER_SELECT = {
@@ -19,6 +20,7 @@ const PUBLIC_USER_SELECT = {
   hintQuota: true,
   darkMode: true,
   preferredLanguage: true,
+  state: true,
   referralCode: true,
   createdAt: true,
 } as const;
@@ -167,8 +169,17 @@ export class UserService {
   }
 
   /** Student-editable profile fields. Email stays fixed (it is the login identity); the Google photo is read-only. */
-  async updateProfile(userId: string, body: { fullName?: string; phone?: string; preferredLanguage?: string }) {
-    const data: { fullName?: string } = {};
+  async updateProfile(userId: string, body: { fullName?: string; phone?: string; preferredLanguage?: string; state?: string | null }) {
+    const data: { fullName?: string; state?: string | null } = {};
+    // Home state (for the State rank). "" / null clears it; anything else must be one of the listed states.
+    if (body.state !== undefined) {
+      if (body.state === null || String(body.state).trim() === '') data.state = null;
+      else {
+        const st = normalizeState(body.state);
+        if (!st) throw new BadRequestException('Please choose your state from the list.');
+        data.state = st;
+      }
+    }
     if (body.fullName !== undefined) {
       const name = body.fullName.trim().replace(/\s+/g, ' ');
       if (name.length < 2) throw new BadRequestException('Name must be at least 2 characters');

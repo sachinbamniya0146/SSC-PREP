@@ -5,6 +5,7 @@ import { ShellHeader, CardSkeletons } from "@/components/AppShell";
 import { api } from "@/lib/api";
 import { logoutAndClear } from "@/lib/session-cache";
 import { getStoredLang, setStoredLang, useLang } from "@/lib/i18n";
+import { INDIAN_STATES } from "@/lib/states";
 
 interface UserProfile {
   id: string;
@@ -14,6 +15,7 @@ interface UserProfile {
   phone?: string | null;
   avatarUrl?: string | null;
   preferredLanguage?: string;
+  state?: string | null;
   isEmailVerified: boolean;
   createdAt: string;
   _count: { testAttempts: number; bookmarks: number };
@@ -35,6 +37,7 @@ export default function ProfilePage() {
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [fullName, setFullName] = React.useState("");
+  const [stateSel, setStateSel] = React.useState("");
   const [savingDetails, setSavingDetails] = React.useState(false);
   const [savingLang, setSavingLang] = React.useState(false);
   const [avatarBroken, setAvatarBroken] = React.useState(false);
@@ -70,6 +73,7 @@ export default function ProfilePage() {
       setUser(data.user);
       if (data.user.phone) setPhone(data.user.phone);
       setFullName(data.user.fullName || "");
+      setStateSel(data.user.state || "");
       // account language wins (set on another device); keep this device in step
       const serverLang = data.user.preferredLanguage === "hinglish" ? "hinglish" : "en";
       if (serverLang !== getStoredLang()) setStoredLang(serverLang);
@@ -191,7 +195,7 @@ export default function ProfilePage() {
       await api("/users/me/profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fullName: name, ...(phone ? { phone: phone.replace(/[\s-]/g, "") } : {}) }),
+        body: JSON.stringify({ fullName: name, state: stateSel, ...(phone ? { phone: phone.replace(/[\s-]/g, "") } : {}) }),
       });
       try {
         const raw = localStorage.getItem("ssc_user");
@@ -352,6 +356,20 @@ export default function ProfilePage() {
                 placeholder="+91 9876543210"
                 className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-1.5 block text-sm font-medium">State</label>
+              <select
+                value={stateSel}
+                onChange={(e) => setStateSel(e.target.value)}
+                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+              >
+                <option value="">Not selected</option>
+                {INDIAN_STATES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted-foreground">Used for your State rank on results and the State leaderboard. Only your state name is used, others see just your first name.</p>
             </div>
             <div className="sm:col-span-2">
               <label className="mb-1.5 block text-sm font-medium">Email</label>

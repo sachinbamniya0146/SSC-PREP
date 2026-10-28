@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useFeatures, FeatureOff } from "@/lib/features";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
 import { useT } from "@/lib/i18n";
@@ -45,7 +46,7 @@ type DailyTarget = {
   message?: string;
 };
 
-export default function StudyPlanPage() {
+function StudyPlanPageInner() {
   const tr = useT();
   const [step, setStep] = React.useState<"create" | "view">("view");
   const [plan, setPlan] = React.useState<PlanData | null>(null);
@@ -255,4 +256,10 @@ export default function StudyPlanPage() {
       </main>
     </div>
   );
+}
+
+export default function StudyPlanPage() {
+  const { on, loaded } = useFeatures();
+  if (loaded && !on("studyPlan")) return <FeatureOff title="Study plan is switched off for now" />;
+  return <StudyPlanPageInner />;
 }

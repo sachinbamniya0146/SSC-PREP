@@ -22,7 +22,13 @@ export function SupportChatMount() {
     pathname?.startsWith("/login") ||
     pathname?.startsWith("/signup") ||
     pathname?.startsWith("/admin") ||
-    pathname?.startsWith("/verification");
+    pathname?.startsWith("/verification") ||
+    // a live exam screen needs every pixel and no distractions
+    pathname === "/test" ||
+    pathname?.startsWith("/test/") ||
+    pathname?.startsWith("/cgl-test") ||
+    // the full help page has its own chat
+    pathname?.startsWith("/help");
 
   React.useEffect(() => {
     if (hideOnThisRoute) {

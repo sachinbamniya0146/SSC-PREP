@@ -9,6 +9,7 @@
 //  Weak   — exam-wise / subject-wise accuracy down to sub-topic, with a
 //            one-tap "strengthen" practice link. Chapters under 95% are weak.
 import * as React from "react";
+import { useFeatures, FeatureOff } from "@/lib/features";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import BiMessage from "@/components/BiMessage";
 import { useT } from "@/lib/i18n";
@@ -55,7 +56,7 @@ const cd = (ms: number) => {
   return `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 };
 
-export default function StudyPlanBoardPage() {
+function StudyPlanBoardPageInner() {
   const tr = useT();
   const [tab, setTab] = React.useState<"today" | "chapters" | "test" | "weak">("today");
   const [noPlan, setNoPlan] = React.useState<Bi | null>(null);
@@ -393,4 +394,10 @@ export default function StudyPlanBoardPage() {
       </main>
     </div>
   );
+}
+
+export default function StudyPlanBoardPage() {
+  const { on, loaded } = useFeatures();
+  if (loaded && !on("studyPlan")) return <FeatureOff title="Study plan is switched off for now" />;
+  return <StudyPlanBoardPageInner />;
 }

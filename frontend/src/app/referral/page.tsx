@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useFeatures, FeatureOff } from "@/lib/features";
 import Link from "next/link";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -113,7 +114,7 @@ function Bar({ pct, tone = "primary" }: { pct: number; tone?: "primary" | "succe
   );
 }
 
-export default function ReferralPage() {
+function ReferralPageInner() {
   const tr = useT();
   const [me, setMe] = React.useState<Me | null>(null);
   const [earnings, setEarnings] = React.useState<Earning[]>([]);
@@ -691,4 +692,10 @@ export default function ReferralPage() {
       )}
     </AppShell>
   );
+}
+
+export default function ReferralPage() {
+  const { on, loaded } = useFeatures();
+  if (loaded && !on("referral")) return <FeatureOff title="Refer & Earn is switched off for now" />;
+  return <ReferralPageInner />;
 }

@@ -32,6 +32,7 @@ import { computeRevisionState } from '../vocab/vocab-revision.util';
 import { VOCAB_UNLOCK_ALL_PRICE_INR, VOCAB_WORD_UNLOCK_PRICE_INR, skipFeeForStreak } from '../vocab/vocab-messages';
 import { grantOrExtendSubscription } from './subscription.util';
 import { couponAmounts, couponProblem, planPricing } from './pricing.util';
+import { FeaturesService } from '../features/features.service';
 
 interface CashfreeConfig {
   appId: string;
@@ -73,6 +74,7 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
     // ReferralModule also imports MonetizationModule (or vice versa).
     @Inject(forwardRef(() => ReferralService))
     private referralService: ReferralService,
+    private features: FeaturesService,
   ) {
     // Credentials are trimmed (a trailing newline copied from a dashboard /
     // .env file is the #1 cause of Cashfree's "authentication Failed").
@@ -315,6 +317,8 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
 
   // ---- Order creation ----
   async createOrder(userId: string, input: OrderInput) {
+    // Feature controller: admin can pause checkout (payment-gateway trouble, price change in progress ...).
+    await this.features.assertEnabled('purchases', 'Buying is paused for a short while. Please try again in a few minutes.');
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true, fullName: true, phone: true } });
     if (!user) throw new NotFoundException('User not found');
 

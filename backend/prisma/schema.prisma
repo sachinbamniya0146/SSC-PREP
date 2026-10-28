@@ -138,6 +138,9 @@ model User {
   // User preferences
   darkMode         Boolean         @default(false) @map("darkmode")  // Light mode is default
   preferredLanguage String         @default("en") @map("preferredlanguage")   // "en" or "hi"
+  // NEW (29 Oct 2026): home state of the student (one of common/indian-states.ts). Optional - only used for the
+  // "State rank" on results and the State leaderboard. Null = not chosen yet.
+  state            String?
   
   // User's personal OpenRouter API key for AI explanations
   openrouterApiKey String?         @map("openrouterapikey") // Encrypted API key for personal AI usage
@@ -193,6 +196,7 @@ model User {
   supportMessagesSent     SupportMessage[]
   explanationVotes        ExplanationVote[]
 
+  @@index([state])
   @@map("users")
 }
 
@@ -493,6 +497,9 @@ model DuplicateReview {
   resolvedById        String?
   resolvedAt          DateTime?
   createdAt           DateTime  @default(now())
+  // NEW (29 Oct 2026): decided by the auto-publish rules after the waiting time, not by a person (undo still works)
+  autoResolved        Boolean   @default(false)
+  autoReason          String?
 
   @@index([status, matchType, createdAt])
   @@index([existingQuestionId])
@@ -919,6 +926,7 @@ model Bookmark {
   question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
   @@unique([userId, questionId])
+  @@index([userId, createdAt])
   @@map("bookmarks")
 }
 
@@ -1386,11 +1394,28 @@ model SupportConversation {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
+  // NEW (29 Oct 2026) - help desk tickets. Every conversation is now a ticket with a short number the student quotes.
+  ticketNo             Int       @unique @default(autoincrement())
+  // GENERAL | PAYMENT | TEST | QUESTION | ACCOUNT | TECHNICAL
+  category             String    @default("GENERAL")
+  // LOW | NORMAL | HIGH | URGENT (staff can change it; payment tickets start HIGH)
+  priority             String    @default("NORMAL")
+  // where the student was when they asked: { page, attemptId, orderId, questionNo, ... }
+  contextJson          Json?
+  firstResponseAt      DateTime?
+  resolvedAt           DateTime?
+  lastStudentMessageAt DateTime?
+  lastStaffMessageAt   DateTime?
+  // CSAT after resolve: 1..5 + optional comment
+  rating               Int?
+  ratingNote           String?
+
   student  User             @relation(fields: [studentId], references: [id], onDelete: Cascade)
   messages SupportMessage[]
 
   @@index([studentId, status])
   @@index([status, updatedAt])
+  @@index([status, category])
   @@map("support_conversations")
 }
 
@@ -1404,6 +1429,8 @@ model SupportMessage {
   contentAuthTag   String
   readAt           DateTime?
   createdAt        DateTime   @default(now())
+  // NEW (29 Oct 2026): private staff note - never sent to, or readable by, the student.
+  isInternal       Boolean    @default(false)
 
   conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender       User                @relation(fields: [senderId], references: [id], onDelete: Cascade)

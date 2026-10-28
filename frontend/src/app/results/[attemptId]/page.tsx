@@ -10,10 +10,16 @@ import SubjectChapterAnalysis from "@/components/SubjectChapterAnalysis";
 import { ScoreHero, ScoreComparison, TimeAnalysis, SubjectBars, RetryPanel, SectionTimeCard, type SectionPlanLike } from "@/components/ResultsInsights";
 import { StemMedia, QFigure, RichText } from "@/components/QuestionMedia";
 import { useT } from "@/lib/i18n";
+import RankCard, { type AttemptRank } from "@/components/RankCard";
+import { BookmarkButton } from "@/components/BookmarkButton";
+import { useBookmarkedSet } from "@/lib/bookmark-store";
 import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang, type ReviewLang } from "@/components/SolutionPanel";
 
 type ReviewQuestion = {
   questionId: string;
+  questionNo?: number | null;
+  paperQuestionNo?: number | null;
+  examDate?: string | null;
   questionText: string;
   questionTextHindi: string | null;
   // Session 22 — Venn/figure diagram support (see DiagramVenn.tsx)
@@ -62,7 +68,7 @@ type AttemptDetail = {
   questions: ReviewQuestion[];
 };
 
-type Filter = "all" | "wrong" | "skipped" | "correct";
+type Filter = "all" | "wrong" | "skipped" | "correct" | "saved";
 
 const apiBase = () => API_BASE;
 const authHeaders = (): Record<string, string> => {
@@ -84,6 +90,9 @@ export default function AttemptReviewPage() {
   const [stats, setStats] = React.useState<any>(null);
   // NEW (Sep 29 2026): topics the student got wrong in THIS attempt + Study-Plan verdict.
   const [planVerdict, setPlanVerdict] = React.useState<any>(null);
+  // live rank (first-attempt rule); the stored rank on the attempt can be stale, so the hero uses this once it arrives
+  const [liveRank, setLiveRank] = React.useState<AttemptRank | null>(null);
+  const savedSet = useBookmarkedSet();
 
   React.useEffect(() => {
     if (!params?.attemptId) return;
@@ -199,7 +208,11 @@ export default function AttemptReviewPage() {
     filter === "wrong" ? questions.filter((q) => !q.isCorrect && !q.isSkipped)
     : filter === "skipped" ? questions.filter((q) => q.isSkipped)
     : filter === "correct" ? questions.filter((q) => q.isCorrect)
+    : filter === "saved" ? questions.filter((q) => savedSet.has(q.questionId))
     : questions;
+  const savedCount = questions.filter((q) => savedSet.has(q.questionId)).length;
+  // number shown to the student: the one printed in the real paper when we have it for every question, else the position
+  const hasPaperNos = questions.length > 0 && questions.every((q) => q.paperQuestionNo != null);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -225,8 +238,8 @@ export default function AttemptReviewPage() {
             title={tpl.title}
             score={detail.score}
             max={maxScore}
-            rank={detail.rank}
-            percentile={detail.percentile}
+            rank={liveRank ? liveRank.overall.rank : detail.rank}
+            percentile={liveRank ? liveRank.overall.percentile : detail.percentile}
             accuracy={detail.accuracyPercent}
             correct={detail.totalCorrect}
             wrong={detail.totalWrong}
@@ -234,6 +247,9 @@ export default function AttemptReviewPage() {
             totalTimeSec={totalTimeSec}
           />
         </div>
+
+        {/* All-India + State rank, percentile and toppers of this test */}
+        <RankCard attemptId={String(params.attemptId)} templateId={detail.testTemplateId || tpl.id} onRank={setLiveRank} />
 
         {/* Study-Plan test verdict: chapters <90% are un-marked as weak (Sep 29 2026) */}
         {planVerdict && (
@@ -386,9 +402,9 @@ export default function AttemptReviewPage() {
 
         {/* Filter tabs */}
         <div className="mt-6 flex flex-wrap gap-2">
-          {(["all", "wrong", "skipped", "correct"] as Filter[]).map((f) => {
+          {(["all", "wrong", "skipped", "correct", "saved"] as Filter[]).map((f) => {
             const count =
-              f === "wrong" ? detail.totalWrong : f === "skipped" ? detail.totalSkipped : f === "correct" ? detail.totalCorrect : questions.length;
+              f === "wrong" ? detail.totalWrong : f === "skipped" ? detail.totalSkipped : f === "correct" ? detail.totalCorrect : f === "saved" ? savedCount : questions.length;
             return (
               <button
                 key={f}
@@ -397,7 +413,7 @@ export default function AttemptReviewPage() {
                   filter === f ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-muted"
                 }`}
               >
-                {f} ({count})
+                {f === "saved" ? "★ bookmarked" : f} ({count})
               </button>
             );
           })}
@@ -408,9 +424,10 @@ export default function AttemptReviewPage() {
           {filtered.length === 0 && (
             <p className="card p-8 text-center text-sm text-muted-foreground">No questions in this filter 🎉</p>
           )}
-          {filtered.map((q, i) => (
-            <QuestionReview key={q.questionId} q={q} index={i} lang={lang} />
-          ))}
+          {filtered.map((q) => {
+            const at = questions.indexOf(q);
+            return <QuestionReview key={q.questionId} q={q} index={at} lang={lang} showPaperNo={hasPaperNos} />;
+          })}
         </div>
 
         {/* Navigator */}
@@ -424,10 +441,10 @@ export default function AttemptReviewPage() {
                   key={q.questionId}
                   type="button"
                   onClick={() => jumpTo(i)}
-                  aria-label={`Go to question ${i + 1}`}
+                  aria-label={`Go to question ${hasPaperNos ? q.paperQuestionNo : i + 1}`}
                   className={`flex h-8 items-center justify-center rounded-md text-xs font-bold ${cls}`}
                 >
-                  {i + 1}
+                  {hasPaperNos ? q.paperQuestionNo : i + 1}
                 </button>
               );
             })}
@@ -439,7 +456,7 @@ export default function AttemptReviewPage() {
 }
 
 // ---- Sub-components ----
-function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; lang: ReviewLang }) {
+function QuestionReview({ q, index, lang, showPaperNo }: { q: ReviewQuestion; index: number; lang: ReviewLang; showPaperNo: boolean }) {
   const tr = useT();
   const badge = q.isSkipped
     ? { text: "Skipped", cls: "bg-muted text-muted-foreground" }
@@ -448,10 +465,10 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
       : { text: "Wrong", cls: "bg-danger/15 text-danger" };
 
   return (
-    <div id={`q-${index}`} className="card p-5">
+    <div id={`q-${index}`} className="card scroll-mt-20 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          Q{index + 1} · {q.marks || 2} marks{q.examName ? ` · ${q.examName}` : ""}
+          Q{showPaperNo && q.paperQuestionNo != null ? q.paperQuestionNo : index + 1} · {q.marks || 2} marks{q.examName ? ` · ${q.examName}` : ""}
           {q.year ? ` · ${q.year}` : ""}
           {q.chapter ? ` · ${q.chapter}` : ""}
           {q.topic ? ` › ${q.topic}` : ""}
@@ -477,6 +494,7 @@ function QuestionReview({ q, index, lang }: { q: ReviewQuestion; index: number; 
             </span>
           )}
           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${badge.cls}`}>{badge.text}</span>
+          <BookmarkButton questionId={q.questionId} size="sm" />
         </div>
       </div>
 

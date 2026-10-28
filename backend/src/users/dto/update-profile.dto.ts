@@ -17,4 +17,10 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsIn(['en', 'hinglish'], { message: "preferredLanguage must be 'en' or 'hinglish'" })
   preferredLanguage?: 'en' | 'hinglish';
+
+  // Home state for the State rank ("" clears it). Checked against the list of states in UserService.updateProfile.
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  state?: string;
 }

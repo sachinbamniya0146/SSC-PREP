@@ -26,6 +26,7 @@ const cols = [
       { href: "/signup", label: "Create account" },
       { href: "/premium", label: "Premium plans" },
       { href: "/referral", label: "Refer & Earn" },
+      { href: "/help", label: "Help Center" },
     ],
   },
 ];

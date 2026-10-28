@@ -2,11 +2,15 @@
 import { Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { GamificationService } from './gamification.service';
+import { FeaturesService } from '../features/features.service';
 
 @Controller('gamification')
 @UseGuards(JwtAuthGuard)
 export class GamificationController {
-  constructor(private gamification: GamificationService) {}
+  constructor(
+    private gamification: GamificationService,
+    private features: FeaturesService,
+  ) {}
 
   @Get('me')
   myState(@Req() req: any) {
@@ -19,7 +23,8 @@ export class GamificationController {
   }
 
   @Get('leaderboard')
-  leaderboard(@Req() req: any, @Query('period') period?: string) {
-    return this.gamification.leaderboard(req.user.userId, period === 'weekly' ? 'weekly' : 'all');
+  async leaderboard(@Req() req: any, @Query('period') period?: string, @Query('scope') scope?: string) {
+    await this.features.assertEnabled('leaderboard');
+    return this.gamification.leaderboard(req.user.userId, period === 'weekly' ? 'weekly' : 'all', 50, scope === 'state' ? 'state' : 'india');
   }
 }

@@ -2,6 +2,8 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TestsService } from './tests.service';
 import { TestsController } from './tests.controller';
 import { TestStatsService } from './test-stats.service';
+import { RankService } from './rank.service';
+import { RankController } from './rank.controller';
 import { DailyTestService } from './daily-test.service';
 import { DailyTestController } from './daily-test.controller';
 import { GamificationModule } from '../gamification/gamification.module';
@@ -22,8 +24,8 @@ import { WeakTopicModule } from '../weak-topics/weak-topic.module';
   // getWeakAreasPractice) so it inherits the no-repeat-until-exhausted +
   // configurable-size fix built there, instead of duplicating that logic.
   imports: [GamificationModule, forwardRef(() => TelegramModule), BankModule, WeakTopicModule],
-  providers: [TestsService, DailyTestService, TestStatsService],
-  controllers: [TestsController, DailyTestController],
+  providers: [TestsService, DailyTestService, TestStatsService, RankService],
+  controllers: [TestsController, DailyTestController, RankController],
   // BUGFIX (bonus grep — module-registration gap, same family as the
   // missing meilisearch-index worker found earlier in this audit):
   // TestsService was never exported, so no other module could inject it via
@@ -41,6 +43,6 @@ import { WeakTopicModule } from '../weak-topics/weak-topic.module';
   // NestJS dependency resolution at boot with "TestStatsService is not
   // exported" / "DailyTestService is not exported". Exporting both now
   // closes that landmine before anything trips it.
-  exports: [TestsService, DailyTestService, TestStatsService],
+  exports: [TestsService, DailyTestService, TestStatsService, RankService],
 })
 export class TestsModule {}

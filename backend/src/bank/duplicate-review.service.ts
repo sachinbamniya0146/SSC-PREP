@@ -169,6 +169,9 @@ export class DuplicateReviewService {
         createdAt: r.createdAt,
         resolvedAt: r.resolvedAt,
         canUndo: r.status !== 'PENDING',
+        // 29 Oct 2026: decided by the auto-publish rules (not by a person) - the page shows a "Auto" badge + the reason
+        autoResolved: (r as any).autoResolved === true,
+        autoReason: ((r as any).autoReason as string | null) ?? null,
         // left = the question already in the bank (old / side A)
         // right = the new upload row (upload mode) or the second bank question (scan mode / side B)
         left,
@@ -279,6 +282,35 @@ export class DuplicateReviewService {
     });
     const remaining = Array.isArray(body.ids) && body.ids.length ? Math.max(ids.length - attempted, 0) : stillPending;
     return { requested: ids.length, done, failed, failedIds, errors, remaining, capped: remaining > 0 };
+  }
+
+  /**
+   * Apply a DIFFERENT decision to each of many reviews (used by the auto-publish job). Runs a few at a time, rebuilds
+   * each PYQ mock / clears caches ONCE at the end, and stops after ~40 s (the rest is picked up by the next run).
+   * `publish` = force every kept NEW question live (an admin's explicit choice). The automatic job passes false, so a
+   * new question goes live only when it passes the same checks as any normal upload (Hindi translation etc.).
+   * Returns which reviews were really decided.
+   */
+  async resolveDecided(items: { id: string; action: DuplicateAction }[], adminId: string, opts: { publish?: boolean } = {}) {
+    const started = Date.now();
+    const ctx: BulkCtx = { papers: new Map(), keyed: [], audits: [] };
+    const doneIds: string[] = [];
+    const failedIds: string[] = [];
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < items.length && Date.now() - started < BULK_TIME_BUDGET_MS) {
+        const it = items[cursor++];
+        try {
+          await this.resolve(it.id, it.action, adminId, { publish: opts.publish === true, ctx });
+          doneIds.push(it.id);
+        } catch {
+          failedIds.push(it.id);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BULK_CONCURRENCY, Math.max(items.length, 1)) }, () => worker()));
+    await this.flushBulk(ctx, adminId);
+    return { doneIds, failedIds, notReached: Math.max(items.length - cursor, 0) };
   }
 
   // ------------------------------------------------------------------ undo (NEW Oct 14 2026)

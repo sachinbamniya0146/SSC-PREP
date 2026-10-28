@@ -33,6 +33,7 @@ import { TelegramModule } from './telegram/telegram.module';
 import { SolverModule } from './solver/solver.module';
 import { PyqDateModule } from './pyq-dates/pyq-date.module';
 import { ExplanationsModule } from './explanations/explanations.module';
+import { FeaturesModule } from './features/features.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { envValidationSchema } from './config/env.validation';
@@ -95,6 +96,7 @@ import { envValidationSchema } from './config/env.validation';
     SupportChatModule,
     PyqDateModule,
     ExplanationsModule,
+    FeaturesModule,
   ],
   controllers: [HealthController],
   providers: [
