@@ -124,7 +124,7 @@ export default function VocabularyHubPage() {
       <main className="mx-auto max-w-5xl px-4 py-8">
         <h1 className="text-2xl font-bold">📖 Vocabulary Mastery</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Ek word padhein, phir usi word ka quiz dein — 95%+ score par hi agla word khulta hai.
+          Read one word, then take its quiz — the next word unlocks only when you score 95%+.
         </p>
 
         {error && <p className="mt-3 text-sm text-danger">{error}</p>}
@@ -161,7 +161,7 @@ export default function VocabularyHubPage() {
         {/* Daily goal */}
         <div className="mt-4 rounded-xl border border-border bg-card p-4">
           <h2 className="font-semibold text-sm">🎯 Daily Goal</h2>
-          <p className="mt-1 text-xs text-muted-foreground">Aap roz kitne naye words seekhna chahte hain?</p>
+          <p className="mt-1 text-xs text-muted-foreground">How many new words do you want to learn every day?</p>
           <div className="mt-2 flex items-center gap-2">
             <input
               type="number"

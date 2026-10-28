@@ -39,8 +39,8 @@ export class BankUploadJobController {
 
   private own(req: any, id: string): UploadJob {
     const j = this.jobs.get(id);
-    if (!j) throw new NotFoundException('Upload job nahi mila (server restart ho gaya ya 1 ghante se purana hai). Upload History me result dekhein.');
-    if (!this.isAdmin(req) && j.adminId !== this.adminId(req)) throw new ForbiddenException('Ye upload kisi aur ka hai.');
+    if (!j) throw new NotFoundException('Upload job not found (the server restarted or the job is older than 1 hour). Check Upload History for the result.');
+    if (!this.isAdmin(req) && j.adminId !== this.adminId(req)) throw new ForbiddenException('This upload belongs to someone else.');
     return j;
   }
 
@@ -52,8 +52,8 @@ export class BankUploadJobController {
       const need = practice ? 'PRACTICE' : 'QUESTIONS';
       if (!(req.user?.permissions ?? []).includes(need)) {
         throw new ForbiddenException(practice
-          ? 'Aapko Practice Questions upload karne ka access nahi hai. Admin se contact karein.'
-          : 'Aapko PYQ / Question Bank upload karne ka access nahi hai. Admin se contact karein.');
+          ? 'You do not have access to upload Practice Questions. Please contact the admin.'
+          : 'You do not have access to upload PYQ / Question Bank questions. Please contact the admin.');
       }
     }
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls/.csv/.json) is required');
@@ -76,7 +76,7 @@ export class BankUploadJobController {
   @Get(':id/rejected')
   rejected(@Param('id') id: string, @Req() req: any, @Res() res: Response) {
     const j = this.own(req, id);
-    if (!j.rejectedRows.length) throw new BadRequestException('Koi rejected row nahi hai.');
+    if (!j.rejectedRows.length) throw new BadRequestException('There are no rejected rows.');
     const out = this.jobs.buildRejected(j);
     res.setHeader('Content-Type', out.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="rejected_${j.id}.${out.ext}"`);

@@ -34,10 +34,10 @@ export interface PaperPreview { papers: PreviewPaper[]; pending: PendingRow[]; p
 export const MAX_PENDING_LISTED = 200;
 
 const MSG: Record<PendingReason, (v?: string) => string> = {
-  INVALID_TIER: (v) => `examTier "${v}" samajh nahi aaya (TIER_1 ya TIER_2 likhein) — ye row kisi date-wise mock me nahi judegi. / Unreadable tier: row joins no date-wise mock.`,
-  INVALID_PAPER: (v) => `tierPaper "${v}" samajh nahi aaya (PAPER_1 / PAPER_2 / PAPER_3) — row PAPER_1 maani jayegi. / Unreadable paper: treated as PAPER_1.`,
-  DATE_WITHOUT_TIER: () => 'examDate hai par examTier (TIER_1 / TIER_2) nahi — ye row date-wise mock me nahi judegi. / Date without tier: row joins no date-wise mock.',
-  TIER_WITHOUT_DATE: () => 'examTier hai par examDate nahi — ye row date-wise mock me nahi judegi. / Tier without date: row joins no date-wise mock.',
+  INVALID_TIER: (v) => `examTier "${v}" is not understood (write TIER_1 or TIER_2) — this row joins no date-wise mock.`,
+  INVALID_PAPER: (v) => `tierPaper "${v}" is not understood (PAPER_1 / PAPER_2 / PAPER_3) — the row will be treated as PAPER_1.`,
+  DATE_WITHOUT_TIER: () => 'examDate is present but examTier (TIER_1 / TIER_2) is missing — this row joins no date-wise mock.',
+  TIER_WITHOUT_DATE: () => 'examTier is present but examDate is missing — this row joins no date-wise mock.',
 };
 
 export function buildPaperPreview(inputs: PaperRowInput[]): PaperPreview {

@@ -114,15 +114,15 @@ export class BankUploadJobService {
       const ws = wb.Sheets[sheetName];
       data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false }) as any[][];
     } catch (e: any) {
-      throw new BadRequestException(`File padhi nahi ja saki (${e?.message ?? e}) — sahi .xlsx/.csv file upload karein.`);
+      throw new BadRequestException(`The file could not be read (${e?.message ?? e}) — upload a valid .xlsx / .csv file.`);
     }
-    if (!data || data.length < 2) throw new BadRequestException('File me header row ke baad kam se kam 1 question row honi chahiye.');
+    if (!data || data.length < 2) throw new BadRequestException('The file needs at least 1 question row after the header row.');
     const headers = (data[0] as any[]).map((h) => String(h ?? '').trim());
     const rows = data.slice(1).filter((r) => r.some((c) => String(c ?? '').trim() !== ''));
-    if (rows.length === 0) throw new BadRequestException('File me koi question row nahi mili.');
+    if (rows.length === 0) throw new BadRequestException('No question rows were found in the file.');
     for (const req of ['examId', 'subjectId', 'chapterId', 'questionText', 'correctAnswer', 'optionA', 'optionB', 'optionC', 'optionD']) {
       if (!headers.some((h) => h.replace(/\*\s*$/, '') === req)) {
-        throw new BadRequestException(`Required column missing: ${req} — header row check karein (template se copy karein).`);
+        throw new BadRequestException(`Required column missing: ${req} — check the header row (copy it from the template).`);
       }
     }
     return { headers, rows };
@@ -210,7 +210,7 @@ export class BankUploadJobService {
       kind = 'JSON';
       const list = parseJsonQuestions(opts.buffer.toString('utf8'));
       if (!list || list.length === 0) {
-        throw new BadRequestException('JSON sahi nahi hai ya khali hai. Ye ho sakta hai: [ {...}, {...} ] ya { "questions": [ ... ] } ya har line me ek question. Admin → Help se JSON template download karein.');
+        throw new BadRequestException('The JSON is invalid or empty. It can be: [ {...}, {...} ], or { "questions": [ ... ] }, or one question per line. Download the JSON template from Admin → Help.');
       }
       items = this.jsonItems(list);
     } else {
@@ -274,14 +274,14 @@ export class BankUploadJobService {
     for (const it of items) {
       // Task B: a row WITH an id is an update of that question — blank cells mean "keep", so it skips the new-question gate
       if (it.id) { idRows.push(it); continue; }
-      if (!it.hasStem) { this.reject(job, it, 'MISSING_FIELD', 'Question text khali hai'); continue; }
+      if (!it.hasStem) { this.reject(job, it, 'MISSING_FIELD', 'Question text is empty'); continue; }
       if (!['A', 'B', 'C', 'D'].includes(it.answer)) {
-        this.reject(job, it, 'MISSING_ANSWER', it.answer ? `Answer key galat hai ("${it.answer}") — A/B/C/D chahiye` : 'Answer key (correctAnswer) missing hai');
+        this.reject(job, it, 'MISSING_ANSWER', it.answer ? `The answer key is invalid ("${it.answer}") — it must be A/B/C/D` : 'The answer key (correctAnswer) is missing');
         continue;
       }
-      if (it.emptyOptions.length) { this.reject(job, it, 'MISSING_FIELD', `Option ${it.emptyOptions.join(', ')} khali hai`); continue; }
+      if (it.emptyOptions.length) { this.reject(job, it, 'MISSING_FIELD', `Option ${it.emptyOptions.join(', ')} is empty`); continue; }
       if (opts.requireSolution && !it.hasSolution) {
-        this.reject(job, it, 'MISSING_SOLUTION', 'Solution/explanation missing hai — question upload nahi hua');
+        this.reject(job, it, 'MISSING_SOLUTION', 'Solution / explanation is missing — the question was not uploaded');
         continue;
       }
       const key = this.dupKey(it);
@@ -290,7 +290,7 @@ export class BankUploadJobService {
         // Check-only run: just report it. Real run: let the row through — the importer finds it is the
         // same question as an earlier row and sends it to the admin's Duplicate Review queue
         // (exact copy or same question in another shift/solution), instead of silently dropping it.
-        if (opts.dryRun) { this.reject(job, it, 'DUPLICATE', `Duplicate — file ki row ${first} me ye question pehle se hai (asli upload me ye Duplicate Review me jayega)`); continue; }
+        if (opts.dryRun) { this.reject(job, it, 'DUPLICATE', `Duplicate — this question is already in row ${first} of the file (in a real upload it will go to Duplicate Review)`); continue; }
       } else {
         seen.set(key, it.rowNum);
       }
@@ -322,12 +322,12 @@ export class BankUploadJobService {
       let wouldCreate = 0;
       for (const it of ok) {
         const k = `${norm(it.text)}|${it.options.map(norm).join('|')}|${it.answer}`;
-        if (existing.has(k) && it.media.replace(/[~#.|]/g, '') === '') this.reject(job, it, 'DUPLICATE', 'Duplicate — ye question database me pehle se maujood hai (asli upload me ye Duplicate Review me jayega)');
+        if (existing.has(k) && it.media.replace(/[~#.|]/g, '') === '') this.reject(job, it, 'DUPLICATE', 'Duplicate — this question already exists in the database (in a real upload it will go to Duplicate Review)');
         else wouldCreate++;
       }
       job.created = wouldCreate;
       job.processed = job.total;
-      job.phase = 'Check complete (kuch save nahi hua)';
+      job.phase = 'Check complete (nothing was saved)';
       job.status = 'DONE';
       job.finishedAt = Date.now();
       return;
@@ -335,7 +335,7 @@ export class BankUploadJobService {
 
     // ---------- Phase 2: real import in chunks ----------
     if (ok.length === 0) {
-      job.phase = job.updated + job.unchanged > 0 ? 'Complete' : 'Koi valid row nahi mili';
+      job.phase = job.updated + job.unchanged > 0 ? 'Complete' : 'No valid row found';
       if (batchId) {
         try { await this.upload.endBatch(batchId, { success: false, total: items.length, created: 0, failed: job.failed, errors: job.errors, warnings: job.warnings } as any); } catch { /* best effort */ }
       }
@@ -373,7 +373,7 @@ export class BankUploadJobService {
         const gap = slice.length - (res.created + res.failed + (res.queuedForReview ?? 0) + (res.reviewAlready ?? 0));
         if (gap > 0) {
           job.unaccounted += gap;
-          job.warnings.push({ row: slice[0]?.rowNum ?? 0, message: `${gap} row(s) ka koi result nahi mila (na save hui, na fail, na review me gayi) — file ke is hisse (row ${slice[0]?.rowNum}+) ko dobara upload karke dekhein.` });
+          job.warnings.push({ row: slice[0]?.rowNum ?? 0, message: `${gap} row(s) have no result (not saved, not failed, not sent to review) — upload this part of the file (row ${slice[0]?.rowNum}+) again.` });
         }
       } catch (e: any) {
         const msg = e?.response?.message ?? e?.message ?? String(e);
@@ -404,12 +404,12 @@ export class BankUploadJobService {
 
   /** Rows with an `id`: update that question (dry run: only report what would change). Never creates, never touches taxonomy. */
   private async handleIdRows(job: UploadJob, rows: Item[], opts: { adminId: string; isPracticeOnly: boolean; dryRun: boolean }) {
-    job.phase = 'ID wali rows (update) check ho rahi hain…';
+    job.phase = 'Checking rows with an ID (updates)…';
     const headerMap: Record<string, number> = {};
     job.headers.forEach((h, i) => { headerMap[h.replace(/\*\s*$/, '')] = i; });
     const valid = rows.filter((r) => {
       if (isQuestionId(r.id)) return true;
-      this.reject(job, r, 'FORMAT', `id galat hai ("${String(r.id).slice(0, 40)}") — export file wala ID jaisa hai waisa rehne dein, ya naye question ke liye id khali chhodein`);
+      this.reject(job, r, 'FORMAT', `The id is invalid ("${String(r.id).slice(0, 40)}") — keep the ID exactly as in the export file, or leave id empty for a new question`);
       return false;
     });
     const ids = Array.from(new Set(valid.map((r) => (r.id as string).trim().toLowerCase())));
@@ -425,8 +425,8 @@ export class BankUploadJobService {
     for (const r of valid) {
       const id = (r.id as string).trim().toLowerCase();
       const existing = found.get(id);
-      if (!existing) { this.reject(job, r, 'INVALID_REFERENCE', 'Ye ID database me nahi mila (question delete ho gaya ya galat ID) — naya banana ho to id khali chhodein'); continue; }
-      if (seenIds.has(id)) { this.reject(job, r, 'DUPLICATE', 'Ye ID file me pehle bhi aa chuka hai — ek ID ki ek hi row rakhein'); continue; }
+      if (!existing) { this.reject(job, r, 'INVALID_REFERENCE', 'This ID was not found in the database (the question was deleted or the ID is wrong) — leave id empty to create a new question'); continue; }
+      if (seenIds.has(id)) { this.reject(job, r, 'DUPLICATE', 'This ID already appeared earlier in the file — keep only one row per ID'); continue; }
       seenIds.add(id);
       const { body, problems } = buildUpdateBody(headerMap, r.data as unknown[], Array.isArray(existing.optionsJson) ? existing.optionsJson : [], !!opts.isPracticeOnly);
       if (problems.length) { this.reject(job, r, 'FORMAT', problems.join('; ')); continue; }
@@ -441,7 +441,7 @@ export class BankUploadJobService {
         try {
           await this.edit.update(existing.id, { ...body, reason: 'Excel re-upload (by ID)' }, opts.adminId);
         } catch (e: any) {
-          const msg = e instanceof ConflictException ? `Update se ye question kisi aur question jaisa ban jata hai: ${e.message}` : e?.response?.message ?? e?.message ?? String(e);
+          const msg = e instanceof ConflictException ? `This update would make the question identical to another question: ${e.message}` : e?.response?.message ?? e?.message ?? String(e);
           this.reject(job, r, e instanceof ConflictException ? 'DUPLICATE' : 'OTHER', String(msg).slice(0, 300));
           continue;
         }

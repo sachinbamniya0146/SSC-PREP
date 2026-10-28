@@ -28,15 +28,15 @@ const OPTION_KEYS = ['A', 'B', 'C', 'D'] as const;
 
 function str(v: unknown, max: number, label: string): string {
   const s = String(v ?? '').trim();
-  if (s.length > max) throw new BadRequestException(`${label} bahut lamba hai (max ${max} characters).`);
+  if (s.length > max) throw new BadRequestException(`${label} is too long (max ${max} characters).`);
   return s;
 }
 
 function cleanUrl(v: unknown, label: string): string | null {
   const s = String(v ?? '').trim();
   if (!s) return null;
-  if (s.length > 2_000_000) throw new BadRequestException(`${label} bahut badi hai.`);
-  if (!/^(https?:\/\/|\/|data:image\/)/i.test(s)) throw new BadRequestException(`${label}: sahi image link chahiye.`);
+  if (s.length > 2_000_000) throw new BadRequestException(`${label} is too large.`);
+  if (!/^(https?:\/\/|\/|data:image\/)/i.test(s)) throw new BadRequestException(`${label}: a valid image link is required.`);
   return s;
 }
 
@@ -71,7 +71,7 @@ export class QuestionEditService {
         where: { id: t.subTopicId },
         select: { id: true, topicId: true, topic: { select: { chapterId: true, chapter: { select: { subjectId: true } } } } },
       });
-      if (!sub) throw new BadRequestException('Sub-topic nahi mila.');
+      if (!sub) throw new BadRequestException('Sub-topic not found.');
       return { subjectId: sub.topic.chapter.subjectId, chapterId: sub.topic.chapterId, topicId: sub.topicId, subTopicId: sub.id };
     }
     if (t.topicId) {
@@ -79,25 +79,25 @@ export class QuestionEditService {
         where: { id: t.topicId },
         select: { id: true, chapterId: true, chapter: { select: { subjectId: true } } },
       });
-      if (!topic) throw new BadRequestException('Topic nahi mila.');
+      if (!topic) throw new BadRequestException('Topic not found.');
       return { subjectId: topic.chapter.subjectId, chapterId: topic.chapterId, topicId: topic.id, subTopicId: null };
     }
     if (t.chapterId) {
       const ch = await this.prisma.chapter.findUnique({ where: { id: t.chapterId }, select: { id: true, subjectId: true } });
-      if (!ch) throw new BadRequestException('Chapter nahi mila.');
+      if (!ch) throw new BadRequestException('Chapter not found.');
       return { subjectId: ch.subjectId, chapterId: ch.id, topicId: null, subTopicId: null };
     }
-    throw new BadRequestException('Chapter / topic / sub-topic chunein.');
+    throw new BadRequestException('Choose a chapter / topic / sub-topic.');
   }
 
   private normalizeDate(v: unknown): string | null {
     const s = String(v ?? '').trim();
     if (!s) return null;
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-    if (!m) throw new BadRequestException('Exam date YYYY-MM-DD format me honi chahiye.');
+    if (!m) throw new BadRequestException('Exam date must be in YYYY-MM-DD format.');
     const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
     if (dt.getUTCFullYear() !== +m[1] || dt.getUTCMonth() !== +m[2] - 1 || dt.getUTCDate() !== +m[3]) {
-      throw new BadRequestException('Exam date galat hai.');
+      throw new BadRequestException('Exam date is invalid.');
     }
     return s;
   }
@@ -131,7 +131,7 @@ export class QuestionEditService {
 
   async getForEdit(key: string) {
     const k = String(key ?? '').trim().replace(/^#|^q\.?\s*/i, '');
-    if (!k) throw new BadRequestException('Question number ya id likhein.');
+    if (!k) throw new BadRequestException('Enter a question number or id.');
     const isNo = /^\d{1,9}$/.test(k);
     const q = await this.prisma.question.findFirst({
       where: isNo ? { questionNo: parseInt(k, 10) } : { id: k },
@@ -145,7 +145,7 @@ export class QuestionEditService {
         _count: { select: { versions: true, errorReports: true } },
       },
     });
-    if (!q) throw new NotFoundException(isNo ? `Question number ${k} nahi mila.` : 'Question nahi mila.');
+    if (!q) throw new NotFoundException(isNo ? `Question number ${k} not found.` : 'Question not found.');
 
     const reports = await this.prisma.questionErrorReport.findMany({
       where: { questionId: q.id },
@@ -228,7 +228,7 @@ export class QuestionEditService {
 
   async update(id: string, body: any, adminId?: string) {
     const existing = await this.prisma.question.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Question nahi mila.');
+    if (!existing) throw new NotFoundException('Question not found.');
     const warnings: string[] = [];
     const data: Prisma.QuestionUncheckedUpdateInput = {};
     const has = (k: string) => body && Object.prototype.hasOwnProperty.call(body, k);
@@ -244,14 +244,14 @@ export class QuestionEditService {
     if (has('questionImageUrl')) questionImageUrl = cleanUrl(body.questionImageUrl, 'Question image');
     data.questionImageUrl = questionImageUrl;
     if (!questionText.trim() && !questionImageUrl && !existing.questionDiagramType) {
-      throw new BadRequestException('Question text likhein ya question image lagayein.');
+      throw new BadRequestException('Write the question text or attach a question image.');
     }
 
     // ---- options ----
     const oldOptions = (Array.isArray(existing.optionsJson) ? (existing.optionsJson as any[]) : []) as any[];
     let options = oldOptions;
     if (has('options')) {
-      if (!Array.isArray(body.options) || body.options.length !== 4) throw new BadRequestException('Chaaron options (A–D) chahiye.');
+      if (!Array.isArray(body.options) || body.options.length !== 4) throw new BadRequestException('All four options (A–D) are required.');
       options = OPTION_KEYS.map((k, i) => {
         const src = body.options.find((o: any) => String(o?.key ?? '').toUpperCase() === k) ?? body.options[i] ?? {};
         const prev = oldOptions.find((o) => o?.key === k) ?? {};
@@ -260,7 +260,7 @@ export class QuestionEditService {
         const textHi = normalizeMathText(str(src.textHi, 2000, `Option ${k} (Hindi)`));
         const diagramType = src.diagramType !== undefined ? src.diagramType || undefined : prev.diagramType || undefined;
         const diagramLabels = src.diagramLabels !== undefined ? src.diagramLabels || undefined : prev.diagramLabels || undefined;
-        if (!text && !imageUrl && !diagramType) throw new BadRequestException(`Option ${k} me text ya image zaroori hai.`);
+        if (!text && !imageUrl && !diagramType) throw new BadRequestException(`Option ${k} needs text or an image.`);
         return {
           key: k,
           text,
@@ -277,7 +277,7 @@ export class QuestionEditService {
     let correctAnswer = existing.correctAnswer;
     if (has('correctAnswer')) {
       correctAnswer = String(body.correctAnswer ?? '').trim().toUpperCase();
-      if (!OPTION_KEYS.includes(correctAnswer as any)) throw new BadRequestException('Sahi answer A/B/C/D me se chunein.');
+      if (!OPTION_KEYS.includes(correctAnswer as any)) throw new BadRequestException('Choose the correct answer from A / B / C / D.');
       data.correctAnswer = correctAnswer;
     }
 
@@ -300,7 +300,7 @@ export class QuestionEditService {
       examId = String(body.examId ?? '').trim() || null;
       if (examId) {
         const ex = await this.prisma.exam.findUnique({ where: { id: examId }, select: { id: true } });
-        if (!ex) throw new BadRequestException('Exam nahi mila.');
+        if (!ex) throw new BadRequestException('Exam not found.');
       }
       data.examId = examId;
     }
@@ -310,7 +310,7 @@ export class QuestionEditService {
       if (!raw) year = null;
       else {
         const y = Number(raw);
-        if (!Number.isInteger(y) || y < 1990 || y > 2100) throw new BadRequestException('Year sahi likhein (jaise 2024).');
+        if (!Number.isInteger(y) || y < 1990 || y > 2100) throw new BadRequestException('Enter a valid year (e.g. 2024).');
         year = y;
       }
       data.year = year;
@@ -328,20 +328,20 @@ export class QuestionEditService {
     let examTier = existing.examTier;
     if (has('examTier')) {
       const t = normalizeExamTier(body.examTier);
-      if (t.invalid) throw new BadRequestException('Tier galat hai — TIER_1 ya TIER_2 likhein.');
+      if (t.invalid) throw new BadRequestException('Invalid tier — use TIER_1 or TIER_2.');
       examTier = t.tier ?? null;
       data.examTier = examTier;
     }
     let tierPaper = existing.tierPaper;
     if (has('tierPaper')) {
       const t = normalizeTierPaper(body.tierPaper);
-      if (t.invalid) throw new BadRequestException('Tier paper galat hai — PAPER_1 / PAPER_2 / PAPER_3.');
+      if (t.invalid) throw new BadRequestException('Invalid tier paper — use PAPER_1 / PAPER_2 / PAPER_3.');
       tierPaper = t.paper ?? null;
       data.tierPaper = tierPaper;
     }
     if (has('paperQuestionNo')) {
       const raw = String(body.paperQuestionNo ?? '').trim();
-      if (raw && parsePaperQuestionNo(raw) === undefined) throw new BadRequestException('Paper me question number 1 se bada poora number hona chahiye.');
+      if (raw && parsePaperQuestionNo(raw) === undefined) throw new BadRequestException('The question number in the paper must be a whole number of 1 or more.');
       data.paperQuestionNo = raw ? parsePaperQuestionNo(raw)! : null;
     }
     let paperCode = existing.paperCode;
@@ -379,17 +379,17 @@ export class QuestionEditService {
     // ---- marks / difficulty ----
     if (has('marks')) {
       const m = Number(body.marks);
-      if (!Number.isFinite(m) || m <= 0 || m > 100) throw new BadRequestException('Marks 0 se bade hone chahiye.');
+      if (!Number.isFinite(m) || m <= 0 || m > 100) throw new BadRequestException('Marks must be greater than 0.');
       data.marks = m;
     }
     if (has('negativeMarks')) {
       const m = Number(body.negativeMarks);
-      if (!Number.isFinite(m) || m < 0 || m > 100) throw new BadRequestException('Negative marks galat hain.');
+      if (!Number.isFinite(m) || m < 0 || m > 100) throw new BadRequestException('Negative marks are invalid.');
       data.negativeMarks = m;
     }
     if (has('difficulty')) {
       const d = String(body.difficulty ?? '').toUpperCase();
-      if (!['EASY', 'MEDIUM', 'HARD'].includes(d)) throw new BadRequestException('Difficulty EASY, MEDIUM ya HARD honi chahiye.');
+      if (!['EASY', 'MEDIUM', 'HARD'].includes(d)) throw new BadRequestException('Difficulty must be EASY, MEDIUM or HARD.');
       data.difficulty = d as any;
     }
 
@@ -411,7 +411,7 @@ export class QuestionEditService {
       });
       if (dup) {
         throw new ConflictException({
-          message: `Aisa hi question pehle se hai (Q#${dup.questionNo}). Fir bhi save karna ho to "duplicate allow" ke saath dobara save karein.`,
+          message: `The same question already exists (Q#${dup.questionNo}). To save it anyway, save again with "allow duplicate".`,
           code: 'DUPLICATE',
           existing: { id: dup.id, questionNo: dup.questionNo, questionText: dup.questionText.slice(0, 200) },
         });
@@ -431,7 +431,7 @@ export class QuestionEditService {
       data.isActive = true;
       data.autoSuspended = false;
       data.reviewStatus = 'APPROVED';
-      if (!hasHindi && !subjectExempt && !imageOnly) warnings.push('Hindi text nahi hai — kuch screens par ye question students ko nahi dikhega.');
+      if (!hasHindi && !subjectExempt && !imageOnly) warnings.push('There is no Hindi text — on some screens this question will not be shown to students.');
     } else if (status === 'hidden') {
       data.isActive = false;
     } else if (status === 'pending') {
@@ -497,7 +497,7 @@ export class QuestionEditService {
       const examId = String(set.examId ?? '').trim();
       if (examId) {
         const ex = await this.prisma.exam.findUnique({ where: { id: examId }, select: { id: true } });
-        if (!ex) throw new BadRequestException('Exam nahi mila.');
+        if (!ex) throw new BadRequestException('Exam not found.');
       }
       data.examId = examId || null;
     }
@@ -506,7 +506,7 @@ export class QuestionEditService {
       if (!raw) data.year = null;
       else {
         const y = Number(raw);
-        if (!Number.isInteger(y) || y < 1990 || y > 2100) throw new BadRequestException('Year sahi likhein (jaise 2024).');
+        if (!Number.isInteger(y) || y < 1990 || y > 2100) throw new BadRequestException('Enter a valid year (e.g. 2024).');
         data.year = y;
       }
     }
@@ -515,27 +515,27 @@ export class QuestionEditService {
     if (has('paperCode')) data.paperCode = str(set.paperCode, 120, 'Paper code') || null;
     if (has('examTier')) {
       const t = normalizeExamTier(set.examTier);
-      if (t.invalid) throw new BadRequestException('Tier galat hai — TIER_1 ya TIER_2 likhein.');
+      if (t.invalid) throw new BadRequestException('Invalid tier — use TIER_1 or TIER_2.');
       data.examTier = t.tier ?? null;
     }
     if (has('tierPaper')) {
       const t = normalizeTierPaper(set.tierPaper);
-      if (t.invalid) throw new BadRequestException('Tier paper galat hai — PAPER_1 / PAPER_2 / PAPER_3.');
+      if (t.invalid) throw new BadRequestException('Invalid tier paper — use PAPER_1 / PAPER_2 / PAPER_3.');
       data.tierPaper = t.paper ?? null;
     }
     if (has('difficulty')) {
       const d = String(set.difficulty ?? '').toUpperCase();
-      if (!['EASY', 'MEDIUM', 'HARD'].includes(d)) throw new BadRequestException('Difficulty EASY, MEDIUM ya HARD honi chahiye.');
+      if (!['EASY', 'MEDIUM', 'HARD'].includes(d)) throw new BadRequestException('Difficulty must be EASY, MEDIUM or HARD.');
       data.difficulty = d as any;
     }
     if (has('marks')) {
       const m = Number(set.marks);
-      if (!Number.isFinite(m) || m <= 0 || m > 100) throw new BadRequestException('Marks 0 se bade hone chahiye.');
+      if (!Number.isFinite(m) || m <= 0 || m > 100) throw new BadRequestException('Marks must be greater than 0.');
       data.marks = m;
     }
     if (has('negativeMarks')) {
       const m = Number(set.negativeMarks);
-      if (!Number.isFinite(m) || m < 0 || m > 100) throw new BadRequestException('Negative marks galat hain.');
+      if (!Number.isFinite(m) || m < 0 || m > 100) throw new BadRequestException('Negative marks are invalid.');
       data.negativeMarks = m;
     }
     if (Object.keys(data).length === 0) throw new BadRequestException('Kam se kam ek detail (exam / year / shift / date …) bharein.');

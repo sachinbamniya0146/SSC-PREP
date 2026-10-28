@@ -1121,7 +1121,7 @@ export class BankService implements OnModuleInit {
     if (twin && opts?.strict) {
       throw new ConflictException({
         code: 'SIMILAR_TOPIC',
-        message: `Is chapter me "${twin.row.name}" naam ka topic pehle se hai — kya ye wahi hai? Wahi hai to use hi chunein; alag hai to "force" ke saath dobara save karein.`,
+        message: `This chapter already has a topic named "${twin.row.name}" — is it the same one? If so, use it; if it is different, save again with "force".`,
         similar: { id: twin.row.id, name: twin.row.name },
       });
     }
@@ -1198,8 +1198,8 @@ export class BankService implements OnModuleInit {
           code: 'SIMILAR_SUBTOPIC',
           message:
             hit === elsewhere && elsewhere?.kind !== 'similar'
-              ? `"${hit.row.name}" sub-topic is chapter ke dusre topic me pehle se hai — wahi use karein ya pehle use merge karein.`
-              : `Is chapter me "${hit.row.name}" naam ka sub-topic pehle se hai — kya ye wahi hai? Alag hai to "force" ke saath dobara save karein.`,
+              ? `The sub-topic "${hit.row.name}" already exists under another topic of this chapter — use that one, or merge it first.`
+              : `This chapter already has a sub-topic named "${hit.row.name}" — is it the same one? If it is different, save again with "force".`,
           similar: { id: hit.row.id, name: hit.row.name },
         });
       }

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { AdminController } from './admin.controller';
+import { UserModerationService } from './user-moderation.service';
+import { MailService } from '../auth/mail.service';
 import { AdminHelpController } from './admin-help.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { BankModule } from '../bank/bank.module';
@@ -16,7 +18,7 @@ import { ReferralModule } from '../referral/referral.module';
 @Module({
   imports: [PrismaModule, BankModule, AuditLogModule, MonetizationModule, ReferralModule],
   controllers: [AdminController, AdminHelpController],
-  providers: [AdminService],
+  providers: [AdminService, UserModerationService, MailService],
   exports: [AdminService],
 })
 export class AdminModule {}

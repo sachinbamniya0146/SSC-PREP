@@ -120,7 +120,13 @@ model User {
   permissions      StaffPermission[] @default([])
   isEmailVerified  Boolean         @default(false)
   avatarUrl        String?
-  
+
+  // Account suspension (admin action). A suspended user cannot log in or refresh a session;
+  // all live sessions are revoked at the moment of suspension. Data is kept so it can be lifted.
+  isSuspended      Boolean         @default(false)
+  suspendedAt      DateTime?
+  suspendedReason  String?
+
   // Gamification & Daily Streaks
   currentStreak    Int             @default(0)
   longestStreak    Int             @default(0)

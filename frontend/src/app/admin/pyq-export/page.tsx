@@ -21,7 +21,7 @@ const GROUPS: Array<{ id: string; label: string; hint: string }> = [
   { id: "tier", label: "Tier-wise", hint: "Tier 1 / Tier 2 / unknown" },
   { id: "year", label: "Year-wise", hint: "har year ki alag sheet/file" },
   { id: "date", label: "Exam date-wise", hint: "har exam date ki alag sheet/file" },
-  { id: "none", label: "Sab ek sheet me", hint: "ek hi sheet, Summary ke saath" },
+  { id: "none", label: "All in one sheet", hint: "a single sheet, with a Summary" },
 ];
 
 export default function AdminPyqExportPage() {
@@ -110,7 +110,7 @@ export default function AdminPyqExportPage() {
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
-      setMsg({ ok: true, text: "Download shuru ho gaya ✅" });
+      setMsg({ ok: true, text: "Download started ✅" });
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
     } finally {
@@ -133,7 +133,7 @@ export default function AdminPyqExportPage() {
 
       <main className="mx-auto max-w-3xl space-y-4 px-3 py-5">
         <section className="rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-3 text-sm font-bold">1. Kaunse PYQ chahiye (filters)</h2>
+          <h2 className="mb-3 text-sm font-bold">1. Which PYQs do you need (filters)</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-xs">Exam
               <select className={sel} value={examId} onChange={(e) => setExamId(e.target.value)}>
@@ -146,7 +146,7 @@ export default function AdminPyqExportPage() {
                 <option value="">Sab</option>
                 <option value="TIER_1">Tier 1</option>
                 <option value="TIER_2">Tier 2</option>
-                <option value="UNKNOWN">Tier pata nahi</option>
+                <option value="UNKNOWN">Tier unknown</option>
               </select>
             </label>
             <label className="text-xs">Subject
@@ -157,33 +157,33 @@ export default function AdminPyqExportPage() {
             </label>
             <label className="text-xs">Chapter
               <select className={sel} value={chapterId} onChange={(e) => setChapterId(e.target.value)} disabled={!subjectId}>
-                <option value="">{subjectId ? "Sab chapters" : "Pehle subject chunein"}</option>
+                <option value="">{subjectId ? "All chapters" : "Choose a subject first"}</option>
                 {chapters.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
               </select>
             </label>
             <label className="text-xs">Year
-              <input className={sel} inputMode="numeric" placeholder="jaise 2024 (khali = sab)" value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))} />
+              <input className={sel} inputMode="numeric" placeholder="e.g. 2024 (empty = all)" value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))} />
             </label>
             <label className="text-xs">Exam date
               <select className={sel} value={dateState} onChange={(e) => setDateState(e.target.value)}>
                 <option value="all">Sab</option>
-                <option value="mapped">Sirf jinki date lagi hai</option>
-                <option value="unmapped">Sirf jinki date nahi lagi</option>
+                <option value="mapped">Only those with a date</option>
+                <option value="unmapped">Only those without a date</option>
               </select>
             </label>
-            <label className="text-xs sm:col-span-2">Students ko dikh raha hai?
+            <label className="text-xs sm:col-span-2">Visible to students?
               <select className={sel} value={published} onChange={(e) => setPublished(e.target.value)}>
                 <option value="all">Sab</option>
-                <option value="published">Sirf published</option>
-                <option value="unpublished">Sirf unpublished / hidden</option>
+                <option value="published">Published only</option>
+                <option value="unpublished">Unpublished / hidden only</option>
               </select>
             </label>
           </div>
-          <p className="mt-3 text-sm">Is filter me <b>{count === null ? "…" : count.toLocaleString()}</b> PYQ questions hain.</p>
+          <p className="mt-3 text-sm">This filter has <b>{count === null ? "…" : count.toLocaleString()}</b> PYQ questions.</p>
         </section>
 
         <section className="rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-3 text-sm font-bold">2. Kaise alag-alag karna hai</h2>
+          <h2 className="mb-3 text-sm font-bold">2. How to split the export</h2>
           <div className="grid gap-2 sm:grid-cols-2">
             {GROUPS.map((g) => (
               <button key={g.id} onClick={() => setGroupBy(g.id)} className={`rounded-lg border p-3 text-left ${groupBy === g.id ? "border-primary bg-primary/10" : "border-border"}`}>
@@ -203,14 +203,14 @@ export default function AdminPyqExportPage() {
             </button>
             <button onClick={() => setLayout("zip")} className={`rounded-lg border p-3 text-left ${layout === "zip" ? "border-primary bg-primary/10" : "border-border"}`}>
               <p className="text-sm font-semibold">🗂️ ZIP (alag Excel files)</p>
-              <p className="text-[11px] text-muted-foreground">Har group ki apni .xlsx file, folders ke saath</p>
+              <p className="text-[11px] text-muted-foreground">A separate .xlsx file for every group, inside folders</p>
             </button>
           </div>
           <button onClick={download} disabled={busy || count === 0} className="mt-4 w-full rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-40">
-            {busy ? "File ban rahi hai… (badi file me thoda time lagta hai)" : "⬇️ Download karein"}
+            {busy ? "Preparing the file… (a large file takes some time)" : "⬇️ Download"}
           </button>
           {msg && <p className={`mt-3 rounded-lg border p-2 text-sm ${msg.ok ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700" : "border-red-500/40 bg-red-500/10 text-red-700"}`}>{msg.text}</p>}
-          <p className="mt-2 text-[11px] text-muted-foreground">Ek file me max 1,20,000 questions. Zyada hon to exam/subject/year filter lagayein.</p>
+          <p className="mt-2 text-[11px] text-muted-foreground">A single file holds at most 120,000 questions. If you have more, apply an exam / subject / year filter.</p>
         </section>
       </main>
     </div>

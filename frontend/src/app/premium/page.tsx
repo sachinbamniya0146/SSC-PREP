@@ -129,7 +129,7 @@ export default function PremiumPage() {
       setPlans(plansData.filter((p) => p.isActive));
       setSubscription(await subRes.json());
     } catch {
-      setLoadError(tr("Plans load nahi ho paye. Page refresh karke dobara try karein.", "Plans load nahi ho paye. Page refresh karke dobara try karein."));
+      setLoadError(tr("Could not load the plans. Please refresh the page and try again.", "Plans load nahi ho paye. Page refresh karke dobara try karein."));
     } finally {
       setLoading(false);
     }
@@ -215,7 +215,7 @@ export default function PremiumPage() {
       }
       // Otherwise the tab is being redirected to Cashfree; keep the button locked.
     } catch (e: any) {
-      setError(e?.message || "Payment start nahi ho paya");
+      setError(e?.message || "Could not start the payment");
       setProcessing(false);
     }
   };
@@ -295,7 +295,7 @@ export default function PremiumPage() {
             {subscription.expiringSoon && (
               <p className="mt-2 text-sm text-foreground/80">
                 {tr(
-                  "Aapka plan jaldi khatam ho raha hai — abhi renew karein, baaki bacha hua time add ho jayega.",
+                  "Your plan is about to expire — renew now and your remaining time will be added.",
                   "Aapka plan jaldi khatam ho raha hai — abhi renew karein, baaki bacha hua time add ho jayega.",
                 )}
               </p>
@@ -313,7 +313,7 @@ export default function PremiumPage() {
                 ? `${tr("Expired on", "Khatam hua")} ${fmtDate(subscription.lastEndedAt)}. `
                 : ""}
               {tr(
-                "Free me har subject/chapter ke 3 practice sets milte hain. Unlimited access ke liye plan lein.",
+                "Free users get 3 practice sets for every subject / chapter. Get a plan for unlimited access.",
                 "Free me har subject/chapter ke 3 practice sets milte hain. Unlimited access ke liye plan lein.",
               )}
             </p>
@@ -450,10 +450,10 @@ export default function PremiumPage() {
                 <p className="pt-2 text-xs text-muted-foreground">
                   {hasActive
                     ? tr(
-                        `Aapka bacha hua time safe rahega — naya plan ${fmtDate(subscription!.endsAt)} ke baad add hoga. Nayi expiry: `,
+                        `Your remaining time is safe — the new plan is added after ${fmtDate(subscription!.endsAt)}. New expiry: `,
                         `Aapka bacha hua time safe rahega — naya plan ${fmtDate(subscription!.endsAt)} ke baad add hoga. Nayi expiry: `,
                       )
-                    : tr("Premium abhi se active hoga, expiry: ", "Premium abhi se active hoga, expiry: ")}
+                    : tr("Premium becomes active now, expiry: ", "Premium abhi se active hoga, expiry: ")}
                   <strong>{fmtDate(newEndsAt.toISOString())}</strong>
                 </p>
               )}
@@ -471,7 +471,7 @@ export default function PremiumPage() {
                   : `${tr("Pay", "Pay")} ${inr(finalPrice)} ${tr("securely", "securely")}`}
             </button>
             <p className="mt-2 text-center text-xs text-muted-foreground">
-              🔒 Cards, UPI, netbanking, wallets — powered by Cashfree. Hum aapka card/UPI detail kabhi store nahi karte.
+              🔒 Cards, UPI, netbanking, wallets — powered by Cashfree. We never store your card / UPI details.
             </p>
 
             {error && <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{error}</div>}
@@ -483,12 +483,12 @@ export default function PremiumPage() {
           <h2 className="mb-5 text-2xl font-bold">{tr("What you get", "Premium me kya milta hai")}</h2>
           <div className="grid gap-4 md:grid-cols-3">
             {[
-              ["Unlimited Practice", "Question bank practice sets par koi limit nahi"],
-              ["All Mock Tests", "Saare premium mocks, detailed analytics ke saath"],
-              ["Chapter PDFs", "Saare chapter PDFs aur answer keys download karein"],
-              ["Weak Areas Practice", "Aapki galtiyon se bani targeted practice"],
-              ["Progress Analytics", "Topic-wise performance tracking aur recommendations"],
-              ["Priority Support", "Tez response aur dedicated help"],
+              ["Unlimited Practice", "No limit on question bank practice sets"],
+              ["All Mock Tests", "All premium mocks, with detailed analytics"],
+              ["Chapter PDFs", "Download all chapter PDFs and answer keys"],
+              ["Weak Areas Practice", "Targeted practice built from your mistakes"],
+              ["Progress Analytics", "Topic-wise performance tracking and recommendations"],
+              ["Priority Support", "Faster responses and dedicated help"],
             ].map(([t, d]) => (
               <div key={t} className="card p-4">
                 <h4 className="mb-1 font-semibold">{t}</h4>

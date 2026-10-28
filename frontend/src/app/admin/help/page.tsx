@@ -76,7 +76,7 @@ export default function AdminHelpPage() {
         if (fr.ok) setFormats(await fr.json());
         if (pr.ok) setPrompts(await pr.json());
         if (dr.ok) setDiagramTypes(await dr.json());
-        if (!fr.ok && !pr.ok && !dr.ok) setError("Help content load nahi hua — dobara try karein.");
+        if (!fr.ok && !pr.ok && !dr.ok) setError("Could not load the help content — please try again.");
       } catch (e) {
         setError(e instanceof Error ? e.message : "Network error");
       } finally {
@@ -88,7 +88,7 @@ export default function AdminHelpPage() {
   async function copyText(text: string, label: string) {
     try {
       await navigator.clipboard.writeText(text);
-      setCopyMsg(`${label} copy ho gaya.`);
+      setCopyMsg(`${label} copied.`);
       setTimeout(() => setCopyMsg(""), 2000);
     } catch {
       // Clipboard API unavailable — text is still visible for manual copy.
@@ -146,7 +146,7 @@ export default function AdminHelpPage() {
           <section className="mt-6 rounded-xl border border-border bg-card p-5">
             <h2 className="font-semibold">⬇️ Download Upload Template</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Excel template mein real exam/subject/chapter IDs bhi included hain (Reference IDs sheet).
+              The Excel template also includes the real exam / subject / chapter IDs (Reference IDs sheet).
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               {(["excel", "csv", "json", "text"] as const).map((f) => (
@@ -195,8 +195,8 @@ export default function AdminHelpPage() {
           <section className="mt-6 rounded-xl border border-border bg-card p-5">
             <h2 className="font-semibold">🤖 Ready-to-use AI Prompts</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              In prompts ko ChatGPT/Claude jaise kisi bhi AI tool mein paste karke question explanations,
-              Hindi translation, study plans, ya weak-area analysis generate kar sakte hain.
+              Paste these prompts into any AI tool such as ChatGPT or Claude to generate question explanations,
+              Hindi translations, study plans or weak-area analysis.
             </p>
             <div className="mt-3 space-y-3">
               {Object.entries(prompts).map(([key, p]) => (

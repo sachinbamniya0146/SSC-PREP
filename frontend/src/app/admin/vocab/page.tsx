@@ -85,7 +85,7 @@ export default function AdminVocabPage() {
   React.useEffect(() => { if (authChecked) loadWords(); }, [authChecked, loadWords]);
 
   const submitUpload = async () => {
-    if (!file) { setError("Pehle Excel file select karein"); return; }
+    if (!file) { setError("Please select an Excel file first"); return; }
     setUploading(true);
     setError("");
     setUploadResult(null);
@@ -118,14 +118,14 @@ export default function AdminVocabPage() {
   // archived first by the server, so uploading the same word again brings their progress back.
   const [deleting, setDeleting] = React.useState<string | null>(null);
   const deleteWord = async (w: AdminWord) => {
-    if (!confirm(`"${w.word}" aur uske ${w.questionCount} question(s) list se hamesha ke liye delete karein?\n\nStudents ka unlock/progress safe rahega — wahi word dobara upload karenge to unlock wapas aa jayega.`)) return;
+    if (!confirm(`Permanently delete "${w.word}" and its ${w.questionCount} question(s) from the list?\n\nStudents' unlocks and progress stay safe — if you upload the same word again, the unlock comes back.`)) return;
     setDeleting(w.id);
     setError("");
     try {
       const r = await fetchAuth(`${API_BASE}/vocab/admin/words/${w.id}?hard=true`, { method: "DELETE" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Delete nahi hua (HTTP ${r.status})`);
+        setError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Could not delete (HTTP ${r.status})`);
         return;
       }
       // close the gap in the numbering so ↑ ↓ / Move-to keep working
@@ -135,7 +135,7 @@ export default function AdminVocabPage() {
         body: "{}",
       }).catch(() => undefined);
     } catch {
-      setError("Network error — word delete nahi hua.");
+      setError("Network error — the word was not deleted.");
     } finally {
       setDeleting(null);
       await loadWords();
@@ -156,10 +156,10 @@ export default function AdminVocabPage() {
     try {
       const r = await fetchAuth(`${API_BASE}/vocab/admin/words/${w.id}/questions`);
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setQError(d?.message || `Questions load nahi hue (HTTP ${r.status})`); return; }
+      if (!r.ok) { setQError(d?.message || `Could not load questions (HTTP ${r.status})`); return; }
       setQPanel({ wordId: w.id, word: d.word ?? w.word, questions: d.questions ?? [] });
     } catch {
-      setQError("Network error — questions load nahi hue.");
+      setQError("Network error — the questions could not be loaded.");
     } finally {
       setQLoading(false);
     }
@@ -167,17 +167,17 @@ export default function AdminVocabPage() {
 
   const deleteQuestion = async (q: AdminQuestion) => {
     if (!qPanel) return;
-    if (!confirm("Ye question delete karein?")) return;
+    if (!confirm("Delete this question?")) return;
     setQBusy(q.id);
     setQError("");
     try {
       const r = await fetchAuth(`${API_BASE}/vocab/admin/questions/${q.id}`, { method: "DELETE" });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setQError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Delete nahi hua (HTTP ${r.status})`); return; }
+      if (!r.ok) { setQError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Could not delete (HTTP ${r.status})`); return; }
       setQPanel((p) => (p ? { ...p, questions: p.questions.filter((x) => x.id !== q.id) } : p));
       await loadWords();
     } catch {
-      setQError("Network error — question delete nahi hua.");
+      setQError("Network error — the question was not deleted.");
     } finally {
       setQBusy(null);
     }
@@ -211,9 +211,9 @@ export default function AdminVocabPage() {
   const saveQuestion = async () => {
     if (!qPanel || !qForm) return;
     setQError("");
-    if (!qForm.questionText.trim()) { setQError("Question text likhein."); return; }
-    if (!(["A", "B", "C", "D"] as const).every((k) => qForm.options[k].trim())) { setQError("Char options (A-D) bharna zaroori hai."); return; }
-    if (!qForm.explanation.trim()) { setQError("Solution / explanation likhna zaroori hai."); return; }
+    if (!qForm.questionText.trim()) { setQError("Please write the question text."); return; }
+    if (!(["A", "B", "C", "D"] as const).every((k) => qForm.options[k].trim())) { setQError("All four options (A–D) are required."); return; }
+    if (!qForm.explanation.trim()) { setQError("A solution / explanation is required."); return; }
     const body = {
       questionText: qForm.questionText.trim(),
       optionsJson: (["A", "B", "C", "D"] as const).map((k) => ({ key: k, text: qForm.options[k].trim() })),
@@ -227,13 +227,13 @@ export default function AdminVocabPage() {
       const url = qForm.id ? `${API_BASE}/vocab/admin/questions/${qForm.id}` : `${API_BASE}/vocab/admin/words/${qPanel.wordId}/questions`;
       const r = await fetchAuth(url, { method: qForm.id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setQError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Save nahi hua (HTTP ${r.status})`); return; }
+      if (!r.ok) { setQError(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Could not save (HTTP ${r.status})`); return; }
       setQForm(null);
       const lr = await fetchAuth(`${API_BASE}/vocab/admin/words/${qPanel.wordId}/questions`);
       if (lr.ok) { const ld = await lr.json(); setQPanel({ wordId: qPanel.wordId, word: ld.word ?? qPanel.word, questions: ld.questions ?? [] }); }
       await loadWords();
     } catch {
-      setQError("Network error — question save nahi hua.");
+      setQError("Network error — the question was not saved.");
     } finally {
       setQSaving(false);
     }
@@ -294,7 +294,7 @@ export default function AdminVocabPage() {
     if (!editing) return;
     setEditError("");
     if (editing.isNew && (!String(editing.word ?? "").trim() || !String(editing.meaningHindi ?? "").trim() || !String(editing.meaningEnglish ?? "").trim())) {
-      setEditError("Word, Meaning (English) aur Meaning (Hindi) zaroori hain.");
+      setEditError("Word, Meaning (English) and Meaning (Hindi) are required.");
       return;
     }
     const body: Record<string, unknown> = {};
@@ -342,9 +342,9 @@ export default function AdminVocabPage() {
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-semibold">📤 Bulk Import (Excel)</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Do sheets: <b>Words</b> (poora learning content) + <b>Questions</b> (wordSlug se link). Jo word ya question pehle se system me hai
-            wo dobara nahi banta — uska content Excel ke naye data se <b>update</b> ho jata hai (khali cell purani value nahi mitati; position aur students ka progress safe rehta hai).
-            Jis question ka <b>answer</b> ya <b>solution</b> missing hai wo upload nahi hota — report me word-wise dikhta hai.
+            Two sheets: <b>Words</b> (the full learning content) + <b>Questions</b> (linked by wordSlug). A word or question that already exists in the system
+            is not created again — its content is <b>updated</b> from the new Excel data (an empty cell does not erase the old value; its position and students' progress stay safe).
+            A question whose <b>answer</b> or <b>solution</b> is missing is not uploaded — it is listed word-wise in the report.
           </p>
           <div className="mt-3">
             <button
@@ -369,7 +369,7 @@ export default function AdminVocabPage() {
               }}
               className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
             >
-              ⬇️ Excel Template download karein
+              ⬇️ Download Excel template
             </button>
           </div>
           <div className="mt-3 flex items-center gap-3">
@@ -384,17 +384,17 @@ export default function AdminVocabPage() {
           </div>
           <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
             <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
-            Sirf check karo (kuch save mat karo)
+            Check only (do not save anything)
           </label>
           {error && <p className="mt-2 text-sm text-danger">{error}</p>}
           {uploadResult && (
             <div className="mt-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
-              {uploadResult.dryRun && <p className="mb-1 font-semibold text-amber-600">Sirf check hua — kuch save nahi hua</p>}
-              <p>Words: <b className="text-emerald-600">{uploadResult.wordsCreated}</b> naye {uploadResult.dryRun ? "add honge" : "add hue"}, <b className="text-sky-600">{uploadResult.wordsUpdated ?? 0}</b> {uploadResult.dryRun ? "update honge" : "update hue"}, <b className="text-amber-600">{uploadResult.wordsSkipped ?? 0}</b> skip</p>
-              <p>Questions: <b className="text-emerald-600">{uploadResult.questionsCreated}</b> naye {uploadResult.dryRun ? "add honge" : "add hue"}, <b className="text-sky-600">{uploadResult.questionsUpdated ?? 0}</b> {uploadResult.dryRun ? "update honge" : "update hue"}, <b className="text-amber-600">{uploadResult.questionsSkipped ?? 0}</b> skip</p>
+              {uploadResult.dryRun && <p className="mb-1 font-semibold text-amber-600">Check only — nothing was saved</p>}
+              <p>Words: <b className="text-emerald-600">{uploadResult.wordsCreated}</b> new {uploadResult.dryRun ? "to be added" : "added"}, <b className="text-sky-600">{uploadResult.wordsUpdated ?? 0}</b> {uploadResult.dryRun ? "to be updated" : "updated"}, <b className="text-amber-600">{uploadResult.wordsSkipped ?? 0}</b> skipped</p>
+              <p>Questions: <b className="text-emerald-600">{uploadResult.questionsCreated}</b> new {uploadResult.dryRun ? "to be added" : "added"}, <b className="text-sky-600">{uploadResult.questionsUpdated ?? 0}</b> {uploadResult.dryRun ? "to be updated" : "updated"}, <b className="text-amber-600">{uploadResult.questionsSkipped ?? 0}</b> skipped</p>
               {(uploadResult.wordReport?.length ?? 0) > 0 && (
                 <div className="mt-2">
-                  <p className="font-semibold text-amber-600">Word-wise report (kya missing / duplicate hai):</p>
+                  <p className="font-semibold text-amber-600">Word-wise report (what is missing / duplicate):</p>
                   <ul className="mt-1 max-h-48 space-y-1 overflow-y-auto text-xs">
                     {uploadResult.wordReport!.map((w, i) => (
                       <li key={i} className="rounded border border-amber-500/20 bg-amber-500/5 p-1.5">
@@ -410,7 +410,7 @@ export default function AdminVocabPage() {
               )}
               {(uploadResult.skipped?.length ?? 0) > 0 && (
                 <div className="mt-2">
-                  <p className="font-semibold text-amber-600">{uploadResult.skipped!.length} row(s) skip hui:</p>
+                  <p className="font-semibold text-amber-600">{uploadResult.skipped!.length} row(s) skipped:</p>
                   <ul className="mt-1 max-h-40 overflow-y-auto text-xs text-muted-foreground">
                     {uploadResult.skipped!.map((e, i) => (
                       <li key={i}>{e.sheet} row {e.row} · <b>{e.word}</b> · {CODE_LABEL[e.code] ?? e.code}: {e.message}</li>
@@ -543,7 +543,7 @@ export default function AdminVocabPage() {
             )}
             {qForm && (
               <div className="mt-3 rounded-lg border border-primary/40 bg-muted/20 p-3 text-sm">
-                <p className="mb-2 font-semibold">{qForm.id ? "Question edit karein" : "Naya question"}</p>
+                <p className="mb-2 font-semibold">{qForm.id ? "Edit question" : "New question"}</p>
                 <textarea
                   rows={2}
                   value={qForm.questionText}
@@ -565,7 +565,7 @@ export default function AdminVocabPage() {
                     </label>
                   ))}
                 </div>
-                <p className="mt-1 text-[11px] text-muted-foreground">Radio button se sahi answer chunein (abhi: {qForm.correctAnswer}).</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Choose the correct answer with the radio button (currently: {qForm.correctAnswer}).</p>
                 <textarea
                   rows={2}
                   value={qForm.explanation}
@@ -577,7 +577,7 @@ export default function AdminVocabPage() {
                   rows={2}
                   value={qForm.explanationHindi}
                   onChange={(e) => setQForm({ ...qForm, explanationHindi: e.target.value })}
-                  placeholder="हिंदी solution / explanation (optional — test ke baad English ke saath dikhega)"
+                  placeholder="Hindi solution / explanation (optional — shown with the English one after the test)"
                   className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-hindi"
                 />
                 <select
@@ -601,7 +601,7 @@ export default function AdminVocabPage() {
             {qError && <p className="mt-3 text-xs font-medium text-danger">{qError}</p>}
             {qLoading && <p className="mt-4 text-sm text-muted-foreground">Loading…</p>}
             {!qLoading && qPanel.questions.length === 0 && !qError && (
-              <p className="mt-4 text-sm text-muted-foreground">Is word ka koi question nahi bacha.</p>
+              <p className="mt-4 text-sm text-muted-foreground">This word has no questions left.</p>
             )}
             <ul className="mt-4 space-y-3">
               {qPanel.questions.map((q, i) => (
@@ -644,7 +644,7 @@ export default function AdminVocabPage() {
         <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={() => !saving && setEditing(null)}>
           <div className="my-6 w-full max-w-2xl rounded-2xl border border-border bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold">{editing.isNew ? "Naya word add karein" : `Edit word #${editing.orderIndex}`}</h3>
+              <h3 className="text-base font-bold">{editing.isNew ? "Add new word" : `Edit word #${editing.orderIndex}`}</h3>
               <button onClick={() => setEditing(null)} className="rounded-md px-2 py-1 text-sm hover:bg-muted" aria-label="Close">✕</button>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">

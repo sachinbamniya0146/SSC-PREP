@@ -33,7 +33,7 @@ function ImageField({ label, url, onChange, onError }: { label: string; url: str
   const pick = async (file: File | undefined) => {
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) {
-      onError("Image 5 MB se badi hai — chhoti image chunein. / Image is over 5 MB.");
+      onError("The image is over 5 MB — please choose a smaller one.");
       return;
     }
     setBusy(true);
@@ -56,7 +56,7 @@ function ImageField({ label, url, onChange, onError }: { label: string; url: str
         <div className="flex items-start gap-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={url} alt={label} className="max-h-32 max-w-[60%] rounded border border-border bg-white object-contain" />
-          <button type="button" onClick={() => onChange("")} className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-600">✕ Hatayein</button>
+          <button type="button" onClick={() => onChange("")} className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-600">✕ Remove</button>
         </div>
       ) : (
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:border-primary">
@@ -124,7 +124,7 @@ export default function AddQuestionPage() {
         }
         if (t.ok) setTax(await t.json());
       } catch {
-        setError("Exam / syllabus list load nahi hui — page refresh karein.");
+        setError("Could not load the exam / syllabus list — please refresh the page.");
       }
     })();
   }, [router]);
@@ -192,7 +192,7 @@ export default function AddQuestionPage() {
     try {
       const { r, d } = await post("single", { duplicateAction: "review" });
       if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `Failed (HTTP ${r.status})`);
-      setOk({ msg: "📥 Duplicate review queue me bhej diya — Admin → Duplicate Review me purana / naya / dono chunein.", warnings: [] });
+      setOk({ msg: "📥 Sent to the Duplicate Review queue — in Admin → Duplicate Review choose the old, the new, or both.", warnings: [] });
       setQuestionText("");
       setQuestionTextHindi("");
       setQuestionImageUrl("");
@@ -221,7 +221,7 @@ export default function AddQuestionPage() {
       }
       if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `Save failed (HTTP ${r.status})`);
       setSavedCount((n) => n + 1);
-      setOk({ msg: `✅ Question save ho gaya (${d.kind === "pyq" ? "PYQ" : "Practice"})${d.published ? " — students ko dikh raha hai" : ""}`, warnings: d.warnings || [] });
+      setOk({ msg: `✅ Question saved (${d.kind === "pyq" ? "PYQ" : "Practice"})${d.published ? " — visible to students" : ""}`, warnings: d.warnings || [] });
       // keep exam / subject / chapter / topic / year / shift / date for rapid entry; clear the question itself
       setQuestionText("");
       setQuestionTextHindi("");
@@ -266,7 +266,7 @@ export default function AddQuestionPage() {
           <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm">
             <p className="font-semibold text-emerald-700 dark:text-emerald-400">{ok.msg}</p>
             {ok.warnings.map((w, i) => <p key={i} className="mt-1 text-xs text-amber-600">⚠️ {w}</p>)}
-            <p className="mt-1 text-xs text-muted-foreground">Exam / chapter / year / shift wahi rakhe gaye hain — agla question bhar dein.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Exam / chapter / year / shift are kept — enter the next question.</p>
           </div>
         )}
 
@@ -281,12 +281,12 @@ export default function AddQuestionPage() {
 
         {/* Where does it belong */}
         <section className="rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-3 text-sm font-bold">1. Kahan jayega</h2>
+          <h2 className="mb-3 text-sm font-bold">1. Where it goes</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className={lbl}>Exam *</label>
               <select className={inp} value={examId} onChange={(e) => { setExamId(e.target.value); setDup(null); }}>
-                <option value="">— exam chunein —</option>
+                <option value="">— choose an exam —</option>
                 {exams.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
               </select>
             </div>
@@ -329,7 +329,7 @@ export default function AddQuestionPage() {
               <div>
                 <label className={lbl}>Shift</label>
                 <input className={inp} list="shift-list" placeholder="Shift 1 / morning / evening" value={shift} onChange={(e) => { setShift(e.target.value); setDup(null); }} onBlur={() => setShift((v) => normalizeShift(v) ?? "")} />
-                <p className="mt-1 text-[11px] text-muted-foreground">Morning / subah = Shift 1 · Afternoon / dopahar = Shift 2 · Evening / shaam = Shift 3 (apne aap badal jayega)</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Morning = Shift 1 · Afternoon = Shift 2 · Evening = Shift 3 (changes automatically)</p>
                 <datalist id="shift-list">{["Shift 1", "Shift 2", "Shift 3", "Shift 4"].map((s) => <option key={s} value={s} />)}</datalist>
               </div>
               <div>
@@ -337,10 +337,10 @@ export default function AddQuestionPage() {
                 <DateField className={inp} value={examDate} onChange={(v) => { setExamDate(v); setDup(null); }} />
               </div>
               <div className="sm:col-span-3">
-                <label className={lbl}>Paper code (optional — blank chhodein to date + shift se ban jayega)</label>
+                <label className={lbl}>Paper code (optional — leave blank to build it from date + shift)</label>
                 <input className={inp} placeholder="optional" value={paperCode} onChange={(e) => setPaperCode(e.target.value)} />
               </div>
-              <p className="text-xs text-muted-foreground sm:col-span-3">Ek hi exam + year + date + shift ke 100 questions apne aap ek real PYQ mock ban jate hain.</p>
+              <p className="text-xs text-muted-foreground sm:col-span-3">100 questions of the same exam + year + date + shift automatically become one real PYQ mock.</p>
             </div>
           )}
         </section>
@@ -349,16 +349,16 @@ export default function AddQuestionPage() {
         <section className="rounded-xl border border-border bg-card p-4">
           <h2 className="mb-3 text-sm font-bold">2. Question</h2>
           <label className={lbl}>Question (English)</label>
-          <textarea className={`${inp} min-h-[90px]`} value={questionText} onChange={(e) => { setQuestionText(e.target.value); setDup(null); }} placeholder="Question text — image wale question me khali bhi chhod sakte hain" />
+          <textarea className={`${inp} min-h-[90px]`} value={questionText} onChange={(e) => { setQuestionText(e.target.value); setDup(null); }} placeholder="Question text — can be left empty for an image-based question" />
           <label className={`${lbl} mt-3`}>प्रश्न (Hindi)</label>
-          <textarea className={`${inp} min-h-[90px]`} value={questionTextHindi} onChange={(e) => setQuestionTextHindi(e.target.value)} placeholder="हिंदी में प्रश्न — English subject ke alawa Hindi zaroori hai tabhi students ko dikhega" />
+          <textarea className={`${inp} min-h-[90px]`} value={questionTextHindi} onChange={(e) => setQuestionTextHindi(e.target.value)} placeholder="Question in Hindi — Hindi is required (except for the English subject) before students can see the question" />
           <ImageField label="Question image" url={questionImageUrl} onChange={(u) => { setQuestionImageUrl(u); setDup(null); }} onError={setError} />
         </section>
 
         {/* Options */}
         <section className="rounded-xl border border-border bg-card p-4">
           <h2 className="mb-1 text-sm font-bold">3. Options (text, Hindi aur/ya image)</h2>
-          <p className="mb-3 text-xs text-muted-foreground">Har option me text ya image zaroori hai. Sahi option ke saath wala gola dabayein.</p>
+          <p className="mb-3 text-xs text-muted-foreground">Every option needs text or an image. Tap the circle next to the correct option.</p>
           <div className="space-y-4">
             {KEYS.map((k, i) => (
               <div key={k} className={`rounded-lg border p-3 ${correct === k ? "border-emerald-500 bg-emerald-500/5" : "border-border"}`}>
@@ -403,14 +403,14 @@ export default function AddQuestionPage() {
               <>
                 <p className="font-semibold text-red-600">
                   {dup.exact
-                    ? "❌ Exactly same question (question, options, solution, shift sab same) pehle se database me hai."
-                    : `⚠️ Same question pehle se hai, lekin ye alag hai: ${(dup.differences ?? []).join(", ") || "details"}.`}
+                    ? "❌ Exactly the same question (question, options, solution and shift all identical) already exists in the database."
+                    : `⚠️ The same question already exists, but this one differs in: ${(dup.differences ?? []).join(", ") || "details"}.`}
                 </p>
-                <button type="button" onClick={sendToReview} disabled={busy} className="mt-2 rounded-lg border border-red-500/50 bg-background px-3 py-1.5 text-xs font-semibold hover:bg-red-500/10 disabled:opacity-40">📥 Review queue me bhejo (purana / naya / dono wahan chunein)</button>
+                <button type="button" onClick={sendToReview} disabled={busy} className="mt-2 rounded-lg border border-red-500/50 bg-background px-3 py-1.5 text-xs font-semibold hover:bg-red-500/10 disabled:opacity-40">📥 Send to the review queue (choose the old, the new, or both there)</button>
                 <p className="mt-1 text-xs text-muted-foreground">“{dup.existing.questionText || "(image question)"}” {dup.existing.year ? `· ${dup.existing.year}` : ""} {dup.existing.shift ? `· ${dup.existing.shift}` : ""} · ID {dup.existing.id}</p>
               </>
             ) : (
-              <p className="font-semibold text-emerald-700 dark:text-emerald-400">✅ Duplicate nahi hai — save kar sakte hain.</p>
+              <p className="font-semibold text-emerald-700 dark:text-emerald-400">✅ Not a duplicate — you can save.</p>
             )}
           </div>
         )}
@@ -419,7 +419,7 @@ export default function AddQuestionPage() {
           <button type="button" onClick={checkDuplicate} disabled={!canSubmit} className="flex-1 rounded-lg border border-border px-3 py-3 text-sm font-semibold hover:border-primary disabled:opacity-40">🔍 Duplicate check</button>
           <button type="button" onClick={save} disabled={!canSubmit} className="flex-[2] rounded-lg bg-primary px-3 py-3 text-sm font-bold text-primary-foreground disabled:opacity-40">{busy ? "Please wait…" : "💾 Save question"}</button>
         </div>
-        {!canSubmit && !busy && <p className="pb-6 text-center text-xs text-muted-foreground">Save ke liye: exam, subject, chapter{kind === "pyq" ? ", year" : ""}, question (text ya image), chaaron options aur sahi answer chahiye.</p>}
+        {!canSubmit && !busy && <p className="pb-6 text-center text-xs text-muted-foreground">To save you need: exam, subject, chapter{kind === "pyq" ? ", year" : ""}, the question (text or image), all four options and the correct answer.</p>}
       </main>
     </div>
   );

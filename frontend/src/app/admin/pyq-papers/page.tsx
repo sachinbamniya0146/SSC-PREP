@@ -25,7 +25,7 @@ interface Detail {
 const STATUS: Record<Paper["status"], { t: string; c: string }> = {
   LIVE: { t: "Live ✅", c: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
   READY_HIDDEN: { t: "Ready (hidden) 🙈", c: "bg-amber-500/15 text-amber-700 dark:text-amber-300" },
-  BUILDING: { t: "Ban raha 🛠️", c: "bg-blue-500/15 text-blue-700 dark:text-blue-300" },
+  BUILDING: { t: "Building 🛠️", c: "bg-blue-500/15 text-blue-700 dark:text-blue-300" },
 };
 const tierText = (t: string | null) => (t === "TIER_2" ? "Tier 2" : t === "TIER_1" ? "Tier 1" : "—");
 const paperText = (p: string | null) => (p && p !== "PAPER_1" ? p.replace("PAPER_", "Paper ") : "");
@@ -82,13 +82,13 @@ export default function AdminPyqPapersPage() {
   }
 
   function rename(p: Paper) {
-    const title = window.prompt("Paper ka naya naam (ye naam aage ke uploads se nahi badlega):", p.title);
+    const title = window.prompt("New name for this paper (it will not be changed by later uploads):", p.title);
     if (title === null || title.trim() === "" || title.trim() === p.title) return;
     void run(`${p.id}:rename`, "Naam badla", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}/rename`, { body: { title: title.trim() } });
   }
 
   function remove(p: Paper) {
-    if (!window.confirm(`"${p.title}" ka mock delete karein?\n\nSirf mock hatega, questions bank me rahenge. Agar kisi student ne ye paper diya hai to delete nahi hoga (tab "Chhupao" use karein). Same exam+tier+date+shift ka agla upload ya Rebuild ise dobara bana dega.`)) return;
+    if (!window.confirm(`Delete the mock "${p.title}"?\n\nOnly the mock is removed; the questions stay in the bank. If any student has attempted this paper it cannot be deleted (use "Hide" instead). The next upload or Rebuild for the same exam + tier + date + shift will create it again.`)) return;
     void run(`${p.id}:delete`, "Paper delete", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}`, { method: "DELETE" });
   }
 
@@ -122,14 +122,14 @@ export default function AdminPyqPapersPage() {
           ))}
           <div className={card}>
             <p className="text-2xl font-bold">{data?.questionsWithDateButNoTier ?? "…"}</p>
-            <p className="text-xs text-muted-foreground">Date hai par Tier nahi — kisi mock me nahi judenge</p>
+            <p className="text-xs text-muted-foreground">Has a date but no tier — will not be added to any mock</p>
           </div>
         </section>
 
         <section className={`${card} flex flex-wrap items-center gap-2`}>
           <button disabled={!!busy} onClick={() => run("rebuild", "Sab papers rebuild", "/bank/admin/upload/pyq-papers/rebuild")}
             className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-50">
-            {busy === "rebuild" ? "Rebuild ho raha…" : "🔄 Bank se sab papers rebuild karo"}
+            {busy === "rebuild" ? "Rebuilding…" : "🔄 Rebuild all papers from the bank"}
           </button>
           <button disabled={!!busy} onClick={() => void load()} className="rounded-lg border border-border px-3 py-1.5 text-xs">↻ Refresh</button>
           <select value={examId} onChange={(e) => { setExamId(e.target.value); setOpen(null); }} className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs">
@@ -140,8 +140,8 @@ export default function AdminPyqPapersPage() {
             className="ml-auto w-56 rounded-lg border border-border bg-background px-2 py-1.5 text-xs" />
         </section>
         <p className="text-[11px] text-muted-foreground">
-          Paper tab tak hidden rehta hai jab tak uske sare questions (pattern ke hisaab se) na aa jayen. "Abhi dikhao" se aap use pehle bhi student ko dikha sakte hain.
-          Pattern link nahi hai to 100 questions maane jaate hain — Exam Patterns me "… Tier 1/2 …" naam ka pattern banayein.
+          A paper stays hidden until all its questions (as per the pattern) have arrived. You can show it to students earlier with "Show now".
+          If no pattern is linked, 100 questions are assumed — create a pattern named "… Tier 1/2 …" in Exam Patterns.
         </p>
 
         <section className="overflow-x-auto rounded-xl border border-border">
@@ -150,7 +150,7 @@ export default function AdminPyqPapersPage() {
               <tr><th className="p-2">Paper</th><th className="p-2">Date</th><th className="p-2">Shift</th><th className="p-2">Tier</th><th className="p-2">Progress</th><th className="p-2">Status</th><th className="p-2" /></tr>
             </thead>
             <tbody>
-              {rows.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">{data ? "Koi paper nahi mila." : "Load ho raha…"}</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">{data ? "No papers found." : "Loading…"}</td></tr>}
               {rows.map((p) => {
                 const pct = Math.min(100, Math.round((p.totalQuestions / Math.max(1, p.target)) * 100));
                 const d = detail[p.id];
@@ -160,7 +160,7 @@ export default function AdminPyqPapersPage() {
                   <React.Fragment key={p.id}>
                     <tr className="border-t border-border align-top">
                       <td className="p-2">
-                        <p className="font-medium">{p.title}{p.titleLocked && <span title="Naam aapne badla hai" className="ml-1">✏️</span>}</p>
+                        <p className="font-medium">{p.title}{p.titleLocked && <span title="You renamed this paper" className="ml-1">✏️</span>}</p>
                         <p className="text-[10px] text-muted-foreground">{p.examName ?? "—"}</p>
                         <p className="break-all text-[10px] text-muted-foreground">{p.id}</p>
                       </td>
@@ -169,8 +169,8 @@ export default function AdminPyqPapersPage() {
                       <td className="p-2 whitespace-nowrap">{tierText(p.examTier)} {paperText(p.tierPaper)}</td>
                       <td className="p-2">
                         <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary" style={{ width: `${pct}%` }} /></div>
-                        <p className="mt-1 text-[11px]">{p.totalQuestions}/{p.target}{!p.patternLinked && <span className="text-amber-600"> · pattern link nahi</span>}</p>
-                        <button onClick={() => void toggleDetail(p.id)} className="mt-1 text-[11px] text-primary underline">{isOpen ? "Band karo" : "Kya missing hai?"}</button>
+                        <p className="mt-1 text-[11px]">{p.totalQuestions}/{p.target}{!p.patternLinked && <span className="text-amber-600"> · no pattern linked</span>}</p>
+                        <button onClick={() => void toggleDetail(p.id)} className="mt-1 text-[11px] text-primary underline">{isOpen ? "Close" : "What is missing?"}</button>
                       </td>
                       <td className="p-2"><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${STATUS[p.status].c}`}>{STATUS[p.status].t}</span></td>
                       <td className="p-2">
@@ -178,7 +178,7 @@ export default function AdminPyqPapersPage() {
                           {!p.isActive ? (
                             <button disabled={!!busy} onClick={() => run(`${p.id}:show`, "Paper live", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}/publish-now`)}
                               className="rounded-lg border border-emerald-500/50 px-2 py-1 text-[11px] text-emerald-700 disabled:opacity-50">
-                              {busy === `${p.id}:show` ? "…" : "Abhi dikhao"}
+                              {busy === `${p.id}:show` ? "…" : "Show now"}
                             </button>
                           ) : (
                             <button disabled={!!busy} onClick={() => run(`${p.id}:hide`, "Paper chhupaya", `/bank/admin/upload/pyq-papers/${encodeURIComponent(p.id)}/visibility`, { body: { visible: false } })} className={btn}>
@@ -194,13 +194,13 @@ export default function AdminPyqPapersPage() {
                     {isOpen && (
                       <tr className="border-t border-border bg-muted/20">
                         <td colSpan={7} className="p-3 text-[11px]">
-                          {!d && <span className="text-muted-foreground">Load ho raha…</span>}
+                          {!d && <span className="text-muted-foreground">Loading…</span>}
                           {d && "error" in d && <span className="text-red-700">{d.error}</span>}
                           {d && !("error" in d) && (
                             <div className="grid gap-3 sm:grid-cols-3">
                               <div>
                                 <p className="mb-1 font-semibold">Subject-wise</p>
-                                {d.subjects.length === 0 && <p className="text-muted-foreground">Abhi koi question nahi.</p>}
+                                {d.subjects.length === 0 && <p className="text-muted-foreground">No questions yet.</p>}
                                 {d.subjects.map((s) => (
                                   <p key={s.slug}>{s.name}: <b>{s.have}</b>{s.need != null ? ` / ${s.need}` : ""}{s.need != null && s.have < s.need && <span className="text-amber-600"> (kam)</span>}</p>
                                 ))}
@@ -209,16 +209,16 @@ export default function AdminPyqPapersPage() {
                               <div>
                                 <p className="mb-1 font-semibold">Question numbers</p>
                                 {d.numbering.missing === null
-                                  ? <p className="text-muted-foreground">Kisi question me questionNo nahi hai — mock upload order me chalega.</p>
+                                  ? <p className="text-muted-foreground">No question has a questionNo — the mock will follow upload order.</p>
                                   : d.numbering.missing.length === 0
-                                    ? <p className="text-emerald-700">Koi number gap nahi ✅</p>
+                                    ? <p className="text-emerald-700">No number gaps ✅</p>
                                     : <p className="text-amber-700">Missing: {d.numbering.missing.map((r) => `Q${r}`).join(", ")}</p>}
-                                <p className="text-muted-foreground">{d.numbering.numbered} numbered · {d.numbering.unnumbered} bina number</p>
+                                <p className="text-muted-foreground">{d.numbering.numbered} numbered · {d.numbering.unnumbered} without a number</p>
                               </div>
                               <div>
                                 <p className="mb-1 font-semibold">Total</p>
-                                <p>{d.built} / {d.target} questions{!d.patternLinked && " (pattern link nahi: 100 maane gaye)"}</p>
-                                {d.duplicatesDropped > 0 && <p className="text-amber-700">{d.duplicatesDropped} duplicate (same text) ginti me nahi liye.</p>}
+                                <p>{d.built} / {d.target} questions{!d.patternLinked && " (no pattern linked: 100 assumed)"}</p>
+                                {d.duplicatesDropped > 0 && <p className="text-amber-700">{d.duplicatesDropped} duplicate(s) (same text) not counted.</p>}
                               </div>
                             </div>
                           )}

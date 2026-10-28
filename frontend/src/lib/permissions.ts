@@ -20,7 +20,7 @@ export const PERMISSION_INFO: Record<
   PRACTICE: {
     label: "Practice Questions",
     emoji: "📗",
-    desc: "Sirf practice-only questions upload (apne uploads manage kar sakta hai)",
+    desc: "Upload practice-only questions (can manage their own uploads)",
     href: "/admin",
   },
   VOCABULARY: {

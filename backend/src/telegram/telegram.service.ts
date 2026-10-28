@@ -154,20 +154,20 @@ export class TelegramService {
     const lines: string[] = ['📊 <b>Your Progress Report</b>', ''];
 
     if (target.hasPlan) {
-      lines.push(`🎯 Aaj ka target: <b>${target.todayDone}/${target.dailyTarget}</b> questions (${target.remaining} baaki)`);
+      lines.push(`🎯 Today's target: <b>${target.todayDone}/${target.dailyTarget}</b> questions (${target.remaining} left)`);
       lines.push(`🔥 Streak: <b>${target.streak} din</b>`);
     } else {
-      lines.push(`🎯 Koi study plan set nahi hai. Dashboard se ek banayein: <a href="https://sscprephub.in/dashboard">Open app</a>`);
+      lines.push(`🎯 No study plan is set. Create one from the dashboard: <a href="https://sscprephub.in/dashboard">Open app</a>`);
     }
 
     if (weakChapters.length > 0) {
       const weakest = weakChapters[0];
       lines.push('');
       lines.push(`📉 Sabse kamzor topic: <b>${weakest.chapterName}</b> (${weakest.subject}) — accuracy <b>${weakest.accuracy}%</b>`);
-      lines.push(`🔗 Abhi practice karein: <a href="https://sscprephub.in/question-bank?chapterId=${weakest.chapterId}">Open app</a>`);
+      lines.push(`🔗 Practise now: <a href="https://sscprephub.in/question-bank?chapterId=${weakest.chapterId}">Open app</a>`);
     } else {
       lines.push('');
-      lines.push('📉 Weak topics dekhne ke liye pehle kam se kam ek mock/sectional test submit karein.');
+      lines.push('📉 Submit at least one mock / sectional test first to see your weak topics.');
     }
 
     // Most recent submitted attempt, if any — score/rank/percentile.
@@ -651,8 +651,8 @@ Keep practicing to climb higher! 🚀`;
 
     return `⏰ <b>Subscription Expiring Soon</b>
 
-Aapka <b>${planName}</b> plan <b>${daysLeft} din</b> mein khatam ho raha hai (${dateStr}).
+Your <b>${planName}</b> plan expires in <b>${daysLeft} day(s)</b> (${dateStr}).
 
-Bina rukawat access jaari rakhne ke liye abhi renew karein: <a href="https://sscprephub.in/subscription">Renew now</a>`;
+Renew now to keep uninterrupted access: <a href="https://sscprephub.in/subscription">Renew now</a>`;
   }
 }

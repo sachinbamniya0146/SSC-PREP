@@ -146,7 +146,7 @@ export default function ReviewPage() {
           <div>
             <h1 className="text-2xl font-bold">Review Queue</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Galat/skipped questions yahan aate hain — 1d → 3d → 7d → 14d → 30d intervals pe.
+              Wrong and skipped questions come here — repeated at 1d → 3d → 7d → 14d → 30d intervals.
             </p>
           </div>
           <span className="rounded-full bg-muted px-4 py-1.5 text-sm font-semibold text-muted-foreground">
@@ -163,9 +163,9 @@ export default function ReviewPage() {
         {!loading && stats && stats.dueCount === 0 && (
           <div className="card mt-10 p-10 text-center">
             <p className="text-4xl">🎉</p>
-            <h2 className="mt-3 text-xl font-bold">Sab clear hai!</h2>
+            <h2 className="mt-3 text-xl font-bold">All caught up!</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Abhi koi review due nahi hai. Quiz me galat jawab de kar yahan cards collect karo.
+              Nothing is due for review right now. Answer questions wrong in a quiz and the cards will collect here.
             </p>
             <a href="/quiz" className="btn btn-primary mt-6 inline-block">
               Aaj ka Quiz Do →
@@ -233,7 +233,7 @@ export default function ReviewPage() {
                     👁 Show Answer
                   </button>
                   <p className="mt-3 text-center text-xs text-muted-foreground">
-                    Pehle khud socho, phir answer dekho — yahi spaced repetition ka asli faida hai.
+                    Think first, then check the answer — that is the real benefit of spaced repetition.
                   </p>
                 </>
               ) : (

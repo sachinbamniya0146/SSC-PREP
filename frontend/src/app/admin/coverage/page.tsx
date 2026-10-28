@@ -210,7 +210,7 @@ export default function CoveragePage() {
         }
         setReport(await r.json());
       } catch (e) {
-        setErr(e instanceof Error ? e.message : "Coverage report load nahi hua");
+        setErr(e instanceof Error ? e.message : "Could not load the coverage report");
       } finally {
         setLoading(false);
       }
@@ -236,7 +236,7 @@ export default function CoveragePage() {
         }
         setYearReport(await r.json());
       } catch (e) {
-        setYearErr(e instanceof Error ? e.message : "Year-wise report load nahi hua");
+        setYearErr(e instanceof Error ? e.message : "Could not load the year-wise report");
       } finally {
         setYearLoading(false);
       }
@@ -260,7 +260,7 @@ export default function CoveragePage() {
         setDrillExams(data.exams || []);
         setDrillExamId((prev) => prev || data.exams?.[0]?.examId || "");
       } catch (e) {
-        setDrillErr(e instanceof Error ? e.message : "Drilldown load nahi hua");
+        setDrillErr(e instanceof Error ? e.message : "Could not load the drilldown");
       } finally {
         setDrillLoading(false);
       }
@@ -363,7 +363,7 @@ export default function CoveragePage() {
       <main className="mx-auto max-w-6xl px-4 py-8">
         <h1 className="text-2xl font-bold">📊 Content Coverage Dashboard</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Kis exam ke kis subject mein kitne questions hain, aur unme se kitne Hindi mein translate ho chuke hain.
+          How many questions each subject of each exam has, and how many of them are already translated into Hindi.
         </p>
 
         {/* NEW ("chuninda questions ka Excel export jinme Hindi translation
@@ -377,7 +377,7 @@ export default function CoveragePage() {
           onClick={downloadGaps}
           disabled={gapsDownloading}
           className="mt-4 rounded-lg border border-danger/40 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
-          title="Sirf vo questions jisme Hindi translation, solution, ya answer key missing hai — PYQ aur Practice dono"
+          title="Only questions whose Hindi translation, solution or answer key is missing — both PYQ and Practice"
         >
           {gapsDownloading ? "Exporting..." : "⬇️ Download Gaps Excel (Missing Hindi/Solution/Answer)"}
         </button>
@@ -464,7 +464,7 @@ export default function CoveragePage() {
                 <tbody>
                   {visibleRows.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">Koi data nahi mila.</td>
+                      <td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">No data found.</td>
                     </tr>
                   )}
                   {visibleRows.map((r, i) => (
@@ -543,7 +543,7 @@ export default function CoveragePage() {
                 <tbody>
                   {yearVisibleRows.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">Koi data nahi mila.</td>
+                      <td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">No data found.</td>
                     </tr>
                   )}
                   {yearVisibleRows.map((r, i) => (
@@ -573,8 +573,8 @@ export default function CoveragePage() {
         ) : activeTab === "drilldown" && drillExams.length > 0 ? (
           <>
             <p className="mt-4 text-sm text-muted-foreground">
-              Har exam ke hisaab se dekhein kaunse Subject → Chapter → Topic → Sub-Topic mein abhi tak koi question
-              upload nahi hua — seedha wahi slug copy karke Bulk Upload sheet mein daal dein.
+              See, exam by exam, which Subject → Chapter → Topic → Sub-Topic still has no question
+              uploaded — copy that slug straight into the Bulk Upload sheet.
             </p>
 
             {/* Exam toggle */}
@@ -609,7 +609,7 @@ export default function CoveragePage() {
                   </div>
                   {filteredEmptyRows.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                      🎉 {selectedDrillExam.examName} ke liye har chapter/topic/sub-topic mein kam se kam ek question hai.
+                      🎉 {selectedDrillExam.examName} has at least one question in every chapter / topic / sub-topic.
                     </p>
                   ) : (
                     <div className="max-h-96 overflow-y-auto">
@@ -654,10 +654,10 @@ export default function CoveragePage() {
 
                 {/* Full tree */}
                 <div className="mb-2 mt-6 flex items-center gap-2">
-                  <h2 className="font-semibold">Poora Coverage Tree</h2>
+                  <h2 className="font-semibold">Full coverage tree</h2>
                   <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
                     <input type="checkbox" checked={onlyEmptyChapters} onChange={(e) => setOnlyEmptyChapters(e.target.checked)} />
-                    Sirf 0-question chapters dikhayein
+                    Show only chapters with 0 questions
                   </label>
                 </div>
                 <div className="space-y-3">
@@ -694,8 +694,8 @@ export default function CoveragePage() {
                                 <div className="mt-2 ml-4 space-y-1.5 border-l border-border pl-4">
                                   {ch.topics.length === 0 && (
                                     <p className="text-xs text-muted-foreground">
-                                      Is chapter mein abhi koi topic define nahi hai —{" "}
-                                      <a href="/admin/topics" className="text-primary underline">Topic Manage se add karein</a>.
+                                      This chapter has no topics defined yet —{" "}
+                                      <a href="/admin/topics" className="text-primary underline">Add one from Manage Topics</a>.
                                     </p>
                                   )}
                                   {ch.topics.map((t) => (

@@ -100,7 +100,7 @@ export default function StaffAccessPage() {
     try {
       setData(await api<StaffList>("/admin/staff"));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Staff list load nahi hui");
+      setError(e instanceof Error ? e.message : "Could not load the staff list");
     } finally {
       setLoading(false);
     }
@@ -134,7 +134,7 @@ export default function StaffAccessPage() {
   async function grant() {
     if (!found) return;
     if (newPerms.length === 0) {
-      setError("Kam se kam ek department select karein");
+      setError("Select at least one department");
       return;
     }
     setBusy(true);
@@ -144,7 +144,7 @@ export default function StaffAccessPage() {
         method: "POST",
         body: JSON.stringify({ email: found.email, permissions: newPerms }),
       });
-      flash(`${found.email} ko access mil gaya`);
+      flash(`${found.email} now has access`);
       setEmail("");
       setFound(null);
       setNewPerms([]);
@@ -158,7 +158,7 @@ export default function StaffAccessPage() {
 
   async function saveEdit(id: string) {
     if (editPerms.length === 0) {
-      setError("Kam se kam ek department rakhein — ya poora access hata dein (Remove).");
+      setError("Keep at least one department — or remove all access (Remove).");
       return;
     }
     setBusy(true);
@@ -169,7 +169,7 @@ export default function StaffAccessPage() {
         body: JSON.stringify({ permissions: editPerms }),
       });
       setEditId(null);
-      flash("Access update ho gaya");
+      flash("Access updated");
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Update failed");
@@ -179,7 +179,7 @@ export default function StaffAccessPage() {
   }
 
   async function revoke(m: StaffMember) {
-    if (!window.confirm(`${m.email} ka staff access poori tarah hata dein? Ye wapas normal student ban jayega.`)) return;
+    if (!window.confirm(`Remove all staff access for ${m.email}? They will become a normal student again.`)) return;
     setBusy(true);
     setError("");
     try {
@@ -209,9 +209,9 @@ export default function StaffAccessPage() {
 
       <main className="mx-auto max-w-4xl px-4 py-6">
         <p className="mb-4 text-sm text-muted-foreground">
-          Kisi bhi registered student ki email daal kar use department-wise access dein. Har department alag hai —
-          Questions wala Vocabulary nahi dekh sakta, aur Vocabulary wala questions upload nahi kar sakta. Change kuch
-          seconds me apply ho jaata hai.
+          Enter any registered student's email to give them department-wise access. Every department is separate —
+          someone with Questions access cannot see Vocabulary, and someone with Vocabulary access cannot upload questions. A change
+          is applied within a few seconds.
         </p>
 
         {error && (
@@ -247,10 +247,10 @@ export default function StaffAccessPage() {
               <div className="rounded-lg border border-border bg-background p-3 text-sm">
                 <div className="font-semibold">{found.fullName}</div>
                 <div className="text-xs text-muted-foreground">
-                  {found.email} · abhi: {found.role}
+                  {found.email} · currently: {found.role}
                 </div>
                 {found.role === "ADMIN" && (
-                  <div className="mt-1 text-xs text-red-500">Ye ADMIN hai — iska access yahan se change nahi hota.</div>
+                  <div className="mt-1 text-xs text-red-500">This is an ADMIN — their access cannot be changed here.</div>
                 )}
               </div>
               {found.role !== "ADMIN" && (
@@ -261,7 +261,7 @@ export default function StaffAccessPage() {
                     disabled={busy || newPerms.length === 0}
                     className="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
                   >
-                    {found.role === "MODERATOR" ? "Access update karein" : "Access dein"}
+                    {found.role === "MODERATOR" ? "Update access" : "Give access"}
                   </button>
                 </>
               )}
@@ -274,7 +274,7 @@ export default function StaffAccessPage() {
           <h2 className="mb-3 font-semibold">👥 Current staff {data ? `(${data.staff.length})` : ""}</h2>
           {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
           {!loading && data && data.staff.length === 0 && (
-            <p className="text-sm text-muted-foreground">Abhi koi staff member nahi hai.</p>
+            <p className="text-sm text-muted-foreground">There are no staff members yet.</p>
           )}
           <ul className="space-y-3">
             {data?.staff.map((m) => (
@@ -320,7 +320,7 @@ export default function StaffAccessPage() {
                 ) : (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {m.permissions.length === 0 && (
-                      <span className="text-xs text-muted-foreground">Koi department nahi</span>
+                      <span className="text-xs text-muted-foreground">No department</span>
                     )}
                     {m.permissions.map((p) => (
                       <span key={p} className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">

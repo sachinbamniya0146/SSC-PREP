@@ -131,7 +131,7 @@ export default function VocabWordDetailPage() {
                   href={`/vocabulary/${nextActionableWordSlug}`}
                   className="mt-4 inline-block rounded-lg border border-primary/40 bg-primary/5 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/10"
                 >
-                  👉 "{nextActionableWord}" seekhein aur 95%+ score karein (free) →
+                  👉 "{nextActionableWord}" — learn it and score 95%+ (free) →
                 </a>
               )}
               <div className="mt-6 flex flex-col gap-2">
@@ -151,7 +151,7 @@ export default function VocabWordDetailPage() {
                     <button onClick={() => pay({ vocabWordId: lockedWordId })} disabled={subscribing || !lockedWordId} className="btn w-full bg-primary py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50">
                       {subscribing ? "Redirecting…" : `Pay ₹${pricing?.wordUnlock.priceInr ?? 2} & unlock this word`}
                     </button>
-                    <button onClick={() => setConfirm("")} className="btn btn-outline w-full py-2 text-sm">Wapas / Back</button>
+                    <button onClick={() => setConfirm("")} className="btn btn-outline w-full py-2 text-sm">Back</button>
                   </div>
                 )}
                 {confirm === "all" && (
@@ -166,7 +166,7 @@ export default function VocabWordDetailPage() {
               </div>
             </>
           )}
-          <a href="/vocabulary" className="btn btn-outline mt-4 block py-2.5 text-sm">← Vocabulary list par wapas jaayein</a>
+          <a href="/vocabulary" className="btn btn-outline mt-4 block py-2.5 text-sm">← Back to the vocabulary list</a>
         </main>
       </div>
     );

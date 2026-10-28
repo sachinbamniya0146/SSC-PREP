@@ -20,6 +20,7 @@ import { MailService } from './mail.service';
 import { OtpService } from './otp.service';
 import { ReferralService } from '../referral/referral.service';
 import { istDateKey } from '../gamification/gamification.service';
+import { suspendedMessage } from '../common/support-contact';
 
 // BUGFIX: must stay in sync with the IST-day-boundary fix in
 // quiz/quiz.service.ts getToday() — that's what actually creates/reads
@@ -464,6 +465,7 @@ export class AuthService implements OnModuleInit {
 
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) throw new UnauthorizedException('User no longer exists');
+    if (user.isSuspended) throw new ForbiddenException(suspendedMessage());
 
     const pair = this.issueTokens(user.id, user.email, user.role, payload.sid);
     const newHash = createHash('sha256').update(pair.refreshToken).digest('hex');
@@ -638,11 +640,14 @@ export class AuthService implements OnModuleInit {
       hintQuota?: number;
       avatarUrl?: string | null;
       preferredLanguage?: string;
+      isSuspended?: boolean;
     },
     platform: 'WEB' | 'APP',
     deviceId?: string,
     userAgent?: string,
   ): Promise<Authenticated> {
+    // Suspended accounts never get a session (email login, Google login and signup all end here).
+    if (user.isSuspended) throw new ForbiddenException(suspendedMessage());
     // Single-device enforcement: revoke previous active session for this
     // user+platform, both in DB and Redis, then create the new one.
     const old = await this.prisma.deviceSession.findFirst({

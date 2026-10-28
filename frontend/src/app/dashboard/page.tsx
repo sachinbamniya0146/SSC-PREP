@@ -171,7 +171,7 @@ export default function DashboardPage() {
           <div className="mt-8 rounded-xl border border-primary/30 bg-primary/[0.04] p-5">
             <h2 className="font-semibold text-primary">Staff Tools</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Aapko ye departments assign kiye gaye hain.
+              These departments are assigned to you.
             </p>
             <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
               {staffPerms.length === 0 && (
@@ -278,11 +278,11 @@ export default function DashboardPage() {
                   wired to /admin/topics. */}
               <a href="/admin/topics" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
                 <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Topic Management</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Chapter ke andar topics banayein for topic-level analysis</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">Create topics inside chapters for topic-level analysis</div>
               </a>
               <a href="/admin/duplicate-topics" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
                 <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Duplicate Topics</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Same topic/sub-topic ke copies dhundo aur merge karo (undo ke saath)</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">Find copies of the same topic / sub-topic and merge them (with undo)</div>
               </a>
               {/* NEW ("admin pura ek ek question ko dekh paye"): every
                   Excel/CSV/JSON/Word bulk-upload question that goes
@@ -408,7 +408,7 @@ export default function DashboardPage() {
             <p className="mt-1.5 text-sm text-muted-foreground">{tr("Target exam + date, mark chapters, tomorrow's 9 AM test, daily revision.", "Target exam + date, chapters mark karein, kal 9 AM ka test, roz ka revision.")}</p>
           </a>
           <a href="/weak-topics" className="card card-hover border-danger/30 bg-danger/[0.04] p-5">
-            <h3 className="font-semibold">🎯 Meri Weak List</h3>
+            <h3 className="font-semibold">🎯 My Weak List</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">{tr("Chapters / topics / sub-topics you got wrong — strengthen them one by one.", "Galat hue chapter / topic / sub-topic — ek-ek ko strong karein.")}</p>
           </a>
           <a href="/mocks" className="card card-hover p-5">

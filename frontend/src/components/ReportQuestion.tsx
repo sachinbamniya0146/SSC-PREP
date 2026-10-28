@@ -241,7 +241,7 @@ function ReportChatThread({
           <p className="py-4 text-center text-xs text-muted-foreground">Loading…</p>
         ) : messages.length === 0 ? (
           <p className="py-4 text-center text-xs text-muted-foreground">
-            Report submit ho gaya. Admin ko iske baare mein aur batana hai to yahan likh sakte hain.
+            Your report was submitted. If you want to tell the admin more about it, write here.
           </p>
         ) : (
           messages.map((m) => {
@@ -263,7 +263,7 @@ function ReportChatThread({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder="Message likhein…"
+          placeholder="Write a message…"
           maxLength={4000}
           className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-xs"
         />

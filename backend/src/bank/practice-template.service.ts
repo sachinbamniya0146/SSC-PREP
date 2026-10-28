@@ -29,7 +29,7 @@ export class PracticeTemplateService {
     ws['!cols'] = PRACTICE_COLUMNS.map((c) => ({ wch: c.width }));
     PRACTICE_COLUMNS.forEach((c, i) => {
       const addr = XLSX.utils.encode_cell({ r: 0, c: i });
-      if (ws[addr]) (ws[addr] as any).c = [{ a: 'SSC Prep Hub', t: `${c.required ? '[ZAROORI] ' : '[optional] '}${c.hint}${c.example ? `\nExample: ${c.example}` : ''}` }];
+      if (ws[addr]) (ws[addr] as any).c = [{ a: 'SSC Prep Hub', t: `${c.required ? '[REQUIRED] ' : '[optional] '}${c.hint}${c.example ? `\nExample: ${c.example}` : ''}` }];
     });
     XLSX.utils.book_append_sheet(wb, ws, 'Questions');
 
@@ -46,14 +46,14 @@ export class PracticeTemplateService {
     set(second, 'correctAnswer', 'B'); set(second, 'explanation', 'Jana Gana Mana was written by Rabindranath Tagore.'); set(second, 'explanationHindi', 'जन गण मन रवीन्द्रनाथ टैगोर ने लिखा।'); set(second, 'difficulty', 'EASY');
     set(second, 'chapterId', 'history'); set(second, 'subjectId', 'general-awareness'); set(second, 'topicId', ''); set(second, 'marks', '1');
     const update = [...exAnswer];
-    set(update, 'id', '3f2504e0-4f89-41d3-9a0c-0305e82c3301  ← export se aaya ID: is row se wahi question UPDATE hoga');
+    set(update, 'id', '3f2504e0-4f89-41d3-9a0c-0305e82c3301  ← ID from an export: this row UPDATES that same question');
     const exWs = XLSX.utils.aoa_to_sheet([headers, exAnswer, second, update]);
     exWs['!cols'] = ws['!cols'];
     XLSX.utils.book_append_sheet(wb, exWs, 'Examples');
 
     // 3) Columns guide
-    const guide: string[][] = [['Column', 'Zaroori?', 'Kya likhna hai (Hinglish)', 'Example']];
-    for (const c of PRACTICE_COLUMNS) guide.push([c.key, c.required ? 'HAAN' : 'optional', c.hint, c.example]);
+    const guide: string[][] = [['Column', 'Required?', 'What to write', 'Example']];
+    for (const c of PRACTICE_COLUMNS) guide.push([c.key, c.required ? 'YES' : 'optional', c.hint, c.example]);
     const gWs = XLSX.utils.aoa_to_sheet(guide);
     gWs['!cols'] = [{ wch: 20 }, { wch: 10 }, { wch: 100 }, { wch: 40 }];
     XLSX.utils.book_append_sheet(wb, gWs, 'Columns guide');
@@ -62,27 +62,27 @@ export class PracticeTemplateService {
     const ins = [
       ['SSC Prep Hub — Practice Question Upload (Excel)'],
       [''],
-      ['KAISE BHAREIN'],
-      ['1. "Questions" sheet me har question ek row me likhein. Header (pehli row) mat badlein; * wale columns zaroori hain.'],
-      ['2. examId / subjectId / chapterId / correctAnswer / difficulty dropdown se chunein (cell par click -> teer).'],
-      ['3. Har question ke saath SOLUTION (explanation) zaroori hai — bina solution ke row upload nahi hoti.'],
-      ['4. Hindi text (questionTextHindi) khali ho to question save hota hai par students ko tab tak nahi dikhta jab tak Hindi na jude.'],
-      ['5. Practice upload me year / shift / paperCode nahi hote — ye question PYQ nahi, sirf practice me jata hai.'],
-      ['6. Upload se pehle "Check (kuch save nahi hoga)" dabayein: kitne naye, kitne update, kya galat — sab dikhega.'],
+      ['HOW TO FILL IT IN'],
+      ['1. In the "Questions" sheet write each question in one row. Do not change the header (first row); columns marked * are required.'],
+      ['2. Choose examId / subjectId / chapterId / correctAnswer / difficulty from the dropdown (click the cell -> arrow).'],
+      ['3. Every question needs a SOLUTION (explanation) — a row without a solution is not uploaded.'],
+      ['4. If the Hindi text (questionTextHindi) is empty, the question is saved but students will not see it until Hindi is added.'],
+      ['5. A Practice upload has no year / shift / paperCode — these questions go to Practice only, not to PYQ.'],
+      ['6. Before uploading, press "Check (nothing will be saved)": it shows how many are new, how many are updates and what is wrong.'],
       [''],
-      ['PEHLE SE UPLOAD QUESTIONS EDIT KARNA (ID se update)'],
-      ['a. Manage Questions se "Download (Excel)" karein — file me pehla column id hota hai.'],
-      ['b. Jo cell badalna hai badlein. id column mat chhedein. Khali cell = "jaisa hai waisa rahe" (kuch mitta nahi).'],
-      ['c. Wahi file dobara upload karein — jin rows me id hai wo UPDATE hongi (duplicate nahi banegi). Jo rows me id khali hai wo naye question banengi.'],
-      ['d. Re-upload se exam / subject / chapter / topic nahi badalte — uske liye Manage Questions me "move" karein.'],
-      ['e. Har update purani value ko version history me save karta hai.'],
+      ['EDITING QUESTIONS THAT ARE ALREADY UPLOADED (update by ID)'],
+      ['a. Use "Download (Excel)" in Manage Questions — the first column of the file is the id.'],
+      ['b. Change the cells you want to change. Do not touch the id column. An empty cell = "keep as it is" (nothing is erased).'],
+      ['c. Upload the same file again — rows that have an id are UPDATED (no duplicate is created). Rows with an empty id become new questions.'],
+      ['d. A re-upload does not change the exam / subject / chapter / topic — use "move" in Manage Questions for that.'],
+      ['e. Every update saves the old value in the version history.'],
       [''],
-      ['Sheets: Questions (yahan bharein) · Examples (copy karne ke liye) · Columns guide · Reference IDs (sab slugs) · Lists (dropdown ka data, mat badlein)'],
+      ['Sheets: Questions (fill in here) · Examples (to copy from) · Columns guide · Reference IDs (all slugs) · Lists (dropdown data, do not change)'],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ins), 'Instructions');
 
     // 5) Reference IDs
-    const ref: string[][] = [['Type', 'Slug (ye likhein)', 'Naam (English)', 'Naam (हिंदी)', 'Parent']];
+    const ref: string[][] = [['Type', 'Slug (write this)', 'Name (English)', 'Name (हिंदी)', 'Parent']];
     for (const e of exams) ref.push(['Exam', e.slug, e.name, '', '']);
     for (const s of subjects) ref.push(['Subject', s.slug, s.name, s.nameHindi || '', '']);
     for (const c of chapters) ref.push(['Chapter', c.slug, c.name, c.nameHindi || '', subjectSlug.get(c.subjectId) ?? '']);
@@ -102,10 +102,10 @@ export class PracticeTemplateService {
     const col = (k: string) => PRACTICE_COLUMNS.findIndex((c) => c.key === k);
     const rng = (letter: string, n: number) => `Lists!$${letter}$2:$${letter}$${Math.max(2, n + 1)}`;
     const specs: ValidationSpec[] = [
-      { col: col('examId'), formula: rng('A', exams.length), title: 'examId', message: 'Dropdown se exam chunein (Reference IDs sheet me poori list).', strict: false },
-      { col: col('subjectId'), formula: rng('B', subjects.length), title: 'subjectId', message: 'Dropdown se subject chunein.', strict: false },
-      { col: col('chapterId'), formula: rng('C', chapters.length), title: 'chapterId', message: 'Dropdown se chapter chunein (chapter ka naam bhi chalta hai).', strict: false },
-      { col: col('correctAnswer'), formula: '"A,B,C,D"', title: 'correctAnswer', message: 'Sirf A, B, C ya D.', strict: true },
+      { col: col('examId'), formula: rng('A', exams.length), title: 'examId', message: 'Choose the exam from the dropdown (full list in the Reference IDs sheet).', strict: false },
+      { col: col('subjectId'), formula: rng('B', subjects.length), title: 'subjectId', message: 'Choose the subject from the dropdown.', strict: false },
+      { col: col('chapterId'), formula: rng('C', chapters.length), title: 'chapterId', message: 'Choose the chapter from the dropdown (the chapter name also works).', strict: false },
+      { col: col('correctAnswer'), formula: '"A,B,C,D"', title: 'correctAnswer', message: 'Only A, B, C or D.', strict: true },
       { col: col('difficulty'), formula: '"EASY,MEDIUM,HARD"', title: 'difficulty', message: 'EASY, MEDIUM ya HARD.', strict: true },
     ];
     const zip = await JSZip.loadAsync(raw);

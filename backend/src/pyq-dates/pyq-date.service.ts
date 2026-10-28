@@ -98,8 +98,8 @@ export class PyqDateService {
 
   async acceptProposed(questionId: string) {
     const map = await this.prisma.pyqDateMap.findUnique({ where: { questionId }, include: { question: { select: { id: true, examId: true, year: true, shift: true, paperCode: true, examTier: true, examDate: true } } } });
-    if (!map) throw new NotFoundException('Is question ki date-mapping entry nahi mili.');
-    if (!map.proposedDate || !isValidIsoDate(map.proposedDate)) throw new BadRequestException('Koi proposed date nahi hai.');
+    if (!map) throw new NotFoundException('No date-mapping entry was found for this question.');
+    if (!map.proposedDate || !isValidIsoDate(map.proposedDate)) throw new BadRequestException('There is no proposed date.');
     const q = map.question as QuestionForRun;
     await this.applyDate(q, map.proposedDate, normalizeTier(map.examTier), map.id, { note: `Admin ne accept ki (${map.agreeCount}/${map.passesDone} passes).` });
     await this.flushPapers();
@@ -108,11 +108,11 @@ export class PyqDateService {
 
   async setManual(questionId: string, dto: { examDate?: string; examTier?: string | null }) {
     const iso = toIsoDate(dto.examDate);
-    if (!iso) throw new BadRequestException('Date galat hai — YYYY-MM-DD ya DD-MM-YYYY likhein.');
+    if (!iso) throw new BadRequestException('Invalid date — use YYYY-MM-DD or DD-MM-YYYY.');
     const tier = dto.examTier === null || dto.examTier === '' || dto.examTier === undefined ? null : normalizeTier(dto.examTier);
-    if (dto.examTier && !tier) throw new BadRequestException('Tier sirf Tier 1 ya Tier 2 ho sakta hai.');
+    if (dto.examTier && !tier) throw new BadRequestException('Tier can only be Tier 1 or Tier 2.');
     const q = await this.prisma.question.findUnique({ where: { id: questionId }, select: { id: true, year: true, examId: true, shift: true, paperCode: true } });
-    if (!q) throw new NotFoundException('Question nahi mila.');
+    if (!q) throw new NotFoundException('Question not found.');
     await this.prisma.$transaction([
       this.prisma.question.update({ where: { id: questionId }, data: { examDate: iso, ...(tier ? { examTier: tier } : {}) } }),
       this.prisma.pyqDateMap.upsert({
@@ -128,7 +128,7 @@ export class PyqDateService {
 
   async reject(questionId: string) {
     const r = await this.prisma.pyqDateMap.updateMany({ where: { questionId }, data: { status: 'NOT_FOUND', note: 'Admin ne proposed date reject ki.', finishedAt: new Date() } });
-    if (r.count === 0) throw new NotFoundException('Entry nahi mili.');
+    if (r.count === 0) throw new NotFoundException('Entry not found.');
     return { ok: true };
   }
 
@@ -287,7 +287,7 @@ export class PyqDateService {
         },
       },
     });
-    if (!m) throw new NotFoundException('Is question ki date-mapping entry nahi mili.');
+    if (!m) throw new NotFoundException('No date-mapping entry was found for this question.');
     return m;
   }
 }

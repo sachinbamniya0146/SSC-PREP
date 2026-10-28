@@ -88,7 +88,7 @@ export default function AdminImageTools() {
     <div className="mb-4 rounded-xl border border-border bg-card p-4">
       <h3 className="text-sm font-bold">🖼️ Image questions — storage & bulk image upload</h3>
       <p className="mt-1 text-xs text-muted-foreground">
-        Pehle storage check karein, phir images upload karke URL Excel ke <code>questionImageUrl</code> / <code>optionImageUrls</code> column me paste karein.
+        First check the storage, then upload the images and paste their URLs into the <code>questionImageUrl</code> / <code>optionImageUrls</code> columns of your Excel file.
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">

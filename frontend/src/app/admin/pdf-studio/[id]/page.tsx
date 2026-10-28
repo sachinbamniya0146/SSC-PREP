@@ -156,13 +156,13 @@ export default function BatchDetailPage() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setErr(d?.message || "Retry fail ho gaya");
+        setErr(d?.message || "Retry failed");
       } else {
-        setMsg("Chunk dobara queue mein daal diya gaya.");
+        setMsg("The chunk was queued again.");
         load();
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Retry fail ho gaya");
+      setErr(e instanceof Error ? e.message : "Retry failed");
     } finally {
       setBusy("");
     }
@@ -194,13 +194,13 @@ export default function BatchDetailPage() {
         // blocked it — surface the backend's exact reason instead of a
         // generic failure so the admin knows what to fix (Hindi text /
         // verification status) before retrying.
-        setErr(d?.message || "Approve fail ho gaya");
+        setErr(d?.message || "Approve failed");
         return;
       }
-      setMsg(chapterId ? "Question approve ho gaya (chapter set ke saath)." : "Question approve ho gaya.");
+      setMsg(chapterId ? "Question approved (with the chapter set)." : "Question approved.");
       load();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Approve fail ho gaya");
+      setErr(e instanceof Error ? e.message : "Approve failed");
     } finally {
       setBusy("");
     }
@@ -226,7 +226,7 @@ export default function BatchDetailPage() {
   );
 
   const rejectOne = async (id: string) => {
-    const reason = prompt("Reject karne ki wajah likho:");
+    const reason = prompt("Write the reason for rejecting:");
     if (!reason) return;
     setBusy(id);
     setErr("");
@@ -238,13 +238,13 @@ export default function BatchDetailPage() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setErr(d?.message || "Reject fail ho gaya");
+        setErr(d?.message || "Reject failed");
         return;
       }
-      setMsg("Question reject kar diya gaya.");
+      setMsg("Question rejected.");
       load();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Reject fail ho gaya");
+      setErr(e instanceof Error ? e.message : "Reject failed");
     } finally {
       setBusy("");
     }
@@ -252,7 +252,7 @@ export default function BatchDetailPage() {
 
   const bulkApprove = async () => {
     if (selected.size === 0) return;
-    const ok = confirm(`${selected.size} questions bulk-approve karne hain? Sirf VERIFIED_* + bilingual-complete wale hi approve honge, baaki queue mein reh jaayenge.`);
+    const ok = confirm(`Bulk-approve ${selected.size} questions? Only VERIFIED_* and bilingual-complete ones will be approved; the rest stay in the queue.`);
     if (!ok) return;
     setBusy("bulk");
     setErr("");
@@ -264,14 +264,14 @@ export default function BatchDetailPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(d?.message || "Bulk approve fail ho gaya");
+        setErr(d?.message || "Bulk approve failed");
         return;
       }
-      setMsg(`✅ ${d.approved} approved, ${d.skippedUnverified} skip ho gaye (unverified/bilingual incomplete).`);
+      setMsg(`✅ ${d.approved} approved, ${d.skippedUnverified} skipped (unverified / bilingual incomplete).`);
       setSelected(new Set());
       load();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Bulk approve fail ho gaya");
+      setErr(e instanceof Error ? e.message : "Bulk approve failed");
     } finally {
       setBusy("");
     }
@@ -280,7 +280,7 @@ export default function BatchDetailPage() {
   const rollback = async () => {
     if (!batch) return;
     const ok = confirm(
-      `⚠️ Poora batch rollback karna hai? Iske ${batch.questions.length} questions deactivate ho jaayenge aur search index se hat jaayenge. Yeh undo nahi ho sakta.`,
+      `⚠️ Roll back the whole batch? Its ${batch.questions.length} questions will be deactivated and removed from the search index. This cannot be undone.`,
     );
     if (!ok) return;
     setBusy("rollback");
@@ -292,13 +292,13 @@ export default function BatchDetailPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(d?.message || "Rollback fail ho gaya");
+        setErr(d?.message || "Rollback failed");
         return;
       }
-      setMsg(`Batch rollback ho gaya — ${d.rolledBack} questions deactivate kiye gaye.`);
+      setMsg(`Batch rolled back — ${d.rolledBack} questions deactivated.`);
       load();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Rollback fail ho gaya");
+      setErr(e instanceof Error ? e.message : "Rollback failed");
     } finally {
       setBusy("");
     }
@@ -315,8 +315,8 @@ export default function BatchDetailPage() {
   if (!batch) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background">
-        <p className="text-muted-foreground">Batch nahi mila.</p>
-        <a href="/admin/pdf-studio" className="btn btn-outline">← Batches par wapas jao</a>
+        <p className="text-muted-foreground">Batch not found.</p>
+        <a href="/admin/pdf-studio" className="btn btn-outline">← Back to batches</a>
       </div>
     );
   }
@@ -370,7 +370,7 @@ export default function BatchDetailPage() {
             ))}
           </div>
           {failedChunks.length > 0 && (
-            <p className="mt-2 text-xs text-danger">{failedChunks.length} chunk(s) fail hue — inhe individually retry karo.</p>
+            <p className="mt-2 text-xs text-danger">{failedChunks.length} chunk(s) failed — retry them individually.</p>
           )}
         </div>
 
@@ -401,7 +401,7 @@ export default function BatchDetailPage() {
 
           <div className="mt-4 space-y-3">
             {questions.length === 0 && (
-              <p className="card p-6 text-center text-sm text-muted-foreground">Is batch se abhi tak koi question extract nahi hua (ya sab filter ho gaye).</p>
+              <p className="card p-6 text-center text-sm text-muted-foreground">No question has been extracted from this batch yet (or all were filtered out).</p>
             )}
             {questions.map((q) => (
               <div key={q.id} className="card p-4">
@@ -415,7 +415,7 @@ export default function BatchDetailPage() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm">{q.questionText}</p>
                     {!q.questionTextHindi && (
-                      <p className="mt-1 text-[11px] font-semibold text-warning">⚠️ Hindi translation missing — publish gate (v3 §6.3) approve hone nahi dega</p>
+                      <p className="mt-1 text-[11px] font-semibold text-warning">⚠️ Hindi translation missing — the publish gate (v3 §6.3) will not allow approval</p>
                     )}
                     <p className="mt-2 text-xs text-muted-foreground">
                       {q.exam?.name || "—"} {q.chapter?.name ? `· ${q.chapter.name}` : ""} · Ans: {q.correctAnswer}
@@ -437,7 +437,7 @@ export default function BatchDetailPage() {
                           onChange={(e) => setChapterPick((prev) => ({ ...prev, [q.id]: e.target.value }))}
                           className="rounded-lg border border-border bg-background px-2 py-1 text-xs"
                         >
-                          <option value="">— Chapter set nahi hai —</option>
+                          <option value="">— No chapter set —</option>
                           {(q.subjectId ? chaptersBySubject[q.subjectId] : [])?.map((c) => (
                             <option key={c.id} value={c.id}>{c.name}</option>
                           ))}
@@ -460,7 +460,7 @@ export default function BatchDetailPage() {
                         <textarea
                           value={explanationDraft[q.id]?.explanation ?? q.explanation ?? ""}
                           onChange={(e) => setExplanationDraft((prev) => ({ ...prev, [q.id]: { ...prev[q.id], explanation: e.target.value } }))}
-                          placeholder="Explanation yahaan khaali hai — khud type karo"
+                          placeholder="Explanation is empty here — type it yourself"
                           className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
                           rows={2}
                         />
@@ -472,7 +472,7 @@ export default function BatchDetailPage() {
                           className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
                           rows={2}
                         />
-                        <p className="text-[10px] text-muted-foreground">Edits yahaan Approve dabane par hi save hongi (saath mein publish bhi ho jaayega).</p>
+                        <p className="text-[10px] text-muted-foreground">Edits are saved only when you press Approve (the question is published at the same time).</p>
                       </div>
                     )}
                   </div>

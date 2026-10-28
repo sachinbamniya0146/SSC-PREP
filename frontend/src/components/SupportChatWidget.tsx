@@ -120,7 +120,7 @@ export function SupportChatWidget({ currentUserId }: { currentUserId: string }) 
               <p className="py-6 text-center text-xs text-muted-foreground">Connecting…</p>
             ) : messages.length === 0 ? (
               <p className="py-6 text-center text-xs text-muted-foreground">
-                Koi bhi sawaal ya problem ho, yahan directly admin se pooch sakte hain.
+                If you have any question or problem, you can ask the admin directly here.
               </p>
             ) : (
               messages.map((m) => {

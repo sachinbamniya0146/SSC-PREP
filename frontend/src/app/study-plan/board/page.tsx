@@ -199,7 +199,7 @@ export default function StudyPlanBoardPage() {
                   if (!rv.available) {
                     return (
                       <div className="rounded-xl border border-dashed border-border bg-card p-4 text-sm">
-                        <h2 className="font-bold">🔁 Daily Revision (zaroori)</h2>
+                        <h2 className="font-bold">🔁 Daily Revision (required)</h2>
                         <p className="mt-1 text-xs text-muted-foreground">{rv.message?.en}</p>
                       </div>
                     );
@@ -207,15 +207,15 @@ export default function StudyPlanBoardPage() {
                   return (
                     <div className={`rounded-xl border p-4 ${rv.doneToday ? "border-emerald-500/40 bg-emerald-500/5" : "border-amber-500/50 bg-amber-500/5"}`}>
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h2 className="text-sm font-bold">🔁 Aaj ka Revision — 50 questions</h2>
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${rv.doneToday ? "bg-emerald-500/15 text-emerald-700" : "bg-amber-500/20 text-amber-700"}`}>{rv.doneToday ? "✅ DONE" : "ZAROORI"}</span>
+                        <h2 className="text-sm font-bold">🔁 Today's Revision — 50 questions</h2>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${rv.doneToday ? "bg-emerald-500/15 text-emerald-700" : "bg-amber-500/20 text-amber-700"}`}>{rv.doneToday ? "✅ DONE" : "REQUIRED"}</span>
                       </div>
-                      <p className="mt-1 text-xs text-muted-foreground">{rv.subjects?.join(" · ")} — aapke pure kiye {rv.completeChapters} chapters me se {rv.chapters?.length} chapter aaj. {rv.notRevisedInWeek ? `${rv.notRevisedInWeek} chapter 7 din se revise nahi hue.` : "Sab chapters is hafte revise hue."} Poora syllabus ~{rv.syllabusCycleDays} din me ghoom jata hai.</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{rv.subjects?.join(" · ")} — {rv.chapters?.length} of your {rv.completeChapters} completed chapters today. {rv.notRevisedInWeek ? `${rv.notRevisedInWeek} chapter(s) have not been revised for 7 days.` : "All chapters were revised this week."} The full syllabus cycles in about {rv.syllabusCycleDays} days.</p>
                       <ul className="mt-2 flex flex-wrap gap-1.5">
                         {rv.chapters?.map((c) => <li key={c.id} className="rounded-md bg-background px-2 py-0.5 text-[11px]">{c.name}</li>)}
                       </ul>
                       {rv.doneToday ? (
-                        <p className="mt-3 text-sm font-semibold text-emerald-700">Aaj ka revision ho gaya{rv.scorePct != null ? ` — score ${rv.scorePct}%` : ""}. Shabaash! 🎉</p>
+                        <p className="mt-3 text-sm font-semibold text-emerald-700">Today's revision is done{rv.scorePct != null ? ` — score ${rv.scorePct}%` : ""}. Well done! 🎉</p>
                       ) : (
                         <a href={`/test?plantest=${rv.testId}`} className="mt-3 block rounded-lg bg-amber-600 px-4 py-3 text-center text-sm font-bold text-white">{tr("Start revision →", "Revision shuru karein →")}</a>
                       )}
@@ -223,7 +223,7 @@ export default function StudyPlanBoardPage() {
                   );
                 })()}
                 <div className="rounded-xl border border-border bg-card p-4">
-                  <h2 className="text-sm font-bold">📖 Aaj padhne wale chapters</h2>
+                  <h2 className="text-sm font-bold">📖 Chapters to study today</h2>
                   {today.today.chaptersToStudy.length === 0 ? (
                     <p className="mt-2 text-sm text-muted-foreground">Sab chapters complete! 🎉 Ab full mocks do.</p>
                   ) : (

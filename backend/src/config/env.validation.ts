@@ -54,6 +54,8 @@ export const envValidationSchema = Joi.object({
   SMTP_USER: Joi.string().allow('').default(''),
   SMTP_PASS: Joi.string().allow('').default(''),
   SMTP_FROM: Joi.string().email().default('noreply@sscprephub.in'),
+  // Mailbox students are told to write to (suspension / deletion e-mails). Falls back to ADMIN_DEFAULT_EMAIL.
+  SUPPORT_EMAIL: Joi.string().email().allow('').default(''),
 
   // Google OAuth — optional
   GOOGLE_CLIENT_ID: Joi.string().allow('').default(''),

@@ -115,7 +115,7 @@ export class VocabUploadService {
       ['2. Sheet "Questions": one row per quiz question. wordSlug must match a word\'s slug (slug defaults to the lower-case word).'],
       ['3. correctAnswer must be A, B, C or D.'],
       ['4. synonymsJson / antonymsJson must be a JSON list, e.g. ["a","b"] — or leave empty.'],
-      ['5. Jo word / question pehle se system me hai (same word, same question text) wo duplicate nahi banta — uska content Excel ke naye data se UPDATE ho jata hai. Khali cell purani value ko nahi mitata. Answer key ya solution missing ho to question upload nahi hota — report me dikhta hai.'],
+      ['5. A word / question that already exists in the system (same word, same question text) is not duplicated — its content is UPDATED from the new Excel data. An empty cell does not erase the old value. A question with a missing answer key or solution is not uploaded — it is listed in the report.'],
       ['6. You can upload only the Questions sheet to add questions to words that already exist.'],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(notes), 'Instructions');
@@ -141,14 +141,14 @@ export class VocabUploadService {
     try {
       workbook = XLSX.read(buffer, { type: 'buffer' });
     } catch {
-      throw new BadRequestException('Excel file padhi nahi ja saki — file corrupt ho sakti hai.');
+      throw new BadRequestException('The Excel file could not be read — it may be corrupt.');
     }
 
     const wordsSheet = workbook.Sheets['Words'];
     const questionsSheet = workbook.Sheets['Questions'];
     if (!wordsSheet && !questionsSheet) {
       throw new BadRequestException(
-        `Is file me 'Words' ya 'Questions' naam ki sheet nahi mili. Sheets mili: ${workbook.SheetNames.join(', ')}`,
+        `This file has no sheet named 'Words' or 'Questions'. Sheets found: ${workbook.SheetNames.join(', ')}`,
       );
     }
 
@@ -215,13 +215,13 @@ export class VocabUploadService {
         try {
           if (!wordText) throw new Error("'word' column is required");
           const slug = cell(row, 'slug') || slugify(wordText);
-          if (!slug) throw new Error("word se valid slug nahi ban paya");
+          if (!slug) throw new Error("a valid slug could not be built from the word");
           const wordKey = normText(wordText);
           if (wordSlugsThisFile.has(slug) || wordTextsThisFile.has(wordKey)) {
             result.wordsSkipped++;
             result.skipped.push({
               sheet: 'Words', row: rowNum, word: wordText, code: 'DUPLICATE_WORD',
-              message: 'Ye word isi file me pehle bhi aa chuka hai — skip kiya',
+              message: 'This word already appeared earlier in this file — skipped',
             });
             rep(wordText).wordStatus = 'DUPLICATE';
             continue;
@@ -246,7 +246,7 @@ export class VocabUploadService {
           const meaningEnglish = cell(row, 'meaningEnglish');
           if (!meaningHindi || !meaningEnglish) {
             result.wordsSkipped++;
-            result.skipped.push({ sheet: 'Words', row: rowNum, word: wordText, code: 'MISSING_MEANING', message: "'meaningHindi' aur 'meaningEnglish' dono zaroori hain — word skip hua" });
+            result.skipped.push({ sheet: 'Words', row: rowNum, word: wordText, code: 'MISSING_MEANING', message: "'meaningHindi' and 'meaningEnglish' are both required — word skipped" });
             rep(wordText).wordStatus = 'MISSING_MEANING';
             continue;
           }
@@ -338,27 +338,27 @@ export class VocabUploadService {
         const row = rows[i];
         const rowNum = i + 2;
         const wordSlug = cell(row, 'wordSlug');
-        const wordLabel = wordSlug || '(wordSlug khali)';
+        const wordLabel = wordSlug || '(wordSlug empty)';
         try {
-          if (!wordSlug) { skipQ(rowNum, wordLabel, 'MISSING_FIELD', "'wordSlug' khali hai"); continue; }
+          if (!wordSlug) { skipQ(rowNum, wordLabel, 'MISSING_FIELD', "'wordSlug' is empty"); continue; }
           const wordId = slugToId.get(wordSlug);
-          if (!wordId) { skipQ(rowNum, wordLabel, 'UNKNOWN_WORD', `wordSlug '${wordSlug}' kisi word se match nahi hua (spelling check karein, ya Words sheet me pehle add karein)`); continue; }
+          if (!wordId) { skipQ(rowNum, wordLabel, 'UNKNOWN_WORD', `wordSlug '${wordSlug}' does not match any word (check the spelling, or add it to the Words sheet first)`); continue; }
 
           const questionText = cell(row, 'questionText');
-          if (!questionText) { skipQ(rowNum, wordLabel, 'MISSING_FIELD', 'questionText khali hai'); continue; }
+          if (!questionText) { skipQ(rowNum, wordLabel, 'MISSING_FIELD', 'questionText is empty'); continue; }
           const optA = cell(row, 'optionA'), optB = cell(row, 'optionB'), optC = cell(row, 'optionC'), optD = cell(row, 'optionD');
-          if (!optA || !optB || !optC || !optD) { skipQ(rowNum, wordLabel, 'MISSING_OPTIONS', 'Char options (A-D) me se koi khali hai'); continue; }
+          if (!optA || !optB || !optC || !optD) { skipQ(rowNum, wordLabel, 'MISSING_OPTIONS', 'One of the four options (A–D) is empty'); continue; }
           const correctAnswer = cell(row, 'correctAnswer').toUpperCase();
           if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) {
-            skipQ(rowNum, wordLabel, 'MISSING_ANSWER', correctAnswer ? `Answer key galat hai ("${correctAnswer}")` : 'Answer key (correctAnswer) missing hai');
+            skipQ(rowNum, wordLabel, 'MISSING_ANSWER', correctAnswer ? `The answer key is invalid ("${correctAnswer}")` : 'The answer key (correctAnswer) is missing');
             continue;
           }
           const explanation = optionalCell(row, 'explanation');
           const explanationHindi = optionalCell(row, 'explanationHindi');
-          if (!explanation) { skipQ(rowNum, wordLabel, 'MISSING_SOLUTION', 'Solution/explanation missing hai'); continue; }
+          if (!explanation) { skipQ(rowNum, wordLabel, 'MISSING_SOLUTION', 'Solution / explanation is missing'); continue; }
 
           const key = `${wordId}::${normText(questionText)}`;
-          if (seenInFile.has(key)) { skipQ(rowNum, wordLabel, 'DUPLICATE_QUESTION', 'Ye question isi file me pehle bhi aa chuka hai — skip kiya'); continue; }
+          if (seenInFile.has(key)) { skipQ(rowNum, wordLabel, 'DUPLICATE_QUESTION', 'This question already appeared earlier in this file — skipped'); continue; }
           seenInFile.add(key);
 
           const optionsJson = [

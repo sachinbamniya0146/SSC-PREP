@@ -162,8 +162,8 @@ export class ReportErrorService {
     if (!q) throw new NotFoundException('Question not found');
     const senderRole = adminRole === 'MODERATOR' ? 'MODERATOR' : 'ADMIN';
     const text =
-      `🙏 Dhanyavaad! Aapne Question #${q.questionNo} me jo problem batayi thi, wo theek kar di gayi hai. ` +
-      `Ab aap us question ko dobara dekh sakte hain. Aapki wajah se platform behtar bana.\n` +
+      `🙏 Thank you! The problem you reported in Question #${q.questionNo} has been fixed. ` +
+      `You can view that question again. The platform is better because of you.\n` +
       `धन्यवाद! आपने प्रश्न #${q.questionNo} में जो समस्या बताई थी, वह ठीक कर दी गई है। ` +
       `अब आप उस प्रश्न को दोबारा देख सकते हैं। आपकी वजह से प्लेटफ़ॉर्म बेहतर बना।`;
     const encrypted = encryptMessageContent(text);

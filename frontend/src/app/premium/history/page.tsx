@@ -36,7 +36,7 @@ export default function PaymentHistoryPage() {
       if (!res.ok) throw new Error();
       setRows(await res.json());
     } catch {
-      setError("Payment history load nahi ho payi.");
+      setError("Could not load your payment history.");
       setRows([]);
     }
   }, []);
@@ -58,7 +58,7 @@ export default function PaymentHistoryPage() {
       <main className="mx-auto max-w-3xl px-4 py-8">
         {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
         {rows === null && <p className="text-sm text-muted-foreground">Loading…</p>}
-        {rows && rows.length === 0 && !error && <p className="text-sm text-muted-foreground">Abhi tak koi payment nahi hui.</p>}
+        {rows && rows.length === 0 && !error && <p className="text-sm text-muted-foreground">No payments yet.</p>}
         <ul className="space-y-3">
           {rows?.map((r) => (
             <li key={r.id} className="rounded-xl border bg-card p-4">

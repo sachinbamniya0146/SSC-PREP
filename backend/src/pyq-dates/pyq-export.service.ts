@@ -248,7 +248,7 @@ export class PyqExportService {
 
   async exportPyq(f: PyqExportFilters, groupBy: PyqGroupBy, layout: PyqLayout): Promise<{ buffer: Buffer; contentType: string; filename: string; rows: number }> {
     const { rows, total, truncated } = await this.load(f);
-    if (rows.length === 0) throw new BadRequestException('In filters ke saath koi PYQ question nahi mila.');
+    if (rows.length === 0) throw new BadRequestException('No PYQ questions match these filters.');
     const stamp = new Date().toISOString().slice(0, 10);
     const label = groupBy === 'none' ? 'all' : groupBy;
 

@@ -9,6 +9,7 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { MonetizationService } from '../monetization/monetization.service';
 import { checkCouponInput, checkPlanInput, couponStatus, planPricing } from '../monetization/pricing.util';
 import { AdminService } from './admin.service';
+import { UserModerationService, DELETED_USER_EMAIL } from './user-moderation.service';
 import { PayoutService } from '../referral/payout.service';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { readPatternSections } from '../common/section-plan';
@@ -28,6 +29,7 @@ export class AdminController {
     private monetization: MonetizationService,
     private adminService: AdminService,
     private payoutService: PayoutService,
+    private userModeration: UserModerationService,
   ) {}
 
   // ---- Dashboard Overview ----
@@ -233,12 +235,13 @@ export class AdminController {
     @Query('limit') limit = '20',
     @Query('search') search?: string,
     @Query('role') role?: string,
+    @Query('status') status?: string,
   ) {
     const pageNum = Math.max(1, Number(page));
     const limitNum = Math.min(100, Math.max(1, Number(limit)));
     const skip = (pageNum - 1) * limitNum;
 
-    const where: Prisma.UserWhereInput = {};
+    const where: Prisma.UserWhereInput = { email: { not: DELETED_USER_EMAIL } };
     if (search) {
       where.OR = [
         { email: { contains: search, mode: 'insensitive' } },
@@ -246,6 +249,8 @@ export class AdminController {
       ];
     }
     if (role) where.role = role as Role;
+    if (status === 'suspended') where.isSuspended = true;
+    if (status === 'active') where.isSuspended = false;
 
     const [users, total] = await Promise.all([
       this.prisma.user.findMany({
@@ -262,6 +267,9 @@ export class AdminController {
           avatarUrl: true,
           preferredLanguage: true,
           isEmailVerified: true,
+          isSuspended: true,
+          suspendedAt: true,
+          suspendedReason: true,
           createdAt: true,
           // Only the live subscription (ACTIVE and not yet expired). Superseded /
           // lapsed rows used to be listed too, so a user could show several
@@ -279,6 +287,39 @@ export class AdminController {
     ]);
 
     return { users, total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) };
+  }
+
+  // ---- Suspend / restore / permanently delete a student ----
+  @Post('users/:id/suspend')
+  suspendUser(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { reason?: string; notify?: boolean },
+  ) {
+    return this.userModeration.suspend(admin.userId, id, body);
+  }
+
+  @Post('users/:id/unsuspend')
+  unsuspendUser(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { notify?: boolean },
+  ) {
+    return this.userModeration.unsuspend(admin.userId, id, body);
+  }
+
+  @Get('users/:id/delete-preview')
+  deleteUserPreview(@CurrentUser() admin: AuthenticatedUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.userModeration.deletePreview(admin.userId, id);
+  }
+
+  @Post('users/:id/delete')
+  deleteUser(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { confirmEmail?: string; reason?: string; notify?: boolean; acknowledge?: boolean },
+  ) {
+    return this.userModeration.deletePermanently(admin.userId, id, body);
   }
 
   @Post('users/:id/subscription/cancel')

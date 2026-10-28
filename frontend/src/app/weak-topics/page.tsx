@@ -109,7 +109,7 @@ export default function WeakTopicsPage() {
       <header className="sticky top-0 z-30 border-b border-border bg-background/90 px-4 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-3xl items-center justify-between">
           <a href="/dashboard" className="text-sm font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-          <span className="text-sm font-bold">🎯 Meri weak list</span>
+          <span className="text-sm font-bold">🎯 My weak list</span>
           <a href="/study-plan" className="text-xs font-semibold text-primary">Planner</a>
         </div>
       </header>
@@ -123,11 +123,11 @@ export default function WeakTopicsPage() {
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-3"><p className="text-2xl font-extrabold text-red-600">{data.summary.weakCount}</p><p className="text-[11px] text-muted-foreground">Weak topics</p></div>
               <div className="rounded-xl border border-border bg-card p-3"><p className="text-2xl font-extrabold">{data.summary.chaptersAffected}</p><p className="text-[11px] text-muted-foreground">Chapters</p></div>
-              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3"><p className="text-2xl font-extrabold text-emerald-600">{data.summary.strengthenedCount}</p><p className="text-[11px] text-muted-foreground">Strong ho gaye</p></div>
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3"><p className="text-2xl font-extrabold text-emerald-600">{data.summary.strengthenedCount}</p><p className="text-[11px] text-muted-foreground">Now strong</p></div>
             </div>
 
             <div className="rounded-xl border border-border bg-card p-3 text-xs text-muted-foreground">
-              💡 Topic tab tak <b>weak</b> rehta hai jab tak aap uski practice me <b>{pass}%+</b> score nahi laate. Kisi bhi test me galat hone par wo wapas yahan aa jata hai.
+              💡 A topic stays <b>weak</b> until you score <b>{pass}%+</b> in its practice. If you get it wrong in any test, it comes back here.
             </div>
 
             {data.weak.length === 0 ? (
@@ -140,7 +140,7 @@ export default function WeakTopicsPage() {
               <>
                 <div className="flex flex-wrap items-center gap-2">
                   <select value={subjectFilter} onChange={(e) => setSubjectFilter(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-2 text-sm">
-                    <option value="">Saare subjects</option>
+                    <option value="">All subjects</option>
                     {subjects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
                   </select>
                   <select value={size} onChange={(e) => setSize(Number(e.target.value))} className="rounded-lg border border-border bg-background px-2 py-2 text-sm">
@@ -154,7 +154,7 @@ export default function WeakTopicsPage() {
                     <h2 className="mb-2 text-base font-bold">{g.chapter}</h2>
                     <ul className="space-y-2">
                       {g.items.map((w) => {
-                        const label = [w.topicName, w.subTopicName].filter(Boolean).join(" › ") || "Poora chapter";
+                        const label = [w.topicName, w.subTopicName].filter(Boolean).join(" › ") || "Whole chapter";
                         const score = w.lastPracticeScore;
                         return (
                           <li key={w.id} className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
@@ -185,7 +185,7 @@ export default function WeakTopicsPage() {
 
             {data.strengthened.length > 0 && (
               <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
-                <h2 className="mb-2 text-sm font-bold text-emerald-700">✅ Strong ho gaye ({data.strengthened.length})</h2>
+                <h2 className="mb-2 text-sm font-bold text-emerald-700">✅ Now strong ({data.strengthened.length})</h2>
                 <ul className="space-y-1 text-xs">
                   {data.strengthened.map((s) => <li key={s.id} className="break-words">{s.label || s.chapterName}{s.lastPracticeScore != null ? ` — ${s.lastPracticeScore}%` : ""}</li>)}
                 </ul>

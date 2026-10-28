@@ -190,11 +190,11 @@ export default function PdfStudioPage() {
     setUploadErr("");
     setUploadMsg("");
     if (!file) {
-      setUploadErr("PDF file chuniye pehle.");
+      setUploadErr("Please choose a PDF file first.");
       return;
     }
     if (!subjectId) {
-      setUploadErr("Subject zaroori hai — backend UploadPdfDto isse maangta hai.");
+      setUploadErr("A subject is required — the backend UploadPdfDto needs it.");
       return;
     }
     setUploading(true);
@@ -221,16 +221,16 @@ export default function PdfStudioPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setUploadErr(d?.message || `Upload fail ho gaya (HTTP ${r.status})`);
+        setUploadErr(d?.message || `Upload failed (HTTP ${r.status})`);
         return;
       }
-      setUploadMsg(`✅ Upload ho gaya — batch #${d?.batch?.id?.slice(0, 8) || "?"} banaya, ${d?.batch?.totalChunks ?? "?"} chunks queue mein daale gaye.`);
+      setUploadMsg(`✅ Uploaded — batch #${d?.batch?.id?.slice(0, 8) || "?"} created, ${d?.batch?.totalChunks ?? "?"} chunks queued.`);
       setFile(null);
       const pdfFileInput = document.getElementById("pdf-file-input") as HTMLInputElement | null;
       if (pdfFileInput) pdfFileInput.value = "";
       loadBatches();
     } catch (e) {
-      setUploadErr(e instanceof Error ? e.message : "Upload fail ho gaya.");
+      setUploadErr(e instanceof Error ? e.message : "Upload failed.");
     } finally {
       setUploading(false);
     }
@@ -262,7 +262,7 @@ export default function PdfStudioPage() {
       <main className="mx-auto max-w-6xl px-4 py-8">
         <h1 className="text-2xl font-bold">📄 PDF Ingestion Studio</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          PDF upload karo → auto-extraction chalega → questions yahan review karke approve karo.
+          Upload a PDF → automatic extraction runs → review and approve the questions here.
         </p>
 
         {/* Pipeline stats overview */}
@@ -289,9 +289,9 @@ export default function PdfStudioPage() {
 
         {/* Upload form */}
         <form onSubmit={submitUpload} className="card mt-8 p-6">
-          <h2 className="font-bold">⬆️ Naya PDF Upload Karo</h2>
+          <h2 className="font-bold">⬆️ Upload a new PDF</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            500MB tak PDF chalega. Upload ke baad automatically 25-page chunks mein OCR/extraction queue mein lagta hai.
+            PDFs up to 500 MB are accepted. After upload, it is automatically split into 25-page chunks and queued for OCR / extraction.
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
@@ -360,16 +360,16 @@ export default function PdfStudioPage() {
             </div>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            💡 Ek hi full-paper PDF (jisme English + Reasoning + Quant + GA sab ek saath hon) ko is form se
-            <b> 4 baar upload karo</b> — har baar wahi file, alag Subject aur us section ke Start/End Page daalke.
-            Page range khali chhodoge to poora PDF ek hi subject me process hoga.
+            💡 For one full-paper PDF (with English + Reasoning + Quant + GA together), use this form
+            <b> 4 times</b> — the same file every time, with a different Subject and that section's Start / End page.
+            If you leave the page range empty, the whole PDF is processed as a single subject.
           </p>
 
           {uploadErr && <p className="mt-3 text-sm text-danger">{uploadErr}</p>}
           {uploadMsg && <p className="mt-3 text-sm text-success">{uploadMsg}</p>}
 
           <button type="submit" disabled={uploading} className="btn btn-primary mt-4 disabled:opacity-60">
-            {uploading ? "Uploading..." : "Upload & Extraction Shuru Karo"}
+            {uploading ? "Uploading..." : "Upload & start extraction"}
           </button>
         </form>
 
@@ -407,7 +407,7 @@ export default function PdfStudioPage() {
             {loading ? (
               <p className="mt-6 text-sm text-muted-foreground">Loading batches...</p>
             ) : batches.length === 0 ? (
-              <p className="card mt-6 p-6 text-center text-sm text-muted-foreground">Abhi tak koi batch nahi hai. Upar se PDF upload karke shuru karo.</p>
+              <p className="card mt-6 p-6 text-center text-sm text-muted-foreground">No batches yet. Upload a PDF above to get started.</p>
             ) : (
               <div className="mt-4 space-y-3">
                 {batches.map((b) => (
@@ -474,7 +474,7 @@ export default function PdfStudioPage() {
 
             <div className="space-y-3">
               {translationRows.length === 0 && (
-                <p className="card p-6 text-center text-sm text-muted-foreground">Translation queue khaali hai — sab kuch translate ho chuka hai 🎉</p>
+                <p className="card p-6 text-center text-sm text-muted-foreground">The translation queue is empty — everything is translated 🎉</p>
               )}
               {translationRows.map((r) => (
                 <div key={r.id} className="card p-4">

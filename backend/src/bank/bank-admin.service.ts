@@ -237,14 +237,14 @@ export class BankAdminService {
     if (Array.isArray(ids) && ids.length > 0) {
       const clean = [...new Set(ids.map((i) => String(i)).filter(Boolean))];
       if (clean.length > MAX_BULK) {
-        throw new BadRequestException(`Ek baar me maximum ${MAX_BULK} questions select kar sakte hain (aapne ${clean.length} diye).`);
+        throw new BadRequestException(`You can select at most ${MAX_BULK} questions at a time (you gave ${clean.length}).`);
       }
       return clean;
     }
     if (filter) {
       if (this.isEmptyFilter(filter)) {
         throw new BadRequestException(
-          'Koi filter select nahi hai — poore question bank par ek saath action allowed nahi hai (galti se sab delete/move na ho jaye). Pehle exam/subject/chapter/upload-batch me se koi filter lagayein.',
+          'No filter is selected — an action on the whole question bank at once is not allowed (so nothing is deleted / moved by mistake). Apply an exam / subject / chapter / upload-batch filter first.',
         );
       }
       // same word-wise search the list screen used, so "all matching" == what the admin sees
@@ -255,7 +255,7 @@ export class BankAdminService {
         take: MAX_BULK + 1,
       });
       if (rows.length > MAX_BULK) {
-        throw new BadRequestException(`Filter se ${MAX_BULK}+ questions match ho rahe hain — filter aur narrow karein (ek baar me max ${MAX_BULK}).`);
+        throw new BadRequestException(`The filter matches more than ${MAX_BULK} questions — narrow the filter (max ${MAX_BULK} at a time).`);
       }
       return rows.map((r) => r.id);
     }
@@ -387,7 +387,7 @@ export class BankAdminService {
       if (!chapter) throw new BadRequestException('Chapter not found');
       data = { subjectId: chapter.subjectId, chapterId: chapter.id, topicId: null, subTopicId: null };
     } else {
-      throw new BadRequestException('Target chapter / topic / sub-topic select karein');
+      throw new BadRequestException('Select the target chapter / topic / sub-topic');
     }
 
     const ids = await this.resolveTargetIds(input.ids, input.filter);
@@ -537,12 +537,12 @@ export class BankAdminService {
     const qCount = await this.prisma.question.count({ where: { chapterId: id } });
     if (qCount > 0) {
       throw new BadRequestException(
-        `"${chapter.name}" me ${qCount} question(s) hain — pehle unhe kisi dusre chapter me Move karein ya is chapter ko dusre chapter me Merge karein, phir delete karein.`,
+        `"${chapter.name}" has ${qCount} question(s) — first move them to another chapter or merge this chapter into another chapter, then delete it.`,
       );
     }
     const purchases = await this.prisma.chapterPurchase.count({ where: { chapterId: id } });
     if (purchases > 0) {
-      throw new BadRequestException('Is chapter ke paid purchases maujood hain — delete karne se students ka purchase record chala jayega. Iski jagah Merge use karein.');
+      throw new BadRequestException('This chapter has paid purchases — deleting it would lose the students\' purchase records. Use Merge instead.');
     }
     await this.prisma.chapter.delete({ where: { id } }); // topics/sub-topics cascade
     this.clearCaches();
@@ -555,12 +555,12 @@ export class BankAdminService {
     if (!subject) throw new NotFoundException('Subject not found');
     const qCount = await this.prisma.question.count({ where: { subjectId: id } });
     if (qCount > 0) {
-      throw new BadRequestException(`"${subject.name}" me ${qCount} question(s) hain — subject delete nahi ho sakta.`);
+      throw new BadRequestException(`"${subject.name}" has ${qCount} question(s) — the subject cannot be deleted.`);
     }
     try {
       await this.prisma.subject.delete({ where: { id } }); // chapters/topics/sub-topics cascade
     } catch {
-      throw new BadRequestException(`"${subject.name}" ko delete nahi kar sakte — koi study-plan/PDF/aur record is subject se jude hue hain.`);
+      throw new BadRequestException(`"${subject.name}" cannot be deleted — study plans / PDFs / other records are linked to this subject.`);
     }
     this.clearCaches();
     return { deleted: true };
@@ -612,13 +612,13 @@ export class BankAdminService {
    * now-empty duplicate chapter is deleted.
    */
   async mergeChapter(sourceId: string, targetId: string) {
-    if (sourceId === targetId) throw new BadRequestException('Source aur target chapter same hain');
+    if (sourceId === targetId) throw new BadRequestException('Source and target chapters are the same');
     const [src, dst] = await Promise.all([
       this.prisma.chapter.findUnique({ where: { id: sourceId } }),
       this.prisma.chapter.findUnique({ where: { id: targetId } }),
     ]);
     if (!src || !dst) throw new NotFoundException('Chapter not found');
-    if (src.subjectId !== dst.subjectId) throw new BadRequestException('Sirf ek hi subject ke chapters merge ho sakte hain');
+    if (src.subjectId !== dst.subjectId) throw new BadRequestException('Only chapters of the same subject can be merged');
 
     const summary = await this.prisma.$transaction(
       async (tx) => {

@@ -115,31 +115,31 @@ function toForm(p: Pattern): Form {
 /** Same rules as the backend (assertPatternShape) so the admin sees the problem before pressing Save. */
 function validate(f: Form): string[] {
   const out: string[] = [];
-  if (!f.name.trim()) out.push("Pattern ka naam chahiye");
-  if (!f.examId) out.push("Exam chunna zaroori hai");
-  if (!(n(f.totalQuestions) > 0)) out.push("Total questions 0 se zyada hone chahiye");
-  if (!(n(f.totalMarks) > 0)) out.push("Total marks 0 se zyada hone chahiye");
-  if (!(n(f.durationMinutes) > 0)) out.push("Total duration 0 se zyada honi chahiye");
-  if (f.sections.length === 0) out.push("Kam se kam ek section chahiye");
+  if (!f.name.trim()) out.push("Pattern name is required");
+  if (!f.examId) out.push("Please choose an exam");
+  if (!(n(f.totalQuestions) > 0)) out.push("Total questions must be greater than 0");
+  if (!(n(f.totalMarks) > 0)) out.push("Total marks must be greater than 0");
+  if (!(n(f.durationMinutes) > 0)) out.push("Total duration must be greater than 0");
+  if (f.sections.length === 0) out.push("At least one section is required");
   const seen = new Set<string>();
   f.sections.forEach((s, i) => {
     const label = `Section ${i + 1}${s.name ? ` (${s.name})` : ""}`;
-    if (!s.name.trim()) out.push(`${label}: naam chahiye`);
-    if (!(n(s.questions) > 0)) out.push(`${label}: questions > 0 hone chahiye`);
-    if (!(n(s.marks) > 0)) out.push(`${label}: marks > 0 hone chahiye`);
+    if (!s.name.trim()) out.push(`${label}: name is required`);
+    if (!(n(s.questions) > 0)) out.push(`${label}: questions must be greater than 0`);
+    if (!(n(s.marks) > 0)) out.push(`${label}: marks must be greater than 0`);
     if (f.lockPreviousSections) {
-      if (!(n(s.durationMinutes) > 0)) out.push(`${label}: lock ON ho to section ka time chahiye`);
-      if (!s.subjectSlug) out.push(`${label}: lock ON ho to subject chahiye`);
+      if (!(n(s.durationMinutes) > 0)) out.push(`${label}: a section time is required when lock is ON`);
+      if (!s.subjectSlug) out.push(`${label}: a subject is required when lock is ON`);
       const nm = `name:${s.name.trim().toLowerCase()}`;
-      if (s.name.trim() && seen.has(nm)) out.push(`${label}: do sections ka naam same hai`);
+      if (s.name.trim() && seen.has(nm)) out.push(`${label}: two sections have the same name`);
       seen.add(nm);
       if (s.subjectSlug) {
-        if (seen.has(s.subjectSlug)) out.push(`${label}: ye subject doosre section me bhi hai`);
+        if (seen.has(s.subjectSlug)) out.push(`${label}: this subject is already used in another section`);
         seen.add(s.subjectSlug);
       }
     }
-    if (s.negativeMarks !== "" && n(s.negativeMarks) < 0) out.push(`${label}: minus 0 ya usse zyada hona chahiye`);
-    if (s.scribeMinutes !== "" && n(s.scribeMinutes) < n(s.durationMinutes)) out.push(`${label}: scribe time section ke time se kam nahi ho sakta`);
+    if (s.negativeMarks !== "" && n(s.negativeMarks) < 0) out.push(`${label}: negative marks must be 0 or more`);
+    if (s.scribeMinutes !== "" && n(s.scribeMinutes) < n(s.durationMinutes)) out.push(`${label}: scribe time cannot be less than the section time`);
   });
   return out;
 }
@@ -316,9 +316,9 @@ export default function AdminPatternsPage() {
   const warnings = React.useMemo(() => {
     if (!form) return [] as string[];
     const w: string[] = [];
-    if (n(form.totalQuestions) > 0 && sums.q !== n(form.totalQuestions)) w.push(`Sections ke questions ka jod ${sums.q} hai, total ${n(form.totalQuestions)} hai`);
-    if (n(form.totalMarks) > 0 && sums.m !== n(form.totalMarks)) w.push(`Sections ke marks ka jod ${sums.m} hai, total ${n(form.totalMarks)} hai`);
-    if (form.lockPreviousSections && n(form.durationMinutes) > 0 && sums.d !== n(form.durationMinutes)) w.push(`Sections ke time ka jod ${sums.d} min hai, total ${n(form.durationMinutes)} min hai`);
+    if (n(form.totalQuestions) > 0 && sums.q !== n(form.totalQuestions)) w.push(`Sections add up to ${sums.q} questions, but the total is ${n(form.totalQuestions)}`);
+    if (n(form.totalMarks) > 0 && sums.m !== n(form.totalMarks)) w.push(`Sections add up to ${sums.m} marks, but the total is ${n(form.totalMarks)}`);
+    if (form.lockPreviousSections && n(form.durationMinutes) > 0 && sums.d !== n(form.durationMinutes)) w.push(`Sections add up to ${sums.d} min, but the total is ${n(form.durationMinutes)} min`);
     return w;
   }, [form, sums]);
 
@@ -462,7 +462,7 @@ export default function AdminPatternsPage() {
         title={t("Exam patterns", "Exam patterns")}
         subtitle={t(
           "Sections, marks, timers and strict sectional lock. Link mocks to a pattern so they run exactly like the real exam.",
-          "Sections, marks, timer aur strict sectional lock. Mocks ko pattern se jodein taaki wo asli exam jaise chalein.",
+          "Sections, marks, timer and strict sectional lock. Attach mocks to a pattern so they run like the real exam.",
         )}
         actions={
           <>
@@ -496,7 +496,7 @@ export default function AdminPatternsPage() {
               <p className="text-xs text-muted-foreground">
                 {t(
                   "Marks per question, minus marking, total and duration from the SSC notices. Only these numbers change; your names, timers and lock stay.",
-                  "SSC notice ke hisaab se marks, minus marking, total aur duration. Sirf ye numbers badalte hain; aapke naam, timer aur lock wahi rehte hain.",
+                  "Marks, negative marking, totals and duration as per the SSC notice. Only these numbers change; your names, timers and locks stay the same.",
                 )}
               </p>
             </div>
@@ -659,7 +659,7 @@ export default function AdminPatternsPage() {
                         <span className="block text-xs text-muted-foreground">
                           {t(
                             "Each section has its own clock; a closed section can never be re-opened. Needs time and subject on every section.",
-                            "Har section ka apna clock; band section dobara nahi khulta. Har section me time aur subject chahiye.",
+                            "Each section has its own clock; a closed section cannot be reopened. Every section needs a time and a subject.",
                           )}
                         </span>
                       </span>
@@ -781,7 +781,7 @@ export default function AdminPatternsPage() {
                   <p className="text-xs text-muted-foreground">
                     {t(
                       "Only press this after you have compared every number above with the official SSC notice. It writes “VERIFIED” + date + your reference at the top of the note.",
-                      "Ye tabhi dabayein jab upar ke har number ko official SSC notice se mila liya ho. Ye note ke upar “VERIFIED” + date + aapka reference likh deta hai.",
+                      "Press this only after every number above has been checked against the official SSC notice. It writes “VERIFIED” + the date + your reference at the top of the note.",
                     )}
                   </p>
                 </section>

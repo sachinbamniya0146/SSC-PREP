@@ -96,7 +96,7 @@ export default function VocabRevisionPage() {
         body: JSON.stringify({ answers }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d?.messages?.en || d?.message || "Submit fail hua");
+      if (!r.ok) throw new Error(d?.messages?.en || d?.message || "Could not submit. Please try again.");
       setResult(d);
       setSession(null);
     } catch (e: any) {
@@ -202,7 +202,7 @@ export default function VocabRevisionPage() {
           <div className="mt-4 flex flex-wrap gap-2">
             {result.wrongWords.map((w) => (
               <a key={w.slug} href={`/vocabulary/${w.slug}/quiz`} className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
-                {w.word} → 95%+ score karein
+                {w.word} → score 95%+
               </a>
             ))}
           </div>

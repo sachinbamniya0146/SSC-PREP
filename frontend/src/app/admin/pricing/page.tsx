@@ -157,7 +157,7 @@ export default function AdminPricingPage() {
       setPlans(p.plans);
       setCoupons(c.coupons);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Load nahi hua");
+      setError(e instanceof Error ? e.message : "Could not load");
     } finally {
       setLoading(false);
     }
@@ -340,8 +340,8 @@ function CouponsTab({
     if (!form) return;
     setFormError("");
     const value = Number(form.value);
-    if (!Number.isFinite(value) || value <= 0) return setFormError("Discount value daalein (0 se zyada).");
-    if (form.kind === "PCT" && value > 100) return setFormError("Percentage 100 se zyada nahi ho sakta.");
+    if (!Number.isFinite(value) || value <= 0) return setFormError("Enter a discount value greater than 0.");
+    if (form.kind === "PCT" && value > 100) return setFormError("A percentage cannot be more than 100.");
     const body: Record<string, unknown> = {
       description: form.description.trim() || null,
       discountPct: form.kind === "PCT" ? value : null,
@@ -360,15 +360,15 @@ function CouponsTab({
     try {
       if (form.id) {
         await api(`/admin/coupons/${form.id}`, { method: "PATCH", body: JSON.stringify(body) });
-        flash(`Coupon ${form.code} update ho gaya.`);
+        flash(`Coupon ${form.code} updated.`);
       } else {
         await api("/admin/coupons", { method: "POST", body: JSON.stringify({ ...body, code: form.code }) });
-        flash(`Coupon ${form.code} ban gaya.`);
+        flash(`Coupon ${form.code} created.`);
       }
       setForm(null);
       await reload();
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Save nahi hua");
+      setFormError(e instanceof Error ? e.message : "Could not save");
     } finally {
       setSaving(false);
     }
@@ -377,28 +377,28 @@ function CouponsTab({
   async function toggle(c: AdminCoupon) {
     try {
       await api(`/admin/coupons/${c.id}`, { method: "PATCH", body: JSON.stringify({ isActive: !c.isActive }) });
-      flash(c.isActive ? `${c.code} pause kiya.` : `${c.code} chalu kiya.`);
+      flash(c.isActive ? `${c.code} paused.` : `${c.code} activated.`);
       await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Update nahi hua");
+      setError(e instanceof Error ? e.message : "Could not update");
     }
   }
 
   async function remove(c: AdminCoupon) {
-    if (!window.confirm(`Coupon ${c.code} delete karein? (sirf bina use wale coupon delete hote hain)`)) return;
+    if (!window.confirm(`Delete coupon ${c.code}? (Only coupons that have never been used can be deleted.)`)) return;
     try {
       await api(`/admin/coupons/${c.id}`, { method: "DELETE" });
-      flash(`${c.code} delete ho gaya.`);
+      flash(`${c.code} deleted.`);
       await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete nahi hua");
+      setError(e instanceof Error ? e.message : "Could not delete");
     }
   }
 
   const copy = async (code: string) => {
     try {
       await navigator.clipboard.writeText(code);
-      flash(`${code} copy ho gaya.`);
+      flash(`${code} copied.`);
     } catch {
       flash(code);
     }
@@ -444,7 +444,7 @@ function CouponsTab({
           </div>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Field label="Coupon code" hint={form.id ? "Code badla nahi ja sakta." : "3–24 characters: letters, numbers, - or _ (auto upper-case)."}>
+            <Field label="Coupon code" hint={form.id ? "The code cannot be changed." : "3–24 characters: letters, numbers, - or _ (auto upper-case)."}>
               <div className="flex gap-2">
                 <input
                   value={form.code}
@@ -478,29 +478,29 @@ function CouponsTab({
                 ))}
               </div>
             </div>
-            <Field label={form.kind === "PCT" ? "Discount %" : "Discount ₹"} hint={form.kind === "PCT" ? "1 – 100. 100 = free plan." : "Plan ke price se zyada nahi kategi."}>
+            <Field label={form.kind === "PCT" ? "Discount %" : "Discount ₹"} hint={form.kind === "PCT" ? "1 – 100. 100 = free plan." : "The discount cannot exceed the plan price."}>
               <input inputMode="decimal" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} className={inputCls} />
             </Field>
             {form.kind === "PCT" && (
-              <Field label="Max discount ₹ (optional)" hint="Bade plan par % coupon ki upar limit. Khali = no cap.">
+              <Field label="Max discount ₹ (optional)" hint="Upper limit for a % coupon on big plans. Empty = no cap.">
                 <input inputMode="decimal" value={form.maxDiscountInr} onChange={(e) => setForm({ ...form, maxDiscountInr: e.target.value })} placeholder="e.g. 200" className={inputCls} />
               </Field>
             )}
-            <Field label="Minimum order ₹ (optional)" hint="Is amount se sasta plan ho to coupon nahi chalega.">
+            <Field label="Minimum order ₹ (optional)" hint="The coupon will not work on plans cheaper than this amount.">
               <input inputMode="decimal" value={form.minOrderInr} onChange={(e) => setForm({ ...form, minOrderInr: e.target.value })} placeholder="e.g. 299" className={inputCls} />
             </Field>
 
-            <Field label="Total uses" hint="Kul kitni baar chal sakta hai. 0 = unlimited.">
+            <Field label="Total uses" hint="How many times it can be used in total. 0 = unlimited.">
               <input inputMode="numeric" value={form.maxUses} onChange={(e) => setForm({ ...form, maxUses: e.target.value.replace(/\D/g, "") })} className={inputCls} />
             </Field>
             <Field label="Uses per student" hint="Ek student kitni baar. Normal: 1. 0 = unlimited.">
               <input inputMode="numeric" value={form.perUserLimit} onChange={(e) => setForm({ ...form, perUserLimit: e.target.value.replace(/\D/g, "") })} className={inputCls} />
             </Field>
 
-            <Field label="Starts (optional)" hint="Is time se pehle coupon nahi chalega.">
+            <Field label="Starts (optional)" hint="The coupon will not work before this time.">
               <input type="datetime-local" value={form.startsAt} onChange={(e) => setForm({ ...form, startsAt: e.target.value })} className={inputCls} />
             </Field>
-            <Field label="Expires (optional)" hint="Khali = kabhi expire nahi.">
+            <Field label="Expires (optional)" hint="Empty = never expires.">
               <input type="datetime-local" value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} className={inputCls} />
               <span className="mt-2 flex flex-wrap gap-1.5">
                 {[["24 hours", plusHours(24)], ["7 days", plusDays(7)], ["30 days", plusDays(30)]].map(([l, v]) => (
@@ -512,7 +512,7 @@ function CouponsTab({
 
             <div className="sm:col-span-2">
               <span className="mb-1 block text-sm font-semibold">Valid on</span>
-              <p className="mb-2 text-[11px] text-muted-foreground">Kuch select na karein to coupon SAARE plans par chalega.</p>
+              <p className="mb-2 text-[11px] text-muted-foreground">If you select nothing, the coupon works on ALL plans.</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {plans.filter((p) => p.isActive || form.planIds.includes(p.id)).map((p) => (
                   <TickBox
@@ -529,11 +529,11 @@ function CouponsTab({
             <div className="grid gap-2 sm:col-span-2 sm:grid-cols-2">
               <TickBox checked={form.stackWithOffer} onChange={(v) => setForm({ ...form, stackWithOffer: v })}>
                 <span className="font-semibold text-foreground">Allow with a running plan offer</span>
-                <span className="block text-[11px]">Band karne par coupon sirf un plans par chalega jinpe offer nahi chal raha.</span>
+                <span className="block text-[11px]">When off, the coupon works only on plans that have no running offer.</span>
               </TickBox>
               <TickBox checked={form.isActive} onChange={(v) => setForm({ ...form, isActive: v })}>
                 <span className="font-semibold text-foreground">Active</span>
-                <span className="block text-[11px]">Band = students ko "not active" dikhega.</span>
+                <span className="block text-[11px]">Off = students will see it as "not active".</span>
               </TickBox>
             </div>
           </div>
@@ -541,7 +541,7 @@ function CouponsTab({
           {preview && (
             <p className="mt-4 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
               Preview ({preview.plan}): {inr(preview.amount)} → student pays <b className="text-foreground">{preview.final <= 0 ? "FREE" : inr(preview.final)}</b> (saves {inr(preview.discount)}).
-              Final number server calculate karta hai.
+              The server calculates the final number.
             </p>
           )}
           {formError && <p role="alert" className="mt-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{formError}</p>}
@@ -555,7 +555,7 @@ function CouponsTab({
       <ul className="mt-4 space-y-3">
         {shown.length === 0 && (
           <li className="card p-8 text-center text-sm text-muted-foreground">
-            {coupons.length === 0 ? "Abhi koi coupon nahi hai. “New coupon” se banayein." : "Is filter me koi coupon nahi."}
+            {coupons.length === 0 ? "There are no coupons yet. Create one with “New coupon”." : "No coupons match this filter."}
           </li>
         )}
         {shown.map((c) => {
@@ -698,9 +698,9 @@ function PlansTab({
     setFormError("");
     const price = Number(form.priceInr);
     const months = Number(form.durationMonths);
-    if (!form.name.trim()) return setFormError("Plan ka naam likhein.");
-    if (!Number.isFinite(price) || price < 1) return setFormError("Price kam se kam ₹1 hona chahiye.");
-    if (!Number.isInteger(months) || months < 1) return setFormError("Duration poore months me likhein (1, 3, 6, 12…).");
+    if (!form.name.trim()) return setFormError("Enter the plan name.");
+    if (!Number.isFinite(price) || price < 1) return setFormError("The price must be at least ₹1.");
+    if (!Number.isInteger(months) || months < 1) return setFormError("Enter the duration in whole months (1, 3, 6, 12…).");
     const body = {
       name: form.name.trim(),
       durationMonths: months,
@@ -718,11 +718,11 @@ function PlansTab({
     try {
       if (form.id) await api(`/admin/plans/${form.id}`, { method: "PATCH", body: JSON.stringify(body) });
       else await api("/admin/plans", { method: "POST", body: JSON.stringify(body) });
-      flash(form.id ? "Plan update ho gaya." : "Plan ban gaya.");
+      flash(form.id ? "Plan updated." : "Plan created.");
       setForm(null);
       await reload();
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Save nahi hua");
+      setFormError(e instanceof Error ? e.message : "Could not save");
     } finally {
       setSaving(false);
     }
@@ -731,31 +731,31 @@ function PlansTab({
   async function toggle(p: AdminPlan) {
     try {
       await api(`/admin/plans/${p.id}`, { method: "PATCH", body: JSON.stringify({ isActive: !p.isActive }) });
-      flash(p.isActive ? `${p.name} band kiya (students ko nahi dikhega).` : `${p.name} chalu kiya.`);
+      flash(p.isActive ? `${p.name} switched off (students will not see it).` : `${p.name} activated.`);
       await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Update nahi hua");
+      setError(e instanceof Error ? e.message : "Could not update");
     }
   }
 
   async function stopOffer(p: AdminPlan) {
     try {
       await api(`/admin/plans/${p.id}`, { method: "PATCH", body: JSON.stringify({ offerPct: null, offerStartsAt: null, offerEndsAt: null, offerLabel: null }) });
-      flash(`${p.name}: offer band ho gaya.`);
+      flash(`${p.name}: offer ended.`);
       await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Update nahi hua");
+      setError(e instanceof Error ? e.message : "Could not update");
     }
   }
 
   async function remove(p: AdminPlan) {
-    if (!window.confirm(`Plan "${p.name}" delete karein?`)) return;
+    if (!window.confirm(`Delete the plan "${p.name}"?`)) return;
     try {
       await api(`/admin/plans/${p.id}`, { method: "DELETE" });
-      flash("Plan delete ho gaya.");
+      flash("Plan deleted.");
       await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete nahi hua");
+      setError(e instanceof Error ? e.message : "Could not delete");
     }
   }
 
@@ -777,22 +777,22 @@ function PlansTab({
             <Field label="Duration (months)">
               <input inputMode="numeric" value={form.durationMonths} onChange={(e) => setForm({ ...form, durationMonths: e.target.value.replace(/\D/g, "") })} className={inputCls} />
             </Field>
-            <Field label="Price ₹ (regular)" hint="Offer na chale to student yehi deta hai.">
+            <Field label="Price ₹ (regular)" hint="This is what the student pays when no offer is running.">
               <input inputMode="decimal" value={form.priceInr} onChange={(e) => setForm({ ...form, priceInr: e.target.value })} className={inputCls} />
             </Field>
-            <Field label="MRP ₹ (optional)" hint="Sirf kata hua “was” price dikhane ke liye — charge nahi hota. Price se bada hona chahiye.">
+            <Field label="MRP ₹ (optional)" hint="Only for showing the struck-through “was” price — it is never charged. Must be higher than the price.">
               <input inputMode="decimal" value={form.mrpInr} onChange={(e) => setForm({ ...form, mrpInr: e.target.value })} className={inputCls} />
             </Field>
           </div>
 
           <div className="mt-5 rounded-xl border border-accent/30 bg-accent/5 p-3 sm:p-4">
             <h3 className="text-sm font-bold">🔥 Offer (time-boxed discount)</h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">Date ke baad apne aap band ho jata hai — price wapas regular. Khali chhodein = koi offer nahi.</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">The offer ends automatically after the end date and the price goes back to regular. Leave empty for no offer.</p>
             <div className="mt-3 grid gap-4 sm:grid-cols-2">
               <Field label="Offer % off" hint="1 – 90">
                 <input inputMode="decimal" value={form.offerPct} onChange={(e) => setForm({ ...form, offerPct: e.target.value })} placeholder="e.g. 25" className={inputCls} />
               </Field>
-              <Field label="Offer label" hint="Card par dikhega, e.g. “Diwali sale”.">
+              <Field label="Offer label" hint="Shown on the card, e.g. “Diwali sale”.">
                 <input value={form.offerLabel} maxLength={60} onChange={(e) => setForm({ ...form, offerLabel: e.target.value })} className={inputCls} />
               </Field>
               <Field label="Starts (optional)">
@@ -813,13 +813,13 @@ function PlansTab({
             <Field label="Badge (optional)" hint="e.g. Most popular, Best value.">
               <input value={form.badge} maxLength={30} onChange={(e) => setForm({ ...form, badge: e.target.value })} className={inputCls} />
             </Field>
-            <Field label="Order on the page" hint="Chhota number pehle dikhta hai.">
+            <Field label="Order on the page" hint="A smaller number is shown first.">
               <input inputMode="numeric" value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: e.target.value.replace(/[^\d-]/g, "") })} className={inputCls} />
             </Field>
             <div className="sm:col-span-2">
               <TickBox checked={form.isActive} onChange={(v) => setForm({ ...form, isActive: v })}>
                 <span className="font-semibold text-foreground">On sale</span>
-                <span className="block text-[11px]">Band karne par plan students ko nahi dikhega; purane students ka access safe rehta hai.</span>
+                <span className="block text-[11px]">When off, students cannot see the plan; existing subscribers keep their access.</span>
               </TickBox>
             </div>
           </div>
@@ -832,8 +832,8 @@ function PlansTab({
                 <b className="text-xl">{inr(preview.sale)}</b>
                 {preview.live && <span className="ml-2 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-bold text-accent">{form.offerPct}% OFF</span>}
               </p>
-              {preview.scheduled && <p className="mt-1 text-[11px] text-info">Offer abhi start nahi hua — start time par apne aap chalu hoga.</p>}
-              {preview.ended && <p className="mt-1 text-[11px] text-warning">Offer ka end time nikal chuka hai — ye abhi lagu nahi hai.</p>}
+              {preview.scheduled && <p className="mt-1 text-[11px] text-info">The offer has not started yet — it starts automatically at the start time.</p>}
+              {preview.ended && <p className="mt-1 text-[11px] text-warning">The offer end time has passed — it is not applied now.</p>}
             </div>
           )}
           {formError && <p role="alert" className="mt-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">{formError}</p>}
@@ -845,7 +845,7 @@ function PlansTab({
       )}
 
       <ul className="mt-4 grid gap-3 sm:grid-cols-2">
-        {plans.length === 0 && <li className="card p-8 text-center text-sm text-muted-foreground sm:col-span-2">Abhi koi plan nahi hai.</li>}
+        {plans.length === 0 && <li className="card p-8 text-center text-sm text-muted-foreground sm:col-span-2">There are no plans yet.</li>}
         {plans.map((p) => (
           <li key={p.id} className={`card p-4 ${p.isActive ? "" : "opacity-70"}`}>
             <div className="flex flex-wrap items-center gap-2">

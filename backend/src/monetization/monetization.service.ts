@@ -381,7 +381,7 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
         where: { userId_wordId: { userId, wordId: input.vocabWordId } },
       });
       if (existing?.masteredAt || existing?.forceUnlocked) {
-        throw new BadRequestException('Ye word already unlocked hai');
+        throw new BadRequestException('This word is already unlocked');
       }
       amountInr = VOCAB_WORD_UNLOCK_PRICE_INR;
       originalAmountInr = amountInr;
@@ -395,15 +395,15 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
       metadata = { kind: 'VOCAB_SUBSCRIPTION' };
     } else if (input.vocabUnlockAll) {
       const state = await this.prisma.vocabUserState.findUnique({ where: { userId } });
-      if (state?.allUnlockedAt) throw new BadRequestException('Saare words pehle se unlock hain');
+      if (state?.allUnlockedAt) throw new BadRequestException('All words are already unlocked');
       amountInr = VOCAB_UNLOCK_ALL_PRICE_INR;
       originalAmountInr = amountInr;
       productInfo = 'SSC Prep Hub - Vocabulary: Unlock All Words';
       metadata = { kind: 'VOCAB_UNLOCK_ALL' };
     } else if (input.vocabRevisionSkip) {
       const st = await computeRevisionState(this.prisma, userId);
-      if (st.doneToday) throw new BadRequestException('Aaj ki revision already ho chuki hai / skip ho chuki hai');
-      if (!st.due) throw new BadRequestException('Abhi revision pending nahi hai — skip karne ki zaroorat nahi');
+      if (st.doneToday) throw new BadRequestException('Today\'s revision is already done or skipped');
+      if (!st.due) throw new BadRequestException('No revision is pending right now — there is nothing to skip');
       amountInr = skipFeeForStreak(st.skipStreak);
       originalAmountInr = amountInr;
       productInfo = `SSC Prep Hub - Vocabulary: skip today's revision (skip #${st.skipStreak + 1})`;

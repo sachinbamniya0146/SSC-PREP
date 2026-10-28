@@ -262,7 +262,7 @@ export async function analyzeKeyedPaper(
     const cur = bySubject.get(sec.subjectSlug) ?? { name: sec.name, slug: sec.subjectSlug, have: 0, need: null };
     cur.need = need;
     bySubject.set(sec.subjectSlug, cur);
-    if (cur.have < need) shortSections.push(`${sec.name}: ${need - cur.have} aur chahiye (${cur.have}/${need})`);
+    if (cur.have < need) shortSections.push(`${sec.name}: ${need - cur.have} more needed (${cur.have}/${need})`);
   }
 
   const nums = (kept as any[]).map((r) => r.paperQuestionNo).filter((n) => typeof n === 'number') as number[];

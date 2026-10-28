@@ -23,7 +23,7 @@ type Audit = {
 };
 type LogRow = { id: string; kind: string; survivorName: string; loserName: string; questionsMoved: number; createdAt: string; undoneAt: string | null };
 
-const REASON: Record<Group["reason"], string> = { "same-name": "Same naam", "same-hindi": "Same Hindi naam", similar: "Milta-julta (check karo)" };
+const REASON: Record<Group["reason"], string> = { "same-name": "Same name", "same-hindi": "Same Hindi name", similar: "Similar (please check)" };
 
 async function jsonOrThrow(r: Response) {
   const body = await r.json().catch(() => ({}));
@@ -62,7 +62,7 @@ export default function DuplicateTopicsPage() {
     const survivorId = pick[groupKey(g)] ?? g.survivorId;
     const loserIds = g.rows.map((r) => r.id).filter((id) => id !== survivorId);
     const survivor = g.rows.find((r) => r.id === survivorId);
-    if (!window.confirm(`"${survivor?.name}" rakhna hai aur ${loserIds.length} duplicate hatana hai? (Undo log me mil jayega)`)) return;
+    if (!window.confirm(`Keep "${survivor?.name}" and remove ${loserIds.length} duplicate(s)? (You can undo it from the log)`)) return;
     setBusy(groupKey(g));
     try {
       await fetchAuth(`${API_BASE}/bank/admin/taxonomy/merge`, {
@@ -70,7 +70,7 @@ export default function DuplicateTopicsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: g.kind, survivorId, loserIds }),
       }).then(jsonOrThrow);
-      setMsg({ ok: true, text: "Merge ho gaya." });
+      setMsg({ ok: true, text: "Merged." });
       await load();
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
@@ -81,7 +81,7 @@ export default function DuplicateTopicsPage() {
 
   const mergeAll = async () => {
     if (!audit) return;
-    if (!window.confirm(`${audit.summary.exactGroups} same-naam groups merge honge (${audit.summary.rowsToRemove} rows hategi). "Milta-julta" wale nahi chhuye jayenge. Pehle DB backup liya? Aage badhein?`)) return;
+    if (!window.confirm(`${audit.summary.exactGroups} same-name groups will be merged (${audit.summary.rowsToRemove} rows will be removed). "Similar" ones will not be touched. Did you take a DB backup first? Continue?`)) return;
     setBusy("all");
     try {
       const r = await fetchAuth(`${API_BASE}/bank/admin/taxonomy/merge-all-exact`, {
@@ -89,7 +89,7 @@ export default function DuplicateTopicsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dryRun: false, confirm: true }),
       }).then(jsonOrThrow);
-      setMsg({ ok: true, text: `${r.losersMerged} duplicate rows merge hui.` });
+      setMsg({ ok: true, text: `${r.losersMerged} duplicate row(s) merged.` });
       await load();
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
@@ -99,11 +99,11 @@ export default function DuplicateTopicsPage() {
   };
 
   const undo = async (id: string) => {
-    if (!window.confirm("Ye merge undo karein?")) return;
+    if (!window.confirm("Undo this merge?")) return;
     setBusy(id);
     try {
       await fetchAuth(`${API_BASE}/bank/admin/taxonomy/merge-log/${id}/undo`, { method: "POST" }).then(jsonOrThrow);
-      setMsg({ ok: true, text: "Undo ho gaya." });
+      setMsg({ ok: true, text: "Undone." });
       await load();
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
@@ -143,7 +143,7 @@ export default function DuplicateTopicsPage() {
                           name={groupKey(g)}
                           checked={survivorId === r.id}
                           onChange={() => setPick((p) => ({ ...p, [groupKey(g)]: r.id }))}
-                          aria-label={`${r.name} rakhna hai`}
+                          aria-label={`Keep ${r.name}`}
                         />
                       )}
                       <span className={survivorId === r.id ? "font-semibold" : ""}>
@@ -165,27 +165,27 @@ export default function DuplicateTopicsPage() {
     <main className="mx-auto max-w-3xl p-4">
       <h1 className="text-2xl font-bold">Duplicate Topics</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        Ek chapter me ek topic / sub-topic sirf ek baar. Radio se wo row chunein jo rakhni hai; baaki ke questions, practice sets aur weak-topic data usme move ho jate hain.
+        A chapter should have each topic / sub-topic only once. Use the radio button to choose the row to keep; the questions, practice sets and weak-topic data of the others move into it.
       </p>
       {msg && (
         <div className={`mt-3 rounded-md border p-2 text-sm ${msg.ok ? "border-green-500/40" : "border-red-500/40"}`}>{msg.text}</div>
       )}
-      {busy === "load" && <p className="mt-4 text-sm">Load ho raha hai…</p>}
+      {busy === "load" && <p className="mt-4 text-sm">Loading…</p>}
       {audit && (
         <>
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
             <span>Same-naam groups: <b>{audit.summary.exactGroups}</b></span>
             <span>Milte-julte: <b>{audit.summary.similarGroups}</b></span>
             <button className="btn btn-primary" disabled={busy !== null || audit.summary.exactGroups === 0} onClick={mergeAll}>
-              {busy === "all" ? "Merging…" : "Saare same-naam merge karo"}
+              {busy === "all" ? "Merging…" : "Merge all same-name groups"}
             </button>
           </div>
           {audit.summary.topicGroups + audit.summary.subTopicGroups + audit.summary.chapterGroups === 0 && (
-            <p className="mt-6 text-sm">Koi duplicate nahi mila. ✅</p>
+            <p className="mt-6 text-sm">No duplicates found. ✅</p>
           )}
           {section("Topics", audit.topics, true)}
           {section("Sub-topics", audit.subTopics, true)}
-          {section("Chapters (sirf report — Chapter Management se merge karein)", audit.chapters, false)}
+          {section("Chapters (report only — merge them from Chapter Management)", audit.chapters, false)}
         </>
       )}
       {log.length > 0 && (

@@ -122,7 +122,7 @@ export default function AppStatus() {
     return pill(
       <>
         <span className="h-2 w-2 rounded-full bg-warning" />
-        <span>Internet nahi hai. Connection wapas aane par page refresh karein.</span>
+        <span>You are offline. Refresh the page once your connection is back.</span>
       </>,
       "border-warning/40 bg-card text-foreground",
     );

@@ -224,8 +224,8 @@ export default function QuestionBankPracticePage() {
       <main className="mx-auto max-w-4xl px-4 py-10">
         <h1 className="text-2xl font-bold">📚 Question Bank Practice</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Subject → Chapter → Topic → Sub-topic chunein aur seedhe usi par practice karein. 🔥 wale topics aapke liye
-          weak hain — unpar unlimited free practice hai.
+          Choose Subject → Chapter → Topic → Sub-topic and practise right there. Topics marked 🔥 are
+          weak for you — they have unlimited free practice.
         </p>
 
         {quota && !quota.premium && quota.dailyLimit != null && (
@@ -346,7 +346,7 @@ export default function QuestionBankPracticePage() {
                                 : "border-border"
                             } disabled:opacity-40`}
                           >
-                            Poora chapter select
+                            Select whole chapter
                           </button>
                         </div>
 
@@ -440,7 +440,7 @@ export default function QuestionBankPracticePage() {
               {starting ? "Starting…" : "🚀 Start Practice"}
             </button>
             <p className="text-center text-xs text-muted-foreground">
-              Pehle {taxonomy?.freeSetsPerScope ?? 3} sets free (is chapter/topic/sub-topic ke liye), uske baad Premium chahiye — 🔥 weak topics hamesha free.
+              The first {taxonomy?.freeSetsPerScope ?? 3} sets are free (for each chapter / topic / sub-topic); after that you need Premium — 🔥 weak topics are always free.
             </p>
           </div>
         )}

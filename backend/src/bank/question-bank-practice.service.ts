@@ -251,7 +251,7 @@ export class QuestionBankPracticeService {
     );
     if (questions.length === 0) {
       throw new NotFoundException(
-        'Is selection me abhi koi practice question available nahi hai. Koi aur chapter/topic chunein, ya thodi der baad try karein.',
+        'No practice questions are available for this selection yet. Choose another chapter / topic, or try again later.',
       );
     }
 

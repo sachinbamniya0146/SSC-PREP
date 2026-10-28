@@ -57,10 +57,10 @@ export default function AdminNotificationsPage() {
 
   const send = async () => {
     if (!title.trim() || !body.trim()) {
-      setErr("Title aur message dono likhna zaroori hai.");
+      setErr("Both a title and a message are required.");
       return;
     }
-    const ok = confirm(`Yeh notification SABHI students ko bhej diya jaayega:\n\n"${title}"\n${body}\n\nContinue?`);
+    const ok = confirm(`This notification will be sent to ALL students:\n\n"${title}"\n${body}\n\nContinue?`);
     if (!ok) return;
 
     setSending(true);
@@ -74,12 +74,12 @@ export default function AdminNotificationsPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(d?.message || "Bhejne me kuch gadbad ho gayi.");
+        setErr(d?.message || "Something went wrong while sending.");
         return;
       }
       if (d?.disabled) {
         setErr(
-          "Push notifications abhi server pe configure nahi hain — VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY env vars set karke backend restart karo (.env.example dekho).",
+          "Push notifications are not configured on the server yet — set the VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY environment variables and restart the backend (see .env.example).",
         );
         return;
       }
@@ -87,7 +87,7 @@ export default function AdminNotificationsPage() {
       setTitle("");
       setBody("");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Bhejne me kuch gadbad ho gayi.");
+      setErr(e instanceof Error ? e.message : "Something went wrong while sending.");
     } finally {
       setSending(false);
     }
@@ -109,9 +109,9 @@ export default function AdminNotificationsPage() {
 
       <main className="mx-auto max-w-3xl px-4 py-8">
         <p className="mb-6 text-sm text-muted-foreground">
-          Yahan se bheja gaya message sabhi students ke phone/laptop par
-          push-notification ki tarah pahunchega — sirf un students ko jinhone
-          notifications "Enable" ki hain.
+          A message sent from here reaches the phone / laptop of every student
+          as a push notification — only the students who have
+          enabled notifications.
         </p>
 
         <div className="card space-y-4 p-5">
@@ -168,7 +168,7 @@ export default function AdminNotificationsPage() {
           {result && (
             <p className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
               Bhej diya — {result.sent} devices ko successfully mila
-              {result.failed ? `, ${result.failed} fail ho gaye` : ""}.
+              {result.failed ? `, ${result.failed} failed` : ""}.
             </p>
           )}
 

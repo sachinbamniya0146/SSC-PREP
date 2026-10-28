@@ -308,10 +308,10 @@ export function SolutionPanel({
       if (res.ok && (d?.explanation || d?.explanationHindi)) setData({ explanation: d.explanation, explanationHindi: d.explanationHindi, source: d.source ?? null });
       else {
         setNoSolution(res.status === 404);
-        setError(d?.message || "Solution abhi available nahi hai.");
+        setError(d?.message || "The solution is not available yet.");
       }
     } catch {
-      setError(typeof navigator !== "undefined" && !navigator.onLine ? "Aap offline hain. Internet aane par solution load hoga." : "Network error. Solution load nahi ho paya.");
+      setError(typeof navigator !== "undefined" && !navigator.onLine ? "You are offline. The solution will load when you are back online." : "Network error. The solution could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -357,7 +357,7 @@ export function SolutionPanel({
           <div className="skeleton h-4 w-3/4" />
           <div className="skeleton h-4 w-full" />
           <div className="skeleton h-4 w-5/6" />
-          <p className="pt-1 text-xs text-muted-foreground">Solution load ho rahi hai…</p>
+          <p className="pt-1 text-xs text-muted-foreground">Loading solution…</p>
         </div>
       )}
 
@@ -370,7 +370,7 @@ export function SolutionPanel({
               onClick={() => void load()}
               className="mt-2 rounded-md border border-primary/40 px-3 py-1 font-semibold text-primary hover:bg-primary/10"
             >
-              Dobara try karein
+              Try again
             </button>
           )}
         </div>
@@ -385,7 +385,7 @@ export function SolutionPanel({
             </div>
           )}
           {lang === "hi" && !hasHi && hasEn && (
-            <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">Is solution ka Hindi version abhi nahi hai, English dikha rahe hain.</p>
+            <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">The Hindi version of this solution is not available yet, so the English one is shown.</p>
           )}
         </div>
       )}

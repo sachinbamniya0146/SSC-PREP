@@ -108,7 +108,7 @@ export default function ChapterManagementPage() {
       // Default to the first subject so the page isn't blank on load.
       setSelectedSubjectId((prev) => prev || data[0]?.id || "");
     } catch (e) {
-      setSubjectsErr(e instanceof Error ? e.message : "Subjects load nahi hue");
+      setSubjectsErr(e instanceof Error ? e.message : "Could not load subjects");
     } finally {
       setSubjectsLoading(false);
     }
@@ -142,7 +142,7 @@ export default function ChapterManagementPage() {
       setChapters(data);
       return data;
     } catch (e) {
-      setChaptersErr(e instanceof Error ? e.message : "Chapters load nahi hue");
+      setChaptersErr(e instanceof Error ? e.message : "Could not load chapters");
       return [];
     } finally {
       setChaptersLoading(false);
@@ -161,11 +161,11 @@ export default function ChapterManagementPage() {
   async function createChapter() {
     const trimmed = newName.trim();
     if (!selectedSubjectId) {
-      setCreateErr("Pehle ek subject select karein");
+      setCreateErr("Please select a subject first");
       return;
     }
     if (!trimmed) {
-      setCreateErr("Chapter ka naam likhein");
+      setCreateErr("Please enter the chapter name");
       return;
     }
     setCreating(true);
@@ -192,11 +192,11 @@ export default function ChapterManagementPage() {
       // existing chapter was returned instead of a new one.
       setCreateMsg(
         refreshed.length === countBefore
-          ? `"${created.name}" pehle se maujood tha — usi ka ID use karein (koi duplicate nahi bana).`
-          : `"${created.name}" ban gaya. Ab yeh chapterId bulk upload sheet mein use kar sakte hain.`,
+          ? `"${created.name}" already existed — use its ID (no duplicate was created).`
+          : `"${created.name}" was created. You can now use this chapterId in the bulk upload sheet.`,
       );
     } catch (e) {
-      setCreateErr(e instanceof Error ? e.message : "Chapter create nahi hua");
+      setCreateErr(e instanceof Error ? e.message : "Could not create the chapter");
     } finally {
       setCreating(false);
     }
@@ -205,7 +205,7 @@ export default function ChapterManagementPage() {
   async function copyId(id: string) {
     try {
       await navigator.clipboard.writeText(id);
-      setCreateMsg("Chapter ID copy ho gaya.");
+      setCreateMsg("Chapter ID copied.");
     } catch {
       // Clipboard API can be unavailable (older browsers, insecure
       // context) — the ID is still visible in the row for manual copy.
@@ -220,7 +220,7 @@ export default function ChapterManagementPage() {
   }
 
   async function saveEdit(id: string) {
-    if (!editName.trim()) { setRowErr("Chapter ka naam khali nahi ho sakta"); return; }
+    if (!editName.trim()) { setRowErr("The chapter name cannot be empty"); return; }
     setRowBusyId(id);
     setRowErr("");
     try {
@@ -234,14 +234,14 @@ export default function ChapterManagementPage() {
       setEditingId("");
       await loadChapters(selectedSubjectId);
     } catch (e) {
-      setRowErr(e instanceof Error ? e.message : "Rename nahi hua");
+      setRowErr(e instanceof Error ? e.message : "Could not rename");
     } finally {
       setRowBusyId("");
     }
   }
 
   async function deleteChapterRow(c: AdminChapter) {
-    if (!confirm(`"${c.name}" chapter delete karein? (Sirf tabhi hoga agar isme koi question na ho.)`)) return;
+    if (!confirm(`Delete the chapter "${c.name}"? (Only possible if it has no questions.)`)) return;
     setRowBusyId(c.id);
     setRowErr("");
     try {
@@ -250,7 +250,7 @@ export default function ChapterManagementPage() {
       if (!r.ok) { setRowErr(d?.message || `HTTP ${r.status}`); return; }
       await loadChapters(selectedSubjectId);
     } catch (e) {
-      setRowErr(e instanceof Error ? e.message : "Delete nahi hua");
+      setRowErr(e instanceof Error ? e.message : "Could not delete");
     } finally {
       setRowBusyId("");
     }
@@ -258,11 +258,11 @@ export default function ChapterManagementPage() {
 
   async function mergeChapters() {
     if (!mergeSourceId || !mergeTargetId || mergeSourceId === mergeTargetId) {
-      setRowErr("Merge ke liye alag-alag source aur target chapter chunein");
+      setRowErr("Choose different source and target chapters to merge");
       return;
     }
     const src = chapters.find((c) => c.id === mergeSourceId);
-    if (!confirm(`"${src?.name}" ke sabhi topics/questions doosre chapter me move karke "${src?.name}" delete kar diya jayega. Continue?`)) return;
+    if (!confirm(`All topics / questions of "${src?.name}" will be moved to the other chapter and "${src?.name}" will be deleted. Continue?`)) return;
     setRowBusyId(mergeSourceId);
     setRowErr("");
     try {
@@ -277,7 +277,7 @@ export default function ChapterManagementPage() {
       setMergeTargetId("");
       await loadChapters(selectedSubjectId);
     } catch (e) {
-      setRowErr(e instanceof Error ? e.message : "Merge nahi hua");
+      setRowErr(e instanceof Error ? e.message : "Could not merge");
     } finally {
       setRowBusyId("");
     }
@@ -303,7 +303,7 @@ export default function ChapterManagementPage() {
       <main className="mx-auto max-w-6xl px-4 py-8">
         <h1 className="text-2xl font-bold">🧩 Chapter Management</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Bulk question upload ke liye har row ko ek valid chapterId chahiye — yahan se subject ke andar naye chapters banayein aur unke ID copy karein.
+          Bulk question upload needs a valid chapterId for every row — create new chapters inside a subject here and copy their IDs.
         </p>
 
         {subjectsErr && (
@@ -313,7 +313,7 @@ export default function ChapterManagementPage() {
         {subjectsLoading ? (
           <p className="mt-6 text-sm text-muted-foreground">Loading subjects...</p>
         ) : subjects.length === 0 ? (
-          <p className="mt-6 text-sm text-muted-foreground">Koi subject nahi mila.</p>
+          <p className="mt-6 text-sm text-muted-foreground">No subjects found.</p>
         ) : (
           <>
             <div className="mt-6 flex flex-wrap gap-2">
@@ -342,7 +342,7 @@ export default function ChapterManagementPage() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && createChapter()}
-                  placeholder="Chapter ka naam (English), jaise 'Percentage' ya 'Modern History'"
+                  placeholder="Chapter name (English), e.g. 'Percentage' or 'Modern History'"
                   className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
                   disabled={!selectedSubjectId || creating}
                 />
@@ -350,7 +350,7 @@ export default function ChapterManagementPage() {
                   value={newNameHindi}
                   onChange={(e) => setNewNameHindi(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && createChapter()}
-                  placeholder="Hindi naam (optional), jaise 'प्रतिशत'"
+                  placeholder="Hindi name (optional), e.g. 'प्रतिशत'"
                   className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
                   disabled={!selectedSubjectId || creating}
                 />
@@ -393,7 +393,7 @@ export default function ChapterManagementPage() {
                   {!chaptersErr && !chaptersLoading && chapters.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">
-                        Is subject mein abhi koi chapter nahi hai — upar se pehla chapter banayein.
+                        This subject has no chapters yet — create the first chapter above.
                       </td>
                     </tr>
                   )}
@@ -441,18 +441,18 @@ export default function ChapterManagementPage() {
               <div className="card mt-4 p-4">
                 <h2 className="font-semibold">🔀 Merge duplicate chapters</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Source chapter ke sabhi topics/sub-topics/questions/paid purchases target chapter me chale jayenge, phir source delete ho jayega.
+                  All topics / sub-topics / questions / paid purchases of the source chapter move to the target chapter, then the source is deleted.
                 </p>
                 <div className="mt-3 flex flex-wrap items-end gap-2">
                   <div>
-                    <label className="block text-xs text-muted-foreground">Source (ye delete hoga)</label>
+                    <label className="block text-xs text-muted-foreground">Source (this will be deleted)</label>
                     <select value={mergeSourceId} onChange={(e) => setMergeSourceId(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
                       <option value="">—</option>
                       {chapters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-muted-foreground">Target (ismein merge hoga)</label>
+                    <label className="block text-xs text-muted-foreground">Target (the source merges into this)</label>
                     <select value={mergeTargetId} onChange={(e) => setMergeTargetId(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
                       <option value="">—</option>
                       {chapters.filter((c) => c.id !== mergeSourceId).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}

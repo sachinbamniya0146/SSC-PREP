@@ -59,7 +59,7 @@ export default function PlanTestBanner() {
                 : tr("Choose your target exam and date, then mark chapters — we will build your daily plan, test and revision.", "Target exam aur date chunein, phir chapters mark karein — hum roz ka plan, test aur revision bana denge.")}
             </p>
           </div>
-          <span className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground">{hasPlan ? "Kholein →" : tr("Start →", "Shuru →")}</span>
+          <span className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground">{hasPlan ? tr("Open →", "Kholein →") : tr("Start →", "Shuru →")}</span>
         </a>
       )}
       {test && (
@@ -68,7 +68,7 @@ export default function PlanTestBanner() {
             <div className="min-w-0">
               <p className="text-xs font-semibold text-muted-foreground">{test.examName} · Study-plan test</p>
               <p className="text-base font-bold">{open ? tr("⏰ Your test is ready!", "⏰ Aapka test taiyaar hai!") : tr("📅 Your test opens at 9:00 AM", "📅 Aapka test 9:00 AM par khulega")}</p>
-              <p className="text-xs text-muted-foreground">{test.chapterCount} chapter · {test.pattern.totalQuestions} questions · {test.pattern.durationMinutes} min · har chapter me 95%+ chahiye</p>
+              <p className="text-xs text-muted-foreground">{test.chapterCount} chapters · {test.pattern.totalQuestions} questions · {test.pattern.durationMinutes} min · 95%+ needed in every chapter</p>
             </div>
             {open ? (
               <a href={`/test?plantest=${test.id}`} className="rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground">{tr("Start test →", "Test shuru karein →")}</a>
@@ -81,7 +81,7 @@ export default function PlanTestBanner() {
       {showRev && (
         <a href={`/test?plantest=${rev!.testId}`} className="flex items-center justify-between gap-3 rounded-2xl border border-amber-500/50 bg-amber-500/5 p-4">
           <div>
-            <p className="text-sm font-bold">🔁 Aaj ka revision baaki hai</p>
+            <p className="text-sm font-bold">🔁 Today's revision is pending</p>
             <p className="text-xs text-muted-foreground">{tr("50 questions · from your completed chapters · every day", "50 questions · aapke complete chapters se · roz zaroori")}</p>
           </div>
           <span className="shrink-0 rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white">{tr("Start →", "Shuru →")}</span>

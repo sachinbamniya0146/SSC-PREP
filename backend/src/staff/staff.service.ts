@@ -72,7 +72,7 @@ export class StaffService {
     });
     if (!user) {
       throw new NotFoundException(
-        'Is email se koi account nahi mila. Student ko pehle app par signup karne bolein, phir yahan access dein.',
+        'No account was found for this email. Ask the student to sign up in the app first, then give access here.',
       );
     }
     return user;
@@ -85,14 +85,14 @@ export class StaffService {
     });
     if (!target) {
       throw new NotFoundException(
-        'Is email se koi account nahi mila. Student ko pehle app par signup karne bolein, phir yahan access dein.',
+        'No account was found for this email. Ask the student to sign up in the app first, then give access here.',
       );
     }
     if (target.role === 'ADMIN') {
-      throw new BadRequestException('Ye account already ADMIN hai — use department access ki zaroorat nahi.');
+      throw new BadRequestException('This account is already an ADMIN — it does not need department access.');
     }
     if (target.id === actorId) {
-      throw new ForbiddenException('Aap apna khud ka access change nahi kar sakte.');
+      throw new ForbiddenException('You cannot change your own access.');
     }
     const updated = await this.prisma.user.update({
       where: { id: target.id },
@@ -114,10 +114,10 @@ export class StaffService {
     const target = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, role: true } });
     if (!target) throw new NotFoundException('User not found');
     if (target.role !== 'MODERATOR') {
-      throw new BadRequestException('Ye user staff nahi hai. Pehle "Add Staff" se access dein.');
+      throw new BadRequestException('This user is not a staff member. Give access with "Add Staff" first.');
     }
     if (target.id === actorId) {
-      throw new ForbiddenException('Aap apna khud ka access change nahi kar sakte.');
+      throw new ForbiddenException('You cannot change your own access.');
     }
     const updated = await this.prisma.user.update({
       where: { id: userId },
@@ -139,9 +139,9 @@ export class StaffService {
   async revoke(actorId: string, userId: string) {
     const target = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, role: true } });
     if (!target) throw new NotFoundException('User not found');
-    if (target.role === 'ADMIN') throw new ForbiddenException('ADMIN account ka access yahan se hata nahi sakte.');
-    if (target.id === actorId) throw new ForbiddenException('Aap apna khud ka access change nahi kar sakte.');
-    if (target.role !== 'MODERATOR') throw new BadRequestException('Ye user pehle se staff nahi hai.');
+    if (target.role === 'ADMIN') throw new ForbiddenException('An ADMIN account\'s access cannot be removed here.');
+    if (target.id === actorId) throw new ForbiddenException('You cannot change your own access.');
+    if (target.role !== 'MODERATOR') throw new BadRequestException('This user is not a staff member.');
     await this.prisma.user.update({
       where: { id: userId },
       data: { role: 'STUDENT', permissions: { set: [] } },

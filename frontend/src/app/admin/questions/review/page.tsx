@@ -144,7 +144,7 @@ export default function QuestionReviewPage() {
       setItems(d.data || []);
       setTotal(d.total || 0);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Pending questions load nahi hue");
+      setErr(e instanceof Error ? e.message : "Could not load pending questions");
     } finally {
       setLoading(false);
     }
@@ -187,21 +187,21 @@ export default function QuestionReviewPage() {
       });
       if (!r.ok) {
         const errBody = await r.json().catch(() => ({}));
-        setActionMsg(errBody?.message || `Approve fail hua (HTTP ${r.status})`);
+        setActionMsg(errBody?.message || `Approve failed (HTTP ${r.status})`);
         return;
       }
-      setActionMsg(`Question approve ho gaya — ab live hai students ke liye.`);
+      setActionMsg(`Question approved — it is now live for students.`);
       setItems((prev) => prev.filter((x) => x.id !== q.id));
       setTotal((t) => Math.max(0, t - 1));
     } catch (e) {
-      setActionMsg(e instanceof Error ? e.message : "Approve fail hua");
+      setActionMsg(e instanceof Error ? e.message : "Approve failed");
     } finally {
       setActioningId("");
     }
   }
 
   async function reject(q: PendingQuestion) {
-    const reason = window.prompt("Reject karne ki wajah (optional):") ?? undefined;
+    const reason = window.prompt("Reason for rejecting (optional):") ?? undefined;
     setActioningId(q.id);
     setActionMsg("");
     try {
@@ -212,14 +212,14 @@ export default function QuestionReviewPage() {
       });
       if (!r.ok) {
         const errBody = await r.json().catch(() => ({}));
-        setActionMsg(errBody?.message || `Reject fail hua (HTTP ${r.status})`);
+        setActionMsg(errBody?.message || `Reject failed (HTTP ${r.status})`);
         return;
       }
-      setActionMsg(`Question reject ho gaya.`);
+      setActionMsg(`Question rejected.`);
       setItems((prev) => prev.filter((x) => x.id !== q.id));
       setTotal((t) => Math.max(0, t - 1));
     } catch (e) {
-      setActionMsg(e instanceof Error ? e.message : "Reject fail hua");
+      setActionMsg(e instanceof Error ? e.message : "Reject failed");
     } finally {
       setActioningId("");
     }
@@ -231,9 +231,9 @@ export default function QuestionReviewPage() {
         ? `subject "${subjects.find((s) => s.id === subjectId)?.name}"`
         : examId && exams.find((e) => e.id === examId)
           ? `exam "${exams.find((e) => e.id === examId)?.name}"`
-          : "SAARE (poori queue)";
+          : "ALL (the whole queue)";
     const ok = window.confirm(
-      `${scopeLabel} ke un sabhi questions ko approve kar diya jayega jo complete hain (text + options + correct answer bhare hue) — bhale hi Hindi translation missing ho. Adhoore/broken questions queue mein hi rahenge. Continue?`,
+      `Approve every complete question of ${scopeLabel} (text + options + correct answer filled in) — even if the Hindi translation is missing. Incomplete / broken questions stay in the queue. Continue?`,
     );
     if (!ok) return;
 
@@ -250,18 +250,18 @@ export default function QuestionReviewPage() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setActionMsg(d?.message || `Bulk approve fail hua (HTTP ${r.status})`);
+        setActionMsg(d?.message || `Bulk approve failed (HTTP ${r.status})`);
         return;
       }
       const d = await r.json();
       setActionMsg(
-        `✅ ${d.approvedCount} question approve ho gaye. ${
-          d.skippedCount > 0 ? `${d.skippedCount} adhoore/broken the isliye queue mein hi chhode gaye.` : ""
+        `✅ ${d.approvedCount} question(s) approved. ${
+          d.skippedCount > 0 ? `${d.skippedCount} incomplete / broken question(s) were left in the queue.` : ""
         }`,
       );
       await loadPending();
     } catch (e) {
-      setActionMsg(e instanceof Error ? e.message : "Bulk approve fail hua");
+      setActionMsg(e instanceof Error ? e.message : "Bulk approve failed");
     } finally {
       setBulkBusy(false);
     }
@@ -289,8 +289,8 @@ export default function QuestionReviewPage() {
       <main className="mx-auto max-w-5xl px-4 py-8">
         <h1 className="text-2xl font-bold">✅ Question Review Queue</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Ye woh questions hain jo upload to ho gaye lekin abhi tak students ko nahi dikh rahe — zyadatar
-          isliye kyunki Hindi translation khaali hai. Yahan se edit karke approve karein, ya reject karein.
+          These questions were uploaded but students cannot see them yet — mostly
+          because the Hindi translation is empty. Edit and approve them here, or reject them.
         </p>
 
         <div className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-border bg-muted/20 p-3">
@@ -301,7 +301,7 @@ export default function QuestionReviewPage() {
               onChange={(e) => setExamId(e.target.value)}
               className="mt-1 rounded-lg border border-border bg-background px-3 py-2 text-sm"
             >
-              <option value="">Sabhi Exam</option>
+              <option value="">All exams</option>
               {exams.map((ex) => (
                 <option key={ex.id} value={ex.id}>
                   {ex.name}
@@ -316,7 +316,7 @@ export default function QuestionReviewPage() {
               onChange={(e) => setSubjectId(e.target.value)}
               className="mt-1 rounded-lg border border-border bg-background px-3 py-2 text-sm"
             >
-              <option value="">Sabhi Subject</option>
+              <option value="">All subjects</option>
               {subjects.map((sb) => (
                 <option key={sb.id} value={sb.id}>
                   {sb.name}
@@ -330,7 +330,7 @@ export default function QuestionReviewPage() {
             disabled={bulkBusy || loading || items.length === 0}
             className="btn bg-success ml-auto px-4 py-2 text-sm text-white disabled:opacity-50"
           >
-            {bulkBusy ? "Approve ho raha hai..." : "⚡ Bulk Approve (complete questions)"}
+            {bulkBusy ? "Approving..." : "⚡ Bulk Approve (complete questions)"}
           </button>
         </div>
 
@@ -347,7 +347,7 @@ export default function QuestionReviewPage() {
           <p className="mt-6 text-sm text-muted-foreground">Loading...</p>
         ) : items.length === 0 ? (
           <div className="mt-6 rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-            🎉 Koi pending question nahi hai — sab kuch review ho chuka hai.
+            🎉 No pending questions — everything has been reviewed.
           </div>
         ) : (
           <>
@@ -409,7 +409,7 @@ export default function QuestionReviewPage() {
                         </div>
                         <div>
                           <label className="text-xs font-semibold text-muted-foreground">
-                            Question (Hindi) — isse bharne se auto-approve ho sakta hai
+                            Question (Hindi) — filling this in can auto-approve the question
                           </label>
                           <textarea
                             defaultValue={q.questionTextHindi ?? ""}

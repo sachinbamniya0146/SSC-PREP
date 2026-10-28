@@ -106,21 +106,21 @@ export class VocabAdminController {
   /** Validate + normalise one quiz question from the admin form (same rules as the Excel import). */
   private static cleanQuestion(body: Record<string, any>) {
     const questionText = String(body?.questionText ?? '').trim();
-    if (!questionText) throw new BadRequestException('Question text khali hai');
+    if (!questionText) throw new BadRequestException('Question text is empty');
     const raw: any[] = Array.isArray(body?.optionsJson) ? body.optionsJson : [];
     const options = ['A', 'B', 'C', 'D'].map((key) => {
       const found = raw.find((o) => String(o?.key ?? '').toUpperCase() === key);
       const text = String(found?.text ?? '').trim();
-      if (!text) throw new BadRequestException(`Option ${key} khali hai — char options zaroori hain`);
+      if (!text) throw new BadRequestException(`Option ${key} is empty — all four options are required`);
       return { key, text };
     });
     const correctAnswer = String(body?.correctAnswer ?? '').trim().toUpperCase();
-    if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) throw new BadRequestException('Sahi answer A, B, C ya D hona chahiye');
+    if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) throw new BadRequestException('The correct answer must be A, B, C or D');
     const explanation = String(body?.explanation ?? '').trim();
-    if (!explanation) throw new BadRequestException('Solution / explanation zaroori hai');
+    if (!explanation) throw new BadRequestException('A solution / explanation is required');
     const explanationHindi = String(body?.explanationHindi ?? '').trim() || null;
     const qt = body?.questionType === undefined || body?.questionType === null ? '' : String(body.questionType).trim().toUpperCase();
-    if (qt && !['SYNONYM', 'ANTONYM', 'CONTEXT'].includes(qt)) throw new BadRequestException('questionType SYNONYM, ANTONYM ya CONTEXT hona chahiye');
+    if (qt && !['SYNONYM', 'ANTONYM', 'CONTEXT'].includes(qt)) throw new BadRequestException('questionType must be SYNONYM, ANTONYM or CONTEXT');
     return { questionText, optionsJson: options as any, correctAnswer, explanation, explanationHindi, questionType: qt || null };
   }
 
@@ -129,19 +129,19 @@ export class VocabAdminController {
   async createWord(@Body() body: Record<string, any>) {
     const str = (k: string, required = false): string | null => {
       const v = body?.[k] === undefined || body?.[k] === null ? '' : String(body[k]).trim();
-      if (required && !v) throw new BadRequestException(`'${k}' zaroori hai`);
+      if (required && !v) throw new BadRequestException(`'${k}' is required`);
       return v || null;
     };
     const word = str('word', true) as string;
     const meaningHindi = str('meaningHindi', true) as string;
     const meaningEnglish = str('meaningEnglish', true) as string;
     const slug = VocabAdminController.slugify(str('slug') || word);
-    if (!slug) throw new BadRequestException('Word se valid slug nahi ban paya');
+    if (!slug) throw new BadRequestException('A valid slug could not be built from the word');
 
     const all = await this.prisma.vocabWord.findMany({ select: { word: true, slug: true, orderIndex: true } });
     const key = vocabWordKey(word);
     const dup = all.find((w) => w.slug === slug || vocabWordKey(w.word) === key);
-    if (dup) throw new BadRequestException(`Word "${dup.word}" pehle se maujood hai — usse Edit karein`);
+    if (dup) throw new BadRequestException(`The word "${dup.word}" already exists — edit that one instead`);
 
     const lists: Record<string, any> = {};
     for (const k of ['examplesJson', 'synonymsJson', 'antonymsJson']) {
@@ -288,7 +288,7 @@ export class VocabAdminController {
     const data = VocabAdminController.cleanQuestion(body);
     const existing = await this.prisma.vocabQuestion.findMany({ where: { wordId: id }, select: { questionText: true } });
     const key = vocabWordKey(data.questionText);
-    if (existing.some((q) => vocabWordKey(q.questionText) === key)) throw new BadRequestException('Ye question is word me pehle se hai');
+    if (existing.some((q) => vocabWordKey(q.questionText) === key)) throw new BadRequestException('This question already exists for this word');
     return this.prisma.vocabQuestion.create({ data: { wordId: id, ...data } });
   }
 
@@ -300,7 +300,7 @@ export class VocabAdminController {
     const data = VocabAdminController.cleanQuestion(body);
     const siblings = await this.prisma.vocabQuestion.findMany({ where: { wordId: q.wordId, id: { not: qid } }, select: { questionText: true } });
     const key = vocabWordKey(data.questionText);
-    if (siblings.some((x) => vocabWordKey(x.questionText) === key)) throw new BadRequestException('Isi word me ye question pehle se hai');
+    if (siblings.some((x) => vocabWordKey(x.questionText) === key)) throw new BadRequestException('This question already exists for this word');
     return this.prisma.vocabQuestion.update({ where: { id: qid }, data });
   }
 
@@ -319,6 +319,6 @@ export class VocabAdminController {
       return { deleted: true, hard: true, studentsKept: kept };
     }
     await this.prisma.vocabWord.update({ where: { id }, data: { isActive: false } });
-    return { deleted: true, hard: false, note: 'Word hide ho gaya; students ka progress safe hai. Dobara upload karne par wapas active ho jayega.' };
+    return { deleted: true, hard: false, note: 'The word was hidden; students\' progress is safe. It becomes active again if you upload it again.' };
   }
 }

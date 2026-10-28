@@ -2,7 +2,7 @@
 
 // Admin → PYQ Date Mapping (manual)
 // Har PYQ question ki asli exam date (aur Tier 1 / Tier 2) admin khud daalta hai. Koi automatic internet search / AI nahi.
-//   • "Bina date" = PYQ jinki date abhi khaali hai
+//   • "No date" = PYQ jinki date abhi khaali hai
 //   • purani auto-finder wali rows (Date lagi / Admin check / ...) dikhti rehti hain: accept, reject ya haath se date badlo
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -22,14 +22,14 @@ interface Item {
 type Exam = { id: string; name: string };
 
 const STATUS_LABEL: Record<string, { t: string; c: string }> = {
-  UNMAPPED: { t: "Bina date", c: "bg-amber-500/15 text-amber-700 dark:text-amber-300" },
-  MANUAL: { t: "Haath se ✍️", c: "bg-purple-500/15 text-purple-700 dark:text-purple-300" },
-  MAPPED: { t: "Date lagi ✅", c: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
+  UNMAPPED: { t: "No date", c: "bg-amber-500/15 text-amber-700 dark:text-amber-300" },
+  MANUAL: { t: "Set manually ✍️", c: "bg-purple-500/15 text-purple-700 dark:text-purple-300" },
+  MAPPED: { t: "Date set ✅", c: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
   NEEDS_REVIEW: { t: "Admin check", c: "bg-amber-500/15 text-amber-700 dark:text-amber-300" },
-  NOT_FOUND: { t: "Nahi mili", c: "bg-red-500/10 text-red-700 dark:text-red-300" },
+  NOT_FOUND: { t: "Not found", c: "bg-red-500/10 text-red-700 dark:text-red-300" },
   FAILED: { t: "Fail", c: "bg-red-500/20 text-red-700 dark:text-red-300" },
-  PENDING: { t: "Purani queue", c: "bg-slate-500/15 text-slate-700 dark:text-slate-300" },
-  RUNNING: { t: "Purani queue", c: "bg-slate-500/15 text-slate-700 dark:text-slate-300" },
+  PENDING: { t: "Old queue", c: "bg-slate-500/15 text-slate-700 dark:text-slate-300" },
+  RUNNING: { t: "Old queue", c: "bg-slate-500/15 text-slate-700 dark:text-slate-300" },
 };
 const FILTER_STATUSES = ["UNMAPPED", "MANUAL", "MAPPED", "NEEDS_REVIEW", "NOT_FOUND", "FAILED", "PENDING"];
 const CARD_STATUSES = ["UNMAPPED", "MANUAL", "MAPPED", "NEEDS_REVIEW"];
@@ -143,13 +143,13 @@ export default function AdminPyqDatesPage() {
         {msg && <p className={`rounded-lg border p-2 text-sm break-all ${msg.ok ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700" : "border-red-500/40 bg-red-500/10 text-red-700"}`}>{msg.text}</p>}
 
         <section className={card}>
-          <p className="text-sm">Exam date aur Tier 1 / Tier 2 yahan <b>khud</b> daalein: neeche list me question kholo → date (YYYY-MM-DD ya DD-MM-YYYY) likho → <b>Date save karein</b>. Date save hote hi us paper ka shift-wise mock bhi nayi date dikhane lagta hai.</p>
+          <p className="text-sm">Enter the exam date and Tier 1 / Tier 2 <b>yourself</b> here: open a question in the list below → type the date (YYYY-MM-DD or DD-MM-YYYY) → press <b>Save date</b>. As soon as the date is saved, that paper's shift-wise mock also shows the new date.</p>
           <div className="mt-3"><button onClick={downloadLog} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold">⬇️ Status Excel</button></div>
         </section>
 
         <section className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
           {[
-            ["PYQ total", ov?.totals.pyqTotal], ["Date lagi hai", ov?.totals.pyqWithDate], ["Bina date", ov?.totals.pyqWithoutDate],
+            ["PYQ total", ov?.totals.pyqTotal], ["Date set", ov?.totals.pyqWithDate], ["No date", ov?.totals.pyqWithoutDate],
           ].map(([l, v]) => <div key={String(l)} className="rounded-lg border border-border bg-card p-3"><p className="text-[11px] text-muted-foreground">{l}</p><p className="text-lg font-bold">{(v as number | undefined)?.toLocaleString() ?? "…"}</p></div>)}
           {CARD_STATUSES.map((s) => (
             <button key={s} onClick={() => { setStatus(status === s ? "" : s); setPage(0); }} className={`rounded-lg border p-3 text-left ${status === s ? "border-primary bg-primary/10" : "border-border bg-card"}`}>
@@ -162,10 +162,10 @@ export default function AdminPyqDatesPage() {
           <section className="grid gap-4 md:grid-cols-2">
             <div className={card}>
               <h2 className="mb-2 text-sm font-bold">Tier</h2>
-              <div className="flex flex-wrap gap-2 text-xs">{ov.tiers.map((t) => <span key={t.tier} className="rounded-full border border-border px-3 py-1">{t.tier === "UNKNOWN" ? "Tier pata nahi" : tierText(t.tier)}: <b>{t.count}</b></span>)}</div>
+              <div className="flex flex-wrap gap-2 text-xs">{ov.tiers.map((t) => <span key={t.tier} className="rounded-full border border-border px-3 py-1">{t.tier === "UNKNOWN" ? "Tier unknown" : tierText(t.tier)}: <b>{t.count}</b></span>)}</div>
             </div>
             <div className={card}>
-              <h2 className="mb-2 text-sm font-bold">Exam-wise status (purani rows + haath se)</h2>
+              <h2 className="mb-2 text-sm font-bold">Exam-wise status (old rows + manual)</h2>
               <ul className="space-y-1 text-xs">{ov.byExam.map((e) => <li key={e.exam} className="flex flex-wrap justify-between gap-2"><span className="font-semibold">{e.exam}</span><span className="text-muted-foreground">{Object.entries(e.counts).map(([k, v]) => `${STATUS_LABEL[k]?.t ?? k}: ${v}`).join(" · ")}</span></li>)}</ul>
             </div>
           </section>
@@ -210,23 +210,23 @@ export default function AdminPyqDatesPage() {
                       {it.note && <p><b>Note:</b> {it.note}</p>}
                       <div className="flex flex-wrap items-end gap-2">
                         {it.proposedDate && it.status !== "MAPPED" && it.status !== "MANUAL" && (
-                          <button onClick={() => act("Accept", () => post(`items/${it.questionId}/accept`))} className="rounded-lg bg-emerald-600 px-3 py-1.5 font-bold text-white">✔ {it.proposedDate} accept karein</button>
+                          <button onClick={() => act("Accept", () => post(`items/${it.questionId}/accept`))} className="rounded-lg bg-emerald-600 px-3 py-1.5 font-bold text-white">✔ Accept {it.proposedDate}</button>
                         )}
                         {it.proposedDate && it.status === "NEEDS_REVIEW" && <button onClick={() => act("Reject", () => post(`items/${it.questionId}/reject`))} className="rounded-lg border border-red-500/40 px-3 py-1.5 font-semibold text-red-600">✖ Reject</button>}
                         <input className={`${field} w-32`} placeholder="YYYY-MM-DD" value={manual.date} onChange={(e) => setManual({ ...manual, date: e.target.value })} />
                         <select className={field} value={manual.tier} onChange={(e) => setManual({ ...manual, tier: e.target.value })}><option value="">Tier?</option><option value="TIER_1">Tier 1</option><option value="TIER_2">Tier 2</option></select>
-                        <button onClick={() => act("Date save", () => post(`items/${it.questionId}/manual`, { examDate: manual.date, examTier: manual.tier || null }))} className="rounded-lg border border-primary/40 px-3 py-1.5 font-semibold text-primary">✍️ Date save karein</button>
+                        <button onClick={() => act("Date save", () => post(`items/${it.questionId}/manual`, { examDate: manual.date, examTier: manual.tier || null }))} className="rounded-lg border border-primary/40 px-3 py-1.5 font-semibold text-primary">✍️ Save date</button>
                       </div>
                     </div>
                   )}
                 </li>
               );
             })}
-            {items.length === 0 && <li className="py-6 text-center text-sm text-muted-foreground">Is filter me koi question nahi hai.</li>}
+            {items.length === 0 && <li className="py-6 text-center text-sm text-muted-foreground">No questions match this filter.</li>}
           </ul>
 
           <div className="mt-3 flex items-center justify-between text-xs">
-            <button disabled={page === 0} onClick={() => setPage(page - 1)} className="rounded border border-border px-3 py-1.5 disabled:opacity-40">← Pehle</button>
+            <button disabled={page === 0} onClick={() => setPage(page - 1)} className="rounded border border-border px-3 py-1.5 disabled:opacity-40">← Previous</button>
             <span>Page {page + 1} / {Math.max(1, Math.ceil(total / PAGE))}</span>
             <button disabled={(page + 1) * PAGE >= total} onClick={() => setPage(page + 1)} className="rounded border border-border px-3 py-1.5 disabled:opacity-40">Aage →</button>
           </div>

@@ -1392,7 +1392,7 @@ export default function TestPage() {
       : accPct < 60
         ? tr("Accuracy is below 60% — review your weak topics and try again.", "Accuracy 60% se kam hai — weak topics review karke wapas try karo.")
         : skipped > 0
-          ? "Bach gaye " + skipped + " skipped questions — ab unhe attempt karna seekho, speed par kaam karo."
+          ? "You left " + skipped + " question(s) skipped — practise attempting them and work on your speed."
           : tr("Good accuracy! Now take a new test to build speed.", "Achhi accuracy! Ab naya test try karke speed badhao.");
 
   // P0 — in a strict sectional attempt the SECTION clock drives the colour / warnings, not the whole-paper clock.

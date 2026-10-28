@@ -280,7 +280,7 @@ describe('admin paper detail: what is still missing', () => {
     expect(d!.built).toBe(10);
     expect(d!.duplicatesDropped).toBe(1);
     expect(d!.numbering).toEqual({ numbered: 0, unnumbered: 10, missing: null });
-    expect(d!.shortSections).toEqual(['Maths: 15 aur chahiye (10/25)']);
+    expect(d!.shortSections).toEqual(['Maths: 15 more needed (10/25)']);
   });
 
   it('a paper without exam / tier / date has no detail', async () => {

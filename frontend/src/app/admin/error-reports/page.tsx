@@ -112,8 +112,8 @@ export default function ErrorReportsPage() {
   const resolve = async (reportId: string, status: "CONFIRMED" | "REJECTED") => {
     let adminNotes: string | undefined;
     if (status === "CONFIRMED") {
-      adminNotes = prompt("Confirm karne se pehle koi note (optional) — kya galat hai isme?") || undefined;
-      const ok = confirm("CONFIRM karne se yeh question auto-suspended reh jaayega jab tak fix nahi hota. Continue?");
+      adminNotes = prompt("Add a note before confirming (optional) — what is wrong with it?") || undefined;
+      const ok = confirm("If you CONFIRM, this question stays auto-suspended until it is fixed. Continue?");
       if (!ok) return;
     }
     setBusy(reportId);
@@ -126,20 +126,20 @@ export default function ErrorReportsPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(d?.message || "Resolve fail ho gaya");
+        setErr(d?.message || "Could not resolve the report");
         return;
       }
-      setMsg(status === "CONFIRMED" ? "Report confirm ho gaya — question suspended hi rahega jab tak fix na ho." : "Report reject ho gaya — question ki suspension hata di gayi.");
+      setMsg(status === "CONFIRMED" ? "Report confirmed — the question stays suspended until it is fixed." : "Report rejected — the question's suspension was lifted.");
       load();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Resolve fail ho gaya");
+      setErr(e instanceof Error ? e.message : "Could not resolve the report");
     } finally {
       setBusy("");
     }
   };
 
   const unsuspend = async (questionId: string) => {
-    const ok = confirm("Yeh question manually unsuspend karna hai? Iske sab OPEN/REVIEWING reports REJECTED ho jaayenge aur error count reset hoga.");
+    const ok = confirm("Unsuspend this question manually? All its OPEN / REVIEWING reports will be REJECTED and the error count will be reset.");
     if (!ok) return;
     setBusy(questionId);
     setErr("");
@@ -150,13 +150,13 @@ export default function ErrorReportsPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(d?.message || "Unsuspend fail ho gaya");
+        setErr(d?.message || "Could not unsuspend");
         return;
       }
-      setMsg(d.message || "Question unsuspend ho gaya.");
+      setMsg(d.message || "Question unsuspended.");
       load();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Unsuspend fail ho gaya");
+      setErr(e instanceof Error ? e.message : "Could not unsuspend");
     } finally {
       setBusy("");
     }
@@ -182,7 +182,7 @@ export default function ErrorReportsPage() {
       <main className="mx-auto max-w-5xl px-4 py-8">
         <h1 className="text-2xl font-bold">🚩 Error Report Resolution</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Students ne jo questions galat report kiye hain unhe yahan review karo. 3+ open reports pe question auto-suspend ho jaata hai.
+          Review the questions that students reported as wrong here. A question is auto-suspended after 3 or more open reports.
         </p>
 
         {stats && stats.byCategory.length > 0 && (
@@ -216,7 +216,7 @@ export default function ErrorReportsPage() {
         {loading ? (
           <p className="mt-6 text-sm text-muted-foreground">Loading reports...</p>
         ) : reports.length === 0 ? (
-          <p className="card mt-6 p-6 text-center text-sm text-muted-foreground">Is filter mein koi report nahi hai. 🎉</p>
+          <p className="card mt-6 p-6 text-center text-sm text-muted-foreground">No reports match this filter. 🎉</p>
         ) : (
           <div className="mt-6 space-y-4">
             {reports.map((r) => (

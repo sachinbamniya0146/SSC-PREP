@@ -101,8 +101,8 @@ export class BankUploadController {
     if (!has.includes(need)) {
       throw new ForbiddenException(
         practice
-          ? 'Aapko Practice Questions upload karne ka access nahi hai. Admin se contact karein.'
-          : 'Aapko PYQ / Question Bank upload karne ka access nahi hai. Admin se contact karein.',
+          ? 'You do not have access to upload Practice Questions. Please contact the admin.'
+          : 'You do not have access to upload PYQ / Question Bank questions. Please contact the admin.',
       );
     }
   }
@@ -118,7 +118,7 @@ export class BankUploadController {
     });
     if (!b) throw new BadRequestException('Upload batch not found');
     if (b.adminId !== this.adminId(req)) {
-      throw new ForbiddenException('Ye upload kisi aur ne kiya hai — aap sirf apne uploads manage kar sakte hain.');
+      throw new ForbiddenException('This upload was made by someone else — you can manage only your own uploads.');
     }
   }
 
@@ -222,7 +222,7 @@ export class BankUploadController {
   rejectedRows(@Param('id') id: string, @Req() req: any, @Res() res: Response) {
     const job = this.uploadService.getUploadJob(id, this.adminId(req));
     const errs: any[] = job.result?.errors ?? [];
-    if (!job.headers || !errs.some((e) => Array.isArray(e.data))) throw new BadRequestException('Koi rejected row nahi hai.');
+    if (!job.headers || !errs.some((e) => Array.isArray(e.data))) throw new BadRequestException('There are no rejected rows.');
     const wb = XLSX.utils.book_new();
     const aoa: any[][] = [[...job.headers, 'rejectReason', 'originalRow', 'problemColumn', 'howToFix']];
     for (const e of errs) if (Array.isArray(e.data)) aoa.push([...job.headers.map((_, i) => e.data[i] ?? ''), e.error, e.row, e.field ?? '', e.fix ?? '']);
@@ -535,9 +535,9 @@ export class BankUploadController {
   @Post('batches-bulk')
   async bulkBatches(@Body() body: any, @Req() req: any) {
     const action = body?.action;
-    if (action !== 'publish' && action !== 'unpublish') throw new BadRequestException("action 'publish' ya 'unpublish' hona chahiye.");
+    if (action !== 'publish' && action !== 'unpublish') throw new BadRequestException("action must be 'publish' or 'unpublish'.");
     const ids: string[] = Array.isArray(body?.ids) ? Array.from(new Set(body.ids.map(String))) : [];
-    if (ids.length === 0) throw new BadRequestException('Koi upload select nahi kiya.');
+    if (ids.length === 0) throw new BadRequestException('No upload was selected.');
     if (ids.length > 500) throw new BadRequestException('Ek baar me max 500 uploads.');
     let questions = 0;
     let done = 0;

@@ -330,7 +330,7 @@ export default function DailyQuizPage() {
               <div className="card p-6">
                 <h2 className="text-xl font-bold">📋 Answer Key &amp; Solutions</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Har question ka sahi answer + full solution — teacher-grade, exam ke liye.
+                  The correct answer and a full solution for every question — teacher-grade, made for the exam.
                 </p>
                 <div className="mt-5 space-y-5">
                   {review.map((r, i) => (
@@ -361,7 +361,7 @@ export default function DailyQuizPage() {
                             </p>
                           )}
                           <p className="mt-1 text-xs text-success">
-                            ✓ Verified Answer — SSC official answer key se match kiya
+                            ✓ Verified answer — matched with the official SSC answer key
                           </p>
                           </div>
                           <span

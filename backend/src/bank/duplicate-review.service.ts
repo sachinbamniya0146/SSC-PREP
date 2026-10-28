@@ -184,9 +184,9 @@ export class DuplicateReviewService {
   async resolve(id: string, actionRaw: string, adminId: string, opts: ResolveOpts = {}) {
     const action = this.parseAction(actionRaw);
     const review = await this.prisma.duplicateReview.findUnique({ where: { id } });
-    if (!review) throw new NotFoundException('Ye duplicate review nahi mila. / Review not found.');
+    if (!review) throw new NotFoundException('Duplicate review not found.');
     if (review.status !== 'PENDING') {
-      throw new ConflictException('Is duplicate par pehle hi decision ho chuka hai. / Already resolved.');
+      throw new ConflictException('A decision has already been made on this duplicate.');
     }
 
     // claim it atomically so two admins (or a double click) cannot apply it twice
@@ -194,7 +194,7 @@ export class DuplicateReviewService {
       where: { id, status: 'PENDING' },
       data: { status: ACTION_TO_STATUS[action], resolvedById: adminId, resolvedAt: new Date() },
     });
-    if (claim.count === 0) throw new ConflictException('Is duplicate par pehle hi decision ho chuka hai. / Already resolved.');
+    if (claim.count === 0) throw new ConflictException('A decision has already been made on this duplicate.');
 
     try {
       const detail = await this.apply(review, action, adminId, opts);
@@ -294,8 +294,8 @@ export class DuplicateReviewService {
    */
   async undo(id: string, adminId: string, ctx?: BulkCtx) {
     const review = await this.prisma.duplicateReview.findUnique({ where: { id } });
-    if (!review) throw new NotFoundException('Ye duplicate review nahi mila. / Review not found.');
-    if (review.status === 'PENDING') throw new ConflictException('Ye pehle se pending hai — undo ke liye kuch nahi. / Already pending.');
+    if (!review) throw new NotFoundException('Duplicate review not found.');
+    if (review.status === 'PENDING') throw new ConflictException('This is already pending — there is nothing to undo.');
 
     const uploadMode = !!review.candidateJson && !review.candidateQuestionId;
     let createdId: string | null = null;
@@ -305,7 +305,7 @@ export class DuplicateReviewService {
       if (review.status === 'KEPT_NEW' || review.status === 'KEPT_BOTH') {
         createdId = await this.findCreatedQuestion(review);
         if (!createdId) {
-          throw new BadRequestException('Is decision se bana naya question dhoondh nahi paaye — Question Manager me haath se hide karein. Kuch change nahi kiya.');
+          throw new BadRequestException('The new question created by this decision could not be found — hide it manually in Question Manager. Nothing was changed.');
         }
       }
       if (review.status === 'KEPT_NEW') restoreId = review.existingQuestionId ?? null;
@@ -320,7 +320,7 @@ export class DuplicateReviewService {
       where: { id, status: review.status },
       data: { status: 'PENDING', resolvedById: null, resolvedAt: null },
     });
-    if (claim.count === 0) throw new ConflictException('Is review par abhi kisi aur ne kaam kiya. / Changed meanwhile.');
+    if (claim.count === 0) throw new ConflictException('Someone else just acted on this review.');
 
     try {
       const out: { hiddenQuestionId?: string; restoredQuestionId?: string } = {};
@@ -623,7 +623,7 @@ export class DuplicateReviewService {
   private parseAction(raw: string): DuplicateAction {
     const a = String(raw ?? '').toUpperCase();
     if (a === 'KEEP_EXISTING' || a === 'KEEP_NEW' || a === 'KEEP_BOTH') return a;
-    throw new BadRequestException('action KEEP_EXISTING, KEEP_NEW ya KEEP_BOTH hona chahiye.');
+    throw new BadRequestException('action must be KEEP_EXISTING, KEEP_NEW or KEEP_BOTH.');
   }
 
   private async apply(review: any, action: DuplicateAction, adminId: string, opts: ResolveOpts = {}) {

@@ -81,7 +81,7 @@ export default function ExamManagementPage() {
       const data: AdminExam[] = await r.json();
       setExams(data);
     } catch (e) {
-      setListErr(e instanceof Error ? e.message : "Exams load nahi hue");
+      setListErr(e instanceof Error ? e.message : "Could not load exams");
     } finally {
       setLoading(false);
     }
@@ -109,7 +109,7 @@ export default function ExamManagementPage() {
     const trimmedSlug = slug.trim().toLowerCase();
     const trimmedCode = code.trim().toUpperCase();
     if (!trimmedName || !trimmedSlug || !trimmedCode) {
-      setCreateErr("Name, slug, aur code teeno chahiye");
+      setCreateErr("Name, slug and code are all required");
       return;
     }
     setCreating(true);
@@ -131,10 +131,10 @@ export default function ExamManagementPage() {
       setCode("");
       slugGuessCache.current = "";
       codeGuessCache.current = "";
-      setCreateMsg(`"${d.name}" ban gaya (slug: ${d.slug}). Ab isme ExamPattern aur questions add kar sakte hain.`);
+      setCreateMsg(`"${d.name}" was created (slug: ${d.slug}). You can now add an ExamPattern and questions to it.`);
       await loadExams();
     } catch (e) {
-      setCreateErr(e instanceof Error ? e.message : "Exam create nahi hua");
+      setCreateErr(e instanceof Error ? e.message : "Could not create the exam");
     } finally {
       setCreating(false);
     }
@@ -157,7 +157,7 @@ export default function ExamManagementPage() {
   async function copyId(id: string) {
     try {
       await navigator.clipboard.writeText(id);
-      setCreateMsg("Exam ID copy ho gaya.");
+      setCreateMsg("Exam ID copied.");
     } catch {
       // Clipboard API can be unavailable — ID is still visible for manual copy.
     }
@@ -185,14 +185,14 @@ export default function ExamManagementPage() {
       <main className="mx-auto max-w-5xl px-4 py-8">
         <h1 className="text-2xl font-bold">🎓 Exam Management</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Naya exam (jaise SSC CGL, SSC CHSL) yahan banayein. Ye exam tabhi dashboard ki &quot;Choose Your
-          Exam&quot; list mein aur sectional/mock tests mein dikhega jab isme kam se kam 10 approved
-          bilingual questions ho jayenge.
+          Create a new exam (for example SSC CGL, SSC CHSL) here. The exam appears in the dashboard's &quot;Choose Your
+          Exam&quot; list and in sectional / mock tests only once it has at least 10 approved
+          bilingual questions.
         </p>
 
         {/* ---- Create form ---- */}
         <div className="mt-6 rounded-xl border border-border bg-card p-5">
-          <h2 className="font-semibold">➕ Naya Exam Banayein</h2>
+          <h2 className="font-semibold">➕ Create a new exam</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <div>
               <label className="text-xs font-semibold text-muted-foreground">Name *</label>
@@ -223,17 +223,17 @@ export default function ExamManagementPage() {
             </div>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Note: sectional test flow abhi sirf <code>cgl</code>, <code>chsl</code>, <code>mts</code>,{" "}
-            <code>cpo</code> slugs ko pehchanta hai — koi aur slug banayenge to uska sectional exam kaam
-            nahi karega jab tak backend mein woh family bhi add na ki jaaye (mock/PYQ/question-bank sab
-            slugs ke saath already kaam karte hain).
+            Note: the sectional test flow currently recognises only the <code>cgl</code>, <code>chsl</code>, <code>mts</code>,{" "}
+            <code>cpo</code> slugs — if you create any other slug, its sectional exam will not work
+            until that family is also added in the backend (mock / PYQ / question-bank all
+            already work with any slug).
           </p>
           <button
             onClick={createExam}
             disabled={creating}
             className="btn mt-4 bg-primary px-5 py-2 text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
-            {creating ? "Ban raha hai..." : "Exam Banayein"}
+            {creating ? "Creating..." : "Create exam"}
           </button>
           {createErr && (
             <p className="mt-3 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{createErr}</p>
@@ -255,8 +255,8 @@ export default function ExamManagementPage() {
             <p className="mt-4 text-sm text-muted-foreground">Loading...</p>
           ) : exams.length === 0 ? (
             <p className="mt-4 rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-              Koi exam nahi mila — is DB mein abhi koi Exam row nahi hai. Yahi wajah hai ki dashboard par
-              &quot;Choose Your Exam&quot; khaali dikh raha hai. Upar se pehle exam banayein.
+              No exam found — this database has no Exam row yet. That is why the dashboard shows
+              &quot;Choose Your Exam&quot; empty. Create an exam above first.
             </p>
           ) : (
             <div className="mt-4 space-y-3">

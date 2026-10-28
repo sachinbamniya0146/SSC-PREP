@@ -55,7 +55,7 @@ export class DuplicateReviewController {
   bulkResolve(@Body() body: any, @Req() req: any) {
     const hasIds = Array.isArray(body?.ids) && body.ids.length > 0;
     if (!hasIds && !body?.confirm) {
-      throw new BadRequestException('Filter ke hisaab se sab par lagane ke liye confirm: true bhejein. / confirm: true required.');
+      throw new BadRequestException('To apply to everything matching the filter, send confirm: true.');
     }
     return this.reviews.bulkResolve(
       {
@@ -76,7 +76,7 @@ export class DuplicateReviewController {
   bulkUndo(@Body() body: any, @Req() req: any) {
     const hasIds = Array.isArray(body?.ids) && body.ids.length > 0;
     if (!hasIds && !body?.confirm) {
-      throw new BadRequestException('Filter ke hisaab se sab undo karne ke liye confirm: true bhejein. / confirm: true required.');
+      throw new BadRequestException('To undo everything matching the filter, send confirm: true.');
     }
     return this.reviews.bulkUndo(
       {

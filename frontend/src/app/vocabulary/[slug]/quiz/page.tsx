@@ -88,7 +88,7 @@ export default function VocabWordQuizPage() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        throw new Error(d?.message || "Submit fail hua");
+        throw new Error(d?.message || "Could not submit. Please try again.");
       }
       setResult(await r.json());
     } catch (e: any) {
@@ -138,7 +138,7 @@ export default function VocabWordQuizPage() {
               </p>
             ) : (
               <p className="mt-3 text-sm text-amber-700 dark:text-amber-400">
-                {result.total} me se {result.requiredCorrectCount} sahi chahiye ({result.masteryThresholdPct}%+) agla word unlock karne ke liye — word ko dobara padhein aur quiz phir se dein.
+                You need {result.requiredCorrectCount} correct out of {result.total} ({result.masteryThresholdPct}%+) to unlock the next word — read the word again and retake the quiz.
               </p>
             )}
           </div>
@@ -148,7 +148,7 @@ export default function VocabWordQuizPage() {
           <div className="mt-6 flex gap-2">
             {!passed && (
               <button onClick={() => window.location.reload()} className="btn flex-1 bg-primary py-2.5 text-sm font-semibold text-primary-foreground">
-                🔁 Dobara try karein
+                🔁 Try again
               </button>
             )}
             <a href="/vocabulary" className="btn btn-outline flex-1 py-2.5 text-center text-sm">

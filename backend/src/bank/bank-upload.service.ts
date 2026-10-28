@@ -470,28 +470,28 @@ export class BankUploadService {
     const ref = /\b(examId|subjectId|chapterId|topicId|subTopicId)\b/.exec(m);
     if (/Missing required column: (\w+)/i.test(m)) {
       const col = /Missing required column: (\w+)/i.exec(m)![1];
-      return { field: col, fix: `Sheet ki header row me "${col}" column nahi hai — template se header copy karke jodein.` };
+      return { field: col, fix: `The sheet header row has no "${col}" column — copy the header from the template.` };
     }
     if (category === 'MISSING_SOLUTION') {
-      return { field: 'explanation', fix: 'explanation (ya explanationHindi) column me solution likhein, phir sirf is row ko dobara upload karein.' };
+      return { field: 'explanation', fix: 'Write the solution in the explanation (or explanationHindi) column, then upload only this row again.' };
     }
     if (/Invalid correctAnswer/i.test(m) || category === 'MISSING_ANSWER') {
-      return { field: 'correctAnswer', fix: 'correctAnswer me sirf A, B, C ya D likhein, aur wo option khali nahi hona chahiye.' };
+      return { field: 'correctAnswer', fix: 'Write only A, B, C or D in correctAnswer, and that option must not be empty.' };
     }
-    if (/Invalid difficulty/i.test(m)) return { field: 'difficulty', fix: 'difficulty me EASY, MEDIUM ya HARD likhein (ya khali chhodein).' };
-    if (/questionText is empty/i.test(m)) return { field: 'questionText', fix: 'questionText khali hai — question likhein ya question image lagayein.' };
+    if (/Invalid difficulty/i.test(m)) return { field: 'difficulty', fix: 'Write EASY, MEDIUM or HARD in difficulty (or leave it empty).' };
+    if (/questionText is empty/i.test(m)) return { field: 'questionText', fix: 'questionText is empty — write the question or attach a question image.' };
     const opt = /Options? ([A-D](?:, [A-D])*) (?:is|are) empty/i.exec(m);
-    if (opt) return { field: opt[1].split(', ').map((k) => `option${k}`).join(', '), fix: 'Har option (A–D) me text, diagram ya image zaroori hai.' };
+    if (opt) return { field: opt[1].split(', ').map((k) => `option${k}`).join(', '), fix: 'Every option (A–D) needs text, a diagram or an image.' };
     if (/belongs to (chapter|topic)/i.test(m)) {
-      return { field: ref?.[1], fix: 'Ye topic/sub-topic dusre chapter/topic ka hai — row me sahi parent wala id/naam likhein (Reference IDs sheet dekhein).' };
+      return { field: ref?.[1], fix: 'This topic / sub-topic belongs to a different chapter / topic — write the id / name with the correct parent in the row (see the Reference IDs sheet).' };
     }
     if (/not found in database/i.test(m)) {
-      return { field: ref?.[1], fix: `${ref?.[1] ?? 'Id'} ka naam/slug database se match nahi hua — Reference IDs sheet se sahi slug ya naam copy karein (spelling aur extra space check karein).` };
+      return { field: ref?.[1], fix: `${ref?.[1] ?? 'Id'}: the name / slug does not match the database — copy the correct slug or name from the Reference IDs sheet (check spelling and extra spaces).` };
     }
-    if (category === 'DUPLICATE') return { field: 'questionText', fix: 'Ye question bank me pehle se hai — Duplicate Review me purana/naya chunein.' };
-    if (category === 'MISSING_FIELD') return { fix: 'Zaroori column khali hai — row me khali cell bharein.' };
-    if (category === 'FORMAT') return { fix: 'Cell ki value ka format galat hai — upar likhi error ke hisaab se theek karein.' };
-    return { fix: 'Row ko dhyan se dekhein; samajh na aaye to Rejected rows file download karke ek-ek row theek karein.' };
+    if (category === 'DUPLICATE') return { field: 'questionText', fix: 'This question is already in the bank — choose the old or the new one in Duplicate Review.' };
+    if (category === 'MISSING_FIELD') return { fix: 'A required column is empty — fill in the empty cell in the row.' };
+    if (category === 'FORMAT') return { fix: 'The format of a cell value is wrong — fix it as described in the error above.' };
+    return { fix: 'Look at the row carefully; if it is unclear, download the Rejected rows file and fix the rows one by one.' };
   }
 
   private pushUploadError(result: UploadResult, entry: UploadResult['errors'][number]): void {
@@ -519,7 +519,7 @@ export class BankUploadService {
       const msg = e instanceof Error ? e.message : String(e);
       if (/memory|heap|stopped unexpectedly/i.test(msg)) {
         throw new BadRequestException(
-          'Excel file itni badi hai ki server ki memory kam pad gayi. File ko 25,000-30,000 rows ke tukdon me baant kar upload karein, ya CSV format use karein (CSV bahut halka hota hai). / The Excel file is too large for the server memory: split it into files of ~25-30k rows, or upload a CSV instead.',
+          'The Excel file is too large for the server memory: split it into files of about 25,000–30,000 rows, or upload a CSV instead (CSV is much lighter).',
         );
       }
       if (/xlsx module not found|ERR_WORKER_UNSUPPORTED/i.test(msg)) {
@@ -550,7 +550,7 @@ export class BankUploadService {
   ): Promise<{ async: true; jobId: string; uploadBatchId: string; status: 'RUNNING' }> {
     if (this.uploadJobs.runningCount() >= MAX_CONCURRENT_UPLOAD_JOBS) {
       throw new BadRequestException(
-        `Server par abhi ${MAX_CONCURRENT_UPLOAD_JOBS} bade uploads chal rahe hain — ek khatam hone ka wait karke phir upload karein. / Two big uploads are already running; try again when one finishes.`,
+        `${MAX_CONCURRENT_UPLOAD_JOBS} big uploads are already running on the server — wait for one to finish, then upload again.`,
       );
     }
     const batchId = await this.createUploadBatchPlaceholder(adminId, kind, filename);
@@ -563,10 +563,10 @@ export class BankUploadService {
     const job = this.uploadJobs.get(jobId);
     if (!job) {
       throw new NotFoundException(
-        'Upload job nahi mila — server restart hua ho sakta hai. "Upload history" me is file ka batch dekhein: jitne questions save ho chuke the wo wahan dikhenge. / Job not found (server may have restarted) — check Upload history.',
+        'Upload job not found — the server may have restarted. Check Upload History for this file\'s batch: the questions that were already saved are listed there.',
       );
     }
-    if (adminId && job.adminId !== adminId) throw new ForbiddenException('Ye upload kisi aur admin ne shuru kiya hai.');
+    if (adminId && job.adminId !== adminId) throw new ForbiddenException('This upload was started by another admin.');
     return job;
   }
 
@@ -638,13 +638,13 @@ export class BankUploadService {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('Question data missing.');
     const str = (v: unknown, max: number, label: string): string => {
       const t = v == null ? '' : String(v).trim();
-      if (t.length > max) throw new BadRequestException(`${label} bahut lamba hai (max ${max} characters). / ${label} is too long.`);
+      if (t.length > max) throw new BadRequestException(`${label} is too long (max ${max} characters).`);
       return t;
     };
     const url = (v: unknown, label: string): string | undefined => {
       const t = v == null ? '' : String(v).trim();
       if (!t) return undefined;
-      if (!BankUploadService.IMAGE_URL_RE.test(t)) throw new BadRequestException(`${label}: image link sahi nahi hai — image ko form se upload karein. / Invalid image URL.`);
+      if (!BankUploadService.IMAGE_URL_RE.test(t)) throw new BadRequestException(`${label}: the image link is not valid — upload the image through the form.`);
       return t;
     };
 
@@ -652,12 +652,12 @@ export class BankUploadService {
     const examId = str(input.examId, 100, 'Exam');
     const subjectId = str(input.subjectId, 100, 'Subject');
     const chapterId = str(input.chapterId, 100, 'Chapter');
-    if (!examId) throw new BadRequestException('Exam select karein. / Select an exam.');
-    if (!subjectId) throw new BadRequestException('Subject select karein. / Select a subject.');
-    if (!chapterId) throw new BadRequestException('Chapter select karein. / Select a chapter.');
+    if (!examId) throw new BadRequestException('Select an exam.');
+    if (!subjectId) throw new BadRequestException('Select a subject.');
+    if (!chapterId) throw new BadRequestException('Select a chapter.');
 
     const rawOptions: any[] = Array.isArray(input.options) ? input.options : [];
-    if (rawOptions.length !== 4) throw new BadRequestException('Exactly 4 options (A, B, C, D) chahiye. / Exactly 4 options are required.');
+    if (rawOptions.length !== 4) throw new BadRequestException('Exactly 4 options (A, B, C, D) are required.');
     const options = ['A', 'B', 'C', 'D'].map((key, i) => {
       const o = rawOptions.find((x) => x && String(x.key).toUpperCase() === key) ?? rawOptions[i] ?? {};
       return {
@@ -669,18 +669,18 @@ export class BankUploadService {
     });
 
     const correctAnswer = String(input.correctAnswer ?? '').trim().toUpperCase();
-    if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) throw new BadRequestException('Sahi answer (A/B/C/D) chunein. / Choose the correct answer.');
+    if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) throw new BadRequestException('Choose the correct answer (A/B/C/D).');
 
     const questionImageUrl = url(input.questionImageUrl, 'Question image');
     const questionText = str(input.questionText, 5000, 'Question');
-    if (!questionText && !questionImageUrl) throw new BadRequestException('Question text likhein ya question image upload karein. / Add question text or an image.');
+    if (!questionText && !questionImageUrl) throw new BadRequestException('Add the question text or a question image.');
 
     const marks = input.marks === '' || input.marks == null ? 1 : Number(input.marks);
     const negativeMarks = input.negativeMarks === '' || input.negativeMarks == null ? 0.25 : Number(input.negativeMarks);
-    if (!Number.isFinite(marks) || marks <= 0 || marks > 100) throw new BadRequestException('Marks 0 se bade hone chahiye. / Invalid marks.');
-    if (!Number.isFinite(negativeMarks) || negativeMarks < 0 || negativeMarks > 100) throw new BadRequestException('Negative marks galat hain. / Invalid negative marks.');
+    if (!Number.isFinite(marks) || marks <= 0 || marks > 100) throw new BadRequestException('Marks must be greater than 0.');
+    if (!Number.isFinite(negativeMarks) || negativeMarks < 0 || negativeMarks > 100) throw new BadRequestException('Negative marks are invalid.');
     const difficulty = String(input.difficulty || 'MEDIUM').toUpperCase();
-    if (!['EASY', 'MEDIUM', 'HARD'].includes(difficulty)) throw new BadRequestException('Difficulty EASY, MEDIUM ya HARD honi chahiye.');
+    if (!['EASY', 'MEDIUM', 'HARD'].includes(difficulty)) throw new BadRequestException('Difficulty must be EASY, MEDIUM or HARD.');
 
     let year: number | undefined;
     let shift: string | undefined;
@@ -691,7 +691,7 @@ export class BankUploadService {
     let paperQuestionNo: number | undefined;
     if (kind === 'pyq') {
       year = Number(input.year);
-      if (!Number.isInteger(year) || year < 1990 || year > 2100) throw new BadRequestException('PYQ ke liye sahi year likhein (jaise 2024). / A valid year is required for a PYQ.');
+      if (!Number.isInteger(year) || year < 1990 || year > 2100) throw new BadRequestException('A valid year (e.g. 2024) is required for a PYQ.');
       // Oct 2026: morning/afternoon/evening/9 AM/"1" -> canonical "Shift 1/2/3" (see common/shift.ts)
       shift = normalizeShiftOrUndefined(str(input.shift, 60, 'Shift'));
       paperCode = str(input.paperCode, 120, 'Paper code') || undefined;
@@ -778,13 +778,13 @@ export class BankUploadService {
           reviewId: queued.reviewId,
           warnings: [
             queued.outcome === 'QUEUED'
-              ? 'Duplicate review queue me bhej diya. Admin > Duplicate Review me jaake "purana / naya / dono" chunein. / Sent to the duplicate review queue.'
-              : 'Ye duplicate pehle se review list me hai ya pehle decide ho chuka hai. / Already in the review list or already decided.',
+              ? 'Sent to the duplicate review queue. Go to Admin > Duplicate Review and choose "old / new / both".'
+              : 'This duplicate is already in the review list or has already been decided.',
           ],
         };
       }
       throw new ConflictException({
-        message: `Ye question pehle se maujood hai (ID ${ex.id}). Duplicate save nahi hoga. / This question already exists.`,
+        message: `This question already exists (ID ${ex.id}). The duplicate will not be saved.`,
         code: 'DUPLICATE',
         existing: ex,
         exact: cmp.exact,
@@ -794,7 +794,7 @@ export class BankUploadService {
 
     const result = await this.processStructuredQuestions([question], adminId, null, kind === 'practice');
     if (result.created !== 1) {
-      const msg = result.errors[0]?.error ?? 'Question save nahi hua.';
+      const msg = result.errors[0]?.error ?? 'The question was not saved.';
       throw new BadRequestException(msg);
     }
 
@@ -823,9 +823,9 @@ export class BankUploadService {
 
     const warnings: string[] = [];
     const published = created?.isApproved ?? result.warnings.length === 0;
-    if (!published) warnings.push('Saved, lekin students ko abhi nahi dikhega — Hindi question text add karein. / Saved but NOT live: add the Hindi text to publish it.');
-    if (kind === 'pyq' && !question.shift && !(question.examTier && question.examDate)) warnings.push('Shift nahi di — ye question shift-wise mock me nahi judega. / No shift given: it will not join a shift-wise mock.');
-    if (kind === 'pyq' && question.examDate && !question.examTier) warnings.push('examTier (TIER_1 / TIER_2) nahi di — ye question tier-wise mock me nahi judega. / No tier given: it will not join a date-wise mock.');
+    if (!published) warnings.push('Saved but NOT live: add the Hindi question text to publish it.');
+    if (kind === 'pyq' && !question.shift && !(question.examTier && question.examDate)) warnings.push('No shift given: this question will not join a shift-wise mock.');
+    if (kind === 'pyq' && question.examDate && !question.examTier) warnings.push('No examTier (TIER_1 / TIER_2) given: this question will not join a date-wise mock.');
     return { id: created?.id ?? null, published, kind, warnings };
   }
 
@@ -995,12 +995,12 @@ export class BankUploadService {
   }
 
   private async keyedTemplateOrThrow(templateId: string) {
-    if (!templateId.startsWith('pyq-k-')) throw new BadRequestException('Ye date-wise paper nahi hai. / Not a date-wise PYQ paper.');
+    if (!templateId.startsWith('pyq-k-')) throw new BadRequestException('This is not a date-wise PYQ paper.');
     const t = await this.prisma.testTemplate.findUnique({
       where: { id: templateId },
       select: { id: true, title: true, isActive: true, examId: true, examTier: true, tierPaper: true, examDate: true, shift: true },
     });
-    if (!t) throw new NotFoundException('Paper nahi mila. / Paper not found.');
+    if (!t) throw new NotFoundException('Paper not found.');
     return t;
   }
 
@@ -1008,7 +1008,7 @@ export class BankUploadService {
   async keyedPaperDetail(templateId: string): Promise<KeyedPaperDetail> {
     const t = await this.keyedTemplateOrThrow(templateId);
     const detail = await analyzeKeyedPaper(this.prisma as any, t);
-    if (!detail) throw new BadRequestException('Is paper me exam / tier / date poora nahi hai. / Paper is missing exam, tier or date.');
+    if (!detail) throw new BadRequestException('This paper is missing its exam, tier or date.');
     return detail;
   }
 
@@ -1016,7 +1016,7 @@ export class BankUploadService {
   async renameKeyedPaper(templateId: string, title: string): Promise<{ id: string; title: string }> {
     await this.keyedTemplateOrThrow(templateId);
     const clean = String(title ?? '').replace(/\s+/g, ' ').trim();
-    if (clean.length < 3 || clean.length > 160) throw new BadRequestException('Naam 3 se 160 akshar ka hona chahiye. / Title must be 3-160 characters.');
+    if (clean.length < 3 || clean.length > 160) throw new BadRequestException('The title must be 3–160 characters.');
     const r = await this.prisma.testTemplate.update({ where: { id: templateId }, data: { title: clean, titleLocked: true }, select: { id: true, title: true } });
     cacheClearPrefix('tests:list');
     return r;
@@ -1039,7 +1039,7 @@ export class BankUploadService {
     await this.keyedTemplateOrThrow(templateId);
     const attempts = await this.prisma.testAttempt.count({ where: { testTemplateId: templateId } });
     if (attempts > 0) {
-      throw new ConflictException(`Is paper ke ${attempts} attempt ho chuke hain, delete nahi ho sakta — "Chhupao" use karein. / ${attempts} attempts exist: hide it instead.`);
+      throw new ConflictException(`This paper has ${attempts} attempt(s), so it cannot be deleted — hide it instead.`);
     }
     await this.prisma.testTemplate.delete({ where: { id: templateId } });
     cacheClearPrefix('tests:list');
@@ -1059,9 +1059,9 @@ export class BankUploadService {
 
   /** Admin "abhi dikhao": make a still-building paper visible to students now. */
   async publishKeyedPaperNow(templateId: string): Promise<{ id: string; isActive: boolean }> {
-    if (!templateId.startsWith('pyq-k-')) throw new BadRequestException('Ye date-wise paper nahi hai. / Not a date-wise PYQ paper.');
+    if (!templateId.startsWith('pyq-k-')) throw new BadRequestException('This is not a date-wise PYQ paper.');
     const t = await this.prisma.testTemplate.findUnique({ where: { id: templateId }, select: { id: true } });
-    if (!t) throw new NotFoundException('Paper nahi mila. / Paper not found.');
+    if (!t) throw new NotFoundException('Paper not found.');
     const r = await this.prisma.testTemplate.update({ where: { id: templateId }, data: { isActive: true }, select: { id: true, isActive: true } });
     cacheClearPrefix('tests:list');
     return r;
@@ -1515,7 +1515,7 @@ export class BankUploadService {
     const batch = await this.prisma.questionUploadBatch.findUnique({ where: { id }, select: { id: true } });
     if (!batch) throw new BadRequestException('Upload batch not found');
     if (!scope.subjectId && !scope.chapterId && !scope.topicId && !scope.subTopicId) {
-      throw new BadRequestException('Subject / chapter / topic / sub-topic me se koi ek select karein (poori batch delete karne ke liye "Delete whole upload" use karein).');
+      throw new BadRequestException('Select a subject / chapter / topic / sub-topic (use "Delete whole upload" to delete the entire batch).');
     }
     const where: any = { uploadBatchId: id };
     if (scope.subjectId) where.subjectId = scope.subjectId;
@@ -1571,7 +1571,7 @@ export class BankUploadService {
     if (n > 0) {
       this.pushUploadWarning(result, {
         row: 0,
-        message: `${n} question(s) me 'year' column khali tha — ye PYQ nahi ban sakte, Practice questions ki tarah save hue hain. Agar ye PYQ the to year bharkar dobara upload karein.`,
+        message: `${n} question(s) had an empty 'year' column — they cannot become PYQs and were saved as Practice questions. If they were PYQs, fill in the year and upload again.`,
       });
     }
   }
@@ -2675,7 +2675,7 @@ export class BankUploadService {
           result.failed++;
           this.pushUploadError(result, {
             row: rowNum,
-            error: 'Solution/explanation missing hai — question upload nahi hua',
+            error: 'Solution / explanation is missing — the question was not uploaded',
             category: 'MISSING_SOLUTION',
             questionPreview: this.extractQuestionPreview(row, headerMap),
             data: row,
@@ -3530,7 +3530,7 @@ export class BankUploadService {
     void rowNum;
 
     if (!question.examId || !examIds.has(question.examId)) {
-      throw new Error(`examId "${question.examId}" not found in database — is exam ka koi question is exam ke test/mock me kabhi dikhega hi nahi, isliye row reject kiya gaya`);
+      throw new Error(`examId "${question.examId}" not found in database — so no question of this exam would ever appear in its tests / mocks; the row was rejected`);
     }
     if (!subjectIds.has(question.subjectId)) {
       throw new Error(`subjectId "${question.subjectId}" not found in database`);
@@ -4313,8 +4313,8 @@ export class BankUploadService {
           row: p.it.rowNum,
           message:
             outcome === 'ALREADY_PENDING'
-              ? 'Ye duplicate pehle se Duplicate Review list me hai — dobara nahi jodha.'
-              : 'Is duplicate par admin pehle "purana rakho" decide kar chuka hai — skip kiya.',
+              ? 'This duplicate is already in the Duplicate Review list — not added again.'
+              : 'The admin has already decided "keep old" for this duplicate — skipped.',
           questionPreview: p.it.preview,
         });
         continue;
@@ -4347,8 +4347,8 @@ export class BankUploadService {
         row: p.it.rowNum,
         message:
           p.cmp.matchType === 'EXACT'
-            ? 'Exact duplicate (question, options, solution, shift sab same) — Duplicate Review me bheja. Wahan purana / naya / dono me se chunein.'
-            : `Same question, lekin ye details alag hain: ${p.cmp.differences.join(', ')} — Duplicate Review me bheja.`,
+            ? 'Exact duplicate (question, options, solution and shift all identical) — sent to Duplicate Review. Choose the old, the new, or both there.'
+            : `Same question, but these details differ: ${p.cmp.differences.join(', ')} — sent to Duplicate Review.`,
         questionPreview: p.it.preview,
       });
     };
@@ -4421,14 +4421,14 @@ export class BankUploadService {
         if (r.matchType === 'EXACT') ctx.result.queuedExact = (ctx.result.queuedExact ?? 0) + 1;
         message =
           r.matchType === 'EXACT'
-            ? 'Exact duplicate (question, options, solution, shift sab same) — Duplicate Review me bheja. Wahan purana / naya / dono me se chunein.'
-            : `Same question, lekin ye details alag hain: ${r.differences.join(', ')} — Duplicate Review me bheja.`;
+            ? 'Exact duplicate (question, options, solution and shift all identical) — sent to Duplicate Review. Choose the old, the new, or both there.'
+            : `Same question, but these details differ: ${r.differences.join(', ')} — sent to Duplicate Review.`;
       } else if (r.outcome === 'ALREADY_PENDING') {
         ctx.result.reviewAlready = (ctx.result.reviewAlready ?? 0) + 1;
-        message = 'Ye duplicate pehle se Duplicate Review list me hai — dobara nahi jodha.';
+        message = 'This duplicate is already in the Duplicate Review list — not added again.';
       } else {
         ctx.result.reviewAlready = (ctx.result.reviewAlready ?? 0) + 1;
-        message = 'Is duplicate par admin pehle "purana rakho" decide kar chuka hai — skip kiya.';
+        message = 'The admin has already decided "keep old" for this duplicate — skipped.';
       }
       this.pushUploadWarning(ctx.result, { row: ctx.rowNum, message, questionPreview: ctx.preview });
       return true;

@@ -47,7 +47,7 @@ export function QFigure({ src, alt = "Figure", className = "max-h-64" }: { src?:
         }}
         className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground hover:border-primary"
       >
-        ⚠️ Image load nahi hui — dobara try karne ke liye tap karein
+        ⚠️ The image could not be loaded — tap to try again
       </button>
     );
   }

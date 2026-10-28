@@ -25,7 +25,7 @@ export class TaxonomyDedupeController {
 
   @Post('merge')
   merge(@Req() req: any, @Body() body: { kind?: string; survivorId?: string; loserIds?: string[] }) {
-    if (body?.kind !== 'TOPIC' && body?.kind !== 'SUBTOPIC') throw new BadRequestException('kind TOPIC ya SUBTOPIC hona chahiye');
+    if (body?.kind !== 'TOPIC' && body?.kind !== 'SUBTOPIC') throw new BadRequestException('kind must be TOPIC or SUBTOPIC');
     if (!body.survivorId || !Array.isArray(body.loserIds) || body.loserIds.length === 0) throw new BadRequestException('survivorId aur loserIds required');
     return this.dedupe.mergeGroup(body.kind, body.survivorId, body.loserIds, this.adminId(req));
   }

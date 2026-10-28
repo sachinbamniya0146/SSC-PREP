@@ -247,11 +247,11 @@ export default function QuestionManagerPage() {
       URL.revokeObjectURL(url);
       setInfo(
         capped
-          ? `⬇️ ${exported} questions download hue (filter me ${totalMatch} mile — max 50,000 ek baar me; baaki ke liye filter narrow karein, jaise subject ya year).`
-          : `⬇️ ${exported} questions download ho gaye.`,
+          ? `⬇️ ${exported} questions downloaded (${totalMatch} matched the filter — max 50,000 at a time; narrow the filter, e.g. by subject or year, for the rest).`
+          : `⬇️ ${exported} questions downloaded.`,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Download nahi hua");
+      setError(e instanceof Error ? e.message : "Could not download");
     } finally {
       setExporting(false);
     }
@@ -273,7 +273,7 @@ export default function QuestionManagerPage() {
         setVisibleTotal(d.visibleTotal ?? d.total ?? 0);
         setSelected(new Set());
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Load nahi hua");
+        setError(e instanceof Error ? e.message : "Could not load");
       } finally {
         setLoading(false);
       }
@@ -350,7 +350,7 @@ export default function QuestionManagerPage() {
       await load(page);
       await loadStats();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Action fail ho gaya");
+      setError(e instanceof Error ? e.message : "Action failed");
     } finally {
       setBusy(false);
     }
@@ -366,8 +366,8 @@ export default function QuestionManagerPage() {
     if (targetSubTopicId) target.subTopicId = targetSubTopicId;
     else if (targetTopicId) target.topicId = targetTopicId;
     else if (targetChapterId) target.chapterId = targetChapterId;
-    else { setError("Target chapter/topic/sub-topic pehle chunein"); return; }
-    runBulk("questions/move", { ...scopeForAction(useFilterForAll), target }, (d) => `${d.moved} question(s) move ho gaye.`);
+    else { setError("Choose the target chapter / topic / sub-topic first"); return; }
+    runBulk("questions/move", { ...scopeForAction(useFilterForAll), target }, (d) => `${d.moved} question(s) moved.`);
   };
 
   const doBulkMeta = (useFilterForAll: boolean) => {
@@ -376,19 +376,19 @@ export default function QuestionManagerPage() {
     if (bYear) set.year = bYear;
     if (bShift) set.shift = bShift;
     if (bDate) set.examDate = bDate;
-    if (Object.keys(set).length === 0) { setError("Exam / year / shift / date me se kam se kam ek bharein"); return; }
+    if (Object.keys(set).length === 0) { setError("Fill in at least one of exam / year / shift / date"); return; }
     const n = useFilterForAll || selected.size === 0 ? total : selected.size;
     if (!confirm(`${n} question(s) ki details badal dein?`)) return;
-    runBulk("questions/bulk-meta", { ...scopeForAction(useFilterForAll), set }, (d) => `${d.updated} question(s) ki details badal gayi.`);
+    runBulk("questions/bulk-meta", { ...scopeForAction(useFilterForAll), set }, (d) => `${d.updated} question(s) updated.`);
   };
 
   const doVisibility = (action: "publish" | "unpublish", useFilterForAll: boolean) =>
-    runBulk("questions/visibility", { ...scopeForAction(useFilterForAll), action }, (d) => `${d.updated} question(s) update ho gaye.`);
+    runBulk("questions/visibility", { ...scopeForAction(useFilterForAll), action }, (d) => `${d.updated} question(s) updated.`);
 
   const doDelete = (useFilterForAll: boolean) => {
     const n = useFilterForAll || selected.size === 0 ? total : selected.size;
-    if (!confirm(`${n} question(s) delete karein? Jo students already attempt kar chuke hain vo sirf hide honge, baaki permanently delete honge.`)) return;
-    runBulk("questions/delete", { ...scopeForAction(useFilterForAll), confirm: true }, (d) => `${d.deleted} delete, ${d.hidden} hide (already attempted) ho gaye.`);
+    if (!confirm(`Delete ${n} question(s)? Questions that students have already attempted will only be hidden; the rest are deleted permanently.`)) return;
+    runBulk("questions/delete", { ...scopeForAction(useFilterForAll), confirm: true }, (d) => `${d.deleted} deleted, ${d.hidden} hidden (already attempted).`);
   };
 
   if (!authChecked) return null;
@@ -465,9 +465,9 @@ export default function QuestionManagerPage() {
               <option value="pending">Pending</option>
               <option value="hidden">Hidden</option>
             </select>
-            {batchId && <button onClick={() => setBatchId("")} className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-sm font-semibold text-amber-700">📦 Sirf ek upload ✕</button>}
+            {batchId && <button onClick={() => setBatchId("")} className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-sm font-semibold text-amber-700">📦 One upload only ✕</button>}
             <select value={fYear} onChange={(e) => setFYear(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
-              <option value="">Saare year</option>
+              <option value="">All years</option>
               {opts.years.map((y) => <option key={y.year} value={String(y.year)}>{y.year} ({y.count})</option>)}
             </select>
             <select value={fShift} onChange={(e) => setFShift(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
@@ -475,7 +475,7 @@ export default function QuestionManagerPage() {
               {opts.shifts.map((s) => <option key={s.shift} value={s.shift}>{s.shift} ({s.count})</option>)}
             </select>
             <div className="w-40"><DateField className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm" value={fDate} onChange={setFDate} placeholder="Exam date" /></div>
-            <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2 py-1.5 text-sm"><input type="checkbox" checked={fImage} onChange={(e) => setFImage(e.target.checked)} /> 🖼️ Image wale</label>
+            <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2 py-1.5 text-sm"><input type="checkbox" checked={fImage} onChange={(e) => setFImage(e.target.checked)} /> 🖼️ With images</label>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -491,7 +491,7 @@ export default function QuestionManagerPage() {
 
         {/* Download — everything matching the filters above, upload-template columns (re-uploadable) */}
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3 text-sm">
-          <span className="font-semibold">⬇️ Download ({includeAll ? total : visibleTotal} {includeAll ? "questions — pending/hidden bhi" : "questions — jo students ko dikhte hain"})</span>
+          <span className="font-semibold">⬇️ Download ({includeAll ? total : visibleTotal} {includeAll ? "questions — including pending / hidden" : "questions — those visible to students"})</span>
           <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value as "excel" | "csv")} className="rounded-lg border border-border bg-background px-2 py-1.5">
             <option value="excel">Excel (.xlsx)</option>
             <option value="csv">CSV</option>
@@ -507,15 +507,15 @@ export default function QuestionManagerPage() {
               <option value="exam">Exam-wise sheets</option>
             </select>
           )}
-          <label className="flex items-center gap-1 text-xs text-muted-foreground" title="Normal download me sirf live questions aate hain (jo students ko dikhte hain)">
-            <input type="checkbox" checked={includeAll} onChange={(e) => setIncludeAll(e.target.checked)} /> Pending / hidden bhi shamil karein
+          <label className="flex items-center gap-1 text-xs text-muted-foreground" title="A normal download contains only live questions (the ones visible to students)">
+            <input type="checkbox" checked={includeAll} onChange={(e) => setIncludeAll(e.target.checked)} /> Include pending / hidden
           </label>
           <button onClick={() => downloadFiltered()} disabled={exporting || (includeAll ? total : visibleTotal) === 0} className="rounded-lg bg-primary px-3 py-1.5 font-semibold text-primary-foreground disabled:opacity-40">
-            {exporting ? "Ban raha hai…" : "Download karein"}
+            {exporting ? "Preparing…" : "Download"}
           </button>
           <span className="w-full text-xs text-muted-foreground">
-            Upar ke filters ke hisaab se. Normal download me sirf wahi questions aate hain jo students ko app me dikhte hain (live). Columns upload template jaise hain, to file wapas upload bhi ho sakti hai.
-            {!includeAll && total > visibleTotal ? ` (Filter me ${total - visibleTotal} questions pending/hidden hain — wo is download me nahi aayenge.)` : ""}
+            Based on the filters above. A normal download contains only the questions students can see in the app (live). The columns match the upload template, so the file can be uploaded again.
+            {!includeAll && total > visibleTotal ? ` (${total - visibleTotal} question(s) in this filter are pending / hidden — they will not be in this download.)` : ""}
           </span>
         </div>
 
@@ -525,20 +525,20 @@ export default function QuestionManagerPage() {
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="font-semibold">📚 Chapter chunkar download</span>
               <span className="text-xs text-muted-foreground">
-                {taxonomy.find((x) => x.id === subjectId)?.name} ke chapters — {includeAll ? "total" : "students ko dikhne wale"} questions ke saath
+                {taxonomy.find((x) => x.id === subjectId)?.name} chapters — with {includeAll ? "total" : "student-visible"} question counts
               </span>
-              {chaptersLoading && <span className="text-xs text-muted-foreground">load ho raha hai…</span>}
+              {chaptersLoading && <span className="text-xs text-muted-foreground">loading…</span>}
               {chapterRows.length > 0 && (
                 <button
                   onClick={() => setPicked(picked.size === chapterRows.length ? new Set() : new Set(chapterRows.map((c) => c.id)))}
                   className="ml-auto rounded-lg border border-border px-2 py-1 text-xs font-medium hover:bg-muted"
                 >
-                  {picked.size === chapterRows.length ? "Sab hatayein" : "Sab chapter chunein"}
+                  {picked.size === chapterRows.length ? "Clear all" : "Select all chapters"}
                 </button>
               )}
             </div>
             {chapterRows.length === 0 && !chaptersLoading && (
-              <p className="text-xs text-muted-foreground">Is subject me (upar ke filters ke saath) koi chapter wale questions nahi mile.</p>
+              <p className="text-xs text-muted-foreground">No questions with a chapter were found in this subject (with the filters above).</p>
             )}
             <div className="grid max-h-72 gap-1 overflow-y-auto sm:grid-cols-2">
               {chapterRows.map((c) => {
@@ -553,21 +553,21 @@ export default function QuestionManagerPage() {
                     <span className="min-w-0 flex-1 truncate" title={c.name}>{c.name}</span>
                     <span className="whitespace-nowrap text-xs font-semibold">{cnt}</span>
                     {!includeAll && c.total > c.visible && (
-                      <span className="whitespace-nowrap text-[10px] text-amber-700 dark:text-amber-400" title="Pending / hidden — normal download me nahi aate">+{c.total - c.visible} pending</span>
+                      <span className="whitespace-nowrap text-[10px] text-amber-700 dark:text-amber-400" title="Pending / hidden — not included in a normal download">+{c.total - c.visible} pending</span>
                     )}
                     <button
                       type="button"
                       onClick={(e) => { e.preventDefault(); downloadFiltered({ chapterIds: [c.id], split: "none", format: "excel" }); }}
                       disabled={exporting || cnt === 0}
                       className="rounded border border-border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-40"
-                      title={`Sirf "${c.name}" ki Excel`}
+                      title={`Excel for "${c.name}" only`}
                     >⬇️</button>
                   </label>
                 );
               })}
             </div>
             {noChapterCount > 0 && (
-              <p className="mt-1 text-[11px] text-muted-foreground">{noChapterCount} questions ka chapter set nahi hai — wo is list me nahi hain.</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{noChapterCount} question(s) have no chapter set — they are not in this list.</p>
             )}
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold">{picked.size} chapter chune</span>
@@ -575,7 +575,7 @@ export default function QuestionManagerPage() {
                 disabled={exporting || picked.size === 0}
                 onClick={() => downloadFiltered({ chapterIds: Array.from(picked), split: "none", format: "excel" })}
                 className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-40"
-                title="Chune hue sabhi chapters ke questions ek hi sheet me merge"
+                title="Merge the questions of all selected chapters into one sheet"
               >⬇️ Ek Excel (merge)</button>
               <button
                 disabled={exporting || picked.size === 0}
@@ -645,10 +645,10 @@ export default function QuestionManagerPage() {
         </div>
 
         <div className="mb-4 rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-1 font-semibold">📅 Exam / year / shift / date ek sath badlein</h2>
-          <p className="mb-3 text-xs text-muted-foreground">{selected.size > 0 ? `${selected.size} selected question(s)` : `filter se match: ${total} question(s)`} par lagega. Jo box khaali hai wo nahi badlega.</p>
+          <h2 className="mb-1 font-semibold">📅 Change exam / year / shift / date together</h2>
+          <p className="mb-3 text-xs text-muted-foreground">{selected.size > 0 ? `${selected.size} selected question(s)` : `${total} question(s) matching the filter`} will be changed. Any empty box is left as it is.</p>
           <div className="flex flex-wrap items-end gap-2">
-            <select value={bExam} onChange={(e) => setBExam(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"><option value="">Exam (na badlein)</option>{exams.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
+            <select value={bExam} onChange={(e) => setBExam(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"><option value="">Exam (no change)</option>{exams.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
             <input value={bYear} onChange={(e) => setBYear(e.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" placeholder="Year" className="w-24 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
             <input value={bShift} onChange={(e) => setBShift(e.target.value)} onBlur={() => setBShift((v) => normalizeShift(v) ?? "")} list="bulk-shift-list" placeholder="Shift / morning" className="w-28 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
             <datalist id="bulk-shift-list">{["Shift 1", "Shift 2", "Shift 3", "Shift 4"].map((s) => <option key={s} value={s} />)}</datalist>
@@ -676,7 +676,7 @@ export default function QuestionManagerPage() {
               </thead>
               <tbody>
                 {loading && <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>}
-                {!loading && rows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">Koi question nahi mila.</td></tr>}
+                {!loading && rows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">No questions found.</td></tr>}
                 {!loading && rows.map((r) => (
                   <tr key={r.id} className="border-b border-border last:border-0">
                     <td className="px-3 py-2 align-top"><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleRow(r.id)} /></td>

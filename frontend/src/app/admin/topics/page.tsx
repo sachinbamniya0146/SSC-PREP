@@ -130,7 +130,7 @@ export default function TopicManagementPage() {
       setSubjects(data);
       setSelectedSubjectId((prev) => prev || data[0]?.id || "");
     } catch (e) {
-      setSubjectsErr(e instanceof Error ? e.message : "Subjects load nahi hue");
+      setSubjectsErr(e instanceof Error ? e.message : "Could not load subjects");
     } finally {
       setSubjectsLoading(false);
     }
@@ -163,7 +163,7 @@ export default function TopicManagementPage() {
       );
       return data;
     } catch (e) {
-      setChaptersErr(e instanceof Error ? e.message : "Chapters load nahi hue");
+      setChaptersErr(e instanceof Error ? e.message : "Could not load chapters");
       return [];
     } finally {
       setChaptersLoading(false);
@@ -194,7 +194,7 @@ export default function TopicManagementPage() {
       setTopics(data);
       return data;
     } catch (e) {
-      setTopicsErr(e instanceof Error ? e.message : "Topics load nahi hue");
+      setTopicsErr(e instanceof Error ? e.message : "Could not load topics");
       return [];
     } finally {
       setTopicsLoading(false);
@@ -218,11 +218,11 @@ export default function TopicManagementPage() {
   async function createTopic() {
     const trimmed = newName.trim();
     if (!selectedChapterId) {
-      setCreateErr("Pehle ek chapter select karein");
+      setCreateErr("Please select a chapter first");
       return;
     }
     if (!trimmed) {
-      setCreateErr("Topic ka naam likhein");
+      setCreateErr("Please enter the topic name");
       return;
     }
     setCreating(true);
@@ -240,9 +240,9 @@ export default function TopicManagementPage() {
       if (r.status === 409) {
         // similar-but-different name already in this chapter → let the admin decide (never a silent duplicate)
         const d = await r.clone().json().catch(() => ({}));
-        if (d?.code === "SIMILAR_TOPIC" && window.confirm(`${d.message}\n\nPhir bhi naya topic banayein?`)) r = await post(true);
+        if (d?.code === "SIMILAR_TOPIC" && window.confirm(`${d.message}\n\nCreate a new topic anyway?`)) r = await post(true);
         else if (d?.code === "SIMILAR_TOPIC") {
-          setCreateErr(`"${d?.similar?.name ?? "existing topic"}" pehle se hai — naya nahi banaya.`);
+          setCreateErr(`"${d?.similar?.name ?? "existing topic"}" already exists — a new one was not created.`);
           return;
         }
       }
@@ -257,11 +257,11 @@ export default function TopicManagementPage() {
       const refreshed = await loadTopics(selectedChapterId);
       setCreateMsg(
         refreshed.length === countBefore
-          ? `"${created.name}" pehle se maujood tha — usi ka ID use karein (koi duplicate nahi bana).`
-          : `"${created.name}" ban gaya. Ab yeh topicId bulk upload sheet mein use kar sakte hain.`,
+          ? `"${created.name}" already existed — use its ID (no duplicate was created).`
+          : `"${created.name}" was created. You can now use this topicId in the bulk upload sheet.`,
       );
     } catch (e) {
-      setCreateErr(e instanceof Error ? e.message : "Topic create nahi hua");
+      setCreateErr(e instanceof Error ? e.message : "Could not create the topic");
     } finally {
       setCreating(false);
     }
@@ -269,7 +269,7 @@ export default function TopicManagementPage() {
 
   async function submitSyllabusUpload() {
     if (!syllabusFile) {
-      setSyllabusErr("Pehle syllabus Excel file select karein");
+      setSyllabusErr("Please select the syllabus Excel file first");
       return;
     }
     setSyllabusUploading(true);
@@ -292,7 +292,7 @@ export default function TopicManagementPage() {
       if (selectedSubjectId) await loadChapters(selectedSubjectId);
       if (selectedChapterId) await loadTopics(selectedChapterId);
     } catch (e) {
-      setSyllabusErr(e instanceof Error ? e.message : "Syllabus upload nahi hua");
+      setSyllabusErr(e instanceof Error ? e.message : "Could not upload the syllabus");
     } finally {
       setSyllabusUploading(false);
     }
@@ -315,14 +315,14 @@ export default function TopicManagementPage() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (e) {
-      setSyllabusErr(e instanceof Error ? e.message : "Syllabus download nahi hua");
+      setSyllabusErr(e instanceof Error ? e.message : "Could not download the syllabus");
     }
   }
 
   async function copyId(id: string) {
     try {
       await navigator.clipboard.writeText(id);
-      setCreateMsg("Topic ID copy ho gaya.");
+      setCreateMsg("Topic ID copied.");
     } catch {
       // Clipboard API unavailable — ID is still visible for manual copy.
     }
@@ -336,7 +336,7 @@ export default function TopicManagementPage() {
   }
 
   async function saveEdit(id: string) {
-    if (!editName.trim()) { setRowErr("Topic ka naam khali nahi ho sakta"); return; }
+    if (!editName.trim()) { setRowErr("The topic name cannot be empty"); return; }
     setRowBusyId(id);
     setRowErr("");
     try {
@@ -350,15 +350,15 @@ export default function TopicManagementPage() {
       setEditingId("");
       await loadTopics(selectedChapterId);
     } catch (e) {
-      setRowErr(e instanceof Error ? e.message : "Rename nahi hua");
+      setRowErr(e instanceof Error ? e.message : "Could not rename");
     } finally {
       setRowBusyId("");
     }
   }
 
   async function deleteTopicRow(t: AdminTopic) {
-    const warn = t._count?.questions ? `\n(${t._count.questions} question(s) is topic se detach ho jayenge — delete NAHI honge.)` : "";
-    if (!confirm(`"${t.name}" topic delete karein?${warn}`)) return;
+    const warn = t._count?.questions ? `\n(${t._count.questions} question(s) will be detached from this topic — they will NOT be deleted.)` : "";
+    if (!confirm(`Delete the topic "${t.name}"?${warn}`)) return;
     setRowBusyId(t.id);
     setRowErr("");
     try {
@@ -367,7 +367,7 @@ export default function TopicManagementPage() {
       if (!r.ok) { setRowErr(d?.message || `HTTP ${r.status}`); return; }
       await loadTopics(selectedChapterId);
     } catch (e) {
-      setRowErr(e instanceof Error ? e.message : "Delete nahi hua");
+      setRowErr(e instanceof Error ? e.message : "Could not delete");
     } finally {
       setRowBusyId("");
     }
@@ -375,11 +375,11 @@ export default function TopicManagementPage() {
 
   async function mergeTopics() {
     if (!mergeSourceId || !mergeTargetId || mergeSourceId === mergeTargetId) {
-      setRowErr("Merge ke liye alag-alag source aur target topic chunein");
+      setRowErr("Choose different source and target topics to merge");
       return;
     }
     const src = topics.find((t) => t.id === mergeSourceId);
-    if (!confirm(`"${src?.name}" ke sabhi questions/sub-topics doosre topic me move karke "${src?.name}" delete kar diya jayega. Continue?`)) return;
+    if (!confirm(`All questions / sub-topics of "${src?.name}" will be moved to the other topic and "${src?.name}" will be deleted. Continue?`)) return;
     setRowBusyId(mergeSourceId);
     setRowErr("");
     try {
@@ -394,7 +394,7 @@ export default function TopicManagementPage() {
       setMergeTargetId("");
       await loadTopics(selectedChapterId);
     } catch (e) {
-      setRowErr(e instanceof Error ? e.message : "Merge nahi hua");
+      setRowErr(e instanceof Error ? e.message : "Could not merge");
     } finally {
       setRowBusyId("");
     }
@@ -422,7 +422,7 @@ export default function TopicManagementPage() {
       <main className="mx-auto max-w-6xl px-4 py-8">
         <h1 className="text-2xl font-bold">🏷️ Topic Management</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Har chapter ke andar topics banayein — jaise English chapter mein Noun, Pronoun, Tenses.
+          Create topics inside every chapter — for example Noun, Pronoun and Tenses inside an English chapter.
           Question upload karte waqt topicId (optional) daalne se analysis aur weak-area report topic-level
           tak drill ho paayega.
         </p>
@@ -433,9 +433,9 @@ export default function TopicManagementPage() {
         <div className="card mt-6 p-4">
           <h2 className="font-semibold">📘 Bulk Syllabus Import (Excel)</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            SSC_Exams_Complete_Syllabus_Hindi.xlsx jaisi file upload karein — Subject, Chapter, Topic, Sub-Topic
-            (English + Hindi dono naam) seedhe database mein ban jayenge. Dobara upload karna bhi safe hai,
-            duplicate nahi banega.
+            Upload a file like SSC_Exams_Complete_Syllabus_Hindi.xlsx — Subject, Chapter, Topic, Sub-Topic
+            (both English and Hindi names) are created directly in the database. Uploading again is also safe,
+            no duplicates will be created.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
             <div className="flex-1 min-w-[220px]">
@@ -492,7 +492,7 @@ export default function TopicManagementPage() {
         {subjectsLoading ? (
           <p className="mt-6 text-sm text-muted-foreground">Loading subjects...</p>
         ) : subjects.length === 0 ? (
-          <p className="mt-6 text-sm text-muted-foreground">Koi subject nahi mila.</p>
+          <p className="mt-6 text-sm text-muted-foreground">No subjects found.</p>
         ) : (
           <>
             {/* Step 1: Subject */}
@@ -529,9 +529,9 @@ export default function TopicManagementPage() {
                   <p className="text-sm text-muted-foreground">Loading chapters...</p>
                 ) : chapters.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    Is subject mein koi chapter nahi hai.{" "}
+                    This subject has no chapters.{" "}
                     <a href="/admin/chapters" className="font-semibold text-primary underline">
-                      Pehle chapter banayein →
+                      Create a chapter first →
                     </a>
                   </p>
                 ) : (
@@ -566,7 +566,7 @@ export default function TopicManagementPage() {
                       value={newName}
                       onChange={(e) => setNewName(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && createTopic()}
-                      placeholder="Topic ka naam (English), jaise 'Noun' ya 'Percentage Basics'"
+                      placeholder="Topic name (English), e.g. 'Noun' or 'Percentage Basics'"
                       className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
                       disabled={creating}
                     />
@@ -574,7 +574,7 @@ export default function TopicManagementPage() {
                       value={newNameHindi}
                       onChange={(e) => setNewNameHindi(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && createTopic()}
-                      placeholder="Hindi naam (optional), jaise 'संज्ञा'"
+                      placeholder="Hindi name (optional), e.g. 'संज्ञा'"
                       className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
                       disabled={creating}
                     />
@@ -618,7 +618,7 @@ export default function TopicManagementPage() {
                       {!topicsErr && !topicsLoading && topics.length === 0 && (
                         <tr>
                           <td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">
-                            Is chapter mein abhi koi topic nahi hai — upar se pehla topic banayein.
+                            This chapter has no topics yet — create the first topic above.
                           </td>
                         </tr>
                       )}
@@ -668,18 +668,18 @@ export default function TopicManagementPage() {
                   <div className="card mt-4 p-4">
                     <h2 className="font-semibold">🔀 Merge duplicate topics</h2>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Source topic ke sabhi questions aur sub-topics target topic me chale jayenge, phir source delete ho jayega.
+                      All questions and sub-topics of the source topic move to the target topic, then the source is deleted.
                     </p>
                     <div className="mt-3 flex flex-wrap items-end gap-2">
                       <div>
-                        <label className="block text-xs text-muted-foreground">Source (ye delete hoga)</label>
+                        <label className="block text-xs text-muted-foreground">Source (this will be deleted)</label>
                         <select value={mergeSourceId} onChange={(e) => setMergeSourceId(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
                           <option value="">—</option>
                           {topics.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs text-muted-foreground">Target (ismein merge hoga)</label>
+                        <label className="block text-xs text-muted-foreground">Target (the source merges into this)</label>
                         <select value={mergeTargetId} onChange={(e) => setMergeTargetId(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
                           <option value="">—</option>
                           {topics.filter((t) => t.id !== mergeSourceId).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}

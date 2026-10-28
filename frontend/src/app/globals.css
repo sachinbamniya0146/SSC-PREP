@@ -158,6 +158,39 @@ html.theme-anim, html.theme-anim *, html.theme-anim *::before, html.theme-anim *
   transition: background-color 0.22s ease, border-color 0.22s ease, color 0.22s ease, fill 0.22s ease, stroke 0.22s ease, box-shadow 0.22s ease !important;
 }
 
+/* ---------- Phone polish (Oct 28 2026) ----------
+   - 16px form text: iOS Safari zooms into any focused field smaller than this and never zooms back out.
+   - touch-action: no 300ms double-tap delay on buttons / links.
+   - media never wider than the screen; compact table cells on narrow screens. */
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  .table-clean th,
+  .table-clean td {
+    padding-left: 0.625rem;
+    padding-right: 0.625rem;
+  }
+}
+button,
+a,
+summary,
+select,
+[role="button"] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+img,
+video {
+  max-width: 100%;
+}
+pre,
+code {
+  overflow-wrap: anywhere;
+}
+
 /* Room for the mobile bottom tab bar */
 @media (max-width: 1023px) {
   body.has-tabbar { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }

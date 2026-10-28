@@ -196,13 +196,13 @@ export class TaxonomyDedupeService {
   // MERGE (one loser into one survivor; groups call this loser by loser)
   // =========================================================================
   async mergeTopics(survivorId: string, loserId: string, actorId?: string): Promise<MergeResult> {
-    if (survivorId === loserId) throw new BadRequestException('Survivor aur loser same hain');
+    if (survivorId === loserId) throw new BadRequestException('The survivor and the loser are the same');
     const [survivor, loser] = await Promise.all([
       this.prisma.topic.findUnique({ where: { id: survivorId } }),
       this.prisma.topic.findUnique({ where: { id: loserId } }),
     ]);
     if (!survivor || !loser) throw new NotFoundException('Topic not found');
-    if (survivor.chapterId !== loser.chapterId) throw new BadRequestException('Sirf ek hi chapter ke andar ke topics merge ho sakte hain');
+    if (survivor.chapterId !== loser.chapterId) throw new BadRequestException('Only topics within the same chapter can be merged');
 
     const payload = emptyPayload();
     const touchedQuestionIds = new Set<string>();
@@ -274,13 +274,13 @@ export class TaxonomyDedupeService {
 
   /** Sub-topic duplicates: the loser may sit under a DIFFERENT topic of the same chapter. */
   async mergeSubTopics(survivorId: string, loserId: string, actorId?: string): Promise<MergeResult> {
-    if (survivorId === loserId) throw new BadRequestException('Survivor aur loser same hain');
+    if (survivorId === loserId) throw new BadRequestException('The survivor and the loser are the same');
     const [survivor, loser] = await Promise.all([
       this.prisma.subTopic.findUnique({ where: { id: survivorId }, include: { topic: { select: { chapterId: true } } } }),
       this.prisma.subTopic.findUnique({ where: { id: loserId }, include: { topic: { select: { chapterId: true } } } }),
     ]);
     if (!survivor || !loser) throw new NotFoundException('Sub-topic not found');
-    if (survivor.topic.chapterId !== loser.topic.chapterId) throw new BadRequestException('Sirf ek hi chapter ke andar ke sub-topics merge ho sakte hain');
+    if (survivor.topic.chapterId !== loser.topic.chapterId) throw new BadRequestException('Only sub-topics within the same chapter can be merged');
 
     const payload = emptyPayload();
     const touchedQuestionIds = new Set<string>();
@@ -369,24 +369,24 @@ export class TaxonomyDedupeService {
   async undo(logId: string): Promise<{ undone: true; questionsRestored: number }> {
     const log = await this.prisma.taxonomyMergeLog.findUnique({ where: { id: logId } });
     if (!log) throw new NotFoundException('Merge log not found');
-    if (log.undoneAt) throw new BadRequestException('Ye merge pehle hi undo ho chuka hai');
+    if (log.undoneAt) throw new BadRequestException('This merge has already been undone');
     const p = log.payload as unknown as MergeLogPayload;
-    if (!p || p.version !== 1) throw new BadRequestException('Is log ka format undo ke liye supported nahi hai');
+    if (!p || p.version !== 1) throw new BadRequestException('This log format is not supported for undo');
 
     // a LATER merge that used the survivor as a loser must be undone first
     const later = await this.prisma.taxonomyMergeLog.count({ where: { loserId: log.survivorId, undoneAt: null, createdAt: { gt: log.createdAt } } });
-    if (later > 0) throw new BadRequestException('Is survivor ko baad me kisi aur merge me loser banaya gaya hai — pehle wo merge undo karein');
+    if (later > 0) throw new BadRequestException('This survivor was later made the loser of another merge — undo that merge first');
 
     const touched = new Set<string>();
     const restoredIds = new Set<string>();
     await this.prisma.$transaction(
       async (tx) => {
         if (p.deletedTopic) {
-          if (await tx.topic.findUnique({ where: { id: p.deletedTopic.id }, select: { id: true } })) throw new BadRequestException('Topic wapas banane ki jagah pehle se occupied hai');
+          if (await tx.topic.findUnique({ where: { id: p.deletedTopic.id }, select: { id: true } })) throw new BadRequestException('The place to restore the topic is already occupied');
           await tx.topic.create({ data: p.deletedTopic });
         }
         for (const s of p.deletedSubTopics) {
-          if (await tx.subTopic.findUnique({ where: { id: s.id }, select: { id: true } })) throw new BadRequestException('Sub-topic wapas banane ki jagah pehle se occupied hai');
+          if (await tx.subTopic.findUnique({ where: { id: s.id }, select: { id: true } })) throw new BadRequestException('The place to restore the sub-topic is already occupied');
           await tx.subTopic.create({ data: s });
         }
         for (const m of [...p.moves].reverse()) {

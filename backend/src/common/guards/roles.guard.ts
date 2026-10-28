@@ -92,7 +92,7 @@ export class RolesGuard implements CanActivate {
       if (!departments || departments.length === 0) return true;
       if (departments.some((d) => live.permissions.includes(d))) return true;
       throw new ForbiddenException(
-        'Aapke account ko is department ka access nahi diya gaya hai. Admin se contact karein.',
+        'Your account does not have access to this department. Please contact the admin.',
       );
     }
 

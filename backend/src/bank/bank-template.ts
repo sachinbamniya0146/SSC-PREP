@@ -4,7 +4,7 @@ import { normalizeExamTier, normalizeTierPaper, parsePaperQuestionNo } from '../
 export interface TemplateColumn {
   key: string;            // header the parser reads (without the trailing *)
   required: boolean;      // shown as "key*" in the header row (the parser strips the *)
-  hint: string;           // Hinglish help shown as a cell comment + in the "Columns guide" sheet
+  hint: string;           // English help shown as a cell comment + in the "Columns guide" sheet
   example: string;
   width: number;
   list?: 'answers' | 'difficulty' | 'exams' | 'subjects' | 'chapters';
@@ -12,14 +12,14 @@ export interface TemplateColumn {
 
 /** Order = order of the columns in the sheet. `id` is first: blank = new question, filled = update that question. */
 export const PRACTICE_COLUMNS: TemplateColumn[] = [
-  { key: 'id', required: false, hint: 'NAYE question ke liye KHALI chhodein. Export file se aaya ID rehne dein to wahi question UPDATE hoga (duplicate nahi banega).', example: '', width: 14 },
-  { key: 'examId', required: true, hint: 'Exam ka slug — dropdown se chunein (Reference IDs sheet me poori list).', example: 'ssc-cgl', width: 16, list: 'exams' },
-  { key: 'subjectId', required: true, hint: 'Subject ka slug — dropdown se chunein.', example: 'quantitative-aptitude', width: 22, list: 'subjects' },
-  { key: 'chapterId', required: true, hint: 'Chapter ka slug ya exact naam — dropdown se chunein. Chapter pehle se database me hona chahiye.', example: 'percentage', width: 22, list: 'chapters' },
-  { key: 'topicId', required: false, hint: 'Optional. Topic ka slug ya naam. Naya naam ho to chapter ke neeche khud ban jata hai.', example: 'basic-percentage-concepts', width: 24 },
-  { key: 'subTopicId', required: false, hint: 'Optional. Sub-topic ka slug ya naam.', example: '', width: 18 },
-  { key: 'questionText', required: true, hint: 'Question ka English text. Khali nahi chhod sakte.', example: 'What is 20% of 150?', width: 46 },
-  { key: 'questionTextHindi', required: false, hint: 'Question ka Hindi text. Khali ho to question UNPUBLISHED save hota hai (jab tak Hindi na jude).', example: '150 का 20% क्या है?', width: 40 },
+  { key: 'id', required: false, hint: 'Leave EMPTY for a NEW question. If you keep the ID that came from an export file, that same question is UPDATED (no duplicate is created).', example: '', width: 14 },
+  { key: 'examId', required: true, hint: 'Slug of the exam — choose from the dropdown (full list in the Reference IDs sheet).', example: 'ssc-cgl', width: 16, list: 'exams' },
+  { key: 'subjectId', required: true, hint: 'Slug of the subject — choose from the dropdown.', example: 'quantitative-aptitude', width: 22, list: 'subjects' },
+  { key: 'chapterId', required: true, hint: 'Slug or exact name of the chapter — choose from the dropdown. The chapter must already exist in the database.', example: 'percentage', width: 22, list: 'chapters' },
+  { key: 'topicId', required: false, hint: 'Optional. Slug or name of the topic. A new name is created automatically under the chapter.', example: 'basic-percentage-concepts', width: 24 },
+  { key: 'subTopicId', required: false, hint: 'Optional. Slug or name of the sub-topic.', example: '', width: 18 },
+  { key: 'questionText', required: true, hint: 'The English text of the question. It cannot be left empty.', example: 'What is 20% of 150?', width: 46 },
+  { key: 'questionTextHindi', required: false, hint: 'The Hindi text of the question. If empty, the question is saved UNPUBLISHED (until Hindi is added).', example: '150 का 20% क्या है?', width: 40 },
   { key: 'optionA', required: true, hint: 'Option A (text).', example: '25', width: 16 },
   { key: 'optionA_Hindi', required: false, hint: 'Option A Hindi (optional).', example: '25', width: 16 },
   { key: 'optionB', required: true, hint: 'Option B (text).', example: '30', width: 16 },
@@ -28,12 +28,12 @@ export const PRACTICE_COLUMNS: TemplateColumn[] = [
   { key: 'optionC_Hindi', required: false, hint: 'Option C Hindi (optional).', example: '35', width: 16 },
   { key: 'optionD', required: true, hint: 'Option D (text).', example: '40', width: 16 },
   { key: 'optionD_Hindi', required: false, hint: 'Option D Hindi (optional).', example: '40', width: 16 },
-  { key: 'correctAnswer', required: true, hint: 'Sirf A, B, C ya D — dropdown se chunein. Us option ka text khali nahi hona chahiye.', example: 'B', width: 14, list: 'answers' },
-  { key: 'explanation', required: true, hint: 'Solution (English). Bina solution ke question upload NAHI hota.', example: '20% of 150 = 150 × 20 / 100 = 30', width: 46 },
+  { key: 'correctAnswer', required: true, hint: 'Only A, B, C or D — choose from the dropdown. The text of that option must not be empty.', example: 'B', width: 14, list: 'answers' },
+  { key: 'explanation', required: true, hint: 'Solution (English). A question without a solution is NOT uploaded.', example: '20% of 150 = 150 × 20 / 100 = 30', width: 46 },
   { key: 'explanationHindi', required: false, hint: 'Solution Hindi me (optional).', example: '150 का 20% = 150 × 20 / 100 = 30', width: 40 },
-  { key: 'difficulty', required: false, hint: 'EASY, MEDIUM ya HARD — dropdown. Khali = MEDIUM (naye question me).', example: 'EASY', width: 14, list: 'difficulty' },
-  { key: 'marks', required: false, hint: 'Number. Khali = 1.', example: '1', width: 10 },
-  { key: 'negativeMarks', required: false, hint: 'Number. Khali = 0.25.', example: '0.25', width: 14 },
+  { key: 'difficulty', required: false, hint: 'EASY, MEDIUM or HARD — dropdown. Empty = MEDIUM (for a new question).', example: 'EASY', width: 14, list: 'difficulty' },
+  { key: 'marks', required: false, hint: 'Number. Empty = 1.', example: '1', width: 10 },
+  { key: 'negativeMarks', required: false, hint: 'Number. Empty = 0.25.', example: '0.25', width: 14 },
 ];
 
 export const ANSWER_LIST = ['A', 'B', 'C', 'D'];
@@ -119,18 +119,18 @@ export function buildUpdateBody(
   for (const k of ['questionText', 'questionTextHindi', 'explanation', 'explanationHindi']) if (get(k)) body[k] = get(k);
   if (get('correctAnswer')) {
     const a = get('correctAnswer').toUpperCase();
-    if (!ANSWER_LIST.includes(a)) problems.push(`correctAnswer galat ("${get('correctAnswer')}") — A/B/C/D chahiye`);
+    if (!ANSWER_LIST.includes(a)) problems.push(`correctAnswer is invalid ("${get('correctAnswer')}") — it must be A/B/C/D`);
     else body.correctAnswer = a;
   }
   if (get('difficulty')) {
     const d = get('difficulty').toUpperCase();
-    if (!DIFFICULTY_LIST.includes(d)) problems.push(`difficulty galat ("${get('difficulty')}") — EASY/MEDIUM/HARD chahiye`);
+    if (!DIFFICULTY_LIST.includes(d)) problems.push(`difficulty is invalid ("${get('difficulty')}") — it must be EASY/MEDIUM/HARD`);
     else body.difficulty = d;
   }
   for (const k of ['marks', 'negativeMarks']) {
     if (get(k)) {
       const n = Number(get(k));
-      if (!Number.isFinite(n)) problems.push(`${k} number hona chahiye ("${get(k)}")`);
+      if (!Number.isFinite(n)) problems.push(`${k} must be a number ("${get(k)}")`);
       else body[k] = n;
     }
   }
@@ -139,17 +139,17 @@ export function buildUpdateBody(
   if (!practiceOnly) {
     if (get('examTier')) {
       const t = normalizeExamTier(get('examTier'));
-      if (t.invalid) problems.push(`examTier galat ("${get('examTier')}") — TIER_1 ya TIER_2 chahiye`);
+      if (t.invalid) problems.push(`examTier is invalid ("${get('examTier')}") — it must be TIER_1 or TIER_2`);
       else body.examTier = t.tier;
     }
     if (get('tierPaper')) {
       const t = normalizeTierPaper(get('tierPaper'));
-      if (t.invalid) problems.push(`tierPaper galat ("${get('tierPaper')}") — PAPER_1 / PAPER_2 / PAPER_3 chahiye`);
+      if (t.invalid) problems.push(`tierPaper is invalid ("${get('tierPaper')}") — it must be PAPER_1 / PAPER_2 / PAPER_3`);
       else body.tierPaper = t.paper;
     }
     if (get('questionNo')) {
       const n = parsePaperQuestionNo(get('questionNo'));
-      if (n === undefined) problems.push(`questionNo poora number (1 ya zyada) hona chahiye ("${get('questionNo')}")`);
+      if (n === undefined) problems.push(`questionNo must be a whole number of 1 or more ("${get('questionNo')}")`);
       else body.paperQuestionNo = n;
     }
   }

@@ -68,7 +68,7 @@ export default function AdminSupportChatPage() {
       const res = await api<{ conversations: ConversationRow[] }>(`/support-chat/admin/inbox${qs}`);
       setConversations(res.conversations);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Inbox load nahi ho paya");
+      setErr(e instanceof Error ? e.message : "Could not load the inbox");
     } finally {
       setLoading(false);
     }
@@ -142,12 +142,12 @@ export default function AdminSupportChatPage() {
 
   const resolve = async () => {
     if (!selectedId) return;
-    if (!confirm("Yeh conversation resolved mark karni hai? Student ko naya chat shuru karna padega agar dobara baat karni ho.")) return;
+    if (!confirm("Mark this conversation as resolved? The student will have to start a new chat to talk again.")) return;
     try {
       await api(`/support-chat/${selectedId}/resolve`, { method: "POST" });
       loadInbox();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Resolve fail ho gaya");
+      setErr(e instanceof Error ? e.message : "Could not resolve the conversation");
     }
   };
 
@@ -173,7 +173,7 @@ export default function AdminSupportChatPage() {
       <main className="mx-auto max-w-6xl px-4 py-8">
         <h1 className="text-2xl font-bold">💬 Support Chat Inbox</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Students ke general sawaal/problems yahan aate hain — reply live chat se milega.
+          Students' general questions and problems arrive here — your reply reaches them through live chat.
         </p>
 
         {err && <p className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{err}</p>}
@@ -196,7 +196,7 @@ export default function AdminSupportChatPage() {
               {loading ? (
                 <p className="p-4 text-center text-xs text-muted-foreground">Loading…</p>
               ) : conversations.length === 0 ? (
-                <p className="p-4 text-center text-xs text-muted-foreground">Koi conversation nahi hai is filter mein.</p>
+                <p className="p-4 text-center text-xs text-muted-foreground">No conversations match this filter.</p>
               ) : (
                 conversations.map((c) => (
                   <button
@@ -227,7 +227,7 @@ export default function AdminSupportChatPage() {
           <div className="card flex h-[36rem] flex-col overflow-hidden">
             {!selected ? (
               <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-                Ek conversation chuno chat dekhne ke liye.
+                Choose a conversation to view the chat.
               </div>
             ) : (
               <>
@@ -261,7 +261,7 @@ export default function AdminSupportChatPage() {
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                    placeholder="Reply likhein…"
+                    placeholder="Write a reply…"
                     maxLength={4000}
                     disabled={selected.status === "RESOLVED"}
                     className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm disabled:opacity-50"

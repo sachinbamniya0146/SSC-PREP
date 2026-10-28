@@ -302,7 +302,7 @@ export class VocabService {
 
     const questions = await this.prisma.vocabQuestion.findMany({ where: { wordId: word.id } });
     if (questions.length === 0) {
-      throw new BadRequestException('Is word ke liye abhi koi question nahi hai.');
+      throw new BadRequestException('There are no questions for this word yet.');
     }
     const needed = requiredCorrectCount(questions.length);
     let correct = 0;

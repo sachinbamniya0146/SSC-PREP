@@ -30,7 +30,7 @@ function ImageField({ label, url, onChange, onError }: { label: string; url: str
   const pick = async (file: File | undefined) => {
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) {
-      onError("Image 5 MB se badi hai — chhoti image chunein. / Image is over 5 MB.");
+      onError("The image is over 5 MB — please choose a smaller one.");
       return;
     }
     setBusy(true);
@@ -53,7 +53,7 @@ function ImageField({ label, url, onChange, onError }: { label: string; url: str
         <div className="flex items-start gap-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={url} alt={label} className="max-h-32 max-w-[60%] rounded border border-border bg-white object-contain" />
-          <button type="button" onClick={() => onChange("")} className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-600">✕ Hatayein</button>
+          <button type="button" onClick={() => onChange("")} className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-600">✕ Remove</button>
         </div>
       ) : (
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:border-primary">
@@ -128,7 +128,7 @@ function EditInner() {
         if (e.ok) setExams(((await e.json()) as { exams?: Exam[] })?.exams ?? []);
         if (t.ok) setTax(await t.json());
       } catch {
-        setError("Exam / syllabus list load nahi hui — page refresh karein.");
+        setError("Could not load the exam / syllabus list — please refresh the page.");
       }
     })();
   }, [router]);
@@ -143,7 +143,7 @@ function EditInner() {
     try {
       const r = await fetchAuth(`${API_BASE}/bank/admin/manage/question/${encodeURIComponent(k)}`);
       const d = await r.json().catch(() => null);
-      if (!r.ok) throw new Error(d?.message || `Question nahi mila (HTTP ${r.status})`);
+      if (!r.ok) throw new Error(d?.message || `Question not found (HTTP ${r.status})`);
       setId(d.id);
       setQNo(d.questionNo);
       setStatus(d.status === "pending" ? "pending" : d.status === "hidden" ? "hidden" : "live");
@@ -229,11 +229,11 @@ function EditInner() {
         throw new Error(d.message);
       }
       if (!r.ok) throw new Error(Array.isArray(d?.message) ? d.message.join(", ") : d?.message || `Save fail (HTTP ${r.status})`);
-      const msgs = [`✅ Q#${d.questionNo} save ho gaya.`, ...(d.autoPublished ? ["Question ab students ko live dikhega."] : []), ...(d.warnings || []).map((w: string) => `⚠️ ${w}`)];
+      const msgs = [`✅ Q#${d.questionNo} saved.`, ...(d.autoPublished ? ["The question is now live for students."] : []), ...(d.warnings || []).map((w: string) => `⚠️ ${w}`)];
       if (thank) {
         const t = await fetchAuth(`${API_BASE}/report-error/question/${id}/fixed`, { method: "POST" });
         const td = await t.json().catch(() => null);
-        if (t.ok && td?.thanked > 0) msgs.push(`🙏 ${td.thanked} student ko thank-you message chala gaya.`);
+        if (t.ok && td?.thanked > 0) msgs.push(`🙏 ${td.thanked} student(s) received a thank-you message.`);
       }
       setOk(msgs);
       await load(String(d.questionNo));
@@ -256,8 +256,8 @@ function EditInner() {
         <div className="mx-auto flex max-w-3xl items-center gap-2">
           <a href="/admin/questions/manage" className="shrink-0 text-sm font-semibold">←</a>
           <form className="flex flex-1 gap-2" onSubmit={(e) => { e.preventDefault(); void load(search); }}>
-            <input className={inp} inputMode="search" placeholder="Question number (jaise 1042) ya id" value={search} onChange={(e) => setSearch(e.target.value)} />
-            <button type="submit" disabled={loading} className="shrink-0 rounded-lg bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-50">{loading ? "…" : "Kholein"}</button>
+            <input className={inp} inputMode="search" placeholder="Question number (e.g. 1042) or id" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <button type="submit" disabled={loading} className="shrink-0 rounded-lg bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-50">{loading ? "…" : "Open"}</button>
           </form>
         </div>
       </header>
@@ -266,10 +266,10 @@ function EditInner() {
         {error && <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-600">{error}</div>}
         {dupInfo && (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-            <p>Aisa hi question Q#{dupInfo.questionNo} me pehle se hai.</p>
+            <p>The same question already exists as Q#{dupInfo.questionNo}.</p>
             <div className="mt-2 flex gap-2">
-              <a className="rounded border border-border px-3 py-1.5 text-xs font-semibold" href={`/admin/questions/edit?q=${dupInfo.questionNo}`}>Q#{dupInfo.questionNo} kholein</a>
-              <button className="rounded bg-amber-600 px-3 py-1.5 text-xs font-bold text-white" onClick={() => void save(true)}>Fir bhi save karein</button>
+              <a className="rounded border border-border px-3 py-1.5 text-xs font-semibold" href={`/admin/questions/edit?q=${dupInfo.questionNo}`}>Open Q#{dupInfo.questionNo}</a>
+              <button className="rounded bg-amber-600 px-3 py-1.5 text-xs font-bold text-white" onClick={() => void save(true)}>Save anyway</button>
             </div>
           </div>
         )}
@@ -279,7 +279,7 @@ function EditInner() {
           </div>
         )}
 
-        {!loaded && !loading && !error && <p className="py-16 text-center text-sm text-muted-foreground">Upar question number likhkar “Kholein” dabayein.<br />Student ke report se seedha yahan aa sakte hain.</p>}
+        {!loaded && !loading && !error && <p className="py-16 text-center text-sm text-muted-foreground">Type a question number above and press “Open”.<br />You can also arrive here directly from a student's report.</p>}
 
         {loaded && (
           <>
@@ -287,7 +287,7 @@ function EditInner() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-lg font-extrabold">Q#{qNo}</p>
-                  <p className="text-xs text-muted-foreground">{meta.batch?.filename ? `Upload: ${meta.batch.filename} · ` : ""}{meta.versions} purane version{meta.updatedAt ? ` · last edit ${new Date(meta.updatedAt).toLocaleString()}` : ""}</p>
+                  <p className="text-xs text-muted-foreground">{meta.batch?.filename ? `Upload: ${meta.batch.filename} · ` : ""}{meta.versions} earlier version(s){meta.updatedAt ? ` · last edit ${new Date(meta.updatedAt).toLocaleString()}` : ""}</p>
                 </div>
                 <div className="flex gap-2">
                   <button disabled={!qNo || qNo <= 1} onClick={() => qNo && void load(String(qNo - 1))} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold disabled:opacity-40">← Q#{qNo ? qNo - 1 : ""}</button>
@@ -297,9 +297,9 @@ function EditInner() {
               <div className="mt-3">
                 <label className={lbl}>Students ko dikhe?</label>
                 <select className={inp} value={status} onChange={(e) => setStatus(e.target.value)}>
-                  <option value="live">✅ Live (students ko dikhega)</option>
-                  <option value="pending">⏳ Pending (Hindi / review baaki)</option>
-                  <option value="hidden">🚫 Hidden (chhupa hua)</option>
+                  <option value="live">✅ Live (visible to students)</option>
+                  <option value="pending">⏳ Pending (Hindi / review left)</option>
+                  <option value="hidden">🚫 Hidden</option>
                 </select>
               </div>
             </section>
@@ -318,13 +318,13 @@ function EditInner() {
                 </ul>
                 <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm">
                   <input type="checkbox" className="mt-1" checked={thank} onChange={(e) => setThank(e.target.checked)} />
-                  <span>Save ke baad reporting students ko <b>thank-you</b> bhejein (“aapki bataayi problem theek ho gayi”) aur reports band karein{openReports.length ? ` (${openReports.length} khule)` : ""}.</span>
+                  <span>After saving, send a <b>thank-you</b> to the students who reported this (“the problem you reported has been fixed”) and close the reports{openReports.length ? ` (${openReports.length} open)` : ""}.</span>
                 </label>
               </section>
             )}
 
             <section className="rounded-xl border border-border bg-card p-4">
-              <h2 className="mb-3 text-sm font-bold">1. Kahan hai</h2>
+              <h2 className="mb-3 text-sm font-bold">1. Where it belongs</h2>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div><label className={lbl}>Exam</label>
                   <select className={inp} value={examId} onChange={(e) => setExamId(e.target.value)}>
@@ -353,15 +353,15 @@ function EditInner() {
                   </select></div>
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <div><label className={lbl}>Year (PYQ ke liye)</label>
+                <div><label className={lbl}>Year (for PYQ)</label>
                   <input className={inp} inputMode="numeric" placeholder="2024" value={year} onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))} /></div>
                 <div><label className={lbl}>Shift</label>
                   <input className={inp} list="edit-shift-list" placeholder="Shift 1 / morning / evening" value={shift} onChange={(e) => setShift(e.target.value)} onBlur={() => setShift((v) => normalizeShift(v) ?? "")} />
-                  <p className="mt-1 text-[11px] text-muted-foreground">Morning / subah = Shift 1 · Afternoon / dopahar = Shift 2 · Evening / shaam = Shift 3 (apne aap badal jayega)</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">Morning = Shift 1 · Afternoon = Shift 2 · Evening = Shift 3 (changes automatically)</p>
                   <datalist id="edit-shift-list">{["Shift 1", "Shift 2", "Shift 3", "Shift 4"].map((s) => <option key={s} value={s} />)}</datalist></div>
-                <div><label className={lbl}>Exam date (likhein ya 📅)</label>
+                <div><label className={lbl}>Exam date (type it or use 📅)</label>
                   <DateField className={inp} value={examDate} onChange={setExamDate} /></div>
-                <div className="sm:col-span-3"><label className={lbl}>Paper code (khaali = date + shift se ban jayega)</label>
+                <div className="sm:col-span-3"><label className={lbl}>Paper code (empty = built from date + shift)</label>
                   <input className={inp} value={paperCode} onChange={(e) => setPaperCode(e.target.value)} /></div>
               </div>
             </section>
@@ -372,7 +372,7 @@ function EditInner() {
               </div>
               <label className={lbl}>Question (English)</label>
               <textarea className={inp} rows={3} value={questionText} onChange={(e) => setQuestionText(e.target.value)} />
-              <p className="mt-1 text-[11px] text-muted-foreground">Power ke liye <b>2^2</b> likhein — save par apne aap <b>2²</b> ban jayega (x^-1 → x⁻¹, H_2O → H₂O).</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">For powers write <b>2^2</b> — on save it becomes <b>2²</b> automatically (x^-1 → x⁻¹, H_2O → H₂O).</p>
               <label className={`${lbl} mt-3`}>Question (Hindi)</label>
               <textarea className={inp} rows={3} value={questionTextHindi} onChange={(e) => setQuestionTextHindi(e.target.value)} />
               <label className={`${lbl} mt-3`}>Question image (optional)</label>
@@ -416,8 +416,8 @@ function EditInner() {
 
             <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 p-3 backdrop-blur" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
               <div className="mx-auto flex max-w-3xl gap-2">
-                <a href="/admin/questions/manage" className="flex-1 rounded-lg border border-border px-3 py-3 text-center text-sm font-semibold">Wapas</a>
-                <button type="button" onClick={() => void save(false)} disabled={busy} className="flex-[2] rounded-lg bg-primary px-3 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">{busy ? "Save ho raha…" : "💾 Save changes"}</button>
+                <a href="/admin/questions/manage" className="flex-1 rounded-lg border border-border px-3 py-3 text-center text-sm font-semibold">Back</a>
+                <button type="button" onClick={() => void save(false)} disabled={busy} className="flex-[2] rounded-lg bg-primary px-3 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">{busy ? "Saving…" : "💾 Save changes"}</button>
               </div>
             </div>
           </>

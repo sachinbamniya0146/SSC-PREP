@@ -52,7 +52,7 @@ export class ExplanationsService {
     }
 
     if (!question.explanation) {
-      throw new NotFoundException('Is question ki explanation abhi available nahi hai.');
+      throw new NotFoundException('An explanation is not available for this question yet.');
     }
 
     const hi = question.explanationHindi ?? '';

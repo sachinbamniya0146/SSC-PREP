@@ -8,6 +8,7 @@ import { Logo } from "@/components/Logo";
 import { api, API_BASE, fetchAuth } from "@/lib/api";
 import { useAccess } from "@/lib/permissions";
 import AdminImageTools from "@/components/AdminImageTools";
+import AdminUsersPanel from "@/components/AdminUsersPanel";
 
 interface User {
   id: string;
@@ -18,6 +19,9 @@ interface User {
   avatarUrl?: string | null;
   preferredLanguage?: string;
   isEmailVerified: boolean;
+  isSuspended?: boolean;
+  suspendedAt?: string | null;
+  suspendedReason?: string | null;
   createdAt: string;
   subscriptions: { status: string; endsAt: string | null; startsAt?: string; planId: string; plan?: { name: string } | null }[];
   _count: { testAttempts: number; bookmarks: number };
@@ -87,11 +91,11 @@ interface UploadJobState {
 }
 
 const PHASE_LABEL: Record<string, string> = {
-  QUEUED: "Queue me",
-  PARSING: "File padh rahe hain (reading file)",
-  CHECKING: "Rows check ho rahe hain (validating)",
+  QUEUED: "In queue",
+  PARSING: "Reading the file",
+  CHECKING: "Validating the rows",
   DUPLICATES: "Duplicate check",
-  SAVING: "Database me save ho rahe hain (saving)",
+  SAVING: "Saving to the database",
   FINALIZING: "Final steps",
 };
 
@@ -122,6 +126,7 @@ export default function AdminPage() {
   const [limit] = React.useState(20);
   const [search, setSearch] = React.useState("");
   const [roleFilter, setRoleFilter] = React.useState("");
+  const [statusFilter, setStatusFilter] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [selectedUser, setSelectedUser] = React.useState<User | null>(null);
   const [showSubscriptionModal, setShowSubscriptionModal] = React.useState(false);
@@ -275,6 +280,7 @@ export default function AdminPage() {
       params.append("limit", String(limit));
       if (search) params.append("search", search);
       if (roleFilter) params.append("role", roleFilter);
+      if (statusFilter) params.append("status", statusFilter);
       const data = await api<UsersResponse>(`/admin/users?${params}`);
       setUsers(data.users);
       setTotal(data.total);
@@ -578,7 +584,7 @@ export default function AdminPage() {
   // between files are found too). One bad file never stops the others.
   async function submitUpload(kind: "practice" | "pyq") {
     if (uploadFiles.length === 0) {
-      setError("Pehle koi file select karein (Excel/CSV/JSON/Text/Word)");
+      setError("Please select a file first (Excel / CSV / JSON / Text / Word)");
       return;
     }
     const files = uploadFiles.slice();
@@ -603,7 +609,7 @@ export default function AdminPage() {
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        setSt(i, "run", "chal raha hai…");
+        setSt(i, "run", "running…");
         setUploadJob(null);
         try {
           const { result, rejectedUrl: rj } = await uploadOneFile(file, kind);
@@ -628,7 +634,7 @@ export default function AdminPage() {
         } catch (err) {
           failedFiles++;
           const msg = err instanceof Error ? err.message : "Upload failed";
-          merged.errors.push({ row: 0, error: msg, category: "OTHER", questionPreview: `(poori file: ${file.name})`, field: "file", fix: "File ka format / header row / size dekhein, phir sirf is file ko dobara upload karein.", file: file.name });
+          merged.errors.push({ row: 0, error: msg, category: "OTHER", questionPreview: `(whole file: ${file.name})`, field: "file", fix: "Check the file format, header row and size, then upload only this file again.", file: file.name });
           merged.errorSummary!.OTHER = (merged.errorSummary!.OTHER ?? 0) + 1;
           setSt(i, "fail", msg);
         }
@@ -639,9 +645,9 @@ export default function AdminPage() {
       if (rejects.length === 1) setRejectedUrl(rejects[0].url);
       loadBatches(); // Phase 3 — refresh history so this upload shows up immediately
       if (merged.created > 0) {
-        setInfo(`${merged.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) upload ho gaye${multi ? ` (${files.length - failedFiles}/${files.length} file)` : ""}`);
+        setInfo(`${merged.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) uploaded${multi ? ` (${files.length - failedFiles}/${files.length} files)` : ""}`);
       }
-      if (failedFiles > 0) setError(`${failedFiles} file fail hui — neeche file-wise reason aur error list dekhein.`);
+      if (failedFiles > 0) setError(`${failedFiles} file(s) failed — see the file-wise reason and error list below.`);
       // one click: every duplicate -> keep the NEW one, then publish everything of these uploads
       if (autoLatest && !checkOnly && batchIds.length > 0 && ((merged.queuedForReview ?? 0) > 0 || merged.created > 0)) {
         await latestAndPublish(batchIds);
@@ -664,7 +670,7 @@ export default function AdminPage() {
       for (const batchId of batchIds) {
         const skipIds: string[] = [];
         for (let round = 0; round < 500; round++) {
-          setInfo(`Duplicates me naya (latest) rakh rahe hain… ${kept} ho gaye`);
+          setInfo(`Keeping the newer question in duplicates… ${kept} done`);
           const r = await fetchAuth(`${API_BASE}/bank/admin/duplicates/bulk-resolve`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -682,9 +688,9 @@ export default function AdminPage() {
         const pd = await pr.json().catch(() => ({}));
         if (pr.ok) published += pd.published ?? 0;
       }
-      setInfo(`✅ ${kept} duplicate me naya rakha gaya, baaki ${published} pending question publish hue${failed ? ` · ⚠️ ${failed} duplicate fail (${firstErr})` : ""}.`);
+      setInfo(`✅ Kept the newer question in ${kept} duplicate(s); published ${published} other pending question(s)${failed ? ` · ⚠️ ${failed} duplicate(s) failed (${firstErr})` : ""}.`);
     } catch (e) {
-      setError(`Auto naya-rakho/publish rukk gaya: ${e instanceof Error ? e.message : "error"}. Duplicate Review page se baaki ek click me kar sakte hain.`);
+      setError(`Auto keep-newer / publish stopped: ${e instanceof Error ? e.message : "error"}. You can finish the rest in one click from the Duplicate Review page.`);
     } finally {
       loadBatches();
     }
@@ -716,14 +722,14 @@ export default function AdminPage() {
         if (!r.ok) throw new Error(j?.message || `HTTP ${r.status}`);
         netFails = 0;
       } catch {
-        if (++netFails >= 20) throw new Error("Progress check fail ho raha hai. Upload server par chal raha hoga — thodi der baad Upload History dekhein.");
+        if (++netFails >= 20) throw new Error("Progress check is failing. The upload is probably still running on the server — check Upload History in a few minutes.");
         continue;
       }
       setUploadJob({ status: j.status, phase: j.status === "DONE" ? "FINALIZING" : "SAVING", processed: j.processed, total: j.total, created: j.created, failed: j.failed });
-      if (j.status === "FAILED") throw new Error(j.fatalError || "Upload fail ho gaya");
+      if (j.status === "FAILED") throw new Error(j.fatalError || "Upload failed");
       if (j.status === "DONE") {
         const result = { success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors ?? [], warnings: j.warnings ?? [], queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted, uploadBatchId: j.uploadBatchId, updated: j.updated, unchanged: j.unchanged, preview: j.preview, papers: j.papers, pending: j.pending, pendingTotal: j.pendingTotal } as UploadResult;
-        if (checkOnly) setInfo(`Sirf check hua (kuch save nahi hua): ${j.created} naye, ${j.updated ?? 0} update hone layak, ${j.unchanged ?? 0} jaise ke taise, ${j.failed} reject.`);
+        if (checkOnly) setInfo(`Check only (nothing was saved): ${j.created} new, ${j.updated ?? 0} would be updated, ${j.unchanged ?? 0} unchanged, ${j.failed} rejected.`);
         return { result, rejectedUrl: j.hasRejected ? `${API_BASE}/bank/admin/upload/job/${started.id}/rejected` : null };
       }
     }
@@ -745,7 +751,7 @@ export default function AdminPage() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Rejected file download nahi hui");
+      setError(err instanceof Error ? err.message : "Could not download the rejected rows file");
     }
   }
 
@@ -760,17 +766,17 @@ export default function AdminPage() {
         const r = await fetchAuth(`${API_BASE}/bank/admin/upload/jobs/${jobId}`);
         const j = (await r.json().catch(() => null)) as (UploadJobState & { message?: string }) | null;
         if (!r.ok) {
-          if (r.status === 404 || r.status === 403) throw new Error(j?.message || "Upload job nahi mila — Upload history dekhein.");
+          if (r.status === 404 || r.status === 403) throw new Error(j?.message || "Upload job not found — check Upload History.");
           throw new Error(j?.message || `HTTP ${r.status}`);
         }
         misses = 0;
         if (!j) continue;
         setUploadJob(j);
         if (j.status === "DONE" && j.result) return j.result;
-        if (j.status === "FAILED") throw new Error(j.error || "Upload fail ho gaya");
+        if (j.status === "FAILED") throw new Error(j.error || "Upload failed");
       } catch (e) {
         const msg = e instanceof Error ? e.message : "";
-        if (/job nahi mila|Upload fail|Excel|CSV|column|Missing/i.test(msg) || ++misses > 30) throw e;
+        if (/job not found|job nahi mila|Upload fail|Excel|CSV|column|Missing/i.test(msg) || ++misses > 30) throw e;
       }
     }
   }
@@ -814,7 +820,7 @@ export default function AdminPage() {
       }
       setBatches(await r.json());
     } catch (e) {
-      setBatchesErr(e instanceof Error ? e.message : "Upload history load nahi hui");
+      setBatchesErr(e instanceof Error ? e.message : "Could not load Upload History");
     } finally {
       if (!silent) setBatchesLoading(false);
     }
@@ -846,11 +852,11 @@ export default function AdminPage() {
         setBatchesErr(d?.message || `HTTP ${r.status}`);
         return;
       }
-      setInfo(`${d.published ?? 0} question(s) publish ho gaye.`);
+      setInfo(`${d.published ?? 0} question(s) published.`);
       await loadBatches();
       if (expandedBatchId === id) toggleBatchDetail(id).then(() => toggleBatchDetail(id));
     } catch (e) {
-      setBatchesErr(e instanceof Error ? e.message : "Publish nahi hua");
+      setBatchesErr(e instanceof Error ? e.message : "Could not publish");
     }
   }
 
@@ -859,8 +865,8 @@ export default function AdminPage() {
     if (ids.length === 0) return;
     const msg =
       action === "publish"
-        ? `${ids.length} upload(s) ke sabhi pending questions PUBLISH (live) karein?`
-        : `${ids.length} upload(s) ke sabhi live questions UNPUBLISH karein? Students ko dikhna band ho jayega (delete nahi hoga, dobara publish kar sakte hain).`;
+        ? `Publish (make live) all pending questions of ${ids.length} upload(s)?`
+        : `Unpublish all live questions of ${ids.length} upload(s)? Students will stop seeing them (nothing is deleted; you can publish again).`;
     if (!confirm(msg)) return;
     setBulkBatchBusy(true);
     setBatchesErr("");
@@ -875,18 +881,18 @@ export default function AdminPage() {
         setBatchesErr(Array.isArray(d?.message) ? d.message.join("; ") : d?.message || `HTTP ${r.status}`);
         return;
       }
-      setInfo(`${d.questions ?? 0} question(s) ${action === "publish" ? "publish" : "unpublish"} hue (${d.done}/${d.uploads} uploads)${d.failed ? ` · ${d.failed} fail: ${d.errors?.[0]?.error ?? ""}` : ""}.`);
+      setInfo(`${d.questions ?? 0} question(s) ${action === "publish" ? "published" : "unpublished"} (${d.done}/${d.uploads} uploads)${d.failed ? ` · ${d.failed} failed: ${d.errors?.[0]?.error ?? ""}` : ""}.`);
       setSelectedBatchIds(new Set());
       await loadBatches();
     } catch (e) {
-      setBatchesErr(e instanceof Error ? e.message : "Action nahi hua");
+      setBatchesErr(e instanceof Error ? e.message : "Action failed");
     } finally {
       setBulkBatchBusy(false);
     }
   }
 
   async function unpublishBatchHandler(id: string) {
-    if (!confirm("Is upload ke live questions UNPUBLISH karein? (students ko dikhna band, delete nahi)")) return;
+    if (!confirm("Unpublish the live questions of this upload? (students stop seeing them; nothing is deleted)")) return;
     try {
       const r = await fetchAuth(`${API_BASE}/bank/admin/upload/batches/${id}/unpublish`, { method: "POST" });
       const d = await r.json().catch(() => ({}));
@@ -894,10 +900,10 @@ export default function AdminPage() {
         setBatchesErr(d?.message || `HTTP ${r.status}`);
         return;
       }
-      setInfo(`${d.unpublished ?? 0} question(s) unpublish ho gaye.`);
+      setInfo(`${d.unpublished ?? 0} question(s) unpublished.`);
       await loadBatches();
     } catch (e) {
-      setBatchesErr(e instanceof Error ? e.message : "Unpublish nahi hua");
+      setBatchesErr(e instanceof Error ? e.message : "Could not unpublish");
     }
   }
 
@@ -919,7 +925,7 @@ export default function AdminPage() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (e) {
-      setBatchesErr(e instanceof Error ? e.message : "Download nahi hua");
+      setBatchesErr(e instanceof Error ? e.message : "Could not download");
     }
   }
 
@@ -927,7 +933,7 @@ export default function AdminPage() {
     batchId: string,
     row: { subjectId: string; chapterId: string | null; topicId: string | null; subTopicId: string | null; total: number },
   ) {
-    if (!confirm(`Is hisse ke ${row.total} question(s) PERMANENTLY delete karein?`)) return;
+    if (!confirm(`PERMANENTLY delete ${row.total} question(s) from this part?`)) return;
     try {
       const params = new URLSearchParams();
       params.set("subjectId", row.subjectId);
@@ -940,19 +946,19 @@ export default function AdminPage() {
         setBatchesErr(d?.message || `HTTP ${r.status}`);
         return;
       }
-      setInfo(`${d.deletedQuestions ?? 0} question(s) delete ho gaye.`);
+      setInfo(`${d.deletedQuestions ?? 0} question(s) deleted.`);
       await loadBatches();
       setExpandedBatchId(null);
       setExpandedBatchDetail(null);
     } catch (e) {
-      setBatchesErr(e instanceof Error ? e.message : "Delete nahi hua");
+      setBatchesErr(e instanceof Error ? e.message : "Could not delete");
     }
   }
 
   async function deleteBatchHandler(id: string, filename: string | null) {
     if (
       !confirm(
-        `"${filename || "is upload"}" ke saare questions PERMANENTLY delete ho jayenge. Sirf history record rakhna hai to Cancel karke "Keep Questions" option use karein. Continue?`,
+        `All questions of "${filename || "this upload"}" will be PERMANENTLY deleted. If you only want to keep the history record, press Cancel and use the "Keep Questions" option. Continue?`,
       )
     )
       return;
@@ -964,14 +970,14 @@ export default function AdminPage() {
         return;
       }
       const d = await r.json();
-      setInfo(`${d.deletedQuestions ?? 0} question(s) delete ho gaye is upload se.`);
+      setInfo(`${d.deletedQuestions ?? 0} question(s) deleted from this upload.`);
       if (expandedBatchId === id) {
         setExpandedBatchId(null);
         setExpandedBatchDetail(null);
       }
       await loadBatches();
     } catch (e) {
-      setBatchesErr(e instanceof Error ? e.message : "Delete nahi hua");
+      setBatchesErr(e instanceof Error ? e.message : "Could not delete");
     }
   }
 
@@ -1025,16 +1031,7 @@ export default function AdminPage() {
     loadUsers();
     loadPlans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, roleFilter, access.isAdmin]);
-
-  const roleBadge = (role: string) => {
-    const colors: Record<string, string> = {
-      ADMIN: "bg-red-500/20 text-red-400",
-      MODERATOR: "bg-amber-500/20 text-amber-400",
-      STUDENT: "bg-blue-500/20 text-blue-400",
-    };
-    return <span className={`badge ${colors[role] || "bg-muted text-muted-foreground"}`}>{role}</span>;
-  };
+  }, [page, search, roleFilter, statusFilter, access.isAdmin]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -1150,10 +1147,10 @@ export default function AdminPage() {
 
         {!access.loading && access.isStaff && !access.isAdmin && (
           <div className="mb-6 rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm">
-            <p className="font-semibold">Aapka access:</p>
+            <p className="font-semibold">Your access:</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {access.permissions.length === 0 && (
-                <span className="text-muted-foreground">Abhi koi department assign nahi hua hai — admin se contact karein.</span>
+                <span className="text-muted-foreground">No department is assigned to you yet — please contact the admin.</span>
               )}
               {access.can("QUESTIONS") && <span className="rounded-full bg-sky-500/15 px-3 py-1 text-xs font-medium text-sky-700 dark:text-sky-400">📘 Questions (PYQ)</span>}
               {access.can("PRACTICE") && <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">📗 Practice Questions</span>}
@@ -1174,18 +1171,18 @@ export default function AdminPage() {
               step-by-step guide, per admin request: "kis format me upload
               hoga uska guide bhi, example file bhi available ho". */}
           <div className="mb-3 rounded-lg border border-border bg-background p-3 text-xs text-muted-foreground">
-            <p className="mb-1 font-semibold text-foreground">Kaise upload karein (step-by-step):</p>
+            <p className="mb-1 font-semibold text-foreground">How to upload (step by step):</p>
             <ol className="list-decimal space-y-1 pl-4">
-              <li>Pehle "Download Full Question Bank" se dekh lein ki kaunse questions already maujood hain — dobara wahi type karne ki zaroorat nahi (duplicate apne aap reject ho jaata hai upload ke time).</li>
-              <li>Ek format select karke uska Template download karein — Excel template mein ab ek "Reference IDs" sheet bhi hai jisme har exam/subject/chapter/topic ki real ID di hui hai, seedhe copy-paste kar sakte hain.</li>
-              <li>Template mein ek hi file mein sab kuch bhar sakte hain — question, options (A–D), correctAnswer, explanation, Hindi translation, year, shift, paperCode — sab columns ek saath.</li>
-              <li>Hindi translation (questionTextHindi) zaroor bharein — iske bina question save to hoga lekin students ko dikhega NAHI (bilingual gate), jab tak translation add na ho.</li>
-              <li>Year bharne se woh question automatically Year-wise PYQ Test aur sectional practice dono mein count hoga — koi extra step nahi.</li>
-              <li>File wapas upload karke format select karke "Upload Questions" dabayein — result mein kitne create hue, kitne fail/duplicate the, sab dikhega.</li>
+              <li>First use "Download Full Question Bank" to see which questions already exist, so you do not type them again (duplicates are rejected automatically during upload).</li>
+              <li>Select a format and download its template. The Excel template also has a "Reference IDs" sheet with the real ID of every exam / subject / chapter / topic that you can copy and paste.</li>
+              <li>You can fill everything in one file — question, options (A–D), correctAnswer, explanation, Hindi translation, year, shift and paperCode, all in the same columns.</li>
+              <li>Always fill the Hindi translation (questionTextHindi). Without it the question is saved but students will NOT see it (bilingual gate) until a translation is added.</li>
+              <li>Once a year is filled in, the question automatically counts in both the Year-wise PYQ Test and sectional practice — no extra step.</li>
+              <li>Select the format, choose your file and press "Upload Questions". The result shows how many were created, failed or were duplicates.</li>
             </ol>
           </div>
           <p className="mb-3 text-xs text-muted-foreground">
-            Pehle format select karke template download karein, usme questions (answer, explanation, Hindi translation sab included) bhar ke wapas upload karein.
+            Select a format, download the template, fill in your questions (answer, explanation and Hindi translation included) and upload it back.
           </p>
 
           {/* SESSION 14 FIX: every row in the upload template needs a
@@ -1199,25 +1196,25 @@ export default function AdminPage() {
             href="/admin/chapters"
             className="mb-3 inline-block rounded-lg border border-primary/40 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
           >
-            🧩 Chapter IDs chahiye upload se pehle? Manage Chapters →
+            🧩 Need chapter IDs before uploading? Manage Chapters →
           </a>
           <a
             href="/admin/coverage"
             className="mb-3 ml-2 inline-block rounded-lg border border-danger/40 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10"
           >
-            🕳️ Kaunse Topic/Sub-Topic mein question missing hai? Coverage / Gap Finder →
+            🕳️ Which topic / sub-topic has no questions? Coverage / Gap Finder →
           </a>
           <a
             href="/admin/questions/duplicates"
             className="mb-3 ml-2 inline-block rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
           >
-            🧬 Duplicate Review — same question ek rakhein ya dono →
+            🧬 Duplicate Review — keep one of the same question, or both →
           </a>
           <a
             href="/admin/questions/manage"
             className="mb-3 ml-2 inline-block rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
           >
-            🗂️ Questions ko chapter/topic/sub-topic me move, publish ya delete karein — Question Manager →
+            🗂️ Move questions between chapters / topics / sub-topics, publish or delete them — Question Manager →
           </a>
           {access.isAdmin && (
           <a
@@ -1232,7 +1229,7 @@ export default function AdminPage() {
             href="/admin/pyq-papers"
             className="mb-3 ml-2 inline-block rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
           >
-            🗓️ Date-wise + Tier-wise PYQ papers — progress, rebuild, abhi dikhao →
+            🗓️ Date-wise + tier-wise PYQ papers — progress, rebuild, publish now →
           </a>
           )}
           {access.isAdmin && (
@@ -1255,7 +1252,7 @@ export default function AdminPage() {
             href="/admin/vocab"
             className="mb-3 ml-2 inline-block rounded-lg border border-purple-500/40 bg-purple-500/5 px-3 py-1.5 text-xs font-medium text-purple-600 hover:bg-purple-500/10 dark:text-purple-400"
           >
-            📖 Vocabulary words + questions Excel se upload karein — Vocabulary Manage →
+            📖 Upload vocabulary words + questions from Excel — Manage Vocabulary →
           </a>
           )}
           <a
@@ -1272,7 +1269,7 @@ export default function AdminPage() {
               if (v) window.location.href = `/admin/questions/edit?q=${encodeURIComponent(v)}`;
             }}
           >
-            <input name="qno" inputMode="search" placeholder="Question number (jaise 1042) — seedha kholkar edit karein" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" />
+            <input name="qno" inputMode="search" placeholder="Question number (e.g. 1042) — opens it directly for editing" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" />
             <button type="submit" className="shrink-0 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">✏️ Edit</button>
             <a href="/admin/questions/manage" className="hidden shrink-0 rounded-lg border border-border px-3 py-2 text-sm font-semibold sm:block">Sab questions</a>
           </form>
@@ -1292,7 +1289,7 @@ export default function AdminPage() {
               onClick={downloadPracticeTemplate}
               disabled={templateDownloading}
               className="rounded-lg border border-primary/50 bg-primary/10 px-3 py-1.5 text-xs font-semibold hover:bg-primary/20 disabled:opacity-50"
-              title="Dropdown + Hinglish hints + examples wala practice-question Excel"
+              title="Practice-question Excel with dropdowns, hints and examples"
             >
               ⭐ Practice Excel Template (dropdown)
             </button>
@@ -1300,7 +1297,7 @@ export default function AdminPage() {
               onClick={downloadBankExport}
               disabled={bankExportDownloading}
               className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/10 disabled:opacity-50 dark:text-emerald-400"
-              title="Poora question bank isi upload-format mein download karein — dekhein kya already maujood hai"
+              title="Download the whole question bank in this upload format — see what already exists"
             >
               {bankExportDownloading ? "Exporting..." : "Download Full Question Bank"}
             </button>
@@ -1308,13 +1305,13 @@ export default function AdminPage() {
               onClick={() => downloadGapsExport()}
               disabled={gapsExportDownloading}
               className="rounded-lg border border-danger/40 bg-danger/5 px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
-              title="Sirf vo questions jisme Hindi translation, solution, ya answer key missing hai — PYQ aur Practice dono"
+              title="Only questions whose Hindi translation, solution or answer key is missing — both PYQ and Practice"
             >
               {gapsExportDownloading ? "Exporting..." : "⬇️ Download Gaps (Missing Hindi/Solution/Answer)"}
             </button>
           </div>
           <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-            💡 Bahut saare questions (10,000 se 1 lakh) ke liye <b>CSV</b> sabse tez hai (UTF-8 me save karein). Excel bhi chalega — 25-30 hazaar rows tak.
+            💡 For a very large number of questions (10,000 to 100,000) <b>CSV</b> is the fastest (save as UTF-8). Excel also works up to about 25,000–30,000 rows.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <div>
@@ -1332,7 +1329,7 @@ export default function AdminPage() {
               </select>
             </div>
             <div className="flex-1 min-w-[220px]">
-              <label className="mb-1.5 block text-sm font-medium">Question File(s) — ek ya kai files ek saath chun sakte hain</label>
+              <label className="mb-1.5 block text-sm font-medium">Question file(s) — you can choose one or several files at once</label>
               <input
                 type="file"
                 multiple
@@ -1341,7 +1338,7 @@ export default function AdminPage() {
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
               />
               {uploadFiles.length > 1 && (
-                <p className="mt-1 text-xs text-muted-foreground">{uploadFiles.length} files chuni gayi — ek ke baad ek upload hongi (har file ka format uske extension se apne aap pata chalta hai).</p>
+                <p className="mt-1 text-xs text-muted-foreground">{uploadFiles.length} files selected — they are uploaded one after another (each file's format is detected from its extension).</p>
               )}
             </div>
           </div>
@@ -1351,42 +1348,42 @@ export default function AdminPage() {
           <label className="mt-4 flex items-start gap-2 rounded-lg border border-border bg-muted/20 p-3 text-sm">
             <input type="checkbox" className="mt-1" checked={requireSolution} onChange={(e) => setRequireSolution(e.target.checked)} />
             <span>
-              Solution ke bina question upload na ho (missing solution report me aayega)
-              <span className="block text-xs text-muted-foreground">Answer key missing, khali option aur duplicate questions hamesha reject hote hain aur report me dikhte hain.</span>
+              Do not upload questions without a solution (they appear in the report as "missing solution")
+              <span className="block text-xs text-muted-foreground">Questions with a missing answer key, an empty option, or duplicates are always rejected and shown in the report.</span>
             </span>
           </label>
           <label className="mt-2 flex items-center gap-2 text-sm">
             <input type="checkbox" checked={checkOnly} onChange={(e) => setCheckOnly(e.target.checked)} />
-            Sirf check karo — kuch save mat karo (pehle report dekhne ke liye)
+            Check only — do not save anything (to see the report first)
           </label>
           <label className="mt-2 flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
             <input type="checkbox" className="mt-1" checked={autoLatest} onChange={(e) => setAutoLatest(e.target.checked)} />
             <span>
-              ⚡ Upload ke baad duplicates me apne aap <b>naya (latest) rakho</b> (purana hide) aur sab <b>Publish</b> karo
-              <span className="block text-xs text-muted-foreground">Band karenge to duplicate Duplicate Review me aayenge, wahan bhi ek click me "sab naya rakho + publish" hai.</span>
+              ⚡ After upload, automatically <b>keep the newer question</b> in duplicates (the old one is hidden) and <b>Publish</b> everything
+              <span className="block text-xs text-muted-foreground">If you turn this off, duplicates go to Duplicate Review, where "keep all newer + publish" is also one click.</span>
             </span>
           </label>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <button
               onClick={() => submitUpload("practice")}
               disabled={uploading || !uploadFile || !access.can("PRACTICE")}
-              title={access.can("PRACTICE") ? undefined : "Aapko Practice upload ka access nahi hai"}
+              title={access.can("PRACTICE") ? undefined : "You do not have access to Practice upload"}
               className="flex flex-col items-center gap-1 rounded-xl border-2 border-emerald-500 bg-emerald-500/10 px-4 py-5 text-center font-semibold text-emerald-700 transition hover:bg-emerald-500/20 disabled:opacity-50 dark:text-emerald-400"
             >
               <span className="text-lg">📗 Upload PRACTICE Questions</span>
               <span className="text-xs font-normal opacity-80">
-                Year/shift/paper-code ignored even if sheet has them. Sirf Practice screens (chapter/topic/sub-topic) me dikhenge — Year-wise PYQ test me NAHI.
+                Year/shift/paper-code ignored even if sheet has them. They appear only on Practice screens (chapter / topic / sub-topic) — NOT in the Year-wise PYQ test.
               </span>
             </button>
             <button
               onClick={() => submitUpload("pyq")}
               disabled={uploading || !uploadFile || !access.can("QUESTIONS")}
-              title={access.can("QUESTIONS") ? undefined : "Aapko PYQ upload ka access nahi hai"}
+              title={access.can("QUESTIONS") ? undefined : "You do not have access to PYQ upload"}
               className="flex flex-col items-center gap-1 rounded-xl border-2 border-sky-500 bg-sky-500/10 px-4 py-5 text-center font-semibold text-sky-700 transition hover:bg-sky-500/20 disabled:opacity-50 dark:text-sky-400"
             >
               <span className="text-lg">📘 Upload PYQ Questions</span>
               <span className="text-xs font-normal opacity-80">
-                Har row me 'year' zaroori hai. Yahi questions Year-wise PYQ Test aur chapter-wise PYQ me dikhenge — Practice screens me NAHI.
+                Every row needs a 'year'. These questions appear in the Year-wise PYQ Test and chapter-wise PYQ — NOT on Practice screens.
               </span>
             </button>
           </div>
@@ -1416,7 +1413,7 @@ export default function AdminPage() {
                   </p>
                 </>
               )}
-              <p className="mt-1 text-xs text-muted-foreground">Badi file me kuch minute lag sakte hain — ye page khula rakhein. Server par import chalta rahega. / Large files take a few minutes; keep this page open.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Large files take a few minutes — keep this page open. The import keeps running on the server.</p>
             </div>
           )}
 
@@ -1429,10 +1426,10 @@ export default function AdminPage() {
                 {(uploadResult.unchanged ?? 0) > 0 && <span className="text-muted-foreground">Jaisi thi waisi: <strong>{uploadResult.unchanged}</strong></span>}
                 <span className="text-red-600 dark:text-red-400">Failed: <strong>{uploadResult.failed}</strong></span>
                 {uploadResult.uploadBatchId && !checkOnly && (
-                  <a href="/admin/questions/manage" className="rounded-lg border border-border px-2 py-1 text-xs font-semibold hover:bg-muted">📋 Questions dekhein</a>
+                  <a href="/admin/questions/manage" className="rounded-lg border border-border px-2 py-1 text-xs font-semibold hover:bg-muted">📋 View questions</a>
                 )}
                 {(uploadResult.reviewAlready ?? 0) > 0 && (
-                  <span className="text-xs text-muted-foreground" title="Pehle se Duplicate Review me the ya aap pehle 'purana rakho' decide kar chuke the">+{uploadResult.reviewAlready} pehle se review me / skip</span>
+                  <span className="text-xs text-muted-foreground" title="Already in Duplicate Review, or you had already decided to keep the old one">+{uploadResult.reviewAlready} already in review / skipped</span>
                 )}
                 {(uploadResult.papers?.length ?? 0) > 0 && (
                   <div className="w-full rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2 text-xs">
@@ -1442,28 +1439,28 @@ export default function AdminPage() {
                         <li key={p.key}>{p.examDate} · {p.examTier === "TIER_2" ? "Tier 2" : "Tier 1"}{p.tierPaper !== "PAPER_1" ? ` · ${p.tierPaper.replace("PAPER_", "Paper ")}` : ""}{p.shift ? ` · ${p.shift}` : ""} — <strong>{p.rows}</strong> rows</li>
                       ))}
                     </ul>
-                    <a href="/admin/pyq-papers" className="mt-1 inline-block text-primary underline">Papers ka progress dekhein →</a>
+                    <a href="/admin/pyq-papers" className="mt-1 inline-block text-primary underline">View paper progress →</a>
                   </div>
                 )}
                 {(uploadResult.pendingTotal ?? 0) > 0 && (
                   <div className="w-full rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-300">
-                    <p className="font-semibold">⚠️ {uploadResult.pendingTotal} rows kisi date-wise mock me nahi judengi (tier/date theek karein):</p>
+                    <p className="font-semibold">⚠️ {uploadResult.pendingTotal} row(s) will not be added to any date-wise mock (fix the tier / date):</p>
                     <ul className="mt-1 max-h-32 space-y-0.5 overflow-auto">
                       {(uploadResult.pending ?? []).slice(0, 30).map((p, i) => <li key={i}>Row {p.row}: {p.message.split(" / ")[0]}</li>)}
                     </ul>
                   </div>
                 )}
                 {(uploadResult.unaccounted ?? 0) > 0 && (
-                  <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">⚠️ {uploadResult.unaccounted} rows ka hisaab nahi mila</span>
+                  <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">⚠️ {uploadResult.unaccounted} row(s) unaccounted for</span>
                 )}
                 {(uploadResult.queuedForReview ?? 0) > 0 && (
                   <a href="/admin/questions/duplicates" className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
-                    🧬 {uploadResult.queuedForReview} duplicate Review me gaye{(uploadResult.queuedExact ?? 0) > 0 ? ` (${uploadResult.queuedExact} exact same)` : ""} — purana / naya / dono chunne ke liye kholein →
+                    🧬 {uploadResult.queuedForReview} duplicate(s) sent to Review{(uploadResult.queuedExact ?? 0) > 0 ? ` (${uploadResult.queuedExact} exact same)` : ""} — open to keep the old, the new, or both →
                   </a>
                 )}
                 {(uploadResult.preview?.length ?? 0) > 0 && (
                   <details className="w-full rounded-lg border border-border p-2 text-xs" open={checkOnly}>
-                    <summary className="cursor-pointer font-semibold">👁 Preview — row-by-row kya hoga (pehli {uploadResult.preview!.length})</summary>
+                    <summary className="cursor-pointer font-semibold">👁 Preview — what will happen row by row (first {uploadResult.preview!.length})</summary>
                     <div className="mt-2 max-h-64 overflow-auto">
                       {uploadResult.preview!.map((p) => (
                         <div key={`${p.action}-${p.row}`} className="border-b border-border/50 py-1">
@@ -1478,7 +1475,7 @@ export default function AdminPage() {
                 )}
                 {uploadResult.errorsTruncated && (
                   <span className="w-full text-xs text-amber-600">
-                    ⚠️ Total {uploadResult.failed.toLocaleString()} rows fail hui — yahan sirf pehli {uploadResult.errors.length.toLocaleString()} dikh rahi hain. Pehle inhe theek karke dobara upload karein. / Only the first {uploadResult.errors.length.toLocaleString()} failures are listed.
+                    ⚠️ Total {uploadResult.failed.toLocaleString()} rows failed — only the first {uploadResult.errors.length.toLocaleString()} are listed here. Fix these first and upload again.
                   </span>
                 )}
                 {/* NEW: one-click download of the full error report as CSV
@@ -1499,7 +1496,7 @@ export default function AdminPage() {
                     onClick={() => downloadRejectedRows()}
                     className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400"
                   >
-                    📄 Rejected rows file (fix karke dobara upload)
+                    📄 Rejected rows file (fix and upload again)
                   </button>
                 )}
                 {uploadResult.errors.length > 0 && (
@@ -1541,7 +1538,7 @@ export default function AdminPage() {
                       <li key={i} className="rounded border border-red-500/20 bg-red-500/5 p-1.5">
                         <div className="flex items-center gap-1.5">
                           {e.file && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground">📄 {e.file}</span>}
-                          <span className="font-semibold text-foreground">{e.row > 0 ? `Row ${e.row}` : "Poori file"}</span>
+                          <span className="font-semibold text-foreground">{e.row > 0 ? `Row ${e.row}` : "Whole file"}</span>
                           <span className="rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
                             {CATEGORY_LABEL[e.category] ?? e.category}
                           </span>
@@ -1551,7 +1548,7 @@ export default function AdminPage() {
                           <div className="mt-0.5 italic text-foreground/80">"{e.questionPreview}"</div>
                         )}
                         <div className="mt-0.5">❌ {e.error}</div>
-                        {e.fix && <div className="mt-0.5 text-emerald-700 dark:text-emerald-400">🛠️ Kaise theek karein: {e.fix}</div>}
+                        {e.fix && <div className="mt-0.5 text-emerald-700 dark:text-emerald-400">🛠️ How to fix: {e.fix}</div>}
                       </li>
                     ))}
                   </ul>
@@ -1592,7 +1589,7 @@ export default function AdminPage() {
           </div>
           {batchesErr && <p className="mt-2 text-sm text-danger">{batchesErr}</p>}
           {!batchesErr && !batchesLoading && batches.length === 0 && (
-            <p className="mt-2 text-sm text-muted-foreground">Abhi tak koi upload record nahi hai.</p>
+            <p className="mt-2 text-sm text-muted-foreground">No uploads yet.</p>
           )}
           {batches.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 p-2 text-xs">
@@ -1617,7 +1614,7 @@ export default function AdminPage() {
                   disabled={bulkBatchBusy || selectedBatchIds.size === 0}
                   onClick={() => bulkBatchAction("unpublish")}
                   className="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 font-semibold text-amber-700 disabled:opacity-40 dark:text-amber-400"
-                  title="Galti se publish ho gaye the? Wapas Pending (students ko nahi dikhenge)"
+                  title="Published by mistake? Move back to Pending (students will not see them)"
                 >
                   ↩️ Selected: Unpublish (undo)
                 </button>
@@ -1635,7 +1632,7 @@ export default function AdminPage() {
                     <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2 text-right">Total</th>
-                    <th className="px-3 py-2 text-right">Upload hue</th>
+                    <th className="px-3 py-2 text-right">Uploaded</th>
                     <th className="px-3 py-2 text-right">Failed</th>
                     <th className="px-3 py-2 text-right">Duplicate review</th>
                     <th className="px-3 py-2">Ab Live/Pending</th>
@@ -1659,19 +1656,19 @@ export default function AdminPage() {
                         <td className="px-3 py-2 text-xs">{b.sourceType}</td>
                         <td className="px-3 py-2 text-xs">
                           {(b.status ?? "DONE") === "RUNNING" ? (
-                            <span className="rounded-full bg-sky-500/15 px-2 py-0.5 font-semibold text-sky-600 dark:text-sky-400" title="Upload abhi chal raha hai — page band karne par bhi server par chalta rahega">
-                              ⏳ Chal raha hai {b.totalRows > 0 ? `${Math.min(100, Math.round(((b.createdCount + b.failedCount + (b.queuedCount ?? 0)) / b.totalRows) * 100))}%` : ""}
+                            <span className="rounded-full bg-sky-500/15 px-2 py-0.5 font-semibold text-sky-600 dark:text-sky-400" title="Upload is running — it continues on the server even if you close this page">
+                              ⏳ Running {b.totalRows > 0 ? `${Math.min(100, Math.round(((b.createdCount + b.failedCount + (b.queuedCount ?? 0)) / b.totalRows) * 100))}%` : ""}
                             </span>
                           ) : b.status === "FAILED" ? (
                             <span className="rounded-full bg-red-500/15 px-2 py-0.5 font-semibold text-red-600" title={b.errorMessage ?? ""}>❌ Fail</span>
                           ) : b.status === "INTERRUPTED" ? (
-                            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400" title="Server restart ya error ki wajah se beech me ruk gaya. Jo questions save ho chuke wo Upload hue me hain; baaki ki file dobara upload karein (duplicate apne aap review me chale jayenge).">⚠️ Beech me ruka{(b.pendingRows ?? 0) > 0 ? ` (${b.pendingRows} baaki)` : ""}</span>
+                            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400" title="Stopped midway because of a server restart or an error. Questions already saved are counted under Uploaded; upload the file again for the rest (duplicates automatically go to review).">⚠️ Stopped midway{(b.pendingRows ?? 0) > 0 ? ` (${b.pendingRows} left)` : ""}</span>
                           ) : (
-                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-600 dark:text-emerald-400">✅ Poora</span>
+                            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-600 dark:text-emerald-400">✅ Complete</span>
                           )}
                           {(b.status ?? "DONE") === "DONE" && (b.pendingRows ?? 0) > 0 && (
-                            <span className="mt-1 block text-[10px] font-medium text-amber-700 dark:text-amber-400" title="Total = Upload hue + Failed + Duplicate review + Skip hona chahiye. Is file ke itne rows ka hisaab nahi mila — file dobara upload karke dekhein.">
-                              ⚠️ {b.pendingRows} rows ka hisaab nahi mila
+                            <span className="mt-1 block text-[10px] font-medium text-amber-700 dark:text-amber-400" title="Total should equal Uploaded + Failed + Duplicate review + Skipped. Some rows of this file are unaccounted for — try uploading the file again.">
+                              ⚠️ {b.pendingRows} row(s) unaccounted for
                             </span>
                           )}
                         </td>
@@ -1680,12 +1677,12 @@ export default function AdminPage() {
                         <td className="px-3 py-2 text-right text-red-600 dark:text-red-400">{b.failedCount}</td>
                         <td className="px-3 py-2 text-right">
                           {(b.queuedCount ?? 0) > 0 ? (
-                            <a href={`/admin/questions/duplicates?batch=${b.id}`} className="font-semibold text-amber-700 underline dark:text-amber-400" title="Ye same question pehle se the — purana / naya / dono chunein">{b.queuedCount} →</a>
+                            <a href={`/admin/questions/duplicates?batch=${b.id}`} className="font-semibold text-amber-700 underline dark:text-amber-400" title="These questions already existed — choose the old, the new, or both">{b.queuedCount} →</a>
                           ) : (
                             <span className="text-muted-foreground">0</span>
                           )}
                           {(b.skippedCount ?? 0) > 0 && (
-                            <span className="block text-[10px] text-muted-foreground" title="Ye duplicate pehle se review list me the ya aap pehle 'purana rakho' decide kar chuke the">+{b.skippedCount} pehle se</span>
+                            <span className="block text-[10px] text-muted-foreground" title="These duplicates were already in the review list, or you had already decided to keep the old one">+{b.skippedCount} already handled</span>
                           )}
                         </td>
                         <td className="px-3 py-2 text-xs">
@@ -1716,20 +1713,20 @@ export default function AdminPage() {
                               onClick={() => toggleBatchDetail(b.id)}
                               className="whitespace-nowrap rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
                             >
-                              {expandedBatchId === b.id ? "▴ Details band karein" : "📋 Details / errors dekhein"}
+                              {expandedBatchId === b.id ? "▴ Hide details" : "📋 View details / errors"}
                             </button>
                             <a
                               href={`/admin/questions/manage?batch=${b.id}`}
                               className="whitespace-nowrap rounded-lg border border-primary/40 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10"
-                              title="Is upload ke saare questions dekhein, search karein aur ek-ek ko edit karein"
+                              title="View all questions of this upload, search them and edit them one by one"
                             >
-                              ✏️ Questions dekhein / edit
+                              ✏️ View / edit questions
                             </a>
                             {(b.pendingCount ?? 0) > 0 && (
                               <button
                                 onClick={() => publishBatchHandler(b.id)}
                                 className="whitespace-nowrap rounded-lg border border-emerald-500/40 px-3 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
-                                title="Is batch ke sabhi pending questions ko ek click me publish (live) karein"
+                                title="Publish (make live) all pending questions of this batch in one click"
                               >
                                 ✅ Publish All ({b.pendingCount})
                               </button>
@@ -1738,7 +1735,7 @@ export default function AdminPage() {
                               <button
                                 onClick={() => unpublishBatchHandler(b.id)}
                                 className="whitespace-nowrap rounded-lg border border-amber-500/40 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
-                                title="Galti se publish hua? Is upload ke live questions wapas Pending (hidden) karein"
+                                title="Published by mistake? Move this upload's live questions back to Pending (hidden)"
                               >
                                 ↩️ Unpublish ({b.liveCount})
                               </button>
@@ -1746,7 +1743,7 @@ export default function AdminPage() {
                             <button
                               onClick={() => downloadBatchHandler(b.id, b.filename)}
                               className="whitespace-nowrap rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
-                              title="Is batch ke abhi maujood questions Excel me download karein"
+                              title="Download the questions currently in this batch as Excel"
                             >
                               ⬇️ Download
                             </button>
@@ -1769,7 +1766,7 @@ export default function AdminPage() {
                                 {(expandedBatchDetail.breakdown?.length ?? 0) > 0 && (
                                   <div className="mb-3">
                                     <p className="mb-1 text-xs font-semibold text-foreground">
-                                      Chapter / Topic / Sub-topic wise (delete sirf isi hisse ke questions):
+                                      Chapter / topic / sub-topic wise (deletes only the questions of that part):
                                     </p>
                                     <div className="max-h-48 space-y-1 overflow-y-auto">
                                       {expandedBatchDetail.breakdown!.map((row, i) => (
@@ -1793,7 +1790,7 @@ export default function AdminPage() {
                                   </div>
                                 )}
                             {(expandedBatchDetail.errorsJson?.length ?? 0) === 0 ? (
-                              <p className="text-xs text-muted-foreground">Is upload me koi error nahi tha.</p>
+                              <p className="text-xs text-muted-foreground">This upload had no errors.</p>
                             ) : (
                               <div>
                                 <div className="mb-2 flex flex-wrap gap-2">
@@ -1829,7 +1826,7 @@ export default function AdminPage() {
                                         <div className="mt-0.5 italic text-foreground/80">&quot;{e.questionPreview}&quot;</div>
                                       )}
                                       <div className="mt-0.5">❌ {e.error}</div>
-                                      {e.fix && <div className="mt-0.5 text-emerald-700 dark:text-emerald-400">🛠️ Kaise theek karein: {e.fix}</div>}
+                                      {e.fix && <div className="mt-0.5 text-emerald-700 dark:text-emerald-400">🛠️ How to fix: {e.fix}</div>}
                                     </li>
                                   ))}
                                 </ul>
@@ -1872,90 +1869,31 @@ export default function AdminPage() {
               <option value="MODERATOR">Moderator</option>
             </select>
           </div>
+          <div className="flex-1 min-w-[150px]">
+            <label className="mb-1.5 block text-sm font-medium">Status</label>
+            <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }} className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm outline-none focus:border-primary">
+              <option value="">All accounts</option>
+              <option value="suspended">Suspended only</option>
+              <option value="active">Active only</option>
+            </select>
+          </div>
         </div>
 
-        {/* Users Table */}
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">User</th>
-                  <th className="px-4 py-3 text-left font-medium">Role</th>
-                  <th className="px-4 py-3 text-left font-medium">Phone</th>
-                  <th className="px-4 py-3 text-left font-medium">Email Verified</th>
-                  <th className="px-4 py-3 text-left font-medium">Tests Taken</th>
-                  <th className="px-4 py-3 text-left font-medium">Bookmarks</th>
-                  <th className="px-4 py-3 text-left font-medium">Subscription</th>
-                  <th className="px-4 py-3 text-left font-medium">Joined</th>
-                  <th className="px-4 py-3 text-right font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.length === 0 ? (
-                  <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No users found</td></tr>
-                ) : (
-                  users.map((u) => (
-                    <tr key={u.id} className="border-t border-border hover:bg-muted/50">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <UserAvatar name={u.fullName} email={u.email} src={u.avatarUrl} size={36} />
-                          <div className="min-w-0">
-                            <div className="truncate font-medium">{u.fullName}</div>
-                            <div className="truncate text-xs text-muted-foreground">{u.email}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">{roleBadge(u.role)}</td>
-                      <td className="px-4 py-3 text-sm">{u.phone || <span className="text-muted-foreground">—</span>}</td>
-                      <td className="px-4 py-3">
-                        {u.isEmailVerified ? "✅ Verified" : <span className="text-amber-500">⏳ Pending</span>}
-                      </td>
-                      <td className="px-4 py-3">{u._count.testAttempts}</td>
-                      <td className="px-4 py-3">{u._count.bookmarks}</td>
-                      <td className="px-4 py-3">
-                        {u.subscriptions.length > 0 ? (
-                          u.subscriptions.map((sub) => {
-                            const left = sub.endsAt ? Math.max(0, Math.ceil((new Date(sub.endsAt).getTime() - Date.now()) / 86400000)) : null;
-                            return (
-                              <div key={sub.planId + (sub.endsAt || "")} className="text-xs text-emerald-500">
-                                ✅ {sub.plan?.name || "Premium"}
-                                {sub.endsAt ? ` · until ${new Date(sub.endsAt).toLocaleDateString("en-IN")} (${left}d left)` : ""}
-                              </div>
-                            );
-                          })
-                        ) : (
-                          <span className="text-muted-foreground">Free</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button onClick={() => setSelectedUser(u)} className="rounded border border-border px-2 py-1 text-xs hover:bg-muted">View</button>
-                          <button onClick={() => { setSelectedUser(u); setShowSubscriptionModal(true); }} className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-500/20">
-                            {u.subscriptions.length > 0 ? "Extend" : "Add Sub"}
-                          </button>
-                          {u.subscriptions.length > 0 && (
-                            <button
-                              onClick={() => { if (confirm(`Cancel ${u.fullName}'s subscription? Remaining days will be lost.`)) cancelSubscription(u.id); }}
-                              className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs text-red-600 hover:bg-red-500/20"
-                            >
-                              Cancel Sub
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-4 py-3 border-t border-border flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Page {page} of {Math.ceil(total / limit)} — {total} total users</span>
+        {/* Users */}
+        <div className="rounded-xl md:border md:border-border md:bg-card md:overflow-hidden">
+          <AdminUsersPanel
+            users={users}
+            onChanged={loadUsers}
+            onInfo={setInfo}
+            onError={setError}
+            onGrant={(u) => { setSelectedUser(u); setShowSubscriptionModal(true); }}
+            onCancelSub={(u) => { if (confirm(`Cancel ${u.fullName}'s subscription? Remaining days will be lost.`)) cancelSubscription(u.id); }}
+          />
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 md:mt-0 md:rounded-none md:border-0 md:border-t">
+            <span className="text-sm text-muted-foreground">Page {page} of {Math.max(1, Math.ceil(total / limit))} · {total} users</span>
             <div className="flex gap-2">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="rounded border border-border px-3 py-1 text-sm disabled:opacity-50">Prev</button>
-              <button onClick={() => setPage(p => Math.min(Math.ceil(total / limit), p + 1))} disabled={page === Math.ceil(total / limit)} className="rounded border border-border px-3 py-1 text-sm disabled:opacity-50">Next</button>
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="min-h-[40px] rounded-lg border border-border px-4 text-sm disabled:opacity-50">Previous</button>
+              <button onClick={() => setPage(p => Math.min(Math.max(1, Math.ceil(total / limit)), p + 1))} disabled={page >= Math.ceil(total / limit)} className="min-h-[40px] rounded-lg border border-border px-4 text-sm disabled:opacity-50">Next</button>
             </div>
           </div>
         </div>

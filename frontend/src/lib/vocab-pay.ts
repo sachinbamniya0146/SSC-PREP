@@ -19,7 +19,7 @@ function loadCashfreeSdk(): Promise<any> {
     script.onload = () => resolve((window as any).Cashfree);
     script.onerror = () => {
       sdkPromise = null;
-      reject(new Error("Payment SDK load nahi hua"));
+      reject(new Error("The payment SDK could not be loaded"));
     };
     document.body.appendChild(script);
   });
@@ -49,12 +49,12 @@ export async function startCashfreeCheckout(product: PayProduct): Promise<{ free
   });
   if (!res.ok) {
     const d = await res.json().catch(() => ({}));
-    throw new Error(d?.message || "Order create nahi hua");
+    throw new Error(d?.message || "Could not create the order");
   }
   const order = await res.json();
   if (order.free) return { free: true, orderId: order.orderId };
   const Cashfree = await loadCashfreeSdk();
-  if (!Cashfree) throw new Error("Payment SDK load nahi hua");
+  if (!Cashfree) throw new Error("The payment SDK could not be loaded");
   const cashfree = Cashfree({ mode: order.cashfreeEnv === "PRODUCTION" ? "production" : "sandbox" });
   await cashfree.checkout({ paymentSessionId: order.paymentSessionId, redirectTarget: "_self" });
   return { free: false, orderId: order.orderId };

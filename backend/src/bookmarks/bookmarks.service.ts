@@ -236,7 +236,7 @@ export class BookmarksService {
       select: { questionId: true },
     });
     if (bookmarks.length === 0) {
-      throw new BadRequestException('Koi bookmark nahi mila — pehle kuch questions bookmark karein.');
+      throw new BadRequestException('No bookmarks found — bookmark some questions first.');
     }
     const ids = bookmarks.map((b) => b.questionId);
     // Fisher-Yates, then cap — same non-biased shuffle used by
