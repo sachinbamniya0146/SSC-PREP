@@ -16,6 +16,7 @@
  */
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { readPatternSections } from '../common/section-plan';
+import { buildMarkingScheme, totalMarksFor } from '../common/marking';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeKeyedPaperRows } from '../common/pyq-paper';
 import {
   KEYED_PAPER_CEILING,
@@ -130,7 +131,7 @@ export async function buildKeyedPaper(
         shift,
         AND: [tierPaper === 'PAPER_1' ? { OR: [{ tierPaper: null }, { tierPaper: 'PAPER_1' }] } : { tierPaper }],
       },
-      select: { id: true, questionText: true, createdAt: true, marks: true, paperQuestionNo: true },
+      select: { id: true, questionText: true, createdAt: true, marks: true, paperQuestionNo: true, subject: { select: { slug: true } } },
     }),
     findPatternForPaper(prisma, parts.examId, parts.examTier, tierPaper),
   ]);
@@ -142,7 +143,11 @@ export async function buildKeyedPaper(
   const patternTarget = pattern?.totalQuestions ?? null;
   const target = patternTarget ?? ASSUMED_PAPER_TARGET;
   const examName = exam?.name ?? 'SSC';
-  const totalMarks = kept.reduce((sum, r) => sum + (r.marks ?? 2), 0);
+  // 28 Oct 2026: a paper is worth what its exam's preset says (CPO: 1 mark each), not the 2-per-row column default.
+  const totalMarks = totalMarksFor(
+    buildMarkingScheme(pattern as any),
+    (kept as any[]).map((r) => ({ subjectSlug: r.subject?.slug, marks: r.marks })),
+  );
   const durationMinutes = pattern?.durationMinutes ?? Math.max(10, Math.round(built * 0.6));
   const common = {
     title: titleForPaper(examName, { ...parts, tierPaper }),

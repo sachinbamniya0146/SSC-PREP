@@ -16,6 +16,8 @@ export type PatternSectionInput = {
   marks?: number;
   durationMinutes?: number;
   scribeMinutes?: number;
+  /** Optional per-section penalty (MTS Session-I has none, Session-II has 1). Absent = the pattern-wide value. */
+  negativeMarks?: number;
 };
 
 export type PlanSection = {
@@ -27,6 +29,8 @@ export type PlanSection = {
   minutes: number;
   questions: number;
   marksPerQuestion: number;
+  /** Per-section penalty; plans frozen before 28 Oct 2026 do not have it and fall back to `plan.negativeMarks`. */
+  negativeMarks?: number;
 };
 
 export type SectionPlan = {
@@ -67,6 +71,7 @@ export function readPatternSections(raw: unknown): PatternSectionInput[] {
       marks: num(r.marks, 0),
       durationMinutes: num(r.durationMinutes, 0),
       scribeMinutes: r.scribeMinutes != null ? num(r.scribeMinutes, 0) : undefined,
+      negativeMarks: r.negativeMarks != null && r.negativeMarks !== '' && Number.isFinite(Number(r.negativeMarks)) ? Math.max(0, Number(r.negativeMarks)) : undefined,
     }))
     .filter((r) => r.name.length > 0);
 }
@@ -103,6 +108,7 @@ export function buildSectionPlan(pattern: PatternForPlan | null | undefined, opt
       minutes,
       questions,
       marksPerQuestion: questions > 0 && (r.marks ?? 0) > 0 ? Math.round(((r.marks as number) / questions) * 1000) / 1000 : 0,
+      ...(r.negativeMarks != null ? { negativeMarks: r.negativeMarks } : {}),
     };
   });
   return { v: 1, lock: true, scribe, negativeMarks: Math.max(0, num(pattern.negativeMarks, 0)), totalMs: cursor, sections };
@@ -190,10 +196,17 @@ export function describePlanAt(plan: SectionPlan, elapsedMs: number) {
   };
 }
 
-/** Marks for one answer under a plan. Negative marks are the pattern-wide value; marks come from the section. */
+/** Penalty for one wrong answer in a section: the section's own value when the pattern sets one, else the pattern-wide value. */
+export function negativeUnderPlan(plan: SectionPlan, sectionIndex: number): number {
+  const s = plan.sections[sectionIndex];
+  return s && typeof s.negativeMarks === 'number' && s.negativeMarks >= 0 ? s.negativeMarks : plan.negativeMarks;
+}
+
+/** Marks for one answer under a plan. Marks and (since 28 Oct 2026) the penalty can both differ per section. */
 export function scoreUnderPlan(plan: SectionPlan, sectionIndex: number, correct: boolean, answered: boolean, fallback: { marks: number }): number {
   if (!answered) return 0;
   const s = plan.sections[sectionIndex];
   const per = s && s.marksPerQuestion > 0 ? s.marksPerQuestion : fallback.marks;
-  return correct ? per : -plan.negativeMarks;
+  const neg = negativeUnderPlan(plan, sectionIndex);
+  return correct ? per : neg > 0 ? -neg : 0;
 }

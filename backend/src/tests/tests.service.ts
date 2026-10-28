@@ -19,11 +19,12 @@ import {
   isSectionWritable,
   readPatternSections,
   readSectionPlan,
-  scoreUnderPlan,
   sectionIndexForSubject,
   canAcceptLateWrite,
   type SectionPlan,
 } from '../common/section-plan';
+import { buildMarkingScheme, resolveMarking, schemeMaxMarks, totalMarksFor, type MarkingScheme } from '../common/marking';
+import { loadMarkingScheme } from './marking-scheme';
 
 /** Fisher–Yates, in place. Used so a practice set is different on every start (sectional). */
 function shuffleInPlace<T>(arr: T[]): T[] {
@@ -194,6 +195,16 @@ export class TestsService {
     return isPyqMockFreeByRank(rank.get(templateId));
   }
 
+  // ---- Marking (28 Oct 2026) ----
+  // The ExamPattern preset an attempt is scored under, for EVERY test type (not only strict-section ones).
+  // See common/marking.ts for the order of authority and tests/marking-scheme.ts for how the pattern is found.
+  private markingSchemeFor(
+    template: { examPatternId?: string | null; examId?: string | null; examTier?: string | null; tierPaper?: string | null } | null | undefined,
+    questions: { examId?: string | null; examTier?: string | null; tierPaper?: string | null }[] = [],
+  ): Promise<MarkingScheme | null> {
+    return loadMarkingScheme(this.prisma as any, template, questions);
+  }
+
   // ---- Server-authoritative test session (P0: client clock never trusted) ----
 
   // Begin a timed attempt: server stamps startedAt + expiresAt from the
@@ -348,20 +359,28 @@ async submitAttempt(
   if (answers.length) {
     const questions = await this.prisma.question.findMany({
       where: { id: { in: answers.map((a) => a.questionId) } },
-      select: { id: true, correctAnswer: true, marks: true, negativeMarks: true, subject: { select: { slug: true } } },
+      select: { id: true, correctAnswer: true, marks: true, negativeMarks: true, examId: true, examTier: true, tierPaper: true, subject: { select: { slug: true } } },
     });
+    // A frozen section plan is authoritative; otherwise the exam's preset (28 Oct 2026 — was: each question's own 2 / 0.5).
+    const scheme = plan
+      ? null
+      : await this.markingSchemeFor(
+          await this.prisma.testTemplate.findUnique({ where: { id: attempt.testTemplateId }, select: { examPatternId: true, examId: true, examTier: true, tierPaper: true } }),
+          questions,
+        );
     const qmap = new Map(questions.map((q) => [q.id, q]));
     for (const a of answers) {
       const q = qmap.get(a.questionId);
       if (!q) continue;
       const correct = a.selectedOption != null && String(a.selectedOption).trim().toUpperCase() === String(q.correctAnswer ?? '').trim().toUpperCase();
+      const rule = resolveMarking({ plan, scheme, subjectSlug: q.subject?.slug, question: q });
       if (a.selectedOption == null) totalSkipped++;
       else if (correct) {
         totalCorrect++;
-        score += plan ? scoreUnderPlan(plan, sectionIndexForSubject(plan, q.subject?.slug), true, true, { marks: q.marks ?? 2 }) : (q.marks ?? 2);
+        score += rule.marks;
       } else {
         totalWrong++;
-        score += plan ? scoreUnderPlan(plan, sectionIndexForSubject(plan, q.subject?.slug), false, true, { marks: q.marks ?? 2 }) : -(q.negativeMarks ?? 0.5);
+        score -= rule.negative;
       }
       scoredAnswers.push({
         questionId: a.questionId,
@@ -371,6 +390,7 @@ async submitAttempt(
       });
     }
   }
+  score = Math.round(score * 100) / 100; // 1/3-mark schemes must not leave 0.30000000000000004 in the DB
   const accuracyPercent =
     totalCorrect + totalWrong > 0 ? Math.round((totalCorrect / (totalCorrect + totalWrong)) * 1000) / 10 : 0;
 
@@ -671,21 +691,24 @@ async saveAnswers(
       const ids = input.answers.map((a) => a.questionId);
       const questions = await this.prisma.question.findMany({
         where: { id: { in: ids } },
-        select: { id: true, correctAnswer: true, marks: true, negativeMarks: true },
+        select: { id: true, correctAnswer: true, marks: true, negativeMarks: true, examId: true, examTier: true, tierPaper: true, subject: { select: { slug: true } } },
       });
+      // 28 Oct 2026: the exam's preset decides marks / negative marking (was: each question's own 2 / 0.5 columns).
+      const scheme = await this.markingSchemeFor(template, questions);
       const qmap = new Map(questions.map((q) => [q.id, q]));
       for (const a of input.answers) {
         const q = qmap.get(a.questionId);
         if (!q) continue; // unknown question → skip, never count
         const correct = a.selectedOption != null && String(a.selectedOption).trim().toUpperCase() === String(q.correctAnswer ?? '').trim().toUpperCase();
+        const rule = resolveMarking({ scheme, subjectSlug: q.subject?.slug, question: q });
         if (a.selectedOption == null) {
           totalSkipped++;
         } else if (correct) {
           totalCorrect++;
-          score += q.marks ?? 2;
+          score += rule.marks;
         } else {
           totalWrong++;
-          score -= q.negativeMarks ?? 0.5;
+          score -= rule.negative;
         }
         scoredAnswers.push({
           questionId: a.questionId,
@@ -695,6 +718,7 @@ async saveAnswers(
         });
       }
     }
+    score = Math.round(score * 100) / 100;
     const accuracyPercent =
       totalCorrect + totalWrong > 0 ? Math.round((totalCorrect / (totalCorrect + totalWrong)) * 1000) / 10 : 0;
 
@@ -793,6 +817,9 @@ async saveAnswers(
                 marks: true,
                 negativeMarks: true,
                 difficulty: true,
+                examId: true,
+                examTier: true,
+                tierPaper: true,
               },
             },
           },
@@ -835,11 +862,14 @@ async saveAnswers(
 
     // P0 — a sectional attempt was scored with the pattern's marks / negative marking, so the review shows those too.
     const plan = readSectionPlan((attempt as any).sectionPlan);
+    // 28 Oct 2026: every other test type shows (and was scored with) the exam's preset, not the question columns.
+    const scheme = plan ? null : await this.markingSchemeFor(attempt.testTemplate, attempt.answers.map((a) => a.question));
 
     // v6 §6 — per-question review data, ordered with topic/exam labels.
     const questions = attempt.answers.map((a) => {
       const q = a.question;
       const sectionIndex = plan ? sectionIndexForSubject(plan, (q as any).subject?.slug) : null;
+      const rule = resolveMarking({ plan, scheme, subjectSlug: (q as any).subject?.slug, question: q });
       // Session 22 — pass diagramType/diagramLabels through untouched when
       // present (ordinary text options simply don't have these keys, so
       // this is a no-op for the ~99% non-diagram case).
@@ -878,15 +908,21 @@ async saveAnswers(
         subTopic: (q as any).subTopic?.name ?? null,
         year: q.year,
         shift: q.shift,
-        marks: plan && sectionIndex != null && plan.sections[sectionIndex]?.marksPerQuestion ? plan.sections[sectionIndex].marksPerQuestion : q.marks,
-        negativeMarks: plan ? plan.negativeMarks : q.negativeMarks,
+        marks: rule.marks,
+        negativeMarks: rule.negative,
         sectionIndex,
         difficulty: q.difficulty ?? null,
       };
     });
 
+    // "out of how many marks": templates built before the preset existed carry a total made of the question columns
+    // (CPO showed /400 instead of /200). Show the preset's figure; the stored total stays as it was for old exports.
+    const testTemplate =
+      scheme && !plan ? { ...attempt.testTemplate, totalMarks: schemeMaxMarks(scheme, attempt.testTemplate.totalQuestions) } : attempt.testTemplate;
+
     return {
       ...attempt,
+      testTemplate,
       sectionPlan: plan,
       testTemplateId: attempt.testTemplateId,
       rank,
@@ -976,6 +1012,12 @@ async saveAnswers(
       throw new BadRequestException(`Exam not set up for "${fam}" yet — cannot compose an exam-specific paper.`);
     }
     const strictPlan = patternUsable ? buildSectionPlan(pattern) : null;
+    // 28 Oct 2026: marks / negative marking come from the exam's preset for EVERY paper, locked or not.
+    const scheme: MarkingScheme | null = strictPlan
+      ? null
+      : patternUsable
+        ? buildMarkingScheme(pattern)
+        : await this.markingSchemeFor({ ...template, examId: template.examId ?? famExam.id }, []);
     const sections: any[] = patternUsable
       ? patternRows.map((r, i) => ({
           part: String.fromCharCode(65 + i),
@@ -1088,12 +1130,14 @@ async saveAnswers(
         }
       }
       picked.forEach((r) => usedAcross.add(r.id));
+      const ruleOf = (r: any) => resolveMarking({ plan: strictPlan, scheme, subjectSlug: sec.subjectSlug, question: r });
+      const secMarks = strictPlan || scheme ? Math.round(picked.slice(0, sec.q).reduce((a: number, r: any) => a + ruleOf(r).marks, 0) * 100) / 100 : sec.marks;
       out.push({
         part: sec.part,
         name: sec.name,
         subjectSlug: sec.subjectSlug,
         questionCount: sec.q,
-        marks: sec.marks,
+        marks: secMarks,
         minutes: sec.min,
         questions: picked.slice(0, sec.q).map((r) => ({
           id: r.id,
@@ -1106,8 +1150,8 @@ async saveAnswers(
           options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
           optionsHi: (r.optionsHi as any[]) || null,
           // P0 — a pattern-driven paper shows the pattern's marking, the same numbers the server scores with.
-          marks: strictPlan && strictPlan.sections[out.length]?.marksPerQuestion ? strictPlan.sections[out.length].marksPerQuestion : (r.marks ?? 2),
-          negativeMarks: strictPlan ? strictPlan.negativeMarks : (r.negativeMarks ?? 0.5),
+          marks: ruleOf(r).marks,
+          negativeMarks: ruleOf(r).negative,
           year: r.year,
           shift: r.shift,
           examName: r.exam?.name,
@@ -1299,6 +1343,13 @@ async saveAnswers(
     // P0 — pattern-linked PYQ paper: sections follow the pattern's order and timers. Subjects the pattern does not
     // name are folded into the LAST section (the server maps unknown subjects there too, so nothing is dropped).
     const strictPlan = pattern ? buildSectionPlan(pattern) : null;
+    // 28 Oct 2026: not only strict-section papers — a keyed / legacy PYQ paper is scored with its exam's preset too.
+    const scheme: MarkingScheme | null = strictPlan
+      ? null
+      : pattern
+        ? (buildMarkingScheme(pattern) ?? (await this.markingSchemeFor(keyedTpl, rows as any[])))
+        : await this.markingSchemeFor(keyedTpl, rows as any[]);
+    const ruleOf = (r: any, slug: string) => resolveMarking({ plan: strictPlan, scheme, subjectSlug: slug, question: r });
     let groups = [...bySubject.values()];
     // Keyed papers: show sections in the order they appear in the real paper (by printed question number),
     // when every question of a section carries one. Otherwise the old subject order stays.
@@ -1330,7 +1381,7 @@ async saveAnswers(
       name: sec.name,
       subjectSlug: sec.slug,
       questionCount: sec.rows.length,
-      marks: strictPlan ? Math.round(sec.rows.length * strictPlan.sections[secIdx].marksPerQuestion * 100) / 100 : sec.rows.reduce((s, r) => s + (r.marks ?? 2), 0),
+      marks: Math.round(sec.rows.reduce((s, r) => s + ruleOf(r, (r as any).subject?.slug ?? sec.slug).marks, 0) * 100) / 100,
       minutes: strictPlan ? strictPlan.sections[secIdx].minutes : Math.max(5, Math.round(sec.rows.length * 0.6)),
       questions: sec.rows.map((r) => ({
         id: r.id,
@@ -1342,8 +1393,8 @@ async saveAnswers(
         questionDiagramLabels: r.questionDiagramLabels ?? null,
         questionImageUrl: r.questionImageUrl ?? null,
         options: (r.optionsJson as any[]).map((o: any) => ({ key: o.key, text: o.text, textHi: o.textHi ?? null, diagramType: o.diagramType ?? null, diagramLabels: o.diagramLabels ?? null, imageUrl: o.imageUrl ?? null })),
-        marks: strictPlan && strictPlan.sections[secIdx].marksPerQuestion ? strictPlan.sections[secIdx].marksPerQuestion : (r.marks ?? 2),
-        negativeMarks: strictPlan ? strictPlan.negativeMarks : (r.negativeMarks ?? 0.5),
+        marks: ruleOf(r, (r as any).subject?.slug ?? sec.slug).marks,
+        negativeMarks: ruleOf(r, (r as any).subject?.slug ?? sec.slug).negative,
         year: r.year,
         shift: r.shift,
         examName: r.exam?.name,
@@ -1419,6 +1470,8 @@ async saveAnswers(
       select: { id: true, slug: true, name: true },
     });
     const slugToId = new Map(subs.map((s) => [s.slug.toLowerCase(), s.id]));
+    // 28 Oct 2026: the family exam's preset (Tier 1 / Paper 1) decides marks and negative marking.
+    const scheme = await this.markingSchemeFor({ examId: famExam.id }, []);
 
     const usedAcross = new Set<string>();
     const out: any[] = [];
@@ -1481,12 +1534,13 @@ async saveAnswers(
         }
       }
       picked.forEach((r) => usedAcross.add(r.id));
+      const ruleOf = (r: any) => resolveMarking({ scheme, subjectSlug: sec.subjectSlug, question: r });
       out.push({
         part: sec.part,
         name: sec.name,
         subjectSlug: sec.subjectSlug,
         questionCount: sec.q,
-        marks: sec.marks,
+        marks: scheme ? Math.round(picked.slice(0, sec.q).reduce((a: number, r: any) => a + ruleOf(r).marks, 0) * 100) / 100 : sec.marks,
         minutes: sec.min,
         questions: picked.slice(0, sec.q).map((r) => ({
           id: r.id,
@@ -1508,8 +1562,8 @@ async saveAnswers(
           chapter: r.chapter?.name,
           year: r.year,
           shift: r.shift,
-          marks: r.marks ?? 2,
-          negativeMarks: r.negativeMarks ?? 0.5,
+          marks: ruleOf(r).marks,
+          negativeMarks: ruleOf(r).negative,
           subjectId: r.subjectId,
         })),
       });
@@ -1520,7 +1574,13 @@ async saveAnswers(
       mts: { type: 'MTS_PAPER1', title: 'SSC MTS Paper 1', durationMinutes: 90, totalQuestions: 90, totalMarks: 90, negativeMarks: 0.25 },
       cpo: { type: 'CPO_PAPER1', title: 'SSC CPO Paper 1', durationMinutes: 60, totalQuestions: 100, totalMarks: 200, negativeMarks: 0.5 },
     }[family];
-    return { ...meta, sections: out };
+    const familyMarks = Math.round(out.reduce((a: number, sec: any) => a + sec.marks, 0) * 100) / 100;
+    return {
+      ...meta,
+      // 28 Oct 2026: the totals follow the exam's preset when there is one (MTS / CPO used to show made-up figures)
+      ...(scheme ? { totalMarks: familyMarks, negativeMarks: scheme.uniform ? scheme.uniform.negative : meta.negativeMarks } : {}),
+      sections: out,
+    };
   }
 
   // Subjects with approved+bilingual counts (for the sectional picker UI).
@@ -1700,7 +1760,7 @@ async saveAnswers(
       where,
       include: {
         exam: { select: { name: true } },
-        subject: { select: { name: true } },
+        subject: { select: { name: true, slug: true } },
         chapter: { select: { name: true } },
       },
       orderBy: [{ subjectId: 'asc' }, { createdAt: 'asc' }],
@@ -1735,7 +1795,11 @@ async saveAnswers(
     }
 
     const exam = await this.prisma.exam.findUnique({ where: { id: examId }, select: { name: true } });
-    const totalMarks = validRows.reduce((s, r) => s + (r.marks ?? 2), 0);
+    // 28 Oct 2026: marks / negative marking come from the exam's preset (tier + paper read from the questions);
+    // the scoring in submitAttempt() derives the same preset from the same questions, so display and score agree.
+    const scheme = await this.markingSchemeFor({ examId, examTier: opts.tier ?? null, tierPaper: opts.tierPaper ?? null }, validRows as any[]);
+    const ruleOf = (r: any) => resolveMarking({ scheme, subjectSlug: r.subject?.slug, question: r });
+    const totalMarks = totalMarksFor(scheme, validRows.map((r: any) => ({ subjectSlug: r.subject?.slug, marks: r.marks })));
     // Same pacing ratio as the family full-mocks in paper() (60 min / 100 Q
     // = 0.6 min/Q), with a sane floor so a tiny topic-wise set doesn't get a
     // useless 1-minute timer.
@@ -1793,8 +1857,8 @@ async saveAnswers(
         chapter: r.chapter?.name,
         year: r.year,
         shift: r.shift,
-        marks: r.marks ?? 2,
-        negativeMarks: r.negativeMarks ?? 0.5,
+        marks: ruleOf(r).marks,
+        negativeMarks: ruleOf(r).negative,
       })),
     };
   }

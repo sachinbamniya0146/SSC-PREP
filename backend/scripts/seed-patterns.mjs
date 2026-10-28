@@ -1,84 +1,80 @@
-// v3 §6.4 — seed real-exam ExamPatterns (idempotent, run inside backend container:
-//   docker exec ssc-backend node scripts/seed-patterns.mjs)
+// Marking-scheme presets for every SSC exam (28 Oct 2026 — replaces the old hard-coded list, whose CPO / MTS / GD
+// numbers were wrong). The data lives in src/common/exam-presets.ts (compiled to dist/), each preset with its source.
+//
+//   docker compose exec backend node scripts/seed-patterns.mjs            # REPORT only — writes nothing
+//   docker compose exec backend node scripts/seed-patterns.mjs --apply    # apply every update / create
+//   docker compose exec backend node scripts/seed-patterns.mjs --apply --only=cpo-p1,mts
+//
+// Safe to re-run: an existing active pattern of the same exam + tier + paper is UPDATED in its marking numbers
+// only (lock / scribe / timers / names stay); a missing one is created; a missing exam is reported and skipped.
 import { PrismaClient } from '@prisma/client';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { EXAM_PRESETS, planPresetSync } = require('../dist/common/exam-presets.js');
+
+const apply = process.argv.includes('--apply');
+const onlyArg = process.argv.find((a) => a.startsWith('--only='));
+const only = onlyArg ? new Set(onlyArg.slice('--only='.length).split(',').filter(Boolean)) : null;
+
 const prisma = new PrismaClient();
 
-const PATTERNS = [
-  {
-    examSlug: 'cgl', name: 'SSC CGL Tier 1 (2025)',
-    totalQuestions: 100, totalMarks: 200, durationMinutes: 60, negativeMarks: 0.5,
-    sections: [
-      { name: 'Part A · General Intelligence & Reasoning', subjectSlug: 'reasoning', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Part B · General Awareness', subjectSlug: 'general_awareness', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Part C · Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Part D · English Comprehension', subjectSlug: 'english', questions: 25, marks: 50, durationMinutes: 15 },
-    ],
-  },
-  {
-    examSlug: 'chsl', name: 'SSC CHSL Tier 1 (2024)',
-    totalQuestions: 100, totalMarks: 200, durationMinutes: 60, negativeMarks: 0.5,
-    sections: [
-      { name: 'Section I · English', subjectSlug: 'english', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Section II · Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Section III · General Intelligence & Reasoning', subjectSlug: 'reasoning', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Section IV · General Awareness', subjectSlug: 'general_awareness', questions: 25, marks: 50, durationMinutes: 15 },
-    ],
-  },
-  {
-    examSlug: 'cpo', name: 'SSC CPO Paper 1 (2024)',
-    totalQuestions: 100, totalMarks: 200, durationMinutes: 60, negativeMarks: 0.5,
-    sections: [
-      { name: 'Part A · Reasoning', subjectSlug: 'reasoning', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Part B · General Awareness', subjectSlug: 'general_awareness', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Part C · Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', questions: 25, marks: 50, durationMinutes: 15 },
-      { name: 'Part D · English', subjectSlug: 'english', questions: 25, marks: 50, durationMinutes: 15 },
-    ],
-  },
-  {
-    examSlug: 'mts', name: 'SSC MTS (2024)',
-    totalQuestions: 90, totalMarks: 225, durationMinutes: 90, negativeMarks: 0.25,
-    sections: [
-      { name: 'Section 1 · Numeric & Mathematical Ability', subjectSlug: 'quantitative_aptitude', questions: 25, marks: 62.5, durationMinutes: 22.5 },
-      { name: 'Section 2 · Reasoning & Problem Solving', subjectSlug: 'reasoning', questions: 20, marks: 50, durationMinutes: 20 },
-      { name: 'Section 3 · General Awareness', subjectSlug: 'general_awareness', questions: 25, marks: 62.5, durationMinutes: 22.5 },
-      { name: 'Section 4 · English Language', subjectSlug: 'english', questions: 20, marks: 50, durationMinutes: 20 },
-    ],
-  },
-  {
-    examSlug: 'gd', name: 'SSC GD Constable (CBE 2024)',
-    totalQuestions: 80, totalMarks: 160, durationMinutes: 60, negativeMarks: 0.25,
-    sections: [
-      { name: 'Part 1 · General Intelligence & Reasoning', subjectSlug: 'reasoning', questions: 20, marks: 40, durationMinutes: 15 },
-      { name: 'Part 2 · General Knowledge & Awareness', subjectSlug: 'general_awareness', questions: 20, marks: 40, durationMinutes: 15 },
-      { name: 'Part 3 · Elementary Mathematics', subjectSlug: 'quantitative_aptitude', questions: 20, marks: 40, durationMinutes: 15 },
-      { name: 'Part 4 · English', subjectSlug: 'english', questions: 20, marks: 40, durationMinutes: 15 },
-    ],
-  },
-];
-
 async function main() {
-  let seeded = 0;
-  for (const p of PATTERNS) {
-    const exam = await prisma.exam.findUnique({ where: { slug: p.examSlug } });
-    if (!exam) { console.log(`SKIP (no exam slug ${p.examSlug})`); continue; }
-    await prisma.examPattern.upsert({
-      where: { examId_name: { examId: exam.id, name: p.name } },
-      update: {
-        totalQuestions: p.totalQuestions, totalMarks: p.totalMarks,
-        durationMinutes: p.durationMinutes, negativeMarks: p.negativeMarks,
-        sections: p.sections, isActive: true,
-      },
-      create: {
-        examId: exam.id, name: p.name,
-        totalQuestions: p.totalQuestions, totalMarks: p.totalMarks,
-        durationMinutes: p.durationMinutes, negativeMarks: p.negativeMarks,
-        sections: p.sections,
-      },
-    });
-    seeded++;
-    console.log(`SEEDED ${p.name}`);
+  const [exams, patterns] = await Promise.all([
+    prisma.exam.findMany({ select: { id: true, slug: true } }),
+    prisma.examPattern.findMany({
+      select: { id: true, examId: true, name: true, isActive: true, totalQuestions: true, totalMarks: true, durationMinutes: true, negativeMarks: true, sections: true, lockPreviousSections: true },
+    }),
+  ]);
+  const actions = planPresetSync({ presets: EXAM_PRESETS, exams, patterns }).filter((a) => !only || only.has(a.presetKey));
+
+  let written = 0;
+  for (const a of actions) {
+    const tag = a.verification === 'OFFICIAL' ? 'official' : 'SECONDARY-check';
+    console.log(`\n[${a.kind.toUpperCase()}] ${a.presetKey} · ${a.patternName ?? a.presetName} (${tag})`);
+    for (const c of a.changes) console.log(`   • ${c}`);
+    for (const w of a.warnings) console.log(`   ! ${w}`);
+    if (!apply) continue;
+    if (a.kind === 'update') {
+      await prisma.examPattern.update({
+        where: { id: a.patternId },
+        data: {
+          totalQuestions: a.write.totalQuestions,
+          totalMarks: a.write.totalMarks,
+          durationMinutes: a.write.durationMinutes,
+          negativeMarks: a.write.negativeMarks,
+          sections: a.write.sections,
+          sourceNote: a.write.sourceNote,
+        },
+      });
+      written++;
+    } else if (a.kind === 'create') {
+      await prisma.examPattern.create({
+        data: {
+          examId: a.examId,
+          name: a.create.name,
+          totalQuestions: a.create.totalQuestions,
+          totalMarks: a.create.totalMarks,
+          durationMinutes: a.create.durationMinutes,
+          negativeMarks: a.create.negativeMarks,
+          sections: a.create.sections,
+          lockPreviousSections: a.create.lockPreviousSections,
+          scribeExtraMinutes: a.create.scribeExtraMinutes,
+          sourceNote: a.create.sourceNote,
+        },
+      });
+      written++;
+    }
   }
-  console.log(`Done: ${seeded} patterns`);
+
+  const count = (k) => actions.filter((a) => a.kind === k).length;
+  console.log(`\nSummary: ${count('update')} update, ${count('create')} create, ${count('unchanged')} unchanged, ${count('skip')} skipped.`);
+  console.log(apply ? `Applied: ${written} written.` : 'REPORT ONLY — nothing written. Re-run with --apply to write.');
 }
 
-main().finally(() => prisma.$disconnect());
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());

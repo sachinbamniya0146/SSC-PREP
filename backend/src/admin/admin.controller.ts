@@ -11,6 +11,9 @@ import { AdminService } from './admin.service';
 import { PayoutService } from '../referral/payout.service';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { readPatternSections } from '../common/section-plan';
+import { cacheClearPrefix } from '../common/cache';
+import { EXAM_PRESETS, planPresetSync, type ExistingPattern } from '../common/exam-presets';
+import { MARKING_CACHE_PREFIX } from '../tests/marking-scheme';
 
 // v1 §10 — Admin dashboards: revenue overview + audit log viewer + user management.
 // All endpoints are ADMIN-only (global JwtAuthGuard is on the module).
@@ -780,6 +783,81 @@ export class AdminController {
     });
   }
 
+  // ---- Marking presets (28 Oct 2026) ----
+  // The official SSC marking schemes live in common/exam-presets.ts. This is a DRY RUN: it only compares them with
+  // the patterns in the database and lists what a sync would change. Nothing is written.
+  @Get('exam-patterns/presets')
+  async examPatternPresets() {
+    return this.buildPresetPlan();
+  }
+
+  // Applies the plan above (all of it, or only the preset keys given). Updates touch the marking numbers only —
+  // lock / scribe settings, section timers and names that the admin set are kept. Idempotent.
+  @Post('exam-patterns/presets/sync')
+  async syncExamPatternPresets(@CurrentUser() user: AuthenticatedUser, @Body() body: { keys?: string[] }) {
+    const plan = await this.buildPresetPlan();
+    const only = Array.isArray(body?.keys) && body.keys.length ? new Set(body.keys) : null;
+    const applied: { presetKey: string; kind: string; patternName: string }[] = [];
+    for (const a of plan.actions) {
+      if (only && !only.has(a.presetKey)) continue;
+      if (a.kind === 'update' && a.patternId && a.write) {
+        await this.prisma.examPattern.update({
+          where: { id: a.patternId },
+          data: {
+            totalQuestions: a.write.totalQuestions,
+            totalMarks: a.write.totalMarks,
+            durationMinutes: a.write.durationMinutes,
+            negativeMarks: a.write.negativeMarks,
+            sections: a.write.sections as unknown as Prisma.InputJsonValue,
+            sourceNote: a.write.sourceNote,
+          },
+        });
+        applied.push({ presetKey: a.presetKey, kind: 'update', patternName: a.patternName ?? '' });
+      } else if (a.kind === 'create' && a.examId && a.create) {
+        await this.prisma.examPattern.create({
+          data: {
+            examId: a.examId,
+            name: a.create.name,
+            totalQuestions: a.create.totalQuestions,
+            totalMarks: a.create.totalMarks,
+            durationMinutes: a.create.durationMinutes,
+            negativeMarks: a.create.negativeMarks,
+            sections: a.create.sections as unknown as Prisma.InputJsonValue,
+            lockPreviousSections: a.create.lockPreviousSections,
+            scribeExtraMinutes: a.create.scribeExtraMinutes,
+            sourceNote: a.create.sourceNote,
+          },
+        });
+        applied.push({ presetKey: a.presetKey, kind: 'create', patternName: a.create.name });
+      }
+    }
+    cacheClearPrefix(MARKING_CACHE_PREFIX);
+    await this.auditLogService.log({
+      userId: user?.userId,
+      action: 'EXAM_PATTERN_PRESET_SYNC',
+      targetEntity: 'ExamPattern',
+      metadataJson: { applied },
+    });
+    return { ok: true, applied, skipped: plan.actions.filter((a) => a.kind === 'skip').map((a) => ({ presetKey: a.presetKey, warnings: a.warnings })) };
+  }
+
+  private async buildPresetPlan() {
+    const [exams, patterns] = await Promise.all([
+      this.prisma.exam.findMany({ select: { id: true, slug: true } }),
+      this.prisma.examPattern.findMany({
+        select: { id: true, examId: true, name: true, isActive: true, totalQuestions: true, totalMarks: true, durationMinutes: true, negativeMarks: true, sections: true, lockPreviousSections: true },
+      }),
+    ]);
+    const actions = planPresetSync({ presets: EXAM_PRESETS, exams, patterns: patterns as ExistingPattern[] });
+    return {
+      checkedOn: '28 Oct 2026',
+      actions: actions.map((a) => {
+        const p = EXAM_PRESETS.find((x) => x.key === a.presetKey);
+        return { ...a, remark: p?.remark ?? null, source: p?.source ?? null };
+      }),
+    };
+  }
+
   // Pattern editor health check (Oct 26 2026). For ONE pattern it answers the three questions an admin has before
   // trusting it: (1) can every section actually be composed from the question bank, (2) which mocks run on it,
   // (3) which same-exam mocks could still be linked. Read-only; counts approximate paper() (published + bilingual).
@@ -875,7 +953,7 @@ export class AdminController {
       lockPreviousSections?: boolean;
       scribeExtraMinutes?: number;
       sourceNote?: string;
-      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number; scribeMinutes?: number }>;
+      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number; scribeMinutes?: number; negativeMarks?: number }>;
     },
   ) {
     if (!body.examId || !body.name || !Array.isArray(body.sections) || body.sections.length === 0) {
@@ -885,6 +963,7 @@ export class AdminController {
     if (!exam) throw new BadRequestException('Exam not found');
     this.assertPatternShape(body.sections, !!body.lockPreviousSections);
 
+    cacheClearPrefix(MARKING_CACHE_PREFIX);
     return this.prisma.examPattern.create({
       data: {
         examId: body.examId,
@@ -921,6 +1000,9 @@ export class AdminController {
         if (seen.has(slug)) throw new BadRequestException(`${label}: subjectSlug "${slug}" is used by two sections — each locked section needs its own subject`);
         seen.add(slug);
       }
+      if (r.negativeMarks != null && r.negativeMarks !== '' && !(Number(r.negativeMarks) >= 0)) {
+        throw new BadRequestException(`${label}: negativeMarks must be 0 or more (0 = no negative marking in this section)`);
+      }
       if (r.scribeMinutes != null && !(Number(r.scribeMinutes) >= Number(r.durationMinutes || 0))) {
         throw new BadRequestException(`${label}: scribeMinutes cannot be less than durationMinutes`);
       }
@@ -941,7 +1023,7 @@ export class AdminController {
       lockPreviousSections: boolean;
       scribeExtraMinutes: number;
       sourceNote: string | null;
-      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number; scribeMinutes?: number }>;
+      sections: Array<{ name: string; subjectSlug?: string; questions: number; marks: number; durationMinutes?: number; scribeMinutes?: number; negativeMarks?: number }>;
     }>,
   ) {
     const existing = await this.prisma.examPattern.findUnique({ where: { id } });
@@ -951,6 +1033,7 @@ export class AdminController {
       body.lockPreviousSections !== undefined ? !!body.lockPreviousSections : existing.lockPreviousSections,
     );
 
+    cacheClearPrefix(MARKING_CACHE_PREFIX);
     return this.prisma.examPattern.update({
       where: { id },
       data: {
@@ -1058,6 +1141,7 @@ export class AdminController {
       });
       out.push({ patternId: pattern.id, patternName: pattern.name, templateId: template.id, templateActive: template.isActive });
     }
+    cacheClearPrefix(MARKING_CACHE_PREFIX);
     await this.auditLogService.log({
       userId: user?.userId,
       action: 'EXAM_PATTERN_SEED_SSC_2026',
@@ -1104,6 +1188,7 @@ export class AdminController {
     const existing = await this.prisma.examPattern.findUnique({ where: { id } });
     if (!existing) throw new BadRequestException('Exam pattern not found');
     await this.prisma.examPattern.delete({ where: { id } });
+    cacheClearPrefix(MARKING_CACHE_PREFIX);
     return { ok: true };
   }
 

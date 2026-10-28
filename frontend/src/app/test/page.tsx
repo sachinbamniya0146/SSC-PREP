@@ -1428,7 +1428,9 @@ export default function TestPage() {
     const maxMarks = preMeta?.totalMarks || questions.reduce((s, q) => s + (q.marks ?? 1), 0) || totalQ;
     // Marking comes from the exam pattern when there is one; otherwise from the loaded questions. When neither is known
     // yet we say so instead of showing an invented number.
-    const negM: number | null = patternMeta ? patternMeta.negativeMarks : questions[0]?.negativeMarks ?? null;
+    // Some exams (MTS: Session I none, Session II −1) penalise differently per section: show every value, low to high.
+    const negVals = Array.from(new Set(questions.map((q) => q.negativeMarks).filter((v): v is number => typeof v === "number"))).sort((a, b) => a - b);
+    const negM: number | string | null = patternMeta ? patternMeta.negativeMarks : negVals.length > 1 ? negVals.join(" / −") : questions[0]?.negativeMarks ?? null;
     const posM = patternMeta?.sections[0]?.marksPerQuestion || (questions[0]?.marks ?? 1);
     const rules: [string, string][] = [
       ["The timer starts when you press Start and the test submits itself at zero.", "Start dabate hi timer chalu hota hai aur zero par test apne aap submit ho jata hai."],

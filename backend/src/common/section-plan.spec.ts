@@ -2,6 +2,8 @@ import {
   buildSectionPlan,
   describePlanAt,
   isSectionWritable,
+  negativeUnderPlan,
+  readPatternSections,
   readSectionPlan,
   scoreUnderPlan,
   sectionIndexAt,
@@ -137,5 +139,45 @@ describe('readSectionPlan', () => {
     expect(readSectionPlan(JSON.parse(JSON.stringify(p)))).toEqual(p);
     expect(readSectionPlan(null)).toBeNull();
     expect(readSectionPlan({ v: 2 })).toBeNull();
+  });
+});
+
+describe('per-section negative marking (28 Oct 2026)', () => {
+  const mtsLike = {
+    negativeMarks: 1,
+    lockPreviousSections: true,
+    scribeExtraMinutes: 0,
+    sections: [
+      { name: 'S1 Maths', subjectSlug: 'quantitative_aptitude', questions: 20, marks: 60, durationMinutes: 22.5, negativeMarks: 0 },
+      { name: 'S2 GA', subjectSlug: 'general_awareness', questions: 25, marks: 75, durationMinutes: 22.5, negativeMarks: 1 },
+    ],
+  };
+
+  it('a section may carry its own penalty, 0 included; the plan keeps it', () => {
+    const p = buildSectionPlan(mtsLike)!;
+    expect(p.sections.map((x) => x.negativeMarks)).toEqual([0, 1]);
+    expect(p.sections.map((x) => x.marksPerQuestion)).toEqual([3, 3]);
+  });
+
+  it('scoreUnderPlan uses the section penalty (a wrong answer in a no-negative section costs nothing)', () => {
+    const p = buildSectionPlan(mtsLike)!;
+    expect(scoreUnderPlan(p, 0, false, true, { marks: 2 })).toBe(0);
+    expect(scoreUnderPlan(p, 1, false, true, { marks: 2 })).toBe(-1);
+    expect(scoreUnderPlan(p, 0, true, true, { marks: 2 })).toBe(3);
+    expect(negativeUnderPlan(p, 0)).toBe(0);
+    expect(negativeUnderPlan(p, 1)).toBe(1);
+  });
+
+  it('without a section value the pattern-wide penalty applies (all patterns saved before today)', () => {
+    const p = buildSectionPlan(tier1)!;
+    expect(p.sections.every((x) => x.negativeMarks === undefined)).toBe(true);
+    expect(negativeUnderPlan(p, 2)).toBe(0.5);
+    // a plan frozen in the DB before this change is read back unchanged
+    expect(scoreUnderPlan(readSectionPlan(JSON.parse(JSON.stringify(p)))!, 1, false, true, { marks: 2 })).toBe(-0.5);
+  });
+
+  it('junk values are ignored, not trusted', () => {
+    const rows = readPatternSections([{ name: 'A', questions: 1, marks: 1, negativeMarks: 'abc' }, { name: 'B', questions: 1, marks: 1, negativeMarks: -3 }, { name: 'C', questions: 1, marks: 1, negativeMarks: '0.25' }]);
+    expect(rows.map((r) => r.negativeMarks)).toEqual([undefined, 0, 0.25]);
   });
 });

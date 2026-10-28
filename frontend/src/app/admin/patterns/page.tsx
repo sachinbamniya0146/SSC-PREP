@@ -18,6 +18,19 @@ type Section = {
   marks: number | "";
   durationMinutes: number | "";
   scribeMinutes: number | "";
+  /** penalty per wrong answer in THIS section; blank = the pattern's value (MTS Session I = 0, Session II = 1) */
+  negativeMarks: number | "";
+};
+type PresetAction = {
+  kind: "update" | "create" | "unchanged" | "skip";
+  presetKey: string;
+  presetName: string;
+  verification: "OFFICIAL" | "SECONDARY";
+  patternName?: string;
+  changes: string[];
+  warnings: string[];
+  remark: string | null;
+  source: string | null;
 };
 type Pattern = {
   id: string;
@@ -70,7 +83,7 @@ type Health = {
   available: TemplateRow[];
 };
 
-const emptySection = (): Section => ({ name: "", subjectSlug: "", questions: "", marks: "", durationMinutes: "", scribeMinutes: "" });
+const emptySection = (): Section => ({ name: "", subjectSlug: "", questions: "", marks: "", durationMinutes: "", scribeMinutes: "", negativeMarks: "" });
 const n = (v: number | "") => (v === "" ? 0 : Number(v));
 const isVerified = (note: string | null | undefined) => /^VERIFIED\b/i.test((note || "").trim());
 
@@ -94,6 +107,7 @@ function toForm(p: Pattern): Form {
       marks: s.marks == null ? "" : Number(s.marks),
       durationMinutes: s.durationMinutes == null ? "" : Number(s.durationMinutes),
       scribeMinutes: s.scribeMinutes == null ? "" : Number(s.scribeMinutes),
+      negativeMarks: s.negativeMarks == null ? "" : Number(s.negativeMarks),
     })),
   };
 }
@@ -124,6 +138,7 @@ function validate(f: Form): string[] {
         seen.add(s.subjectSlug);
       }
     }
+    if (s.negativeMarks !== "" && n(s.negativeMarks) < 0) out.push(`${label}: minus 0 ya usse zyada hona chahiye`);
     if (s.scribeMinutes !== "" && n(s.scribeMinutes) < n(s.durationMinutes)) out.push(`${label}: scribe time section ke time se kam nahi ho sakta`);
   });
   return out;
@@ -180,6 +195,8 @@ export default function AdminPatternsPage() {
   const [pyqOnly, setPyqOnly] = React.useState(false);
   const [noticeRef, setNoticeRef] = React.useState("");
   const [showAllAvail, setShowAllAvail] = React.useState(false);
+  const [presets, setPresets] = React.useState<PresetAction[] | null>(null);
+  const [presetsBusy, setPresetsBusy] = React.useState(false);
 
   React.useEffect(() => {
     try {
@@ -323,6 +340,7 @@ export default function AdminPatternsPage() {
       marks: n(s.marks),
       ...(s.durationMinutes !== "" ? { durationMinutes: n(s.durationMinutes) } : {}),
       ...(s.scribeMinutes !== "" ? { scribeMinutes: n(s.scribeMinutes) } : {}),
+      ...(s.negativeMarks !== "" ? { negativeMarks: n(s.negativeMarks) } : {}),
     })),
   });
 
@@ -354,6 +372,29 @@ export default function AdminPatternsPage() {
       await loadAll();
       if (form.id) await loadHealth(form.id);
     });
+  };
+
+  // Official marking presets (28 Oct 2026): first a dry run, nothing is written until the admin presses Apply.
+  const loadPresets = () => {
+    setPresetsBusy(true);
+    setMsg(null);
+    api<{ actions: PresetAction[] }>("/admin/exam-patterns/presets")
+      .then((r) => setPresets(r.actions))
+      .catch((e) => setMsg({ ok: false, text: `Presets: ${(e as Error).message || "fail"}` }))
+      .finally(() => setPresetsBusy(false));
+  };
+  const applyPresets = (keys?: string[]) => {
+    if (dirty && !window.confirm(t("Unsaved changes in the editor will be lost. Continue?", "Editor ke bina save badlav chale jayenge. Aage badhein?"))) return;
+    void run(
+      "Presets",
+      () => api("/admin/exam-patterns/presets/sync", { method: "POST", body: JSON.stringify(keys ? { keys } : {}) }),
+      async () => {
+        setForm(null);
+        setDirty(false);
+        await loadAll();
+        loadPresets();
+      },
+    );
   };
 
   const markVerified = () => {
@@ -428,6 +469,9 @@ export default function AdminPatternsPage() {
             <button type="button" onClick={startNew} className="btn btn-primary btn-sm">
               {t("New pattern", "Naya pattern")}
             </button>
+            <button type="button" onClick={loadPresets} disabled={presetsBusy} className="btn btn-outline btn-sm">
+              {t("Official presets", "Official presets")}
+            </button>
             <button type="button" onClick={seed} disabled={saving} className="btn btn-outline btn-sm">
               {t("Seed SSC CGL 2026", "SSC CGL 2026 seed")}
             </button>
@@ -442,6 +486,74 @@ export default function AdminPatternsPage() {
         <div role="status" className={`mb-4 rounded-lg border px-3 py-2 text-sm ${msg.ok ? "border-success/30 bg-success/10 text-success" : "border-danger/30 bg-danger/10 text-danger"}`}>
           {msg.text}
         </div>
+      ) : null}
+
+      {presets ? (
+        <section className="card mb-5 space-y-3 p-4 sm:p-5" aria-label={t("Official marking presets", "Official marking presets")}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold">{t("Official marking presets", "Official marking presets")}</h2>
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  "Marks per question, minus marking, total and duration from the SSC notices. Only these numbers change; your names, timers and lock stay.",
+                  "SSC notice ke hisaab se marks, minus marking, total aur duration. Sirf ye numbers badalte hain; aapke naam, timer aur lock wahi rehte hain.",
+                )}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={saving || !presets.some((a) => a.kind === "update" || a.kind === "create")}
+                onClick={() => applyPresets()}
+              >
+                {t("Apply all", "Sab apply karein")} ({presets.filter((a) => a.kind === "update" || a.kind === "create").length})
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setPresets(null)}>
+                ✕
+              </button>
+            </div>
+          </div>
+          <ul className="space-y-2">
+            {presets.map((a) => (
+              <li key={`${a.presetKey}-${a.patternName ?? ""}`} className="rounded-lg border border-border p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold">
+                    {a.patternName ?? a.presetName}{" "}
+                    <span
+                      className={`ml-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        a.kind === "update" ? "bg-warning/10 text-warning" : a.kind === "create" ? "bg-primary/10 text-primary" : a.kind === "unchanged" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {a.kind === "update" ? t("will update", "update hoga") : a.kind === "create" ? t("will create", "banega") : a.kind === "unchanged" ? t("already correct", "pehle se sahi") : t("skipped", "skip")}
+                    </span>
+                    <span className={`ml-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${a.verification === "OFFICIAL" ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
+                      {a.verification === "OFFICIAL" ? t("official notice", "official notice") : t("coaching sources — check", "coaching sources — check karein")}
+                    </span>
+                  </p>
+                  {a.kind === "update" || a.kind === "create" ? (
+                    <button type="button" className="btn btn-outline btn-sm" disabled={saving} onClick={() => applyPresets([a.presetKey])}>
+                      {t("Apply", "Apply")}
+                    </button>
+                  ) : null}
+                </div>
+                {a.remark ? <p className="mt-1 text-xs text-muted-foreground">{a.remark}</p> : null}
+                {a.changes.length ? (
+                  <ul className="mt-1 list-disc pl-5 text-xs">
+                    {a.changes.map((c) => (
+                      <li key={c}>{c}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {a.warnings.map((w) => (
+                  <p key={w} className="mt-1 text-xs text-warning">
+                    ! {w}
+                  </p>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       {loading ? <CardSkeletons count={3} /> : null}
@@ -611,11 +723,12 @@ export default function AdminPatternsPage() {
                               </select>
                             </label>
                           </div>
-                          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+                          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-5">
                             <NumField label={t("Questions", "Sawal")} value={s.questions} onChange={(v) => patchSection(i, { questions: v })} />
                             <NumField label={t("Marks", "Marks")} value={s.marks} onChange={(v) => patchSection(i, { marks: v })} step={0.5} />
                             <NumField label={t("Minutes", "Minute")} value={s.durationMinutes} onChange={(v) => patchSection(i, { durationMinutes: v })} />
                             <NumField label={t("Scribe minutes", "Scribe minute")} value={s.scribeMinutes} onChange={(v) => patchSection(i, { scribeMinutes: v })} />
+                            <NumField label={t("Minus per wrong (blank = pattern)", "Galat par minus (khali = pattern)")} value={s.negativeMarks} onChange={(v) => patchSection(i, { negativeMarks: v })} step={0.05} />
                           </div>
                           {h && !dirty ? (
                             <p className={`mt-3 inline-block rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_STYLE[h.status] ?? "bg-muted text-muted-foreground"}`}>
