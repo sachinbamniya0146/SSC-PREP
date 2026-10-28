@@ -780,6 +780,9 @@ model TestAttempt {
   scoreBeforeRescore Float?
   rescoreNote        String?
 
+  // Session 29 — times the student left the exam tab (> 1.5 s), reported by the exam page; it only grows. A notice, not a penalty.
+  tabSwitches        Int       @default(0)
+
   @@index([userId, status])
   @@index([testTemplateId, status]) // rank/percentile + leaderboard hot path
   @@map("test_attempts")

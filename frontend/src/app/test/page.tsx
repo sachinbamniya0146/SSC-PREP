@@ -13,6 +13,7 @@ import { ReportQuestion } from "@/components/ReportQuestion";
 import WeakTopicPractice from "@/components/WeakTopicPractice";
 import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang, parseSolution } from "@/components/SolutionPanel";
 import { TickBox, CheckIcon } from "@/components/TickBox";
+import { ExamPaperView } from "@/components/ExamPaperView";
 import { useT } from "@/lib/i18n";
 import { sectionIndexAt, sectionRemainingSec, totalMinutes, type SectionPlan, type PatternMeta } from "@/lib/section-plan";
 
@@ -386,6 +387,8 @@ export default function TestPage() {
   const [hintUsed, setHintUsed] = React.useState<{ [qid: string]: boolean }>({});
   const [hintQuota, setHintQuota] = React.useState(3);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
+  // question-paper view: all questions of the open section on one scroll (off by default; only changes how the same state is shown)
+  const [paperView, setPaperView] = React.useState(false);
   // FIX (exam-integrity bug): "Show Answer" / "Hint" were rendering on
   // EVERY test — including server-authoritative timed exams (sectional,
   // year-wise, full mock) — which let a student see the correct answer
@@ -701,6 +704,8 @@ export default function TestPage() {
             setSecClock(null);
             setPlan(ad.plan as SectionPlan);
           }
+          // the tab-switch count survives a refresh (the server keeps the highest number it was told)
+          if (ad?.resumed && Number(ad.tabSwitches) > 0) setTabAways((n) => Math.max(n, Number(ad.tabSwitches)));
           // v4 §31 — resumed attempt (refresh/revisit): hydrate persisted autosaves
           {
             const savedMap: { [qid: string]: string } = {};
@@ -932,6 +937,19 @@ export default function TestPage() {
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [phase, attemptId]);
+  // Tell the server (best effort, no penalty): it keeps the highest number, so a refresh or a lost request never lowers it. The final
+  // number also goes with the submit. An empty answer list is a valid autosave call.
+  React.useEffect(() => {
+    if (phase !== "exam" || !attemptId || tabAways <= 0) return;
+    const t = window.setTimeout(() => {
+      fetchAuth(`${apiBase()}/tests/attempts/${attemptId}/answers`, {
+        method: "PUT",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ answers: [], tabSwitches: tabAways }),
+      }).catch(() => undefined);
+    }, 1000);
+    return () => window.clearTimeout(t);
+  }, [tabAways, phase, attemptId]);
   React.useEffect(() => {
     if (!tabNoticeOpen) return;
     const t = window.setTimeout(() => setTabNoticeOpen(false), 8000);
@@ -1007,7 +1025,7 @@ export default function TestPage() {
   // ---- keyboard shortcuts (real CBT feel) ----
   // A-D / Alt+1-4 choose · Space or → save & next · ← / Shift+Space previous · M mark & next · C clear · P palette · ? help
   React.useEffect(() => {
-    if (phase !== "exam" || paused || reviewOpen || offlinePending) return;
+    if (phase !== "exam" || paused || reviewOpen || offlinePending || paperView) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
@@ -1094,6 +1112,38 @@ export default function TestPage() {
     );
   };
 
+  // Question-paper view: the same actions as the one-question view, for ANY question of the open section (found by id, not by idx).
+  // Opening the question first keeps the per-question timing and the strict-section lock exactly as they are.
+  const paperPick = (i: number, qid: string, key: string) => {
+    if (!canOpen(i)) return;
+    markVisited(i, qid);
+    chooseOption(qid, key);
+  };
+  const paperClear = (i: number, qid: string) => {
+    if (!canOpen(i)) return;
+    markVisited(i, qid);
+    answeredAtRef.current[qid] = Date.now() + skewRef.current;
+    setAnswers((p) => {
+      const n = { ...p };
+      delete n[qid];
+      return n;
+    });
+    setStatus((p) =>
+      p[qid] === "answered" || p[qid] === "answered-marked"
+        ? { ...p, [qid]: p[qid] === "answered-marked" ? "marked" : "not-answered" }
+        : { ...p, [qid]: p[qid] ?? "not-answered" },
+    );
+  };
+  const paperMark = (i: number, qid: string) => {
+    if (!canOpen(i)) return;
+    markVisited(i, qid);
+    setStatus((p) => {
+      const isMarked = p[qid] === "marked" || p[qid] === "answered-marked";
+      const has = !!answers[qid];
+      return { ...p, [qid]: isMarked ? (has ? "answered" : "not-answered") : has ? "answered-marked" : "marked" };
+    });
+  };
+
   // "Save & Next": BUGFIX — a question with NO answer used to turn green ("answered") here. It now only counts as
   // answered when an option is actually selected; otherwise it stays "not answered" (or "marked" if flagged).
   const saveAndNext = () => {
@@ -1174,7 +1224,7 @@ export default function TestPage() {
           sr = await fetchAuth(`${apiBase()}/tests/attempts/${activeAttempt}/submit`, {
             method: "POST",
             headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify({ answers: answersPayload, clientSubmittedAt, ...answeredAtPayload }),
+            body: JSON.stringify({ answers: answersPayload, clientSubmittedAt, ...answeredAtPayload, ...(tabAways > 0 ? { tabSwitches: tabAways } : {}) }),
           });
         } catch {
           // Internet is down: the test is NOT lost. Queue the final submit on the device; it is sent automatically
@@ -2063,6 +2113,11 @@ export default function TestPage() {
               <span className="w-8 text-center font-semibold">{zoom}%</span>
               <button onClick={() => setZoom((z) => Math.min(130, z + 5))} aria-label="Zoom in" className="rounded px-1.5 hover:bg-muted">+</button>
             </div>
+            {questions.length > 1 && (
+              <button onClick={() => setPaperView(true)} className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted" aria-label={tr("Open question paper view", "Question paper view kholo")} title={tr("All questions of this section on one page", "Is section ke saare sawal ek page par")}>
+                📄 {tr("Paper", "Paper")}
+              </button>
+            )}
             <button onClick={toggleFullscreen} className="hidden rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted sm:inline-flex">
               {fullscreen ? "Exit Fullscreen" : "⛶ Fullscreen"}
             </button>
@@ -2385,7 +2440,7 @@ export default function TestPage() {
       </div>
 
       {/* MOBILE BOTTOM NAV (phones): big thumb-friendly Prev / Palette / Next */}
-      {questions.length > 0 && (
+      {questions.length > 0 && !paperView && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 backdrop-blur lg:hidden" style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
           <div className="mx-auto flex max-w-xl items-center gap-2 px-3 pt-2">
             <button onClick={() => idx > 0 && markVisited(idx - 1, questions[idx - 1].id)} disabled={idx === 0 || atSectionStart} className="flex-1 rounded-xl border border-border px-3 py-3 text-sm font-semibold disabled:opacity-40">← Prev</button>
@@ -2396,6 +2451,25 @@ export default function TestPage() {
       )}
 
       {/* MOBILE QUESTION PALETTE DRAWER */}
+      {paperView && q && (
+        <ExamPaperView
+          items={paletteItems.map(({ x, i }) => ({ q: x, i }))}
+          activeIdx={idx}
+          answers={answers}
+          isMarked={(qid) => statusOf(qid) === "marked" || statusOf(qid) === "answered-marked"}
+          lang={revLang}
+          onLang={setRevLang}
+          onPick={paperPick}
+          onClear={paperClear}
+          onMark={paperMark}
+          onClose={() => setPaperView(false)}
+          onReview={() => setReviewOpen(true)}
+          clockText={formatSec(clockSec)}
+          clockClass={timelineColor}
+          sectionLabel={hasSections ? curSection : ""}
+        />
+      )}
+
       {paletteOpen && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Question palette">
           <div className="absolute inset-0 bg-black/50" onClick={() => setPaletteOpen(false)} />

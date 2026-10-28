@@ -230,7 +230,7 @@ export class TestsService {
     // Makes refresh/relogin mid-test lossless and prevents restart-cheating.
     const existing = await this.prisma.testAttempt.findFirst({
       where: { userId, testTemplateId, status: 'IN_PROGRESS', expiresAt: { gt: new Date() } },
-      select: { id: true, startedAt: true, expiresAt: true, status: true, sectionPlan: true, questionSnapshot: true },
+      select: { id: true, startedAt: true, expiresAt: true, status: true, sectionPlan: true, questionSnapshot: true, tabSwitches: true },
     });
     if (existing) {
       const saved = await this.prisma.attemptAnswer.findMany({
@@ -308,6 +308,8 @@ async submitAttempt(
     // P0 — only used when an offline submit is replayed after the deadline of a sectional attempt:
     // { [questionId]: epoch ms at which the student gave that answer }.
     answeredAt?: Record<string, number>;
+    // Session 29 — tab switches counted by the exam page (only grows, see recordTabSwitches)
+    tabSwitches?: number;
   },
 ) {
   return this.finishAttempt(userId, attemptId, input, 'manual');
@@ -327,6 +329,22 @@ async autoSubmitAttempt(attemptId: string, minAgeMs = 0): Promise<{ skipped: tru
   return { skipped: false, attemptId, alreadyDone: false };
 }
 
+// Session 29 — the exam page counts how often the student left the tab (> 1.5 s) and reports it with the autosave and the submit.
+// The stored number only ever grows (a refresh resets the page's own counter, a late or repeated request must not lower it), is
+// capped at 1000, and a bad value is ignored. Best-effort: it never blocks an autosave or a submit. No penalty is attached to it.
+private async recordTabSwitches(attemptId: string, userId: string, raw: unknown): Promise<void> {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n <= 0) return;
+  try {
+    await this.prisma.testAttempt.updateMany({
+      where: { id: attemptId, userId, status: 'IN_PROGRESS', tabSwitches: { lt: Math.min(n, 1000) } },
+      data: { tabSwitches: Math.min(n, 1000) },
+    });
+  } catch {
+    /* a counter must never fail the request */
+  }
+}
+
 private async finishAttempt(
   userId: string,
   attemptId: string,
@@ -334,6 +352,7 @@ private async finishAttempt(
     answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[];
     clientSubmittedAt?: number | string;
     answeredAt?: Record<string, number>;
+    tabSwitches?: number;
   },
   mode: 'manual' | 'auto',
 ) {
@@ -341,6 +360,7 @@ private async finishAttempt(
     where: { id: attemptId, userId },
   });
   if (!attempt) throw new BadRequestException('Attempt not found');
+  if (mode === 'manual' && attempt.status === 'IN_PROGRESS') await this.recordTabSwitches(attempt.id, userId, input.tabSwitches);
   if (attempt.status === 'SUBMITTED' || attempt.status === 'AUTO_SUBMITTED') {
     // IDEMPOTENT SUBMIT (28 Oct 2026, session 21): a second submit — the student's retry after a slow / lost response,
     // the offline queue replaying, a second tab — is NOT an error. It gets the already-finished result back, exactly
@@ -744,6 +764,8 @@ async saveAnswers(
     timeSpentByQuestion?: Record<string, number>;
     // P0 — { [questionId]: epoch ms the answer was given }; lets an offline student's delayed autosave into a closed section.
     answeredAt?: Record<string, number>;
+    // Session 29 — tab switches counted by the exam page (a notice for the student, no penalty); only ever grows
+    tabSwitches?: number;
   },
 ) {
   const attempt = await this.prisma.testAttempt.findFirst({
@@ -752,6 +774,7 @@ async saveAnswers(
   });
   if (!attempt) throw new BadRequestException('Attempt not found');
   if (attempt.status !== 'IN_PROGRESS') throw new BadRequestException('Attempt is not in progress');
+  await this.recordTabSwitches(attempt.id, userId, input.tabSwitches);
 
   // Session 25: an attempt that remembers its paper accepts answers for the questions of that paper only (rows for other ids used to be
   // stored and scored, and they also unlocked answer keys after submit).

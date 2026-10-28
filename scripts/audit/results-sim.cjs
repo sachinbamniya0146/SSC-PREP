@@ -673,6 +673,33 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     check('a tiny bank (only the two copies) still serves a set: nothing is blocked', !sm.err && ((sm.v && sm.v.questions) || []).length >= 1, sm.err ? sm.err.message : '');
   }
 
+  // ---- session 29 (roadmap 4.6): the exam page reports how often the student left the tab; the server keeps the highest number ----
+  {
+    const w = world();
+    const at = w.attempts.find((x) => x.id === 'a-s1');
+    at.tabSwitches = 0; // the database default
+    const tabs = () => w.attempts.find((x) => x.id === 'a-s1').tabSwitches;
+    const r1 = await ask(() => w.svc.saveAnswers('s1', 'a-s1', { answers: [], tabSwitches: 2 }));
+    check('tab switches: an autosave with no answers still records the count', !r1.err && tabs() === 2, r1.err ? r1.err.message : 'stored=' + tabs());
+    await ask(() => w.svc.saveAnswers('s1', 'a-s1', { answers: [], tabSwitches: 1 }));
+    check('tab switches: a lower number (page refreshed, late request) never lowers it', tabs() === 2, 'stored=' + tabs());
+    await ask(() => w.svc.saveAnswers('s1', 'a-s1', { answers: [], tabSwitches: 'abc' }));
+    await ask(() => w.svc.saveAnswers('s1', 'a-s1', { answers: [], tabSwitches: -4 }));
+    await ask(() => w.svc.saveAnswers('s1', 'a-s1', { answers: [], tabSwitches: 3.9 }));
+    check('tab switches: junk and negative values are ignored, 3.9 counts as 3', tabs() === 3, 'stored=' + tabs());
+    await ask(() => w.svc.saveAnswers('s1', 'a-s1', { answers: [], tabSwitches: 1e9 }));
+    check('tab switches: capped at 1000', tabs() === 1000, 'stored=' + tabs());
+    const other = await ask(() => w.svc.saveAnswers('s2', 'a-s1', { answers: [], tabSwitches: 5 }));
+    check("tab switches: another student cannot write to someone's attempt", !!other.err && tabs() === 1000);
+    at.tabSwitches = 0;
+    const sub = await ask(() => w.svc.submitAttempt('s1', 'a-s1', { answers: [{ questionId: 'q1', selectedOption: 'A' }], tabSwitches: 5 }));
+    check('tab switches: the submit carries the final count', !sub.err && tabs() === 5, sub.err ? sub.err.message : 'stored=' + tabs());
+    const late = await ask(() => w.svc.saveAnswers('s1', 'a-s1', { answers: [], tabSwitches: 9 }));
+    await ask(() => w.svc.submitAttempt('s1', 'a-s1', { answers: [], tabSwitches: 9 }));
+    check('tab switches: a finished attempt is never changed (late autosave refused, repeated submit ignored)', !!late.err && tabs() === 5, 'stored=' + tabs());
+    const d = await ask(() => w.svc.attemptDetail('s1', 'a-s1'));
+    check('tab switches: the review response carries the count', !d.err && d.v.tabSwitches === 5, d.err ? d.err.message : String(d.v && d.v.tabSwitches));
+  }
 
   console.log('\n' + (gaps ? `${gaps} known gap(s) are still open (printed as GAP, documented in AUDIT_RESULTS_ANALYSIS_OCT2026.md)` : 'no open gaps'));
   console.log(allOk ? '\nALL OK' : '\nSOME CHECKS FAILED');

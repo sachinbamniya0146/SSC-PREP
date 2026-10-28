@@ -40,7 +40,7 @@ export class TestsController {
   submitAttempt(
     @CurrentUser() user: { userId: string },
     @Param('attemptId') attemptId: string,
-    @Body() body: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; clientSubmittedAt?: number | string; answeredAt?: Record<string, number> },
+    @Body() body: { answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; clientSubmittedAt?: number | string; answeredAt?: Record<string, number>; tabSwitches?: number },
   ) {
     return this.testsService.submitAttempt(user.userId, attemptId, body);
   }
@@ -56,7 +56,7 @@ export class TestsController {
   saveAnswers(
     @CurrentUser() user: { userId: string },
     @Param('attemptId') attemptId: string,
-    @Body() body: { answers: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; timeSpentByQuestion?: Record<string, number> },
+    @Body() body: { answers: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[]; timeSpentByQuestion?: Record<string, number>; tabSwitches?: number },
   ) {
     return this.testsService.saveAnswers(user.userId, attemptId, body);
   }
