@@ -111,7 +111,7 @@ export default function AppStatus() {
   if (path.startsWith("/test") || path.startsWith("/cgl-test")) return null;
 
   const pill = (children: React.ReactNode, tone: string) => (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-[60] flex justify-center px-4 lg:bottom-5">
+    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-[60] flex justify-center px-4 md:bottom-5">
       <div role="status" className={`animate-pop pointer-events-auto flex max-w-md items-center gap-2 rounded-full border px-4 py-2 text-xs font-semibold shadow-lift ${tone}`}>
         {children}
       </div>

@@ -12,6 +12,8 @@ import SessionSync from "@/components/SessionSync";
 import LanguageSync from "@/components/LanguageSync";
 import NavTracker from "@/components/NavTracker";
 import { MobileTabBar } from "@/components/MobileTabBar";
+import { StudentSidebar } from "@/components/StudentSidebar";
+import { SIDEBAR_BOOT_SCRIPT } from "@/lib/student-nav";
 import AppStatus from "@/components/AppStatus";
 import { ReferralCapture } from "@/components/ReferralCapture";
 import AnnouncementBar from "@/components/AnnouncementBar";
@@ -99,6 +101,8 @@ export default function RootLayout({
             __html: "try{if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}",
           }}
         />
+        {/* Left menu for signed-in students on tablet / desktop: reserve its space before the first paint (no jump). */}
+        <script dangerouslySetInnerHTML={{ __html: SIDEBAR_BOOT_SCRIPT }} />
       </head>
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         <ThemeProvider>
@@ -109,6 +113,7 @@ export default function RootLayout({
           <SessionSync />
           <LanguageSync />
           <NavTracker />
+          <StudentSidebar />
           <MobileTabBar />
           <AppStatus />
           <ReferralCapture />

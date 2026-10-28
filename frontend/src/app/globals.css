@@ -192,8 +192,38 @@ code {
 }
 
 /* Room for the mobile bottom tab bar */
-@media (max-width: 1023px) {
+/* Phones (< 768 px) use the bottom tab bar; tablets and desktops use the left menu (StudentSidebar). */
+@media (max-width: 767px) {
   body.has-tabbar { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
+}
+
+/* ---------- Student left menu ----------
+   <html class="has-sidebar [sidebar-rail]"> is set by the boot script in layout.tsx before the first paint and kept in
+   step by components/StudentSidebar.tsx, so the page never jumps. */
+.student-sidebar { display: none; }
+.student-sidebar .sb-logo-rail,
+.student-sidebar .sb-divider { display: none; }
+@media (min-width: 768px) {
+  html.has-sidebar { --sb-w: 15rem; }
+  html.has-sidebar.sidebar-rail { --sb-w: 4.25rem; }
+  html.has-sidebar body { padding-left: var(--sb-w); }
+  html.has-sidebar .student-sidebar { display: flex; width: var(--sb-w); }
+  /* the sidebar carries the logo and the links, so the top bar keeps only theme switch + account menu */
+  html.has-sidebar [data-shell="logo"],
+  html.has-sidebar [data-shell="nav"],
+  html.has-sidebar [data-shell="menu-btn"],
+  html.has-sidebar [data-shell="mobile-nav"] { display: none; }
+  html.sidebar-rail .student-sidebar .sb-label,
+  html.sidebar-rail .student-sidebar .sb-logo-full { display: none; }
+  html.sidebar-rail .student-sidebar .sb-logo-rail,
+  html.sidebar-rail .student-sidebar .sb-divider { display: block; }
+  html.sidebar-rail .student-sidebar .sb-head { justify-content: center; padding-left: 0; padding-right: 0; }
+  html.sidebar-rail .student-sidebar .sb-link { justify-content: center; padding-left: 0; padding-right: 0; }
+  html.sidebar-rail .student-sidebar .sb-chevron { transform: rotate(180deg); }
+}
+@media (min-width: 768px) and (prefers-reduced-motion: no-preference) {
+  html.has-sidebar .student-sidebar { transition: width 0.2s ease; }
+  html.has-sidebar body { transition: padding-left 0.2s ease; }
 }
 
 @layer components {

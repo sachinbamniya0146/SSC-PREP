@@ -44,7 +44,7 @@ export function SupportChatWidget({ currentUserId }: { currentUserId: string }) 
   };
 
   return (
-    <div className="fixed bottom-20 right-4 z-50 lg:bottom-5 lg:right-5">
+    <div className="fixed bottom-20 right-4 z-50 md:bottom-5 md:right-5">
       {mountedOnce && (
         <div className={open ? "mb-3 animate-pop" : "hidden"}>
           <HelpDeskPanel currentUserId={currentUserId} variant="widget" onUnread={setUnread} onClose={() => setOpen(false)} />
