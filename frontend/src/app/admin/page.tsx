@@ -8,7 +8,6 @@ import { Logo } from "@/components/Logo";
 import { api, API_BASE, fetchAuth } from "@/lib/api";
 import { useAccess } from "@/lib/permissions";
 import AdminImageTools from "@/components/AdminImageTools";
-import AdminUsersPanel from "@/components/AdminUsersPanel";
 
 interface User {
   id: string;
@@ -1028,7 +1027,6 @@ export default function AdminPage() {
   React.useEffect(() => {
     // /admin/users and /admin/plans are ADMIN-only — staff would just get 403s.
     if (!access.isAdmin) return;
-    loadUsers();
     loadPlans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, search, roleFilter, statusFilter, access.isAdmin]);
@@ -1036,7 +1034,7 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
             <BackButton />
             <Logo size={32} withWordmark={false} />
@@ -1044,7 +1042,12 @@ export default function AdminPage() {
               SSC<span className="text-primary">PrepHub</span> <span className="text-muted-foreground">Admin</span>
             </span>
           </div>
-          <div className="flex items-center gap-3 text-sm">
+          <div className="flex max-w-full flex-wrap items-center gap-2 text-sm">
+            {access.isAdmin && (
+              <a href="/admin/users" className="rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10">
+                🧑‍🎓 Users
+              </a>
+            )}
             {access.isAdmin && (
               <a href="/admin/staff" className="rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10">
                 👥 Staff Access
@@ -1849,54 +1852,13 @@ export default function AdminPage() {
 
         {access.isAdmin && (
         <>
-        {/* Filters */}
-        <div className="mb-4 flex flex-wrap gap-4 rounded-xl border border-border bg-card p-4">
-          <div className="flex-1 min-w-[200px]">
-            <label className="mb-1.5 block text-sm font-medium">Search (email/name)</label>
-            <input
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              placeholder="Search users..."
-              className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm outline-none focus:border-primary"
-            />
+        <a href="/admin/users" className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/5 p-5 hover:bg-primary/10">
+          <div>
+            <div className="font-semibold">🧑‍🎓 Users &amp; account control</div>
+            <div className="mt-1 text-sm text-muted-foreground">Search students, add or cancel subscriptions, suspend, restore or permanently delete an account.</div>
           </div>
-          <div className="flex-1 min-w-[150px]">
-            <label className="mb-1.5 block text-sm font-medium">Role Filter</label>
-            <select value={roleFilter} onChange={(e) => { setRoleFilter(e.target.value); setPage(1); }} className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm outline-none focus:border-primary">
-              <option value="">All Roles</option>
-              <option value="STUDENT">Student</option>
-              <option value="ADMIN">Admin</option>
-              <option value="MODERATOR">Moderator</option>
-            </select>
-          </div>
-          <div className="flex-1 min-w-[150px]">
-            <label className="mb-1.5 block text-sm font-medium">Status</label>
-            <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }} className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm outline-none focus:border-primary">
-              <option value="">All accounts</option>
-              <option value="suspended">Suspended only</option>
-              <option value="active">Active only</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Users */}
-        <div className="rounded-xl md:border md:border-border md:bg-card md:overflow-hidden">
-          <AdminUsersPanel
-            users={users}
-            onChanged={loadUsers}
-            onInfo={setInfo}
-            onError={setError}
-            onGrant={(u) => { setSelectedUser(u); setShowSubscriptionModal(true); }}
-            onCancelSub={(u) => { if (confirm(`Cancel ${u.fullName}'s subscription? Remaining days will be lost.`)) cancelSubscription(u.id); }}
-          />
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 md:mt-0 md:rounded-none md:border-0 md:border-t">
-            <span className="text-sm text-muted-foreground">Page {page} of {Math.max(1, Math.ceil(total / limit))} · {total} users</span>
-            <div className="flex gap-2">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="min-h-[40px] rounded-lg border border-border px-4 text-sm disabled:opacity-50">Previous</button>
-              <button onClick={() => setPage(p => Math.min(Math.max(1, Math.ceil(total / limit)), p + 1))} disabled={page >= Math.ceil(total / limit)} className="min-h-[40px] rounded-lg border border-border px-4 text-sm disabled:opacity-50">Next</button>
-            </div>
-          </div>
-        </div>
+          <span className="text-xl text-primary">→</span>
+        </a>
         </>
         )}
       </main>

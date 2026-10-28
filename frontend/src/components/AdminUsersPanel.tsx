@@ -42,7 +42,8 @@ interface DeletePreview {
   needsAcknowledge: boolean;
 }
 
-type Mode = "menu" | "suspend" | "delete";
+type Mode = "menu" | "suspend" | "delete" | "grant";
+type PlanRow = { id: string; name: string; priceInr: number; durationMonths: number; isActive: boolean };
 
 const ROLE_STYLE: Record<string, string> = {
   ADMIN: "bg-red-500/15 text-red-500",
@@ -80,15 +81,11 @@ export default function AdminUsersPanel({
   onChanged,
   onInfo,
   onError,
-  onGrant,
-  onCancelSub,
 }: {
   users: AdminUserRow[];
   onChanged: () => void;
   onInfo: (m: string) => void;
   onError: (m: string) => void;
-  onGrant: (u: AdminUserRow) => void;
-  onCancelSub: (u: AdminUserRow) => void;
 }) {
   const [currentUserId, setCurrentUserId] = React.useState<string | undefined>(undefined);
   React.useEffect(() => setCurrentUserId(readStoredUser()?.id), []);
@@ -104,6 +101,35 @@ export default function AdminUsersPanel({
   const [previewLoading, setPreviewLoading] = React.useState(false);
   const [confirmEmail, setConfirmEmail] = React.useState("");
   const [ack, setAck] = React.useState(false);
+
+  const [plans, setPlans] = React.useState<PlanRow[] | null>(null);
+  const [grantUnit, setGrantUnit] = React.useState<"plan" | "days" | "months">("plan");
+  const [grantAmount, setGrantAmount] = React.useState("");
+
+  async function startGrant() {
+    setMode("grant");
+    setLocalErr("");
+    setGrantUnit("plan");
+    setGrantAmount("");
+    if (plans) return;
+    try {
+      const d = await api<{ plans: PlanRow[] }>("/admin/plans");
+      setPlans(d.plans || []);
+    } catch (e) {
+      setLocalErr(e instanceof Error ? e.message : "Could not load the plans");
+      setPlans([]);
+    }
+  }
+  function grantWith(planId: string) {
+    if (!target) return;
+    const n = Number(grantAmount);
+    if (grantUnit !== "plan" && (!Number.isInteger(n) || n < 1)) {
+      setLocalErr("Custom duration must be a whole number (1 or more).");
+      return;
+    }
+    const extra = grantUnit === "days" ? { days: n } : grantUnit === "months" ? { months: n } : {};
+    void run(`/admin/users/${target.id}/subscription/add`, { planId, ...extra }, () => `Subscription updated for ${target.fullName}.`);
+  }
 
   function open(u: AdminUserRow) {
     setTarget(u);
@@ -126,12 +152,8 @@ export default function AdminUsersPanel({
       if (e.key === "Escape" && !busy) setTarget(null);
     };
     window.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
-    };
+    window.scrollTo({ top: 0 });
+    return () => window.removeEventListener("keydown", onKey);
   }, [target, busy]);
 
   async function startDelete() {
@@ -177,6 +199,7 @@ export default function AdminUsersPanel({
 
   return (
     <>
+      {!target && (<>
       {/* ---------- Mobile: cards ---------- */}
       <div className="space-y-3 md:hidden">
         {users.length === 0 && <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">No users found</div>}
@@ -259,18 +282,17 @@ export default function AdminUsersPanel({
         </table>
       </div>
 
-      {/* ---------- Manage sheet ---------- */}
+      </>)}
+
+      {/* ---------- Manage view (inline, replaces the list — no pop-up) ---------- */}
       {target && (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/55 sm:items-center sm:p-4" onClick={close} role="presentation">
+        <div className="mx-auto w-full max-w-xl">
+          <button onClick={close} className="mb-3 inline-flex min-h-[40px] items-center gap-1 rounded-lg border border-border px-3 text-sm hover:bg-muted">← All users</button>
           <div
-            role="dialog"
-            aria-modal="true"
+            role="region"
             aria-label={`Manage ${target.fullName}`}
-            onClick={(e) => e.stopPropagation()}
-            className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card p-5 shadow-2xl sm:max-w-md sm:rounded-2xl"
-            style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
+            className="rounded-2xl border border-border bg-card p-5 shadow-sm"
           >
-            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-border sm:hidden" />
             <div className="flex items-center gap-3">
               <UserAvatar name={target.fullName} email={target.email} src={target.avatarUrl} size={44} />
               <div className="min-w-0 flex-1">
@@ -291,11 +313,11 @@ export default function AdminUsersPanel({
                     {target.suspendedReason && <div className="mt-1 whitespace-pre-wrap">{target.suspendedReason}</div>}
                   </div>
                 )}
-                <button onClick={() => { setTarget(null); onGrant(target); }} className={`${btnBase} w-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20`}>
+                <button onClick={startGrant} className={`${btnBase} w-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20`}>
                   {target.subscriptions.length > 0 ? "Extend subscription" : "Add subscription"}
                 </button>
                 {target.subscriptions.length > 0 && (
-                  <button onClick={() => { setTarget(null); onCancelSub(target); }} className={`${btnBase} w-full border border-border hover:bg-muted`}>Cancel subscription</button>
+                  <button onClick={() => { if (confirm(`Cancel ${target.fullName}'s subscription? Remaining days will be lost.`)) void run(`/admin/users/${target.id}/subscription/cancel`, {}, () => "Subscription cancelled."); }} className={`${btnBase} w-full border border-border hover:bg-muted`}>Cancel subscription</button>
                 )}
 
                 {protectedAccount ? (
@@ -324,6 +346,37 @@ export default function AdminUsersPanel({
                     <button onClick={startDelete} className={`${btnBase} w-full border border-red-500/40 bg-red-500/10 text-red-600 hover:bg-red-500/20`}>Delete permanently…</button>
                   </>
                 )}
+              </div>
+            )}
+
+            {mode === "grant" && (
+              <div className="mt-4 space-y-3">
+                <h3 className="text-base font-bold">{target.subscriptions.length > 0 ? "Extend" : "Add"} subscription</h3>
+                <div className="rounded-lg border border-border bg-background p-3 text-sm">
+                  <label className="mb-1.5 block font-medium">Duration</label>
+                  <div className="flex gap-2">
+                    <select value={grantUnit} onChange={(e) => setGrantUnit(e.target.value as "plan" | "days" | "months")} className="rounded-lg border border-border bg-card px-3 py-2 text-sm">
+                      <option value="plan">Plan&apos;s own duration</option>
+                      <option value="days">Custom — days</option>
+                      <option value="months">Custom — months</option>
+                    </select>
+                    {grantUnit !== "plan" && (
+                      <input type="number" min="1" value={grantAmount} onChange={(e) => setGrantAmount(e.target.value)} placeholder={grantUnit === "days" ? "e.g. 10" : "e.g. 2"} className="w-24 rounded-lg border border-border bg-card px-3 py-2 text-sm" />
+                    )}
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">Remaining days are kept — new time is added after the current expiry.</p>
+                </div>
+                <p className="text-sm font-medium">Choose a plan to grant</p>
+                {plans === null && <p className="text-sm text-muted-foreground">Loading plans…</p>}
+                {plans && plans.filter((x) => x.isActive).length === 0 && <p className="text-sm text-muted-foreground">No active plans.</p>}
+                <div className="space-y-2">
+                  {(plans || []).filter((x) => x.isActive).map((pl) => (
+                    <button key={pl.id} disabled={busy} onClick={() => grantWith(pl.id)} className="w-full rounded-lg border border-border bg-background p-3 text-left text-sm font-medium hover:border-primary hover:bg-primary/5 disabled:opacity-50">
+                      {pl.name} — ₹{pl.priceInr}/{pl.durationMonths} mo
+                    </button>
+                  ))}
+                </div>
+                <button disabled={busy} onClick={() => { setMode("menu"); setLocalErr(""); }} className={`${btnBase} w-full border border-border hover:bg-muted`}>Back</button>
               </div>
             )}
 
