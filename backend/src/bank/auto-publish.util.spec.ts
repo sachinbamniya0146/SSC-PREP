@@ -1,4 +1,4 @@
-import { decideAuto, mergeAutoPublish, pushRun, recency, validateAutoPublish } from './auto-publish.util';
+import { AUTO_UNDONE, decideAuto, mergeAutoPublish, pushRun, recency, validateAutoPublish } from './auto-publish.util';
 
 const live = (year: number | null = 2025, examDate: string | null = null) => ({ year, examDate, live: true });
 
@@ -51,5 +51,18 @@ describe('auto-publish rules', () => {
     for (let i = 0; i < 25; i++) log = pushRun(log, { at: String(i), trigger: 'auto', keptNew: 0, keptExisting: 0, keptBoth: 0, needsHuman: 0, failed: 0 });
     expect(log.length).toBe(20);
     expect(log[0].at).toBe('24');
+  });
+});
+
+describe('undo marker', () => {
+  it('is a stable, non-empty value that cannot be mistaken for a rule reason', () => {
+    expect(AUTO_UNDONE).toBe('UNDONE');
+    // every reason the rules can give is a sentence; none equals the marker
+    const reasons = [
+      decideAuto({ matchType: 'EXACT', differences: [], existing: live(), candidate: live(), includeSimilar: false })?.reason,
+      decideAuto({ matchType: 'SIMILAR', differences: ['shift'], existing: live(), candidate: live(), includeSimilar: false })?.reason,
+      decideAuto({ matchType: 'SIMILAR', differences: ['explanation'], existing: null, candidate: live(), includeSimilar: false })?.reason,
+    ];
+    for (const r of reasons) expect(r === AUTO_UNDONE).toBe(false);
   });
 });

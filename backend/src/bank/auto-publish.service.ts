@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DuplicateAction, DuplicateReviewService } from './duplicate-review.service';
 import {
   AUTO_PUBLISH_KEY,
+  AUTO_UNDONE,
   AutoDecision,
   AutoPublishConfig,
   AutoRunSummary,
@@ -17,6 +18,9 @@ import {
 const LOG_KEY = 'autopublish.log';
 const RUN_EVERY_MS = 15 * 60_000;
 const MAX_PER_RUN = 300;
+/** Reviews read from the database per step, and the most one run looks at (reviews that need a person are skipped over). */
+const PAGE_SIZE = 300;
+const SCAN_MAX = 3000;
 const PREVIEW_MAX = 3000;
 const CONFIG_CACHE_MS = 20_000;
 
@@ -176,7 +180,12 @@ export class AutoPublishService implements OnModuleInit, OnModuleDestroy {
   }
 
   private dueWhere(cfg: AutoPublishConfig) {
-    return { status: 'PENDING', createdAt: { lte: new Date(Date.now() - cfg.afterHours * 3_600_000) } };
+    return {
+      status: 'PENDING',
+      createdAt: { lte: new Date(Date.now() - cfg.afterHours * 3_600_000) },
+      // a review an admin took back with Undo stays with the admins: the job must never redo that decision
+      OR: [{ autoReason: null }, { autoReason: { not: AUTO_UNDONE } }],
+    };
   }
 
   /** What would happen if the job ran now: counts per decision, so the admin can see it before trusting it. */
@@ -224,29 +233,43 @@ export class AutoPublishService implements OnModuleInit, OnModuleDestroy {
     }
     this.running = true;
     try {
-      const due = await this.prisma.duplicateReview.findMany({
-        where: this.dueWhere(cfg),
-        orderBy: { createdAt: 'asc' },
-        take: MAX_PER_RUN,
-        select: { id: true, matchType: true, differences: true, existingQuestionId: true, candidateQuestionId: true, candidateJson: true },
-      });
-      if (due.length === 0) return null;
       const actor = await this.actor();
       if (!actor) return null;
 
-      const decisions = await this.decideBatch(due, cfg);
+      // Read the waiting reviews page by page (oldest first). Reviews that need a person stay PENDING, so a fixed
+      // "first 300" window could be filled by them for ever and the decidable ones behind them would never be reached:
+      // keep paging until MAX_PER_RUN decisions are collected, the list ends, or SCAN_MAX reviews were looked at.
       const items: { id: string; action: DuplicateAction }[] = [];
       const reasonOf = new Map<string, string>();
       let needsHuman = 0;
-      for (const r of due) {
-        const d = decisions.get(r.id);
-        if (!d) {
-          needsHuman++;
-          continue;
+      let scanned = 0;
+      let lastId: string | undefined;
+      while (items.length < MAX_PER_RUN && scanned < SCAN_MAX) {
+        const page = await this.prisma.duplicateReview.findMany({
+          where: this.dueWhere(cfg),
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          take: PAGE_SIZE,
+          ...(lastId ? { cursor: { id: lastId }, skip: 1 } : {}),
+          select: { id: true, matchType: true, differences: true, existingQuestionId: true, candidateQuestionId: true, candidateJson: true },
+        });
+        if (page.length === 0) break;
+        lastId = page[page.length - 1].id;
+        scanned += page.length;
+
+        const decisions = await this.decideBatch(page, cfg);
+        for (const r of page) {
+          const d = decisions.get(r.id);
+          if (!d) {
+            needsHuman++;
+            continue;
+          }
+          if (items.length >= MAX_PER_RUN) continue; // the rest waits for the next run
+          items.push({ id: r.id, action: d.action });
+          reasonOf.set(r.id, d.reason);
         }
-        items.push({ id: r.id, action: d.action });
-        reasonOf.set(r.id, d.reason);
+        if (page.length < PAGE_SIZE) break;
       }
+      if (scanned === 0) return null;
 
       const { doneIds, failedIds } = items.length ? await this.reviews.resolveDecided(items, actor, { publish: false }) : { doneIds: [] as string[], failedIds: [] as string[] };
 

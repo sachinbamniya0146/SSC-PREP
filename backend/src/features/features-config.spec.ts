@@ -45,6 +45,20 @@ describe('feature switches', () => {
     }
   });
 
+  it('announcement: turning on an already-saved text needs no text in the request (the saved one is used)', () => {
+    const saved = mergeFeatureState({ announcement: { enabled: false, text: 'Server upgrade tonight' } });
+    const on = applyFeatureInput(saved, { announcement: { enabled: true } });
+    expect(on.ok).toBe(true);
+    if (on.ok) {
+      expect(on.state.announcement.enabled).toBe(true);
+      expect(on.state.announcement.text).toBe('Server upgrade tonight');
+    }
+    // nothing saved and nothing sent: still refused
+    expect(applyFeatureInput(mergeFeatureState(null), { announcement: { enabled: true } }).ok).toBe(false);
+    // clearing the text while turning it on is refused too
+    expect(applyFeatureInput(saved, { announcement: { enabled: true, text: '   ' } }).ok).toBe(false);
+  });
+
   it('link safety', () => {
     expect(isSafeLink('')).toBe(true);
     expect(isSafeLink('/pricing')).toBe(true);

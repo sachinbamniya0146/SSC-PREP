@@ -16,6 +16,12 @@ export interface AutoPublishConfig {
 
 export const AUTO_PUBLISH_KEY = 'autopublish.config';
 
+/**
+ * `autoReason` value written when an admin takes a decision back (Undo). The auto-publish job never touches a review
+ * carrying it again: the admin took it back on purpose, so it waits for a person.
+ */
+export const AUTO_UNDONE = 'UNDONE';
+
 export const DEFAULT_AUTO_PUBLISH: AutoPublishConfig = { enabled: true, afterHours: 24, includeSimilar: false };
 
 export function mergeAutoPublish(raw: unknown): AutoPublishConfig {

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BankUploadService } from './bank-upload.service';
 import { cacheClearPrefix } from '../common/cache';
 import { COMPARED_FIELDS, FIELD_LABELS, PAPER_IDENTITY_FIELDS, compareQuestions, isCrossPaperRepeat } from '../common/duplicate-compare';
+import { AUTO_UNDONE } from './auto-publish.util';
 
 /**
  * Duplicate review queue  (Sachin, Oct 6 2026)
@@ -195,7 +196,9 @@ export class DuplicateReviewService {
     // claim it atomically so two admins (or a double click) cannot apply it twice
     const claim = await this.prisma.duplicateReview.updateMany({
       where: { id, status: 'PENDING' },
-      data: { status: ACTION_TO_STATUS[action], resolvedById: adminId, resolvedAt: new Date() },
+      // autoResolved is cleared here: only the auto-publish job sets it again (right after it calls this method), so a
+      // decision made by a person never carries a stale "Auto" badge from an earlier, undone automatic decision.
+      data: { status: ACTION_TO_STATUS[action], resolvedById: adminId, resolvedAt: new Date(), autoResolved: false },
     });
     if (claim.count === 0) throw new ConflictException('A decision has already been made on this duplicate.');
 
@@ -350,7 +353,9 @@ export class DuplicateReviewService {
     // claim atomically (double click / two admins)
     const claim = await this.prisma.duplicateReview.updateMany({
       where: { id, status: review.status },
-      data: { status: 'PENDING', resolvedById: null, resolvedAt: null },
+      // Undo hands the review back to the admins for good: autoReason = UNDONE tells the auto-publish job never to
+      // decide this review again (otherwise it would redo the very decision the admin just took back, within 15 minutes).
+      data: { status: 'PENDING', resolvedById: null, resolvedAt: null, autoResolved: false, autoReason: AUTO_UNDONE },
     });
     if (claim.count === 0) throw new ConflictException('Someone else just acted on this review.');
 
@@ -373,7 +378,16 @@ export class DuplicateReviewService {
       return { id, status: 'PENDING', ...out };
     } catch (e) {
       await this.prisma.duplicateReview
-        .updateMany({ where: { id }, data: { status: review.status, resolvedById: review.resolvedById, resolvedAt: review.resolvedAt } })
+        .updateMany({
+          where: { id },
+          data: {
+            status: review.status,
+            resolvedById: review.resolvedById,
+            resolvedAt: review.resolvedAt,
+            autoResolved: review.autoResolved,
+            autoReason: review.autoReason,
+          },
+        })
         .catch(() => undefined);
       throw e;
     }

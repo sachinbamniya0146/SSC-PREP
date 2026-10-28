@@ -125,7 +125,9 @@ export function applyFeatureInput(current: FeatureState, input: unknown): Valida
     if (typeof ann.link === 'string' && ann.link.trim() && !isSafeLink(ann.link.trim())) {
       return { ok: false, error: 'Announcement link must start with / or https://' };
     }
-    if (ann.enabled === true && !(typeof ann.text === 'string' && ann.text.trim())) {
+    // The text that will really be stored: the one sent now, else the one already saved (so "just turn it on" works).
+    const finalText = typeof ann.text === 'string' ? ann.text.trim() : current.announcement.text.trim();
+    if (ann.enabled === true && !finalText) {
       return { ok: false, error: 'Write the announcement text before turning it on.' };
     }
     if (typeof ann.expiresAt === 'string' && ann.expiresAt.trim() && Number.isNaN(Date.parse(ann.expiresAt))) {
