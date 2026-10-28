@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TestsService } from './tests.service';
 import { TestsController } from './tests.controller';
+import { AttemptSweeperService } from './attempt-sweeper.service';
 import { TestStatsService } from './test-stats.service';
 import { RankService } from './rank.service';
 import { RankController } from './rank.controller';
@@ -24,7 +25,7 @@ import { WeakTopicModule } from '../weak-topics/weak-topic.module';
   // getWeakAreasPractice) so it inherits the no-repeat-until-exhausted +
   // configurable-size fix built there, instead of duplicating that logic.
   imports: [GamificationModule, forwardRef(() => TelegramModule), BankModule, WeakTopicModule],
-  providers: [TestsService, DailyTestService, TestStatsService, RankService],
+  providers: [TestsService, DailyTestService, TestStatsService, RankService, AttemptSweeperService],
   controllers: [TestsController, DailyTestController, RankController],
   // BUGFIX (bonus grep — module-registration gap, same family as the
   // missing meilisearch-index worker found earlier in this audit):

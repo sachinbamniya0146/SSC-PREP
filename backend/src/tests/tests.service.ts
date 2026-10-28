@@ -28,6 +28,7 @@ import { loadMarkingScheme } from './marking-scheme';
 import { loadRankRows, topScoreOf } from './rank-rows';
 import { durationOf, placeAmong, shortName } from './rank.util';
 import { hasCanonicalPaper, paperQuestionIds, readPaperSnapshot } from './attempt-paper';
+import { ATTEMPT_DONE, isAttemptDone } from '../common/attempt-status';
 import { dropDuplicateQuestions, rememberQuestions, uniquePool } from '../common/question-fingerprint';
 
 /** Fisher–Yates, in place. Used so a practice set is different on every start (sectional). */
@@ -38,6 +39,9 @@ function shuffleInPlace<T>(arr: T[]): T[] {
   }
   return arr;
 }
+
+export type SectionalFamily = 'cgl' | 'chsl' | 'mts' | 'cpo';
+export const SECTIONAL_FAMILIES: readonly SectionalFamily[] = ['cgl', 'chsl', 'mts', 'cpo'];
 
 @Injectable()
 export class TestsService {
@@ -214,7 +218,7 @@ export class TestsService {
   // Begin a timed attempt: server stamps startedAt + expiresAt from the
   // template duration. The client may render a countdown from expiresAt but
   // cannot extend it — submission after expiry is capped server-side.
-  async startAttempt(userId: string, testTemplateId: string, opts: { scribe?: boolean; questionIds?: string[]; fromPaper?: boolean } = {}) {
+  async startAttempt(userId: string, testTemplateId: string, opts: { scribe?: boolean; questionIds?: string[]; fromPaper?: boolean; sectionalFamily?: SectionalFamily } = {}) {
     const template = await this.prisma.testTemplate.findUnique({
       where: { id: testTemplateId },
       include: { examPattern: true },
@@ -226,17 +230,27 @@ export class TestsService {
     // Makes refresh/relogin mid-test lossless and prevents restart-cheating.
     const existing = await this.prisma.testAttempt.findFirst({
       where: { userId, testTemplateId, status: 'IN_PROGRESS', expiresAt: { gt: new Date() } },
-      select: { id: true, startedAt: true, expiresAt: true, status: true, sectionPlan: true },
+      select: { id: true, startedAt: true, expiresAt: true, status: true, sectionPlan: true, questionSnapshot: true },
     });
     if (existing) {
       const saved = await this.prisma.attemptAnswer.findMany({
         where: { testAttemptId: existing.id },
         select: { questionId: true, selectedOption: true, timeSpentSeconds: true },
       });
-      const { sectionPlan, ...rest } = existing;
+      const { sectionPlan, questionSnapshot, ...rest } = existing;
+      // Session 29: the sectional page gets the SAME questions back on a resume (rebuilt from the stored list). null = the attempt has no
+      // list (started before this change): the client then asks for a composed exam like it always did.
+      const family = opts.sectionalFamily;
+      const storedIds = family ? readPaperSnapshot(questionSnapshot) : null;
+      const resumedExam = family && storedIds ? await this.sectionalExamFromIds(family, storedIds).catch(() => null) : null;
       // Resume keeps the plan frozen at the original start (incl. the scribe choice) — never rebuilt from the live pattern.
-      return { ...rest, plan: readSectionPlan(sectionPlan), serverNow: Date.now(), resumed: true, answers: saved };
+      return { ...rest, plan: readSectionPlan(sectionPlan), serverNow: Date.now(), resumed: true, answers: saved, ...(family ? { exam: resumedExam } : {}) };
     }
+
+    // Session 29: the sectional exam (CGL page) is composed HERE, so the list the student is given is the list the attempt stores. Composed before
+    // the entitlement check on purpose: a bank that is too small must not cost a free-trial use.
+    const sectionalFamily = opts.sectionalFamily;
+    const sectionalExam = sectionalFamily ? await this.sectionalExamForFamily(sectionalFamily) : null;
 
     // Entitlement is checked (and a free-trial use spent) only when a NEW attempt is really created — a resume above
     // must never cost a second free use or be refused after the free uses ran out.
@@ -249,7 +263,7 @@ export class TestsService {
     const expiresAt = new Date(now.getTime() + (plan ? plan.totalMs : (template.durationMinutes || 60) * 60 * 1000));
     // Session 25: the attempt remembers the questions of its paper (see attempt-paper.ts). Autosave / submit then accept only those,
     // and every question the student never touched is counted as skipped. null = no list (other composers): behaviour as before.
-    const paperIds = await this.paperIdsFor(userId, template, opts.questionIds, opts.fromPaper === true);
+    const paperIds = sectionalExam ? readPaperSnapshot(paperQuestionIds(sectionalExam)) : await this.paperIdsFor(userId, template, opts.questionIds, opts.fromPaper === true);
     const attempt = await this.prisma.testAttempt.create({
       data: {
         userId,
@@ -262,7 +276,7 @@ export class TestsService {
       },
       select: { id: true, startedAt: true, expiresAt: true, status: true },
     });
-    return { ...attempt, plan, serverNow: Date.now(), resumed: false, answers: [] };
+    return { ...attempt, plan, serverNow: Date.now(), resumed: false, answers: [], ...(sectionalExam ? { exam: sectionalExam } : {}) };
   }
 
   // The question ids a NEW attempt is tied to: the list the caller composed itself (year-wise start), else the canonical paper of an
@@ -296,6 +310,33 @@ async submitAttempt(
     answeredAt?: Record<string, number>;
   },
 ) {
+  return this.finishAttempt(userId, attemptId, input, 'manual');
+}
+
+// Session 29 — the abandoned-attempt sweeper (attempt-sweeper.service.ts) calls this for ONE attempt whose time is long over and that
+// nobody submitted. Same scoring as a student's submit, but: no client payload (only the autosaved answers count), the result is stored as
+// AUTO_SUBMITTED with submittedAt = the deadline (so rank ties use the real test window, not the hours until the sweep), and no XP / Telegram
+// message (the student did not press Submit). An attempt with no autosaved answer is left alone ({ skipped: true }).
+async autoSubmitAttempt(attemptId: string, minAgeMs = 0): Promise<{ skipped: true; reason: string } | { skipped: false; attemptId: string; alreadyDone: boolean }> {
+  const attempt = await this.prisma.testAttempt.findFirst({ where: { id: attemptId }, select: { id: true, userId: true, status: true, expiresAt: true } });
+  if (!attempt) return { skipped: true, reason: 'not found' };
+  if (attempt.status !== 'IN_PROGRESS') return { skipped: false, attemptId, alreadyDone: true };
+  if (!attempt.expiresAt || Date.now() < attempt.expiresAt.getTime() + minAgeMs) return { skipped: true, reason: 'not expired yet' };
+  const out: any = await this.finishAttempt(attempt.userId, attemptId, {}, 'auto');
+  if (out && out.autoSkipped) return { skipped: true, reason: 'no answer' };
+  return { skipped: false, attemptId, alreadyDone: false };
+}
+
+private async finishAttempt(
+  userId: string,
+  attemptId: string,
+  input: {
+    answers?: { questionId: string; selectedOption: string | null; timeSpentSeconds?: number }[];
+    clientSubmittedAt?: number | string;
+    answeredAt?: Record<string, number>;
+  },
+  mode: 'manual' | 'auto',
+) {
   const attempt = await this.prisma.testAttempt.findFirst({
     where: { id: attemptId, userId },
   });
@@ -313,7 +354,7 @@ async submitAttempt(
     };
   }
   const now = new Date();
-  const expired = attempt.expiresAt != null && now > attempt.expiresAt;
+  const expired = mode === 'auto' || (attempt.expiresAt != null && now > attempt.expiresAt);
 
   // OFFLINE-SAFE SUBMIT: a student whose internet dropped keeps writing the test on the device; the app queues the
   // submit and replays it when the network is back — possibly AFTER the server deadline. The client stamps the moment
@@ -329,7 +370,7 @@ async submitAttempt(
     clientAtMs <= attempt.expiresAt.getTime() + CLOCK_SLACK_MS &&
     clientAtMs <= now.getTime() + CLOCK_SLACK_MS && // a client can't claim a future time
     now.getTime() <= attempt.expiresAt.getTime() + OFFLINE_REPLAY_WINDOW_MS;
-  const honourClientAnswers = !expired || finishedInsideWindow;
+  const honourClientAnswers = mode === 'manual' && (!expired || finishedInsideWindow);
 
   // Base = answers already persisted by AUTOSAVE (v4 §31). Client payload is
   // merged on top when the attempt is still live; when expired it is dropped
@@ -384,6 +425,8 @@ async submitAttempt(
   const paperIds = readPaperSnapshot((attempt as any).questionSnapshot);
   const paperSet = paperIds ? new Set(paperIds) : null;
   const answers = Array.from(merged.values()).filter((a) => !paperSet || paperSet.has(a.questionId));
+  // auto mode: an attempt where nothing was ever answered stays as it is (there is nothing to score and nothing to rank)
+  if (mode === 'auto' && !answers.some((a) => a.selectedOption != null)) return { autoSkipped: true } as any;
 
   // Re-score against DB answer key (identical rules to saveAttempt).
   let score = 0;
@@ -485,16 +528,18 @@ async submitAttempt(
   // requests can ever see count === 1; the other must treat it as an
   // already-submitted attempt and return the existing scored result
   // instead of granting XP or sending a duplicate notification.
+  const finalStatus = mode === 'auto' ? 'AUTO_SUBMITTED' : 'SUBMITTED';
   const claim = await this.prisma.testAttempt.updateMany({
     where: { id: attempt.id, status: 'IN_PROGRESS' },
     data: {
-      status: 'SUBMITTED',
+      status: finalStatus,
       score,
       totalCorrect,
       totalWrong,
       totalSkipped,
       accuracyPercent,
-      submittedAt: now,
+      // auto: the moment the time ran out (never later than now), so the duration used for rank ties is the real test window
+      submittedAt: mode === 'auto' && attempt.expiresAt ? new Date(Math.min(now.getTime(), attempt.expiresAt.getTime())) : now,
     },
   });
 
@@ -536,14 +581,15 @@ async submitAttempt(
     }
   } catch (err) {
     await this.prisma.testAttempt
-      .updateMany({ where: { id: attempt.id, status: 'SUBMITTED' }, data: { status: 'IN_PROGRESS', submittedAt: null } })
+      .updateMany({ where: { id: attempt.id, status: finalStatus }, data: { status: 'IN_PROGRESS', submittedAt: null } })
       .catch(() => undefined);
     throw err;
   }
 
   const updated = await loadUpdated();
 
-  this.gamification.awardTestXp(userId, totalCorrect, 'mock').catch(() => undefined);
+  // an auto-submitted attempt earns no XP and sends no message: the student did not finish it themselves
+  if (mode === 'manual') this.gamification.awardTestXp(userId, totalCorrect, 'mock').catch(() => undefined);
 
   // NEW (Sep 29 2026): chapter >=90% -> COMPLETE; the student's own scheduled
   // Study-Plan test marks chapters <90% as WEAK. Fire-and-forget — must never
@@ -560,7 +606,7 @@ async submitAttempt(
   // award one line above — so a PDF-render failure (Chromium crash,
   // Telegram API hiccup, rate limit) can never fail or delay the submit
   // response the student is waiting on.
-  this.notifyTelegramAttemptPdf(userId, updated.id).catch(() => undefined);
+  if (mode === 'manual') this.notifyTelegramAttemptPdf(userId, updated.id).catch(() => undefined);
 
   return { ...updated, expired };
 }
@@ -827,7 +873,7 @@ async saveAnswers(
     // clamp: a missing / NaN / huge ?take= must never turn into an unbounded query
     const take = Number.isFinite(takeIn) ? Math.min(Math.max(Math.floor(takeIn), 1), 200) : 50;
     const attempts = await this.prisma.testAttempt.findMany({
-      where: { userId, status: 'SUBMITTED' },
+      where: { userId, status: ATTEMPT_DONE },
       orderBy: { submittedAt: 'desc' },
       take,
       include: {
@@ -836,7 +882,7 @@ async saveAnswers(
       },
     });
     const completed = await this.prisma.testAttempt.findMany({
-      where: { userId, status: 'SUBMITTED' },
+      where: { userId, status: ATTEMPT_DONE },
       select: { score: true, accuracyPercent: true },
     });
     const totalAttempts = completed.length;
@@ -893,7 +939,7 @@ async saveAnswers(
     if (!attempt) throw new BadRequestException('Attempt not found');
     // The review carries the answer key + explanations, so it exists only after submit. Before this guard a student
     // could autosave an answer for each question and read the whole key from an attempt that was still running.
-    if (attempt.status !== 'SUBMITTED') {
+    if (!isAttemptDone(attempt.status)) {
       throw new BadRequestException('Attempt is still in progress — submit it to see the review.');
     }
 
@@ -1502,21 +1548,25 @@ async saveAnswers(
   // 4-option validation) across all 4 recognised families, using the SAME
   // section blueprints paper() uses, so behaviour stays consistent between
   // "take a full paper" and "practice one exam sectionally".
-  async sectionalExamForFamily(family: 'cgl' | 'chsl' | 'mts' | 'cpo') {
-    const sections =
-      family === 'mts'
-        ? [
-            { part: 'A', name: 'Numerical and Mathematical Ability', subjectSlug: 'quantitative_aptitude', q: 20, marks: 20, min: 20 },
-            { part: 'B', name: 'Reasoning Ability and Problem Solving', subjectSlug: 'reasoning', q: 25, marks: 25, min: 25 },
-            { part: 'C', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 25, min: 25 },
-            { part: 'D', name: 'General Awareness', subjectSlug: 'general_awareness', q: 20, marks: 20, min: 20 },
-          ]
-        : [
-            { part: 'A', name: 'General Intelligence and Reasoning', subjectSlug: 'reasoning', q: 25, marks: 50, min: 15 },
-            { part: 'B', name: 'General Awareness', subjectSlug: 'general_awareness', q: 25, marks: 50, min: 15 },
-            { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', q: 25, marks: 50, min: 15 },
-            { part: 'D', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 50, min: 15 },
-          ];
+  // The sections of a sectional exam (one blueprint per exam family, used by the composer AND by the resume of a stored list).
+  private sectionalBlueprint(family: SectionalFamily) {
+    return family === 'mts'
+      ? [
+          { part: 'A', name: 'Numerical and Mathematical Ability', subjectSlug: 'quantitative_aptitude', q: 20, marks: 20, min: 20 },
+          { part: 'B', name: 'Reasoning Ability and Problem Solving', subjectSlug: 'reasoning', q: 25, marks: 25, min: 25 },
+          { part: 'C', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 25, min: 25 },
+          { part: 'D', name: 'General Awareness', subjectSlug: 'general_awareness', q: 20, marks: 20, min: 20 },
+        ]
+      : [
+          { part: 'A', name: 'General Intelligence and Reasoning', subjectSlug: 'reasoning', q: 25, marks: 50, min: 15 },
+          { part: 'B', name: 'General Awareness', subjectSlug: 'general_awareness', q: 25, marks: 50, min: 15 },
+          { part: 'C', name: 'Quantitative Aptitude', subjectSlug: 'quantitative_aptitude', q: 25, marks: 50, min: 15 },
+          { part: 'D', name: 'English Comprehension', subjectSlug: 'english', q: 25, marks: 50, min: 15 },
+        ];
+  }
+
+  async sectionalExamForFamily(family: SectionalFamily) {
+    const sections = this.sectionalBlueprint(family);
     // BUGFIX (Session 20 — same root cause as paper() above): resolve the
     // actual exam this family maps to and pin every section's query to it.
     // Previously this method only checked `examId: { not: null }`, so a
@@ -1538,7 +1588,7 @@ async saveAnswers(
 
     const usedAcross = new Set<string>();
     const usedFp = new Set<string>(); // content of the questions already picked for earlier sections (same question, other row)
-    const out: any[] = [];
+    const picks: { sec: (typeof sections)[number]; rows: any[] }[] = [];
     for (const sec of sections) {
       const subjectId = slugToId.get(sec.subjectSlug);
       if (!subjectId) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
@@ -1601,15 +1651,49 @@ async saveAnswers(
       }
       picked.forEach((r) => usedAcross.add(r.id));
       rememberQuestions(usedFp, picked);
+      picks.push({ sec, rows: picked.slice(0, sec.q) });
+    }
+    return this.shapeSectionalExam(family, scheme, picks);
+  }
+
+  // The exam a student was given, rebuilt from the question ids stored on the attempt (questionSnapshot): the same questions, in the same order,
+  // however the bank changed since. A question deleted / unpublished since is simply left out. Used when a running attempt is resumed.
+  async sectionalExamFromIds(family: SectionalFamily, ids: string[]) {
+    const sections = this.sectionalBlueprint(family);
+    const famExam = await this.prisma.exam.findUnique({ where: { slug: family }, select: { id: true, name: true } });
+    if (!famExam) throw new BadRequestException(`Exam not set up for "${family}" yet — cannot compose an exam-specific sectional paper.`);
+    const subs = await this.prisma.subject.findMany({ select: { id: true, slug: true, name: true } });
+    const slugToId = new Map(subs.map((s: { id: string; slug: string }) => [s.slug.toLowerCase(), s.id]));
+    const scheme = await this.markingSchemeFor({ examId: famExam.id }, []);
+    const rows: any[] = await this.prisma.question.findMany({
+      where: { id: { in: ids } },
+      include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const picks: { sec: (typeof sections)[number]; rows: any[] }[] = sections.map((sec) => {
+      const subjectId = slugToId.get(sec.subjectSlug);
+      return { sec, rows: ids.map((id) => byId.get(id)).filter((r): r is any => !!r && r.subjectId === subjectId) };
+    });
+    return this.shapeSectionalExam(family, scheme, picks);
+  }
+
+  // The response shape of a sectional exam (one place, so a freshly composed exam and a resumed one are identical).
+  private shapeSectionalExam(
+    family: SectionalFamily,
+    scheme: MarkingScheme | null,
+    picks: { sec: { part: string; name: string; subjectSlug: string; marks: number; min: number }; rows: any[] }[],
+  ) {
+    const out: any[] = [];
+    for (const { sec, rows: picked } of picks) {
       const ruleOf = (r: any) => resolveMarking({ scheme, subjectSlug: sec.subjectSlug, question: r });
       out.push({
         part: sec.part,
         name: sec.name,
         subjectSlug: sec.subjectSlug,
-        questionCount: sec.q,
-        marks: scheme ? Math.round(picked.slice(0, sec.q).reduce((a: number, r: any) => a + ruleOf(r).marks, 0) * 100) / 100 : sec.marks,
+        questionCount: picked.length,
+        marks: scheme ? Math.round(picked.reduce((a: number, r: any) => a + ruleOf(r).marks, 0) * 100) / 100 : sec.marks,
         minutes: sec.min,
-        questions: picked.slice(0, sec.q).map((r) => ({
+        questions: picked.map((r) => ({
           id: r.id,
           questionText: r.questionText,
           questionNo: (r as any).questionNo,
@@ -1971,7 +2055,7 @@ async saveAnswers(
 
     // Get all SUBMITTED attempts for this user
     const attempts = await this.prisma.testAttempt.findMany({
-      where: { userId, status: 'SUBMITTED' },
+      where: { userId, status: ATTEMPT_DONE },
       select: { id: true, testTemplateId: true },
     });
 
@@ -2176,7 +2260,7 @@ async saveAnswers(
     if (cached) return cached;
 
     const attempts = await this.prisma.testAttempt.findMany({
-      where: { userId, testTemplateId: templateId, status: 'SUBMITTED' },
+      where: { userId, testTemplateId: templateId, status: ATTEMPT_DONE },
       orderBy: { submittedAt: 'desc' },
       include: {
         testTemplate: { select: { title: true, totalQuestions: true, totalMarks: true } },
@@ -2303,7 +2387,7 @@ async saveAnswers(
     if (cached) return cached;
 
     const attempts = await this.prisma.testAttempt.findMany({
-      where: { userId, status: 'SUBMITTED' },
+      where: { userId, status: ATTEMPT_DONE },
       include: {
         answers: {
           include: {
@@ -2355,7 +2439,7 @@ async saveAnswers(
    * Get time spent analytics
    */
   async getTimeSpentAnalytics(userId: string, templateId?: string) {
-    const where: any = { userId, status: 'SUBMITTED' };
+    const where: any = { userId, status: ATTEMPT_DONE };
     if (templateId) where.testTemplateId = templateId;
 
     const attempts = await this.prisma.testAttempt.findMany({
@@ -2404,7 +2488,7 @@ async saveAnswers(
     since.setDate(since.getDate() - days);
 
     const attempts = await this.prisma.testAttempt.findMany({
-      where: { userId, status: 'SUBMITTED', submittedAt: { gte: since } },
+      where: { userId, status: ATTEMPT_DONE, submittedAt: { gte: since } },
       select: { accuracyPercent: true, submittedAt: true, score: true },
       orderBy: { submittedAt: 'asc' },
     });
@@ -2447,7 +2531,7 @@ async saveAnswers(
     if (cached) return cached;
 
     const attempts = await this.prisma.testAttempt.findMany({
-      where: { userId, status: 'SUBMITTED' },
+      where: { userId, status: ATTEMPT_DONE },
       include: {
         answers: {
           include: {
@@ -2518,7 +2602,7 @@ async saveAnswers(
    */
   async getComparisonWithToppers(userId: string, templateId: string) {
     const userAttempts = await this.prisma.testAttempt.findMany({
-      where: { userId, testTemplateId: templateId, status: 'SUBMITTED' },
+      where: { userId, testTemplateId: templateId, status: ATTEMPT_DONE },
       orderBy: { submittedAt: 'desc' },
       take: 1,
     });

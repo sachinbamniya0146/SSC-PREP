@@ -18,6 +18,8 @@ type AnswerMap = { [qid: string]: string };
 type StatusMap = { [qid: string]: "answered" | "review" | "visited" | "unvisited" };
 type LangMode = "en" | "hi" | "both";
 
+// the template the CGL sectional page opens its timed attempt on
+const CGL_TEMPLATE_ID = "tpl-cgl-pyq-2024";
 const apiBase = () => API_BASE;
 const authHeaders = (): Record<string, string> => {
   const token = typeof window !== "undefined" ? localStorage.getItem("ssc_access_token") || "" : "";
@@ -73,45 +75,97 @@ export default function CglTestPage() {
     }
   };
 
+  // answers the server already has (so only changed ones are sent by the autosave below)
+  const savedRef = React.useRef<{ [qid: string]: string }>({});
+
   // ---- Load exam on first Start ----
+  // Session 29: the SERVER composes the exam when the attempt starts and stores its question list on the attempt, so a refresh / a
+  // resume gets the same questions back and an abandoned attempt can still be scored on the whole paper. Older server answers (no
+  // `exam` field) fall back to the old two-step way: GET the composed exam, attempt is opened separately.
   const startExam = async () => {
     setLoading(true);
     setError("");
     try {
-      const r = await fetchAuth(`${apiBase()}/tests/sectional/cgl`, { headers: authHeaders() });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        setError(`Failed to load exam: ${d.message || r.status}`);
-        setLoading(false);
-        return;
-      }
-      const d = await r.json();
-      setExam(d);
-      setSectionIdx(0);
-      setQIdx(0);
-      setAnswers({});
-      setStatus({});
-      setTimeLeft(d.sections[0].minutes * 60);
-      setRunning(true);
-      setPhase("exam");
-      // P0: open a server-authoritative attempt — server stamps the deadline.
+      let d: any = null;
+      let aid: string | null = null;
+      let saved: { questionId: string; selectedOption: string | null }[] = [];
       try {
         const ar = await fetchAuth(`${apiBase()}/tests/attempts/start`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ testTemplateId: "tpl-cgl-pyq-2024" }),
+          body: JSON.stringify({ testTemplateId: CGL_TEMPLATE_ID, sectional: "cgl" }),
         });
-        const ad = await ar.json();
-        setAttemptId(ad.id ?? null);
+        const ad = await ar.json().catch(() => ({}));
+        if (ar.ok) {
+          aid = ad.id ?? null;
+          d = ad.exam ?? null;
+          saved = Array.isArray(ad.answers) ? ad.answers : [];
+        } else if (ar.status === 400 || ar.status === 403) {
+          // premium without access / template missing / not enough questions: the exam could not be submitted later either, so say it now
+          const m = Array.isArray(ad?.message) ? ad.message.join(", ") : ad?.message;
+          setError(`Could not start the exam: ${m || ar.status}`);
+          setLoading(false);
+          return;
+        }
       } catch {
-        setAttemptId(null); // exam still runs; submit will create its own record
+        aid = null; // network: try the old way below; the exam still runs, submit creates its own record
       }
+      if (!d) {
+        const r = await fetchAuth(`${apiBase()}/tests/sectional/cgl`, { headers: authHeaders() });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          setError(`Failed to load exam: ${e.message || r.status}`);
+          setLoading(false);
+          return;
+        }
+        d = await r.json();
+      }
+      // answers the server already holds for this attempt (a resume after a refresh)
+      const known: AnswerMap = {};
+      const st: StatusMap = {};
+      for (const a of saved) {
+        if (a.selectedOption) {
+          known[a.questionId] = a.selectedOption;
+          st[a.questionId] = "answered";
+        }
+      }
+      savedRef.current = { ...known };
+      setAttemptId(aid);
+      setExam(d);
+      setSectionIdx(0);
+      setQIdx(0);
+      setAnswers(known);
+      setStatus(st);
+      setTimeLeft(d.sections[0].minutes * 60);
+      setRunning(true);
+      setPhase("exam");
     } catch {
       setError("Network error — backend unreachable");
     } finally {
       setLoading(false);
     }
   };
+
+  // ---- Autosave (session 29): changed answers go to the server a moment after they are picked, so a closed tab / dead battery
+  // does not lose them and an unfinished attempt can be scored from them. Best effort: the final submit still carries every answer.
+  React.useEffect(() => {
+    if (!attemptId || (phase !== "exam" && phase !== "section-break")) return;
+    const t = setTimeout(async () => {
+      const changed = Object.entries(answers).filter(([qid, opt]) => savedRef.current[qid] !== opt);
+      if (changed.length === 0) return;
+      try {
+        const r = await fetchAuth(`${apiBase()}/tests/attempts/${attemptId}/answers`, {
+          method: "PUT",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ answers: changed.map(([questionId, selectedOption]) => ({ questionId, selectedOption })) }),
+        });
+        if (r.ok) changed.forEach(([qid, opt]) => { savedRef.current[qid] = opt; });
+      } catch {
+        // offline: tried again on the next change
+      }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [answers, attemptId, phase]);
 
   const sec = exam?.sections[sectionIdx];
   const qs = sec?.questions || [];
@@ -216,7 +270,7 @@ export default function CglTestPage() {
             attemptId
               ? { answers: answersPayload }
               : {
-                  testTemplateId: "tpl-cgl-pyq-2024",
+                  testTemplateId: CGL_TEMPLATE_ID,
                   answers: answersPayload,
                 },
           ),

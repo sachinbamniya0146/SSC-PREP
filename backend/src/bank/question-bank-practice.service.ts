@@ -2,6 +2,7 @@
 import { WeakTopicService } from '../weak-topics/weak-topic.service';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ATTEMPT_DONE } from '../common/attempt-status';
 import { istDateKey } from '../gamification/gamification.service';
 import { markChapterFromPractice } from '../study-plan/study-plan-progress.util';
 import { PUBLISHED_QUESTION_WHERE, PRACTICE_QUESTION_WHERE, PYQ_QUESTION_WHERE } from '../common/question-visibility';
@@ -1313,7 +1314,7 @@ export class QuestionBankPracticeService {
   private async isScopeWeakLegacy(userId: string, topicId?: string, subTopicId?: string): Promise<boolean> {
     const wrongOrSkipped = await this.prisma.attemptAnswer.findFirst({
       where: {
-        testAttempt: { userId, status: 'SUBMITTED' },
+        testAttempt: { userId, status: ATTEMPT_DONE },
         question: subTopicId ? { subTopicId } : { topicId },
         OR: [{ isCorrect: false }, { selectedOption: null }],
       },
@@ -1336,7 +1337,7 @@ export class QuestionBankPracticeService {
         JOIN test_attempts ta ON ta.id = aa."testAttemptId"
         JOIN questions q ON q.id = aa."questionId"
         WHERE ta."userId" = ${userId}
-          AND ta.status = 'SUBMITTED'
+          AND ta.status IN ('SUBMITTED', 'AUTO_SUBMITTED')
           AND (aa."isCorrect" = false OR aa."selectedOption" IS NULL)
           AND (q."topicId" IS NOT NULL OR q."subTopicId" IS NOT NULL)`;
     } catch {

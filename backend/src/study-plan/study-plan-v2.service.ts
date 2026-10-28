@@ -15,6 +15,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { isAttemptDone } from '../common/attempt-status';
 import { istDateKey } from '../gamification/gamification.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { applyAttemptToChapters, CHAPTER_COMPLETE_PCT } from './study-plan-progress.util';
@@ -529,7 +530,7 @@ export class StudyPlanV2Service {
     if (!test) throw new NotFoundException('Test not found');
     if (test.status !== 'SUBMITTED' && test.attemptId) {
       const att = await this.prisma.testAttempt.findUnique({ where: { id: test.attemptId }, select: { status: true } });
-      if (att?.status === 'SUBMITTED') {
+      if (isAttemptDone(att?.status)) {
         await applyAttemptToChapters(this.prisma, userId, test.attemptId);
         test = (await this.prisma.studyPlanTest.findFirst({ where: { id: testId, userId } })) ?? test;
       }
@@ -568,7 +569,7 @@ export class StudyPlanV2Service {
       FROM "attempt_answers" aa
       JOIN "test_attempts" ta ON ta."id" = aa."testAttemptId"
       JOIN "questions" q ON q."id" = aa."questionId"
-      WHERE ta."userId" = ${userId} AND ta."status" = 'SUBMITTED' AND aa."selectedOption" IS NOT NULL
+      WHERE ta."userId" = ${userId} AND ta."status" IN ('SUBMITTED', 'AUTO_SUBMITTED') AND aa."selectedOption" IS NOT NULL
       GROUP BY q."examId", q."subjectId", q."chapterId", q."topicId", q."subTopicId"
     `);
 

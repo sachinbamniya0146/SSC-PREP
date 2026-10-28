@@ -9,6 +9,7 @@
 //   * chapter <  95%  in the student's own scheduled Study-Plan test -> WEAK
 //     ("ye weak topic he ab bhi, is chapter ko phir se practice karo")
 import { PrismaService } from '../prisma/prisma.service';
+import { ATTEMPT_DONE } from '../common/attempt-status';
 
 export const CHAPTER_COMPLETE_PCT = 95; // Oct 3 2026: was 90 — a chapter is complete only at 95%+
 export const PLAN_TEST_MIN_Q_PER_CHAPTER = 2;
@@ -25,7 +26,7 @@ export interface ChapterVerdict {
 
 export async function applyAttemptToChapters(prisma: PrismaService, userId: string, attemptId: string): Promise<ChapterVerdict[] | null> {
   const attempt = await prisma.testAttempt.findFirst({
-    where: { id: attemptId, userId, status: 'SUBMITTED' },
+    where: { id: attemptId, userId, status: ATTEMPT_DONE },
     select: { id: true, questionSnapshot: true, answers: { select: { questionId: true, isCorrect: true } } },
   });
   if (!attempt) return null;

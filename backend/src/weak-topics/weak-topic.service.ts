@@ -311,7 +311,7 @@ export class WeakTopicService {
           JOIN test_attempts ta ON ta.id = aa."testAttemptId"
           JOIN questions q ON q.id = aa."questionId"
           WHERE ta."userId" = ${userId}
-            AND ta.status = 'SUBMITTED'
+            AND ta.status IN ('SUBMITTED', 'AUTO_SUBMITTED')
             AND (q."chapterId" IS NOT NULL OR q."topicId" IS NOT NULL OR q."subTopicId" IS NOT NULL)
           GROUP BY q."subjectId", q."chapterId", q."topicId", q."subTopicId"
           HAVING SUM(CASE WHEN aa."isCorrect" = false OR aa."selectedOption" IS NULL THEN 1 ELSE 0 END) > 0

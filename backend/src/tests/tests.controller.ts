@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Controller, Get, Post, Put, Body, Query, Param, BadRequestException } from '@nestjs/common';
-import { TestsService } from './tests.service';
+import { SECTIONAL_FAMILIES, SectionalFamily, TestsService } from './tests.service';
 import { TestStatsService } from './test-stats.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { normalizeExamTier, normalizeTierPaper } from '../common/pyq-paper-key';
@@ -25,10 +25,14 @@ export class TestsController {
 
   // P0 — server-authoritative timed session: start (stamps startedAt+expiresAt)
   @Post('attempts/start')
-  startAttempt(@CurrentUser() user: { userId: string }, @Body() body: { testTemplateId: string; scribe?: boolean; fromPaper?: boolean }) {
+  startAttempt(@CurrentUser() user: { userId: string }, @Body() body: { testTemplateId: string; scribe?: boolean; fromPaper?: boolean; sectional?: string }) {
     // `scribe` = extra-time accessibility option; only has an effect on strict-sectional patterns that offer it.
     // `fromPaper` = the client got its questions from GET /tests/paper/:id (the /test?template= page): the server then ties the attempt to that paper.
-    return this.testsService.startAttempt(user.userId, body.testTemplateId, { scribe: body.scribe === true, fromPaper: body.fromPaper === true });
+    // `sectional` = the CGL sectional page: the server composes the exam itself, stores its question list on the attempt and returns it as `exam`
+    // (a resume returns the same questions). An unknown value is ignored, so an old client keeps working.
+    const fam = String(body.sectional ?? '').toLowerCase();
+    const sectionalFamily = (SECTIONAL_FAMILIES as readonly string[]).includes(fam) ? (fam as SectionalFamily) : undefined;
+    return this.testsService.startAttempt(user.userId, body.testTemplateId, { scribe: body.scribe === true, fromPaper: body.fromPaper === true, sectionalFamily });
   }
 
   // P0 — submit a timed attempt (server-enforced expiry + server-side scoring)

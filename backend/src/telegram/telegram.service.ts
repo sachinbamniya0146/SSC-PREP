@@ -2,6 +2,7 @@
 import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { ATTEMPT_DONE, isAttemptDone } from '../common/attempt-status';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import FormData from 'form-data';
@@ -172,7 +173,7 @@ export class TelegramService {
 
     // Most recent submitted attempt, if any — score/rank/percentile.
     const recentAttempt = await this.prisma.testAttempt.findFirst({
-      where: { userId, status: 'SUBMITTED' },
+      where: { userId, status: ATTEMPT_DONE },
       orderBy: { submittedAt: 'desc' },
       select: { id: true },
     });
@@ -220,7 +221,7 @@ export class TelegramService {
       this.prisma.user.findUnique({ where: { id: userId }, select: { fullName: true } }),
     ]);
 
-    if (detail.status !== 'SUBMITTED') {
+    if (!isAttemptDone(detail.status)) {
       return { ok: false, error: 'This attempt has not been submitted yet — the result PDF is only available after you finish and submit.' };
     }
 

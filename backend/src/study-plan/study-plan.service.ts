@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { StudyPlanType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ATTEMPT_DONE } from '../common/attempt-status';
 import { istDateKey } from '../gamification/gamification.service';
 import { clampDailyTarget } from './study-plan-pace.util';
 
@@ -233,7 +234,7 @@ export class StudyPlanService {
   private async getQuestionsAnsweredSince(userId: string, since: Date): Promise<number> {
     const [testAgg, setAgg] = await Promise.all([
       this.prisma.testAttempt.aggregate({
-        where: { userId, status: 'SUBMITTED', submittedAt: { gte: since } },
+        where: { userId, status: ATTEMPT_DONE, submittedAt: { gte: since } },
         _sum: { totalCorrect: true, totalWrong: true, totalSkipped: true },
       }),
       this.prisma.questionBankSet.findMany({
@@ -251,7 +252,7 @@ export class StudyPlanService {
   private async computeStreaks(userId: string): Promise<{ currentStreak: number; longestStreak: number }> {
     const [testDates, setDates] = await Promise.all([
       this.prisma.testAttempt.findMany({
-        where: { userId, status: 'SUBMITTED', submittedAt: { not: null } },
+        where: { userId, status: ATTEMPT_DONE, submittedAt: { not: null } },
         select: { submittedAt: true },
       }),
       this.prisma.questionBankSet.findMany({

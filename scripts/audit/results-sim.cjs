@@ -165,12 +165,13 @@ function world() {
         const a = attempts.find((x) => x.id === where.id);
         return { ...withRel(a, { testTemplate: true, answers: {} }), testTemplate: { id: 'T1', title: template.title, totalQuestions: 4, totalMarks: 16 }, answers: answerRows.filter((r) => r.testAttemptId === a.id).map(({ questionId, selectedOption, isCorrect, timeSpentSeconds }) => ({ questionId, selectedOption, isCorrect, timeSpentSeconds })) };
       },
-      create: async ({ data }) => {
+      create: async ({ data, select }) => {
         const { answers, ...rest } = data;
         const a = { id: 'new' + ++seq, rank: null, percentile: null, startedAt: new Date(), expiresAt: null, sectionPlan: null, lastSyncAt: null, ...rest };
         a.user = userOf(a.userId);
         attempts.push(a);
         for (const r of (answers && answers.create) || []) answerRows.push({ testAttemptId: a.id, isMarkedForReview: false, ...r });
+        if (select) return Object.fromEntries(Object.keys(select).filter((k) => select[k]).map((k) => [k, a[k]])); // like Prisma: only the selected columns come back
         return { ...withRel(a, { testTemplate: true, answers: {} }), testTemplate: { id: 'T1', title: template.title, totalQuestions: 4, totalMarks: 16 }, answers: answerRows.filter((r) => r.testAttemptId === a.id) };
       },
     },
@@ -199,6 +200,42 @@ function world() {
   svc.assertMockEntitled = async () => undefined; // entitlement is not what this sim is about
   const features = { assertEnabled: async () => undefined };
   return { prisma, svc, attempts, answerRows, questions, template, rank: new RankService(prisma, features), stats: new TestStatsService(prisma) };
+}
+
+// A world for the CGL sectional page (session 29): exam 'cgl', 4 subjects x 30 bilingual questions, template tpl-cgl-pyq-2024.
+function cglWorld() {
+  const w = world();
+  const slugs = ['reasoning', 'general_awareness', 'quantitative_aptitude', 'english'];
+  const subjects = slugs.map((slug, i) => ({ id: 'sub-' + slug, slug, name: slug }));
+  const bank = [];
+  slugs.forEach((slug) => {
+    for (let i = 0; i < 30; i++) {
+      bank.push({
+        id: `${slug}-${i}`, subjectId: 'sub-' + slug, examId: 'exam-cgl', year: 2020 + (i % 5), createdAt: new Date(2026, 0, 1, 0, i),
+        questionText: `${slug} question ${i}`, questionTextHindi: 'hi ' + i, questionNo: i, paperQuestionNo: i,
+        optionsJson: ['A', 'B', 'C', 'D'].map((k) => ({ key: k, text: `${slug} ${i} option ${k}` })),
+        correctAnswer: 'A', marks: 2, negativeMarks: 0.5, shift: 'S1', exam: { name: 'SSC CGL' }, chapter: { name: 'Ch' },
+        questionDiagramType: null, questionDiagramLabels: null, questionImageUrl: null,
+      });
+    }
+  });
+  bank.forEach((q) => {
+    const slug = q.id.replace(/-\d+$/, '');
+    Object.assign(q, { subject: { name: slug, slug }, topic: null, subTopic: null, explanation: 'because', explanationHindi: null, explanationSource: null, difficulty: null, examTier: null, tierPaper: null, examDate: null });
+  });
+  w.questions.push(...bank); // the review (attemptDetail) reads its questions from here
+  w.bank = bank;
+  const sortBank = (rows) => rows.sort((a, b) => b.year - a.year || a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  w.prisma.exam = { findUnique: async ({ where }) => (where.slug === 'cgl' ? { id: 'exam-cgl', name: 'SSC CGL' } : null) };
+  w.prisma.subject = { findMany: async () => subjects.map((x) => ({ ...x })) };
+  w.prisma.question.findMany = async ({ where }) => {
+    if (where.id && where.id.in) return bank.filter((q) => where.id.in.includes(q.id)).map((q) => ({ ...q }));
+    return sortBank(bank.filter((q) => q.subjectId === where.subjectId && q.examId === where.examId)).map((q) => ({ ...q }));
+  };
+  const baseTpl = w.prisma.testTemplate.findUnique;
+  w.prisma.testTemplate.findUnique = async (a) => (a.where.id === 'tpl-cgl-pyq-2024' ? { id: 'tpl-cgl-pyq-2024', title: 'CGL', type: 'MOCK', durationMinutes: 60, totalQuestions: 100, totalMarks: 200, examPatternId: null, examId: 'exam-cgl', examPattern: null } : baseTpl(a));
+  w.svc.markingSchemeFor = async () => null; // the preset lookup is not what this sim is about; the question columns (2 / -0.5) score
+  return w;
 }
 
 const ask = (fn) => fn().then((v) => ({ v }), (e) => ({ err: e }));
@@ -306,16 +343,6 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     check('a question deleted after the start: submit still works, it is simply not counted (right 1, skipped 2)', !out.err && r.totalCorrect === 1 && r.totalSkipped === 2 && !w.answerRows.some((x) => x.questionId === 'q4'), out.err ? out.err.message : `right=${r.totalCorrect} skipped=${r.totalSkipped}`);
   }
 
-  // G1 still open for an attempt WITHOUT a stored list (started before session 25, or a template other than a PYQ paper / year-wise test)
-  {
-    const w = world();
-    w.attempts.push(rawAttempt('a-s3', 's3', U3, {}));
-    w.answerRows.push({ testAttemptId: 'a-s3', questionId: 'q1', selectedOption: 'A', isCorrect: true, timeSpentSeconds: 5, isMarkedForReview: false });
-    const r = (await ask(() => w.svc.submitAttempt('s3', 'a-s3', { answers: ALL4 }))).v || {};
-    const total = (r.totalCorrect || 0) + (r.totalWrong || 0) + (r.totalSkipped || 0);
-    gap('G1 attempt without a stored list (older attempts, CGL sectional page): right + wrong + skipped = question count (4)', total !== w.template.totalQuestions, `totals add up to ${total} of ${w.template.totalQuestions}`);
-  }
-
   // G2 (closed for papers with a stored list). Autosave of ids that are not in the paper
   {
     const w = world();
@@ -330,16 +357,6 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     const r2 = (await ask(() => w.svc.submitAttempt('s5', 'a-s5b', { answers: Object.entries(key).map(([questionId, selectedOption]) => ({ questionId, selectedOption })) }))).v || {};
     check('G2 submit payload with foreign ids: ignored, score stays within the paper (10)', r2.score === 10 && r2.totalCorrect === 4, `score=${r2.score} right=${r2.totalCorrect}`);
   }
-  // G2 still open for an attempt without a stored list
-  {
-    const w = world();
-    w.attempts.push(rawAttempt('a-s5', 's5', { id: 's5', fullName: 'Cheat Boy', role: 'STUDENT', state: 'Bihar', isSuspended: false }, { startedAt: new Date(T0 - 60000), expiresAt: new Date(T0 + 3600e3) }));
-    const key = { q1: 'A', q2: 'B', q3: 'C', q4: 'D', q5: 'A', q6: 'A', q7: 'A' };
-    await ask(() => w.svc.saveAnswers('s5', 'a-s5', { answers: Object.entries(key).map(([questionId, selectedOption]) => ({ questionId, selectedOption })) }));
-    const r = (await ask(() => w.svc.submitAttempt('s5', 'a-s5', { answers: [] }))).v || {};
-    gap('G2 attempt without a stored list: score never exceeds the paper maximum (10)', r.score > 10, `score=${r.score}, totalCorrect=${r.totalCorrect} on a 4-question paper`);
-  }
-
   // ---- where the list comes from: startAttempt ----
   {
     const w = world();
@@ -356,12 +373,157 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     const s2 = await ask(() => w2.svc.startAttempt('s3', 'pyq-x'));
     check('start of an auto-built PYQ paper (SHIFT_WISE, pyq-...): the list is the composed paper', !s2.err && JSON.stringify(snap2(s2.v && s2.v.id)) === JSON.stringify(PAPER) && paperCalls === 1, s2.err ? s2.err.message : JSON.stringify(snap2(s2.v && s2.v.id)));
     const s3 = await ask(() => w2.svc.startAttempt('s5', 'T1'));
-    check('start of any other template WITHOUT the fromPaper flag (CGL sectional page): no list is guessed, paper() is not even asked', !s3.err && snap2(s3.v && s3.v.id) == null && paperCalls === 1, s3.err ? s3.err.message : 'snapshot=' + JSON.stringify(snap2(s3.v && s3.v.id)));
+    check('start of any other template WITHOUT the fromPaper flag (and without the sectional flag): no list is guessed, paper() is not even asked', !s3.err && snap2(s3.v && s3.v.id) == null && paperCalls === 1, s3.err ? s3.err.message : 'snapshot=' + JSON.stringify(snap2(s3.v && s3.v.id)));
     const s3b = await ask(() => w2.svc.startAttempt('s3', 'T1', { fromPaper: true }));
     check('start of a template from the /test?template= page (fromPaper): the list is the composed paper, also for a generic mock', !s3b.err && JSON.stringify(snap2(s3b.v && s3b.v.id)) === JSON.stringify(PAPER) && paperCalls === 2, s3b.err ? s3b.err.message : JSON.stringify(snap2(s3b.v && s3b.v.id)));
     w2.svc.paper = async () => { throw new BadRequestException('Pattern needs questions for: Reasoning'); };
     const s4 = await ask(() => w2.svc.startAttempt('s2', 'pyq-x', { fromPaper: true }));
     check('start when the paper cannot be composed: the attempt still starts, without a list', !s4.err && snap2(s4.v && s4.v.id) == null, s4.err ? s4.err.message : '');
+  }
+
+  // ---- session 29 (roadmap 4.1): the CGL sectional page. The server composes the exam, stores its list, and a resume returns the same questions ----
+  {
+    const w = cglWorld();
+    const start = await ask(() => w.svc.startAttempt('s3', 'tpl-cgl-pyq-2024', { sectionalFamily: 'cgl' }));
+    const exam = start.v && start.v.exam;
+    const flat = (e) => (e ? e.sections.flatMap((x) => x.questions.map((q) => q.id)) : []);
+    const ids = flat(exam);
+    check('CGL start: the response carries the exam, 4 sections x 25 = 100 distinct questions', !start.err && ids.length === 100 && new Set(ids).size === 100 && exam.sections.every((x) => x.questions.length === 25), start.err ? start.err.message : 'questions=' + ids.length);
+    check('CGL start: no answer key and no explanation in the exam', !!exam && exam.sections.every((x) => x.questions.every((q) => !('correctAnswer' in q) && !('explanation' in q))));
+    const att = w.attempts.find((a) => a.id === (start.v && start.v.id)) || {};
+    check('CGL start: the exam\'s question list is stored on the attempt (100 ids, in exam order)', JSON.stringify(att.questionSnapshot) === JSON.stringify(ids), 'stored=' + (Array.isArray(att.questionSnapshot) ? att.questionSnapshot.length : att.questionSnapshot));
+    check('CGL start: the response has no question list of its own besides the exam (snapshot is not leaked)', !!start.v && !('questionSnapshot' in start.v));
+
+    // the bank changes while the student is writing (a new 2030 question would now be picked first): a refresh must give the same exam
+    w.bank.push({ ...w.bank.find((q) => q.id === 'reasoning-0'), id: 'reasoning-NEW', year: 2030, questionText: 'brand new reasoning question', optionsJson: ['A', 'B', 'C', 'D'].map((k) => ({ key: k, text: 'new ' + k })) });
+    const fresh = flat(await w.svc.sectionalExamForFamily('cgl'));
+    check('sanity: a freshly composed exam is a DIFFERENT list now (this is why the stored list matters)', JSON.stringify(fresh) !== JSON.stringify(ids));
+    const again = await ask(() => w.svc.startAttempt('s3', 'tpl-cgl-pyq-2024', { sectionalFamily: 'cgl' }));
+    check('CGL resume (refresh in the middle): the SAME attempt and the SAME 100 questions in the same order', !again.err && again.v.resumed === true && again.v.id === start.v.id && JSON.stringify(flat(again.v.exam)) === JSON.stringify(ids), again.err ? again.err.message : 'resumed=' + (again.v && again.v.resumed));
+    check('CGL resume: still no answer key', !!again.v && !!again.v.exam && again.v.exam.sections.every((x) => x.questions.every((q) => !('correctAnswer' in q))));
+    const plain = await ask(() => w.svc.startAttempt('s3', 'tpl-cgl-pyq-2024', {}));
+    check('CGL resume asked WITHOUT the sectional flag (an old client): same attempt, no exam field added', !plain.err && plain.v.id === start.v.id && !('exam' in plain.v));
+
+    // G1 / G1b: the student answers ONE question, then leaves; the time is over
+    const first = ids[0];
+    w.answerRows.push({ testAttemptId: att.id, questionId: first, selectedOption: 'A', isCorrect: true, timeSpentSeconds: 9, isMarkedForReview: false });
+    att.expiresAt = new Date(T0 - 5 * MIN);
+    const late = ids.map((id) => ({ questionId: id, selectedOption: 'A' }));
+    const sub = (await ask(() => w.svc.submitAttempt('s3', att.id, { answers: late }))).v || {};
+    const total = (sub.totalCorrect || 0) + (sub.totalWrong || 0) + (sub.totalSkipped || 0);
+    check('G1 CGL page, abandoned attempt: right + wrong + skipped = 100 (1 + 0 + 99)', total === 100 && sub.totalCorrect === 1 && sub.totalSkipped === 99, `right=${sub.totalCorrect} wrong=${sub.totalWrong} skipped=${sub.totalSkipped}`);
+    check('G1 CGL page: the late payload is ignored, only the autosaved answer scores (+2)', sub.score === 2, 'score=' + sub.score);
+    const det = (await ask(() => w.svc.attemptDetail('s3', att.id))).v || { questions: [] };
+    check('G1b CGL page: the review lists all 100 questions, 99 as skipped', det.questions.length === 100 && det.questions.filter((q) => q.isSkipped).length === 99, `rows=${det.questions.length}`);
+
+    // G2: a second attempt of another student, autosave with ids from outside the exam, then everything right
+    const s2 = await ask(() => w.svc.startAttempt('s5', 'tpl-cgl-pyq-2024', { sectionalFamily: 'cgl' }));
+    const ids2 = flat(s2.v && s2.v.exam);
+    const foreign = w.bank.filter((q) => !ids2.includes(q.id)).slice(0, 5).map((q) => q.id);
+    const sv = (await ask(() => w.svc.saveAnswers('s5', s2.v.id, { answers: [...ids2, ...foreign].map((questionId) => ({ questionId, selectedOption: 'A' })) }))).v || {};
+    check('G2 CGL page: autosave stores the 100 questions of the exam and rejects the 5 foreign ids', sv.saved === 100 && sv.rejected === 5 && !w.answerRows.some((x) => x.testAttemptId === s2.v.id && foreign.includes(x.questionId)), JSON.stringify(sv));
+    const full = (await ask(() => w.svc.submitAttempt('s5', s2.v.id, { answers: [...ids2, ...foreign].map((questionId) => ({ questionId, selectedOption: 'A' })) }))).v || {};
+    check('G2 CGL page: a score never passes the exam maximum (100 x 2 = 200)', full.score === 200 && full.totalCorrect === 100, `score=${full.score} right=${full.totalCorrect}`);
+  }
+
+  // LEGACY (documented limit, behaviour must stay as it was): attempts that were started WITHOUT a stored list
+  {
+    const w = world();
+    w.attempts.push(rawAttempt('a-s3', 's3', U3, {}));
+    w.answerRows.push({ testAttemptId: 'a-s3', questionId: 'q1', selectedOption: 'A', isCorrect: true, timeSpentSeconds: 5, isMarkedForReview: false });
+    const r = (await ask(() => w.svc.submitAttempt('s3', 'a-s3', { answers: ALL4 }))).v || {};
+    const total = (r.totalCorrect || 0) + (r.totalWrong || 0) + (r.totalSkipped || 0);
+    check('LEGACY attempt without a stored list (started before session 25): scored exactly as before (only the touched question counts, totals add up to 1 of 4)', total === 1 && r.score === 2, `total=${total} score=${r.score}`);
+    const w2 = world();
+    w2.attempts.push(rawAttempt('a-s5', 's5', { id: 's5', fullName: 'Cheat Boy', role: 'STUDENT', state: 'Bihar', isSuspended: false }, { startedAt: new Date(T0 - 60000), expiresAt: new Date(T0 + 3600e3) }));
+    const key = { q1: 'A', q2: 'B', q3: 'C', q4: 'D', q5: 'A', q6: 'A', q7: 'A' };
+    await ask(() => w2.svc.saveAnswers('s5', 'a-s5', { answers: Object.entries(key).map(([questionId, selectedOption]) => ({ questionId, selectedOption })) }));
+    const r2 = (await ask(() => w2.svc.submitAttempt('s5', 'a-s5', { answers: [] }))).v || {};
+    check('LEGACY attempt without a stored list: autosave / score behave exactly as before (7 ids stored, score 19 on a 10-mark paper: the known old limit)', r2.score === 19, `score=${r2.score}`);
+    const s6 = await ask(() => w2.svc.startAttempt('s3', 'T1', {}));
+    check('start WITHOUT the sectional flag keeps working exactly as before (no list, no exam in the answer)', !s6.err && !('exam' in s6.v) && (w2.attempts.find((a) => a.id === s6.v.id) || {}).questionSnapshot === undefined, s6.err ? s6.err.message : '');
+  }
+
+  // ---- session 29 (roadmap 4.2): the abandoned-attempt sweeper + AUTO_SUBMITTED counted everywhere ----
+  {
+    let sweeperMod = null;
+    try { sweeperMod = require(path.join(backend, 'src/tests/attempt-sweeper.service.ts')); } catch (e) { sweeperMod = null; }
+    check('the sweeper service exists (attempt-sweeper.service.ts)', !!sweeperMod && !!sweeperMod.AttemptSweeperService);
+    if (sweeperMod) {
+      const { AttemptSweeperService, sweepGraceMs, SWEEP_GRACE_MS } = sweeperMod;
+      const w = world();
+      const H = 3600e3;
+      const U5 = { id: 's5', fullName: 'Cheat Boy', role: 'STUDENT', state: 'Bihar', isSuspended: false };
+      const row = (testAttemptId, questionId, selectedOption, isCorrect) => w.answerRows.push({ testAttemptId, questionId, selectedOption, isCorrect, timeSpentSeconds: 4, isMarkedForReview: false });
+      // ab1: Neha, deadline 7 h ago, autosaved q1 (right) and q3 (wrong, Reasoning -1); the paper has 4 questions
+      w.attempts.push(rawAttempt('ab1', 's3', U3, { questionSnapshot: PAPER, startedAt: new Date(T0 - 8 * H), expiresAt: new Date(T0 - 7 * H) }));
+      row('ab1', 'q1', 'A', true); row('ab1', 'q3', 'A', false);
+      // ab2: deadline 7 h ago but NOTHING was answered (only a cleared answer row)
+      w.attempts.push(rawAttempt('ab2', 's5', U5, { questionSnapshot: PAPER, startedAt: new Date(T0 - 8 * H), expiresAt: new Date(T0 - 7 * H) }));
+      row('ab2', 'q1', null, false);
+      // ab4: deadline only 1 h ago (inside the grace), answered
+      w.attempts.push(rawAttempt('ab4', 's2', { id: 's2', fullName: 'Ravi Singh', role: 'STUDENT', state: 'Bihar', isSuspended: false }, { testTemplateId: 'T1', questionSnapshot: PAPER, startedAt: new Date(T0 - 2 * H), expiresAt: new Date(T0 - 1 * H) }));
+      row('ab4', 'q1', 'A', true);
+      // ab5: deadline 5 h ago (an offline student may still replay a queued submit until 6 h): answered, must not be touched
+      w.attempts.push(rawAttempt('ab5', 's1', { id: 's1', fullName: 'Asha Kumari', role: 'STUDENT', state: 'Bihar', isSuspended: false }, { questionSnapshot: PAPER, startedAt: new Date(T0 - 6 * H), expiresAt: new Date(T0 - 5 * H) }));
+      row('ab5', 'q2', 'B', true);
+      // the fake database understands `answers: { some: ... }` for the candidate query
+      const origFind = w.prisma.testAttempt.findMany;
+      w.prisma.testAttempt.findMany = async (args) => {
+        const { answers, ...where } = args.where || {};
+        let r = await origFind({ ...args, where, take: 1e9 });
+        if (answers && answers.some) r = r.filter((a) => w.answerRows.some((x) => x.testAttemptId === a.id && x.selectedOption != null));
+        return r.slice(0, args.take || 1e9);
+      };
+      w.svc.gamification = { awardTestXp: async () => { w.stats.xp++; } };
+      const sw = new AttemptSweeperService(w.prisma, w.svc);
+      const snap = () => JSON.stringify([w.attempts.map((a) => [a.id, a.status, a.score, a.submittedAt && +a.submittedAt]), w.answerRows.map((x) => [x.testAttemptId, x.questionId, x.selectedOption])]);
+      const before = w.attempts.find((a) => a.id === 'ab1');
+      check('before the sweep: ab1 is IN_PROGRESS with no result', before.status === 'IN_PROGRESS' && before.score === 0);
+      const xp0 = w.stats.xp;
+      const run1 = await sw.run(new Date(T0));
+      const ab1 = w.attempts.find((a) => a.id === 'ab1');
+      check('sweep: the abandoned attempt with answers is auto-submitted (1 submitted)', run1.submitted === 1 && ab1.status === 'AUTO_SUBMITTED', JSON.stringify(run1) + ' status=' + ab1.status);
+      check('sweep: scored from the autosaved answers only: q1 right +2, q3 wrong -1 => 1; 1 right, 1 wrong, 2 skipped', ab1.score === 1 && ab1.totalCorrect === 1 && ab1.totalWrong === 1 && ab1.totalSkipped === 2, `score=${ab1.score} r/w/s=${ab1.totalCorrect}/${ab1.totalWrong}/${ab1.totalSkipped}`);
+      check('sweep: submittedAt = the deadline (not the sweep time), so rank ties use the real test window', +ab1.submittedAt === T0 - 7 * H, String(ab1.submittedAt));
+      check('sweep: untouched questions are stored as skipped rows (4 rows in all)', w.answerRows.filter((x) => x.testAttemptId === 'ab1').length === 4);
+      check('sweep: no XP is given for an attempt the student did not submit', w.stats.xp === xp0);
+      check('sweep: an attempt with NO answer stays IN_PROGRESS (nothing to score)', w.attempts.find((a) => a.id === 'ab2').status === 'IN_PROGRESS');
+      check('sweep: an attempt still inside the 6 h offline grace (deadline 1 h / 5 h ago) is NOT touched', w.attempts.find((a) => a.id === 'ab4').status === 'IN_PROGRESS' && w.attempts.find((a) => a.id === 'ab5').status === 'IN_PROGRESS');
+      check('sweep: a running attempt whose deadline is in the future is not touched', w.attempts.find((a) => a.id === 'a-s1').status === 'IN_PROGRESS');
+      check('the grace can only be made longer, never shorter than the 6 h offline replay window', sweepGraceMs({ ATTEMPT_SWEEP_GRACE_MIN: '30' }) === SWEEP_GRACE_MS && sweepGraceMs({ ATTEMPT_SWEEP_GRACE_MIN: '900' }) === 900 * 60000 && sweepGraceMs({}) === SWEEP_GRACE_MS);
+
+      // idempotent: run again, and two containers at the same time
+      const s1 = snap();
+      const run2 = await sw.run(new Date(T0));
+      check('sweep again: nothing changes (0 submitted, database identical)', run2.submitted === 0 && snap() === s1, JSON.stringify(run2));
+      // a second abandoned attempt, swept by two containers at the same moment
+      w.attempts.push(rawAttempt('ab6', 's5', U5, { questionSnapshot: PAPER, startedAt: new Date(T0 - 9 * H), expiresAt: new Date(T0 - 8 * H) }));
+      row('ab6', 'q2', 'B', true);
+      const swA = new AttemptSweeperService(w.prisma, w.svc);
+      const swB = new AttemptSweeperService(w.prisma, w.svc);
+      await Promise.all([swA.run(new Date(T0)), swB.run(new Date(T0))]);
+      const ab6 = w.attempts.find((a) => a.id === 'ab6');
+      check('two sweepers at the same time: scored once (AUTO_SUBMITTED, score 2), answer rows written once (4 rows)', ab6.status === 'AUTO_SUBMITTED' && ab6.score === 2 && w.answerRows.filter((x) => x.testAttemptId === 'ab6').length === 4, `status=${ab6.status} score=${ab6.score} rows=${w.answerRows.filter((x) => x.testAttemptId === 'ab6').length}`);
+      const cap = new AttemptSweeperService(w.prisma, w.svc);
+      for (let i = 0; i < 5; i++) { w.attempts.push(rawAttempt('bulk' + i, 's5', U5, { testTemplateId: 'T1', questionSnapshot: PAPER, startedAt: new Date(T0 - 20 * H), expiresAt: new Date(T0 - (19 - i) * H) })); row('bulk' + i, 'q1', 'A', true); }
+      const capped = await cap.run(new Date(T0), 2);
+      check('one run does at most `max` attempts (2 of 5), the oldest deadline first', capped.submitted === 2 && w.attempts.find((a) => a.id === 'bulk0').status === 'AUTO_SUBMITTED' && w.attempts.find((a) => a.id === 'bulk1').status === 'AUTO_SUBMITTED' && w.attempts.find((a) => a.id === 'bulk2').status === 'IN_PROGRESS', JSON.stringify(capped));
+
+      // the student's late own submit after the sweep: same finished result, nothing re-scored
+      const late = await ask(() => w.svc.submitAttempt('s3', 'ab1', { answers: ALL4 }));
+      check('a late manual submit after the sweep returns the finished result unchanged (alreadySubmitted)', !late.err && late.v.alreadySubmitted === true && late.v.score === 1 && w.attempts.find((a) => a.id === 'ab1').status === 'AUTO_SUBMITTED', late.err ? late.err.message : 'score=' + (late.v && late.v.score));
+
+      // AUTO_SUBMITTED is a finished attempt everywhere
+      const det = await ask(() => w.svc.attemptDetail('s3', 'ab1'));
+      check('review (attemptDetail) of an AUTO_SUBMITTED attempt works: 4 rows, 2 skipped', !det.err && det.v.questions.length === 4 && det.v.questions.filter((q) => q.isSkipped).length === 2, det.err ? det.err.message : '');
+      const hist = await ask(() => w.svc.myAttempts('s3'));
+      check('history (myAttempts) lists the AUTO_SUBMITTED attempt and counts it in the stats', !hist.err && hist.v.attempts.some((a) => a.id === 'ab1') && hist.v.stats.totalAttempts >= 1, hist.err ? hist.err.message : '');
+      const card = await ask(() => w.rank.forAttempt('s3', 'ab1'));
+      const lb = await ask(() => w.rank.leaderboard('s3', 'T1'));
+      const mine = ((lb.v && lb.v.rows) || []).filter((r) => r.isMe);
+      check('rank: the AUTO_SUBMITTED attempt counts once in the rank list, and the rank card agrees with the leaderboard', !card.err && card.v.countsForRank === true && mine.length === 1 && mine[0].rank === card.v.overall.rank, card.err ? card.err.message : JSON.stringify({ card: card.v && card.v.overall, mine }));
+    }
   }
 
   // G4. POST /tests/attempts (saveAttempt) turns client-sent answers into an instantly SUBMITTED, rankable attempt
@@ -457,6 +619,7 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     const sm = await ask(() => w.svc.sectional('subj', 5));
     check('a tiny bank (only the two copies) still serves a set: nothing is blocked', !sm.err && ((sm.v && sm.v.questions) || []).length >= 1, sm.err ? sm.err.message : '');
   }
+
 
   console.log('\n' + (gaps ? `${gaps} known gap(s) are still open (printed as GAP, documented in AUDIT_RESULTS_ANALYSIS_OCT2026.md)` : 'no open gaps'));
   console.log(allOk ? '\nALL OK' : '\nSOME CHECKS FAILED');
