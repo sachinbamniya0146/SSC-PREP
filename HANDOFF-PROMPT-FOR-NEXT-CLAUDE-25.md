@@ -1,0 +1,35 @@
+# Handoff 25 - the attempt remembers its paper (28 Oct 2026)
+
+Rules: `NEXT-CLAUDE-MASTER-PROMPT-V4.md` (Project docs). Start from Sachin's newest zip, ONE zip + `apply-fix.sh`, never ask him to run dev tools, say what was / was not run,
+push in three separate blocks (commit, `git push`, `git status -sb`) and check GitHub yourself afterwards. **The next handoff number is 26.** Earlier handoff: `HANDOFF-PROMPT-FOR-NEXT-CLAUDE-24.md` (its OPEN / ASK list still stands).
+Details of this session: `UPDATE_ATTEMPT_PAPER_OCT2026.md`. Audit with all tables: `AUDIT_RESULTS_ANALYSIS_OCT2026.md`.
+
+## State at the start of S25 (read from GitHub)
+- S24 `2d24ff6` was pushed by Sachin; CI success (Frontend + Backend). The Deploy job was still running when this was written - look at it.
+- CI's "Run tests" still runs nothing. Unit specs run only through `scripts/audit/runspecs.cjs`.
+
+## Delivered (S25, not yet seen by real CI until Sachin pushes)
+- `TestAttempt.questionSnapshot` now holds the paper's question ids for auto-built PYQ papers (`pyq-...`, `pyq-k-...`) and year-wise tests: `startAttempt` stores it (`paperIdsFor`), `saveAnswers` / `submitAttempt` use it,
+  untouched questions become skipped rows, totals = question count. Closes G1 / G1b / G2 for those attempts. New `tests/attempt-paper.ts` + spec. `results-sim` extended (ALL OK, 4 GAP lines).
+
+## Run / NOT run
+Run: `results-sim` (+ against S24 tree: 11 FAIL, S23 tree: 25 FAIL), `submit-sim`, `leaderboard-sim`, `plan-today-sim`, `withdrawal-sim`, `attempt-paper.spec`, other pure specs, `tests.marking.spec` via shim, tsc diff, minilint.
+NOT run: eslint, jest, `next build`, real Postgres, browser / phone, `startAttempt` against a real PYQ `paper()`.
+If Actions is red look first at `tests/tests.service.ts` (`startAttempt`, `paperIdsFor`, `saveAnswers`, `submitAttempt`) and `tests/attempt-paper.ts`.
+
+## Known limits / open GAPs
+1. G1 / G1b / G2 stay open for attempts WITHOUT a stored list: older attempts, generic full mocks (`paper()` generic path), the CGL sectional page (`tpl-cgl-pyq-2024`, `cglExam()`), sectional exams. Next: let those composers hand their list to `startAttempt({ questionIds })`.
+2. G3 answer key corrected after submit (needs Sachin's decision: re-score or freeze). 3. G4 `POST /tests/attempts` makes an instantly finished, rankable attempt (the practice flow and `cgl-test` still use it; do not just block it).
+4. BY DESIGN: bank PYQ browse, `GET /bank/set` and the public PDF answer key reveal keys. No prizes before G3 / G4 are closed.
+5. Abandoned attempts stay `IN_PROGRESS` (no sweeper). `AUTO_SUBMITTED` is ignored by `attemptDetail`, `myAttempts`, Telegram and analytics (rank / stats include it): fix together with the sweeper.
+6. `planPriceInr: 19` is hard-coded (needs Sachin's answer). 7. S23 + S24 UI never seen on a phone (360 px light + dark).
+8. `tests.marking.spec` has one test that fails under the shim on the old tree too ("an exam without any preset keeps scoring with the question columns", 0.75 vs 1.5).
+
+## Next, in this order
+1. Gate: Actions for the S25 push (`https://api.github.com/repos/sachinbamniya0146/SSC-PREP/actions/runs?per_page=6&branch=main`, then `.../runs/<id>/jobs`). WebFetch caches 15 min - add a changing query parameter if the answer looks stale.
+2. The other composers hand their list to `startAttempt` (generic `paper()` path, sectional, CGL page) - simulation first.
+3. Sweeper for abandoned timed attempts (after Sachin's answer), `AUTO_SUBMITTED` everywhere. 4. G4, then G3. 5. New result-screen UI. 6. Handoff-22 leftovers: question-paper view, calculator, tab-switch count to the server, 360 px soft keyboard. 7. Withdrawals unchanged.
+
+## OPEN / ASK Sachin (unchanged from handoff 24 unless he answered)
+1. Free daily practice limit (5 today, env `FREE_DAILY_PRACTICE_LIMIT`): raise? 2. Moderator on the leaderboard: hide (now) or show? 3. Abandoned timed attempts: auto-submit and count for rank?
+4. Answer key corrected later: re-score or keep the old score with a note? 5. Which plan should the free-limit text quote?

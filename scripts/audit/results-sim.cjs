@@ -1,4 +1,4 @@
-// Simulation of the REAL result / analysis code against an in-memory fake database (session 24, 28 Oct 2026, roadmap area 3).
+// Simulation of the REAL result / analysis code against an in-memory fake database (sessions 24 + 25, 28 Oct 2026, roadmap area 3).
 //   cd backend && tsx ../scripts/audit/results-sim.cjs .            -> the tree you run it in (must print ALL OK)
 //   cd <old-tree>/backend && tsx <new-tree>/scripts/audit/results-sim.cjs .   -> the same checks against the session-23 tree: FAILs
 // Real files: tests.service.ts (submitAttempt, saveAnswers, saveAttempt, attemptDetail), rank.service.ts, test-stats.service.ts,
@@ -129,7 +129,7 @@ function world() {
   const stats = { xp: 0 };
   const prisma = {
     user: { findUnique: async ({ where }) => { const u = userOf(where.id); return u ? { ...u } : null; } },
-    testTemplate: { findUnique: async ({ where }) => (where.id === 'T1' ? { ...template } : null) },
+    testTemplate: { findUnique: async ({ where }) => (where.id === 'T1' ? { ...template } : where.id === 'pyq-x' ? { ...template, id: 'pyq-x', type: 'SHIFT_WISE' } : null) },
     examPattern: { findMany: async () => [], findUnique: async ({ where }) => (where.id === 'p1' ? { ...pattern } : null) },
     testAttemptStats: { upsert: async () => ({}) },
     questionBankSet: { findMany: async () => [] },
@@ -272,27 +272,92 @@ const sumReview = (qs) => Math.round(qs.reduce((s, q) => s + (q.isCorrect ? q.ma
     w.questions.find((q) => q.id === 'q1').correctAnswer = 'A';
   }
 
-  // G1. abandoned / expired attempt scored from autosaved rows only: unvisited questions have no row
+  // ---- session 25: the attempt remembers the questions of its paper (TestAttempt.questionSnapshot) ----
+  const U3 = { id: 's3', fullName: 'Neha Gupta', role: 'STUDENT', state: 'Bihar', isSuspended: false };
+  const rawAttempt = (id, userId, user, extra) => ({ id, userId, testTemplateId: 'T1', status: 'IN_PROGRESS', score: 0, totalCorrect: 0, totalWrong: 0, totalSkipped: 0, accuracyPercent: 0, rank: null, percentile: null, startedAt: new Date(T0 - 2 * 3600e3), submittedAt: null, expiresAt: new Date(T0 - 3600e3), sectionPlan: null, lastSyncAt: null, user, ...extra });
+  const PAPER = ['q1', 'q2', 'q3', 'q4'];
+
+  // G1 (closed for papers with a stored list). Expired / abandoned attempt: only q1 was ever autosaved.
   {
     const w = world();
-    w.attempts.push({ id: 'a-s3', userId: 's3', testTemplateId: 'T1', status: 'IN_PROGRESS', score: 0, totalCorrect: 0, totalWrong: 0, totalSkipped: 0, accuracyPercent: 0, rank: null, percentile: null, startedAt: new Date(T0 - 2 * 3600e3), submittedAt: null, expiresAt: new Date(T0 - 3600e3), sectionPlan: null, lastSyncAt: null, user: w.attempts[0].user });
-    w.attempts[w.attempts.length - 1].user = { id: 's3', fullName: 'Neha Gupta', role: 'STUDENT', state: 'Bihar', isSuspended: false };
+    w.attempts.push(rawAttempt('a-s3', 's3', U3, { questionSnapshot: PAPER }));
     w.answerRows.push({ testAttemptId: 'a-s3', questionId: 'q1', selectedOption: 'A', isCorrect: true, timeSpentSeconds: 5, isMarkedForReview: false });
     const r = (await ask(() => w.svc.submitAttempt('s3', 'a-s3', { answers: ALL4 }))).v || {};
     const total = (r.totalCorrect || 0) + (r.totalWrong || 0) + (r.totalSkipped || 0);
-    gap('G1 expired attempt: right + wrong + skipped = question count (4)', total !== w.template.totalQuestions, `totals add up to ${total} of ${w.template.totalQuestions} (no question list is stored for a normal mock)`);
+    check('G1 expired attempt with a stored paper: right + wrong + skipped = question count (4)', total === 4 && r.totalCorrect === 1 && r.totalWrong === 0 && r.totalSkipped === 3, `right=${r.totalCorrect} wrong=${r.totalWrong} skipped=${r.totalSkipped}`);
+    check('G1 expired attempt: the late client payload is still ignored, only the autosaved q1 scores (+2)', r.score === 2, 'score=' + r.score);
     const det = (await ask(() => w.svc.attemptDetail('s3', 'a-s3'))).v || { questions: [] };
-    gap('G1b expired attempt: the review lists every question of the paper', det.questions.length !== w.template.totalQuestions, `review has ${det.questions.length} of ${w.template.totalQuestions} rows`);
+    check('G1b expired attempt: the review lists every question of the paper (4), the 3 untouched ones as skipped', det.questions.length === 4 && det.questions.filter((q) => q.isSkipped).length === 3, `rows=${det.questions.length} skipped=${det.questions.filter((q) => q.isSkipped).length}`);
+    check('G1b review: sum of the per-question marks = the stored score', sumReview(det.questions) === det.score, `sum=${sumReview(det.questions)} score=${det.score}`);
+    const filler = w.answerRows.filter((x) => x.testAttemptId === 'a-s3' && x.questionId !== 'q1');
+    check('untouched questions are stored as skipped rows (no answer, not correct)', filler.length === 3 && filler.every((x) => x.selectedOption === null && x.isCorrect === false), JSON.stringify(filler.map((x) => x.questionId)));
   }
 
-  // G2. autosave accepts ANY question id: a score can exceed the paper's maximum
+  // G1 on a question deleted from the bank after the attempt started: no row can be written for it (foreign key), submit must still work
   {
     const w = world();
-    w.attempts.push({ id: 'a-s5', userId: 's5', testTemplateId: 'T1', status: 'IN_PROGRESS', score: 0, totalCorrect: 0, totalWrong: 0, totalSkipped: 0, accuracyPercent: 0, rank: null, percentile: null, startedAt: new Date(T0 - 60000), submittedAt: null, expiresAt: new Date(T0 + 3600e3), sectionPlan: null, lastSyncAt: null, user: { id: 's5', fullName: 'Cheat Boy', role: 'STUDENT', state: 'Bihar', isSuspended: false } });
+    w.attempts.push(rawAttempt('a-s3', 's3', U3, { questionSnapshot: PAPER }));
+    w.answerRows.push({ testAttemptId: 'a-s3', questionId: 'q1', selectedOption: 'A', isCorrect: true, timeSpentSeconds: 5, isMarkedForReview: false });
+    w.questions.splice(w.questions.findIndex((q) => q.id === 'q4'), 1);
+    const out = await ask(() => w.svc.submitAttempt('s3', 'a-s3', { answers: [] }));
+    const r = out.v || {};
+    check('a question deleted after the start: submit still works, it is simply not counted (right 1, skipped 2)', !out.err && r.totalCorrect === 1 && r.totalSkipped === 2 && !w.answerRows.some((x) => x.questionId === 'q4'), out.err ? out.err.message : `right=${r.totalCorrect} skipped=${r.totalSkipped}`);
+  }
+
+  // G1 still open for an attempt WITHOUT a stored list (started before session 25, or a template other than a PYQ paper / year-wise test)
+  {
+    const w = world();
+    w.attempts.push(rawAttempt('a-s3', 's3', U3, {}));
+    w.answerRows.push({ testAttemptId: 'a-s3', questionId: 'q1', selectedOption: 'A', isCorrect: true, timeSpentSeconds: 5, isMarkedForReview: false });
+    const r = (await ask(() => w.svc.submitAttempt('s3', 'a-s3', { answers: ALL4 }))).v || {};
+    const total = (r.totalCorrect || 0) + (r.totalWrong || 0) + (r.totalSkipped || 0);
+    gap('G1 attempt without a stored list (older attempts, generic full mocks, CGL sectional page): right + wrong + skipped = question count (4)', total !== w.template.totalQuestions, `totals add up to ${total} of ${w.template.totalQuestions}`);
+  }
+
+  // G2 (closed for papers with a stored list). Autosave of ids that are not in the paper
+  {
+    const w = world();
+    w.attempts.push(rawAttempt('a-s5', 's5', { id: 's5', fullName: 'Cheat Boy', role: 'STUDENT', state: 'Bihar', isSuspended: false }, { startedAt: new Date(T0 - 60000), expiresAt: new Date(T0 + 3600e3), questionSnapshot: PAPER }));
+    const key = { q1: 'A', q2: 'B', q3: 'C', q4: 'D', q5: 'A', q6: 'A', q7: 'A' };
+    const sv = (await ask(() => w.svc.saveAnswers('s5', 'a-s5', { answers: Object.entries(key).map(([questionId, selectedOption]) => ({ questionId, selectedOption })) }))).v || {};
+    check('G2 autosave: only the 4 questions of the paper are stored, the 3 foreign ids are rejected', sv.saved === 4 && sv.rejected === 3 && !w.answerRows.some((x) => ['q5', 'q6', 'q7'].includes(x.questionId)), JSON.stringify(sv));
+    const r = (await ask(() => w.svc.submitAttempt('s5', 'a-s5', { answers: Object.entries(key).map(([questionId, selectedOption]) => ({ questionId, selectedOption })) }))).v || {};
+    check('G2 score never exceeds the paper maximum (10): full marks = 2 + 2 + 3 + 3', r.score === 10 && r.totalCorrect === 4 && r.totalSkipped === 0, `score=${r.score} right=${r.totalCorrect} skipped=${r.totalSkipped}`);
+    // submit alone (nothing autosaved before): foreign ids in the final payload are ignored
+    w.attempts.push(rawAttempt('a-s5b', 's5', { id: 's5', fullName: 'Cheat Boy', role: 'STUDENT', state: 'Bihar', isSuspended: false }, { startedAt: new Date(T0 - 60000), expiresAt: new Date(T0 + 3600e3), questionSnapshot: PAPER }));
+    const r2 = (await ask(() => w.svc.submitAttempt('s5', 'a-s5b', { answers: Object.entries(key).map(([questionId, selectedOption]) => ({ questionId, selectedOption })) }))).v || {};
+    check('G2 submit payload with foreign ids: ignored, score stays within the paper (10)', r2.score === 10 && r2.totalCorrect === 4, `score=${r2.score} right=${r2.totalCorrect}`);
+  }
+  // G2 still open for an attempt without a stored list
+  {
+    const w = world();
+    w.attempts.push(rawAttempt('a-s5', 's5', { id: 's5', fullName: 'Cheat Boy', role: 'STUDENT', state: 'Bihar', isSuspended: false }, { startedAt: new Date(T0 - 60000), expiresAt: new Date(T0 + 3600e3) }));
     const key = { q1: 'A', q2: 'B', q3: 'C', q4: 'D', q5: 'A', q6: 'A', q7: 'A' };
     await ask(() => w.svc.saveAnswers('s5', 'a-s5', { answers: Object.entries(key).map(([questionId, selectedOption]) => ({ questionId, selectedOption })) }));
     const r = (await ask(() => w.svc.submitAttempt('s5', 'a-s5', { answers: [] }))).v || {};
-    gap('G2 score never exceeds the paper maximum (10)', r.score > 10, `score=${r.score}, totalCorrect=${r.totalCorrect} on a 4-question paper (autosave does not check that the question belongs to the paper)`);
+    gap('G2 attempt without a stored list: score never exceeds the paper maximum (10)', r.score > 10, `score=${r.score}, totalCorrect=${r.totalCorrect} on a 4-question paper`);
+  }
+
+  // ---- where the list comes from: startAttempt ----
+  {
+    const w = world();
+    const snapOf = (id) => (w.attempts.find((a) => a.id === id) || {}).questionSnapshot;
+    const s1 = await ask(() => w.svc.startAttempt('s3', 'T1', { questionIds: ['q1', 'q2', 'q3', 'q4', 'q1'] }));
+    check('start with a composed list (year-wise test): stored without repeats, in order', !s1.err && JSON.stringify(snapOf(s1.v && s1.v.id)) === JSON.stringify(PAPER), s1.err ? s1.err.message : JSON.stringify(snapOf(s1.v && s1.v.id)));
+    const again = await ask(() => w.svc.startAttempt('s3', 'T1', { questionIds: ['q5'] }));
+    check('start again while running = resume: same attempt, its list is not replaced', !again.err && again.v.resumed === true && again.v.id === s1.v.id && JSON.stringify(snapOf(s1.v.id)) === JSON.stringify(PAPER));
+
+    const w2 = world();
+    const snap2 = (id) => (w2.attempts.find((a) => a.id === id) || {}).questionSnapshot;
+    let paperCalls = 0;
+    w2.svc.paper = async (uid, tid) => { paperCalls++; return { sections: [{ questions: [{ id: 'q1' }, { id: 'q2' }] }, { questions: [{ id: 'q3' }, { id: 'q4' }] }] }; };
+    const s2 = await ask(() => w2.svc.startAttempt('s3', 'pyq-x'));
+    check('start of an auto-built PYQ paper (SHIFT_WISE, pyq-...): the list is the composed paper', !s2.err && JSON.stringify(snap2(s2.v && s2.v.id)) === JSON.stringify(PAPER) && paperCalls === 1, s2.err ? s2.err.message : JSON.stringify(snap2(s2.v && s2.v.id)));
+    const s3 = await ask(() => w2.svc.startAttempt('s5', 'T1'));
+    check('start of any other template (generic mock, CGL sectional page): no list is guessed, paper() is not even asked', !s3.err && snap2(s3.v && s3.v.id) == null && paperCalls === 1, s3.err ? s3.err.message : 'snapshot=' + JSON.stringify(snap2(s3.v && s3.v.id)));
+    w2.svc.paper = async () => { throw new BadRequestException('Pattern needs questions for: Reasoning'); };
+    const s4 = await ask(() => w2.svc.startAttempt('s2', 'pyq-x'));
+    check('start when the paper cannot be composed: the attempt still starts, without a list', !s4.err && snap2(s4.v && s4.v.id) == null, s4.err ? s4.err.message : '');
   }
 
   // G4. POST /tests/attempts (saveAttempt) turns client-sent answers into an instantly SUBMITTED, rankable attempt

@@ -27,6 +27,7 @@ import { buildMarkingScheme, resolveMarking, schemeMaxMarks, totalMarksFor, type
 import { loadMarkingScheme } from './marking-scheme';
 import { loadRankRows, topScoreOf } from './rank-rows';
 import { durationOf, placeAmong, shortName } from './rank.util';
+import { hasCanonicalPaper, paperQuestionIds, readPaperSnapshot } from './attempt-paper';
 
 /** Fisher–Yates, in place. Used so a practice set is different on every start (sectional). */
 function shuffleInPlace<T>(arr: T[]): T[] {
@@ -212,7 +213,7 @@ export class TestsService {
   // Begin a timed attempt: server stamps startedAt + expiresAt from the
   // template duration. The client may render a countdown from expiresAt but
   // cannot extend it — submission after expiry is capped server-side.
-  async startAttempt(userId: string, testTemplateId: string, opts: { scribe?: boolean } = {}) {
+  async startAttempt(userId: string, testTemplateId: string, opts: { scribe?: boolean; questionIds?: string[] } = {}) {
     const template = await this.prisma.testTemplate.findUnique({
       where: { id: testTemplateId },
       include: { examPattern: true },
@@ -245,6 +246,9 @@ export class TestsService {
     // (every section's start/end) is frozen on the attempt now; expiresAt is the end of the last section.
     const plan = buildSectionPlan(template.examPattern, { scribe: !!opts.scribe });
     const expiresAt = new Date(now.getTime() + (plan ? plan.totalMs : (template.durationMinutes || 60) * 60 * 1000));
+    // Session 25: the attempt remembers the questions of its paper (see attempt-paper.ts). Autosave / submit then accept only those,
+    // and every question the student never touched is counted as skipped. null = no list (other composers): behaviour as before.
+    const paperIds = await this.paperIdsFor(userId, template, opts.questionIds);
     const attempt = await this.prisma.testAttempt.create({
       data: {
         userId,
@@ -253,10 +257,23 @@ export class TestsService {
         startedAt: now,
         expiresAt,
         ...(plan ? { sectionPlan: plan as unknown as Prisma.InputJsonValue } : {}),
+        ...(paperIds ? { questionSnapshot: paperIds as unknown as Prisma.InputJsonValue } : {}),
       },
       select: { id: true, startedAt: true, expiresAt: true, status: true },
     });
     return { ...attempt, plan, serverNow: Date.now(), resumed: false, answers: [] };
+  }
+
+  // The question ids a NEW attempt is tied to: the list the caller composed itself (year-wise start), else the canonical paper of an
+  // auto-built PYQ template, else null. Never throws: a paper that cannot be composed leaves the attempt without a list, as before.
+  private async paperIdsFor(userId: string, template: { id: string; type: string }, given?: string[]): Promise<string[] | null> {
+    if (Array.isArray(given)) return readPaperSnapshot(given);
+    if (!hasCanonicalPaper(template)) return null;
+    try {
+      return readPaperSnapshot(paperQuestionIds(await this.paper(userId, template.id)));
+    } catch {
+      return null;
+    }
   }
 
 // Score and finalize an in-progress attempt. Server-authoritative:
@@ -359,7 +376,11 @@ async submitAttempt(
       });
     }
   }
-  const answers = Array.from(merged.values());
+  // Session 25: an attempt that remembers its paper (questionSnapshot) is scored on that paper only - an answer for a question that is not
+  // in it is ignored (it used to be scored, so a score could pass the paper maximum).
+  const paperIds = readPaperSnapshot((attempt as any).questionSnapshot);
+  const paperSet = paperIds ? new Set(paperIds) : null;
+  const answers = Array.from(merged.values()).filter((a) => !paperSet || paperSet.has(a.questionId));
 
   // Re-score against DB answer key (identical rules to saveAttempt).
   let score = 0;
@@ -404,6 +425,21 @@ async submitAttempt(
   score = Math.round(score * 100) / 100; // 1/3-mark schemes must not leave 0.30000000000000004 in the DB
   const accuracyPercent =
     totalCorrect + totalWrong > 0 ? Math.round((totalCorrect / (totalCorrect + totalWrong)) * 1000) / 10 : 0;
+
+  // Session 25: right + wrong + skipped = the number of questions of the paper. A question the student never opened has no autosave row, so it
+  // used to be missing from the totals and from the review; it is now a skipped row (written below, after the claim, with the other rows).
+  // (A question that was deleted from the bank after the attempt started is left out: its row could not be written - foreign key.)
+  const scoredIds = new Set(scoredAnswers.map((a) => a.questionId));
+  const missingIds = paperIds ? paperIds.filter((id) => !scoredIds.has(id)) : [];
+  const stillThere = missingIds.length
+    ? new Set((await this.prisma.question.findMany({ where: { id: { in: missingIds } }, select: { id: true } })).map((q: { id: string }) => q.id))
+    : new Set<string>();
+  const untouched = missingIds.filter((id) => stillThere.has(id));
+  totalSkipped += untouched.length;
+  const rowsToWrite = [
+    ...scoredAnswers,
+    ...untouched.map((questionId) => ({ questionId, selectedOption: null, isCorrect: false, timeSpentSeconds: 0 })),
+  ];
 
   // BUG FIX (Session 21 — "analysis showing wrong selected answer" audit):
   // this used to write scoredAnswers with a single nested
@@ -474,9 +510,9 @@ async submitAttempt(
   // If this write fails the attempt is put back to IN_PROGRESS so the student's retry / the replay queue can
   // submit it again, instead of leaving a SUBMITTED attempt whose review rows disagree with its score.
   try {
-    if (scoredAnswers.length) {
+    if (rowsToWrite.length) {
       await Promise.all(
-        scoredAnswers.map((a) =>
+        rowsToWrite.map((a) =>
           this.prisma.attemptAnswer.upsert({
             where: { testAttemptId_questionId: { testAttemptId: attempt.id, questionId: a.questionId } },
             create: {
@@ -598,13 +634,18 @@ async saveAnswers(
 ) {
   const attempt = await this.prisma.testAttempt.findFirst({
     where: { id: attemptId, userId },
-    select: { id: true, status: true, startedAt: true, sectionPlan: true, lastSyncAt: true },
+    select: { id: true, status: true, startedAt: true, sectionPlan: true, lastSyncAt: true, questionSnapshot: true },
   });
   if (!attempt) throw new BadRequestException('Attempt not found');
   if (attempt.status !== 'IN_PROGRESS') throw new BadRequestException('Attempt is not in progress');
 
-  const answers = input.answers ?? [];
-  if (!answers.length) return { saved: 0 };
+  // Session 25: an attempt that remembers its paper accepts answers for the questions of that paper only (rows for other ids used to be
+  // stored and scored, and they also unlocked answer keys after submit).
+  const paperIds = readPaperSnapshot(attempt.questionSnapshot);
+  const paperSet = paperIds ? new Set(paperIds) : null;
+  const answers = (input.answers ?? []).filter((a) => !paperSet || paperSet.has(a.questionId));
+  const notInPaper = (input.answers ?? []).length - answers.length;
+  if (!answers.length) return paperSet ? { saved: 0, rejected: notInPaper } : { saved: 0 };
 
   const questions = await this.prisma.question.findMany({
     where: { id: { in: answers.map((a) => a.questionId) } },
@@ -660,7 +701,7 @@ async saveAnswers(
     });
     saved++;
   }
-  return { saved, rejected };
+  return { saved, rejected: rejected + notInPaper };
 }
 
   async listAvailable() {
@@ -1845,7 +1886,8 @@ async saveAnswers(
 
     // Reuses the exact same server-authoritative session start as every
     // other test type: stamps startedAt/expiresAt, handles resume-on-refresh.
-    const attempt = await this.startAttempt(userId, template.id);
+    // Session 25: the attempt is tied to exactly the questions composed above (the composer for this ad-hoc template is this function, not paper()).
+    const attempt = await this.startAttempt(userId, template.id, { questionIds: validRows.map((r) => r.id) });
 
     return {
       attemptId: attempt.id,
