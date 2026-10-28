@@ -11,6 +11,7 @@ import { ScoreHero, ScoreComparison, TimeAnalysis, SubjectBars, RetryPanel, Sect
 import { StemMedia, QFigure, RichText } from "@/components/QuestionMedia";
 import { useT } from "@/lib/i18n";
 import RankCard, { type AttemptRank } from "@/components/RankCard";
+import { ResultNotices, SectionScoreTable } from "@/components/ResultOverview";
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { useBookmarkedSet } from "@/lib/bookmark-store";
 import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang, type ReviewLang } from "@/components/SolutionPanel";
@@ -48,6 +49,8 @@ type ReviewQuestion = {
   marks: number;
   negativeMarks: number;
   sectionIndex?: number | null;
+  // true = the answer key changed after this attempt was scored and the attempt is not re-scored yet (the verdict is the old one)
+  keyChanged?: boolean;
 };
 
 type AttemptDetail = {
@@ -62,6 +65,12 @@ type AttemptDetail = {
   rank?: number | null;
   percentile?: number | null;
   submittedAt: string;
+  status?: string | null;
+  expiresAt?: string | null;
+  rescoredAt?: string | null;
+  scoreBeforeRescore?: number | null;
+  rescoreNote?: string | null;
+  tabSwitches?: number | null;
   testTemplate: { id: string; title: string; totalQuestions: number; totalMarks: number };
   topper?: { score: number | null; accuracyPercent: number | null } | null;
   sectionPlan?: SectionPlanLike | null;
@@ -189,6 +198,11 @@ export default function AttemptReviewPage() {
       document.getElementById(`q-${i}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 60);
   };
+  // From the section table: show only wrong / skipped / correct questions and bring the review list into view.
+  const showOnly = (f: Filter) => {
+    setFilter(f);
+    window.setTimeout(() => document.getElementById("review-filters")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+  };
   const totalTimeSec = questions.reduce((a, q) => a + (q.timeSpentSeconds || 0), 0);
   const filtered =
     filter === "wrong" ? questions.filter((q) => !q.isCorrect && !q.isSkipped)
@@ -203,16 +217,16 @@ export default function AttemptReviewPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <a href="/results" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-          <div className="flex items-center gap-3">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-2">
+          <a href="/results" className="shrink-0 text-base font-bold sm:text-lg">← <span className="text-primary">SSC</span>PrepHub</a>
+          <div className="flex items-center gap-2 sm:gap-3">
             <ReviewLangToggle lang={lang} onChange={setLang} />
-            <a href="/test" className="btn border border-border px-4 py-1.5 text-sm hover:bg-muted">New Test</a>
+            <a href="/test" className="btn shrink-0 border border-border px-3 py-1.5 text-xs hover:bg-muted sm:px-4 sm:text-sm">New Test</a>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-4 py-8">
+      <main className="mx-auto max-w-5xl px-3 py-6 sm:px-4 sm:py-8">
         <h1 className="text-2xl font-bold">📊 Result Review</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           {tpl.title} · {fmt(detail.submittedAt)}
@@ -236,6 +250,12 @@ export default function AttemptReviewPage() {
 
         {/* All-India + State rank, percentile and toppers of this test */}
         <RankCard attemptId={String(params.attemptId)} templateId={detail.testTemplateId || tpl.id} onRank={setLiveRank} />
+
+        {/* why a number is what it is: auto-submitted, re-scored after a key fix, key changed and not re-scored yet */}
+        <ResultNotices attempt={detail} questions={questions} />
+
+        {/* section-wise: right / wrong / skipped / marks / time; a tap filters the review below */}
+        <SectionScoreTable questions={questions} plan={detail.sectionPlan} onFilter={showOnly} />
 
         {/* Study-Plan test verdict: chapters <90% are un-marked as weak (Sep 29 2026) */}
         {planVerdict && (
@@ -353,14 +373,14 @@ export default function AttemptReviewPage() {
             <div className="mt-3 space-y-2">
               {realTopics.map((t) => (
                 <div key={t.name} className="flex items-center gap-3 text-sm">
-                  <span className="w-40 truncate text-muted-foreground">{t.name}</span>
+                  <span className="w-24 shrink-0 truncate text-muted-foreground sm:w-40">{t.name}</span>
                   <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
                     <div
                       className={`h-full rounded-full ${t.acc < 40 ? "bg-danger" : t.acc < 70 ? "bg-warning" : "bg-success"}`}
                       style={{ width: `${t.acc}%` }}
                     />
                   </div>
-                  <span className="w-24 text-right text-xs text-muted-foreground">{t.correct}/{t.total} · {t.acc}%</span>
+                  <span className="w-20 shrink-0 text-right text-xs text-muted-foreground sm:w-24">{t.correct}/{t.total} · {t.acc}%</span>
                 </div>
               ))}
             </div>
@@ -370,14 +390,14 @@ export default function AttemptReviewPage() {
                 <div className="mt-2 space-y-2">
                   {subTopics.map((t) => (
                     <div key={t.name} className="flex items-center gap-3 text-sm">
-                      <span className="w-48 truncate text-xs text-muted-foreground">{t.name}</span>
+                      <span className="w-24 shrink-0 truncate text-xs text-muted-foreground sm:w-48">{t.name}</span>
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                         <div
                           className={`h-full rounded-full ${t.acc < 40 ? "bg-danger" : t.acc < 70 ? "bg-warning" : "bg-success"}`}
                           style={{ width: `${t.acc}%` }}
                         />
                       </div>
-                      <span className="w-24 text-right text-xs text-muted-foreground">{t.correct}/{t.total} · {t.acc}%</span>
+                      <span className="w-20 shrink-0 text-right text-xs text-muted-foreground sm:w-24">{t.correct}/{t.total} · {t.acc}%</span>
                     </div>
                   ))}
                 </div>
@@ -387,7 +407,7 @@ export default function AttemptReviewPage() {
         )}
 
         {/* Filter tabs */}
-        <div className="mt-6 flex flex-wrap gap-2">
+        <div id="review-filters" className="mt-6 flex scroll-mt-20 flex-wrap gap-2">
           {(["all", "wrong", "skipped", "correct", "saved"] as Filter[]).map((f) => {
             const count =
               f === "wrong" ? detail.totalWrong : f === "skipped" ? detail.totalSkipped : f === "correct" ? detail.totalCorrect : f === "saved" ? savedCount : questions.length;
@@ -500,6 +520,12 @@ function QuestionReview({ q, index, lang, showPaperNo }: { q: ReviewQuestion; in
           lang={lang}
         />
       </div>
+
+      {q.keyChanged && (
+        <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+          ⚠️ {tr("The answer key of this question was changed after your test. The right option above is the new one; your score still uses the old key until it is re-scored.", "Is sawal ki answer key test ke baad badli. Upar sahi option naya hai; re-score hone tak score purani key se hi hai.")}
+        </p>
+      )}
 
       <div className="mt-4">
         <SolutionPanel
