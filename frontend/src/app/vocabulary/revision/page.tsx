@@ -11,6 +11,7 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 import { startCashfreeCheckout, type BiMsg } from "@/lib/vocab-pay";
 import BiMessage from "@/components/BiMessage";
 import { useT } from "@/lib/i18n";
+import { VocabReviewList, type VocabReviewItem } from "@/components/VocabReview";
 
 type Status = {
   due: boolean;
@@ -28,7 +29,7 @@ type Status = {
 };
 type Q = { id: string; questionText: string; options: { key: string; text: string }[] };
 type Session = { sessionId: string; timeLimitSec: number; totalQuestions: number; questions: Q[] };
-type Review = { id: string; questionText: string; options: { key: string; text: string }[]; givenAnswer: string | null; correctAnswer: string; isCorrect: boolean; explanation?: string | null };
+type Review = VocabReviewItem;
 type Result = { scorePct: number; correct: number; wrong: number; total: number; wrongWords: { slug: string; word: string }[]; allClear: boolean; messages: { summary: BiMsg }; review: Review[] };
 
 const fmt = (s: number) => `${String(Math.floor(Math.max(0, s) / 60)).padStart(2, "0")}:${String(Math.max(0, s) % 60).padStart(2, "0")}`;
@@ -206,18 +207,7 @@ export default function VocabRevisionPage() {
             ))}
           </div>
         )}
-        <div className="mt-6 space-y-3">
-          <h2 className="text-sm font-bold">Review</h2>
-          {result.review.map((r, i) => (
-            <div key={r.id} className={`rounded-xl border p-4 text-sm ${r.isCorrect ? "border-emerald-500/30" : "border-red-500/30"}`}>
-              <p className="font-semibold">{i + 1}. {r.questionText}</p>
-              <p className="mt-1 text-xs">
-                Aapka: <b>{r.givenAnswer ?? "—"}</b> · Sahi: <b className="text-emerald-600">{r.correctAnswer}</b>
-              </p>
-              {r.explanation && <p className="mt-1 text-xs text-muted-foreground">{r.explanation}</p>}
-            </div>
-          ))}
-        </div>
+        <VocabReviewList items={result.review} />
         <a href="/vocabulary" className="btn btn-outline mt-6 block py-2.5 text-center text-sm">← Vocabulary</a>
       </>,
     );

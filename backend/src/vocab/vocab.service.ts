@@ -320,6 +320,7 @@ export class VocabService {
         correctAnswer: q.correctAnswer,
         isCorrect,
         explanation: q.explanation,
+        explanationHindi: q.explanationHindi,
       };
     });
     const scorePct = Math.round((correct / questions.length) * 100);

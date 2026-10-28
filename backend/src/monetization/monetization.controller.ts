@@ -26,10 +26,12 @@ export class MonetizationController {
   @Post('coupon/validate')
   validateCoupon(
     @CurrentUser() user: { userId: string },
-    @Body() body: { code: string; amountInr: number },
+    @Body() body: { code: string; planId?: string; amountInr?: number },
   ) {
-    // userId lets the service reject a coupon this user already redeemed.
-    return this.service.validateCoupon(body.code, body.amountInr, user.userId);
+    // planId (preferred): the amount is the plan's current sale price, computed on the server, and
+    // plan-specific coupon rules can be checked. amountInr is only kept for older clients.
+    // userId lets the service enforce the coupon's per-student limit.
+    return this.service.validateCoupon(body.code, body.amountInr, user.userId, body.planId);
   }
 
   @Get('history')

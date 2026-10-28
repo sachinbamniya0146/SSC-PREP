@@ -118,9 +118,10 @@ export class VocabAdminController {
     if (!['A', 'B', 'C', 'D'].includes(correctAnswer)) throw new BadRequestException('Sahi answer A, B, C ya D hona chahiye');
     const explanation = String(body?.explanation ?? '').trim();
     if (!explanation) throw new BadRequestException('Solution / explanation zaroori hai');
+    const explanationHindi = String(body?.explanationHindi ?? '').trim() || null;
     const qt = body?.questionType === undefined || body?.questionType === null ? '' : String(body.questionType).trim().toUpperCase();
     if (qt && !['SYNONYM', 'ANTONYM', 'CONTEXT'].includes(qt)) throw new BadRequestException('questionType SYNONYM, ANTONYM ya CONTEXT hona chahiye');
-    return { questionText, optionsJson: options as any, correctAnswer, explanation, questionType: qt || null };
+    return { questionText, optionsJson: options as any, correctAnswer, explanation, explanationHindi, questionType: qt || null };
   }
 
   /** Add one word by hand (no Excel). It goes to the END of the list; a word deleted earlier gets its students' unlocks back. */
@@ -265,7 +266,7 @@ export class VocabAdminController {
     const questions = await this.prisma.vocabQuestion.findMany({
       where: { wordId: id },
       orderBy: { createdAt: 'asc' },
-      select: { id: true, questionText: true, optionsJson: true, correctAnswer: true, explanation: true, questionType: true },
+      select: { id: true, questionText: true, optionsJson: true, correctAnswer: true, explanation: true, explanationHindi: true, questionType: true },
     });
     return { word: word.word, questions };
   }

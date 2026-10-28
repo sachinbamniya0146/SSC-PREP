@@ -11,18 +11,12 @@ import * as React from "react";
 import { useParams } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { VocabReviewList, type VocabReviewItem } from "@/components/VocabReview";
+import { CheckIcon } from "@/components/TickBox";
 
 type QuizQuestion = { id: string; questionText: string; options: { key: string; text: string }[] };
 type QuizData = { wordId: string; word: string; slug: string; masteryThresholdPct: number; requiredCorrectCount: number; timeLimitSec?: number; questions: QuizQuestion[] };
-type ReviewItem = {
-  id: string;
-  questionText: string;
-  options: { key: string; text: string }[];
-  givenAnswer: string | null;
-  correctAnswer: string;
-  isCorrect: boolean;
-  explanation?: string | null;
-};
+type ReviewItem = VocabReviewItem;
 type SubmitResult = {
   scorePct: number;
   correct: number;
@@ -149,19 +143,7 @@ export default function VocabWordQuizPage() {
             )}
           </div>
 
-          <div className="mt-6 space-y-3">
-            <h2 className="text-sm font-bold">Review</h2>
-            {result.review.map((r, i) => (
-              <div key={r.id} className={`rounded-xl border p-4 text-sm ${r.isCorrect ? "border-emerald-500/30" : "border-danger/30"}`}>
-                <p className="font-medium">{i + 1}. {r.questionText}</p>
-                <p className="mt-1.5 text-xs">
-                  Aapka jawab: <span className={r.isCorrect ? "text-emerald-600 dark:text-emerald-400" : "text-danger"}>{r.givenAnswer ?? "Skipped"}</span>
-                  {!r.isCorrect && <span className="ml-2 text-emerald-600 dark:text-emerald-400">Sahi: {r.correctAnswer}</span>}
-                </p>
-                {r.explanation && <p className="mt-1.5 text-xs text-muted-foreground">💡 {r.explanation}</p>}
-              </div>
-            ))}
-          </div>
+          <VocabReviewList items={result.review} />
 
           <div className="mt-6 flex gap-2">
             {!passed && (
@@ -207,7 +189,8 @@ export default function VocabWordQuizPage() {
             <button
               key={qq.id}
               onClick={() => setCurrent(i)}
-              className={`h-7 w-7 rounded-md text-xs font-semibold ${
+              aria-label={`${tr("Question", "Sawal")} ${i + 1}`}
+              className={`h-9 w-9 touch-manipulation rounded-md text-xs font-semibold ${
                 i === current ? "bg-primary text-primary-foreground" : answers[qq.id] ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400" : "bg-muted text-muted-foreground"
               }`}
             >
@@ -218,19 +201,29 @@ export default function VocabWordQuizPage() {
 
         <div className="rounded-xl border border-border bg-card p-5">
           <p className="font-medium">{q.questionText}</p>
-          <div className="mt-4 space-y-2">
-            {q.options.map((opt) => (
-              <button
-                key={opt.key}
-                onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: opt.key }))}
-                className={`w-full rounded-lg border p-3 text-left text-sm transition ${
-                  answers[q.id] === opt.key ? "border-primary bg-primary/10" : "border-border hover:bg-muted/40"
-                }`}
-              >
-                <span className="mr-2 font-semibold">{opt.key}.</span>
-                {opt.text}
-              </button>
-            ))}
+          <div className="mt-4 space-y-2" role="radiogroup" aria-label={tr("Options", "Options")}>
+            {q.options.map((opt) => {
+              const picked = answers[q.id] === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: opt.key }))}
+                  role="radio"
+                  aria-checked={picked}
+                  className={`flex min-h-[52px] w-full touch-manipulation items-center gap-3 rounded-lg border p-3 text-left text-[15px] transition active:scale-[0.99] sm:text-sm ${
+                    picked ? "border-primary bg-primary/10" : "border-border hover:bg-muted/40"
+                  }`}
+                >
+                  <span className="min-w-0 flex-1 break-words"><span className="mr-2 font-semibold">{opt.key}.</span>{opt.text}</span>
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 ${picked ? "border-primary bg-primary text-primary-foreground" : "border-border text-transparent"}`}
+                  >
+                    <CheckIcon className="h-3.5 w-3.5" />
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 

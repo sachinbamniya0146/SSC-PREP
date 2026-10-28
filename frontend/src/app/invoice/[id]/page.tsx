@@ -14,6 +14,8 @@ type Invoice = {
   item: string;
   listPriceInr: number;
   discountInr: number;
+  offerDiscountInr?: number;
+  offerPct?: number | null;
   couponCode: string | null;
   paidInr: number;
   validFrom: string | null;
@@ -87,6 +89,12 @@ export default function InvoicePage() {
               </td>
               <td className="py-2 text-right">₹{inv.listPriceInr}</td>
             </tr>
+            {(inv.offerDiscountInr ?? 0) > 0 && (
+              <tr className="border-b text-green-700">
+                <td className="py-2">Offer{inv.offerPct ? ` (${inv.offerPct}%)` : ""}</td>
+                <td className="py-2 text-right">− ₹{inv.offerDiscountInr}</td>
+              </tr>
+            )}
             {inv.discountInr > 0 && (
               <tr className="border-b text-green-700">
                 <td className="py-2">Coupon {inv.couponCode}</td>

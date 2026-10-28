@@ -102,10 +102,10 @@ export class VocabUploadService {
     const wsWords = XLSX.utils.aoa_to_sheet([wordsHeader, wordsRow]);
     XLSX.utils.book_append_sheet(wb, wsWords, 'Words');
 
-    const qHeader = ['wordSlug*', 'questionText*', 'optionA*', 'optionB*', 'optionC*', 'optionD*', 'correctAnswer*', 'explanation', 'questionType'];
+    const qHeader = ['wordSlug*', 'questionText*', 'optionA*', 'optionB*', 'optionC*', 'optionD*', 'correctAnswer*', 'explanation', 'explanationHindi', 'questionType'];
     const qRow = [
       'abate', 'Choose the word closest in meaning to "ABATE".', 'Subside', 'Intensify', 'Ignore', 'Postpone', 'A',
-      'Abate means to become less intense — "subside" is the closest.', 'SYNONYM',
+      'Abate means to become less intense — "subside" is the closest.', 'Abate ka matlab hai kam hona — "subside" sabse paas ka arth hai.', 'SYNONYM',
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([qHeader, qRow]), 'Questions');
 
@@ -354,6 +354,7 @@ export class VocabUploadService {
             continue;
           }
           const explanation = optionalCell(row, 'explanation');
+          const explanationHindi = optionalCell(row, 'explanationHindi');
           if (!explanation) { skipQ(rowNum, wordLabel, 'MISSING_SOLUTION', 'Solution/explanation missing hai'); continue; }
 
           const key = `${wordId}::${normText(questionText)}`;
@@ -370,11 +371,12 @@ export class VocabUploadService {
             // already in the system -> refresh it from the sheet (questionType only when the sheet gives one)
             const data: Record<string, any> = { questionText, optionsJson, correctAnswer, explanation };
             if (questionType !== null) data.questionType = questionType;
+            if (explanationHindi !== null) data.explanationHindi = explanationHindi; // blank cell keeps the stored Hindi
             toUpdateQ.push({ id: existingId, data });
             continue;
           }
 
-          toCreateQ.push({ wordId, questionText, optionsJson, correctAnswer, explanation, questionType, _label: wordLabel });
+          toCreateQ.push({ wordId, questionText, optionsJson, correctAnswer, explanation, explanationHindi, questionType, _label: wordLabel });
         } catch (e) {
           result.errors.push({ sheet: 'Questions', row: rowNum, error: e instanceof Error ? e.message : String(e) });
         }

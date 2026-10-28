@@ -1,5 +1,5 @@
 import { grantOrExtendSubscription } from '../monetization/subscription.util';
-import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Patch, Delete, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Post, Body, Param, ParseUUIDPipe, Patch, Delete, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -7,6 +7,7 @@ import { Role, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { MonetizationService } from '../monetization/monetization.service';
+import { checkCouponInput, checkPlanInput, couponStatus, planPricing } from '../monetization/pricing.util';
 import { AdminService } from './admin.service';
 import { PayoutService } from '../referral/payout.service';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -385,37 +386,68 @@ export class AdminController {
   }
 
   // ---- Plan Management (Admin) ----
+  // Every write goes through checkPlanInput() (whitelist + range checks) — the old code passed the raw
+  // request body straight to Prisma.
+
+  /** Admin pricing screen: ALL plans (also switched-off ones) with the live pricing block + subscriber counts. */
+  @Get('pricing/plans')
+  async pricingPlans() {
+    const rows = await this.prisma.plan.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { durationMonths: 'asc' }, { priceInr: 'asc' }],
+      include: { _count: { select: { subscriptions: true } } },
+    });
+    const now = new Date();
+    return {
+      plans: rows.map(({ _count, ...p }) => ({ ...p, subscribers: _count.subscriptions, pricing: planPricing(p, now) })),
+    };
+  }
+
   @Post('plans')
-  async createPlan(@Body() body: { name: string; durationMonths: number; priceInr: number }) {
+  async createPlan(@Body() body: Record<string, unknown>) {
+    const r = checkPlanInput(body ?? {}, false);
+    if (!r.ok) throw new BadRequestException(r.error);
+    const d = r.data;
     const plan = await this.prisma.plan.create({
-      data: { name: body.name, durationMonths: body.durationMonths, priceInr: body.priceInr, isActive: true },
+      data: { ...d, name: d.name as string, durationMonths: d.durationMonths as number, priceInr: d.priceInr as number, isActive: d.isActive ?? true },
     });
     await this.auditLogService.log({
       action: 'PLAN_CREATED',
       targetEntity: 'Plan',
       entityId: plan.id,
-      metadataJson: body,
+      metadataJson: JSON.parse(JSON.stringify(r.data)),
     });
-    return { plan };
+    return { plan: { ...plan, pricing: planPricing(plan) } };
   }
 
   @Patch('plans/:id')
-  async updatePlan(@Param('id', ParseUUIDPipe) id: string, @Body() body: { name?: string; durationMonths?: number; priceInr?: number; isActive?: boolean }) {
-    const plan = await this.prisma.plan.update({
-      where: { id },
-      data: body,
+  async updatePlan(@Param('id', ParseUUIDPipe) id: string, @Body() body: Record<string, unknown>) {
+    const current = await this.prisma.plan.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException('Plan not found');
+    const r = checkPlanInput(body ?? {}, true, {
+      priceInr: current.priceInr,
+      mrpInr: current.mrpInr,
+      offerPct: current.offerPct,
+      offerStartsAt: current.offerStartsAt,
+      offerEndsAt: current.offerEndsAt,
     });
+    if (!r.ok) throw new BadRequestException(r.error);
+    const plan = await this.prisma.plan.update({ where: { id }, data: r.data });
     await this.auditLogService.log({
       action: 'PLAN_UPDATED',
       targetEntity: 'Plan',
       entityId: id,
-      metadataJson: body,
+      metadataJson: JSON.parse(JSON.stringify(r.data)),
     });
-    return { plan };
+    return { plan: { ...plan, pricing: planPricing(plan) } };
   }
 
   @Delete('plans/:id')
   async deletePlan(@Param('id', ParseUUIDPipe) id: string) {
+    const subs = await this.prisma.subscription.count({ where: { planId: id } });
+    if (subs > 0) {
+      // Subscriptions keep a hard reference to their plan (and the students' history needs it) — switch it off instead.
+      throw new BadRequestException(`This plan has ${subs} subscription(s) — it cannot be deleted. Switch it off instead (it disappears from the pricing page, existing students keep their access).`);
+    }
     await this.prisma.plan.delete({ where: { id } });
     await this.auditLogService.log({
       action: 'PLAN_DELETED',
@@ -430,50 +462,86 @@ export class AdminController {
   async listCoupons() {
     const coupons = await this.prisma.coupon.findMany({
       orderBy: { createdAt: 'desc' },
+      take: 500,
     });
-    return { coupons };
+    // One grouped query for "how many paid orders / how much revenue / how much discount" per code.
+    const stats = await this.prisma.$queryRaw<Array<{ code: string; orders: number; revenue: number; discount: number }>>`
+      SELECT "metadataJson"->>'couponCode' AS code,
+             COUNT(*)::int AS orders,
+             COALESCE(SUM("amountInr"), 0)::float AS revenue,
+             COALESCE(SUM(NULLIF("metadataJson"->>'discount', '')::float), 0)::float AS discount
+      FROM "payments"
+      WHERE "status" = 'SUCCESS' AND "metadataJson"->>'couponCode' IS NOT NULL
+      GROUP BY 1`;
+    const byCode = new Map(stats.map((x) => [x.code, x]));
+    const now = new Date();
+    return {
+      coupons: coupons.map((c) => {
+        const st = byCode.get(c.code);
+        return {
+          ...c,
+          status: couponStatus(c, now),
+          paidOrders: st?.orders ?? 0,
+          revenueInr: st?.revenue ?? 0,
+          discountGivenInr: st?.discount ?? 0,
+        };
+      }),
+    };
   }
 
   @Post('coupons')
-  async createCoupon(@Body() body: { code: string; description?: string; discountPct?: number; discountInr?: number; maxUses?: number; expiresAt?: string }) {
-    if (body.discountPct && body.discountInr) throw new BadRequestException('Use either discountPct or discountInr, not both');
-    const coupon = await this.prisma.coupon.create({
-      data: {
-        code: body.code.trim().toUpperCase(),
-        description: body.description,
-        discountPct: body.discountPct,
-        discountInr: body.discountInr,
-        maxUses: body.maxUses ?? 1,
-        expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
-        isActive: true,
-      },
-    });
+  async createCoupon(@Body() body: Record<string, unknown>) {
+    const r = checkCouponInput(body ?? {}, false);
+    if (!r.ok) throw new BadRequestException(r.error);
+    const d = r.data;
+    let coupon;
+    try {
+      coupon = await this.prisma.coupon.create({
+        data: { ...d, code: d.code as string, isActive: d.isActive ?? true },
+      });
+    } catch (e) {
+      if ((e as { code?: string })?.code === 'P2002') throw new ConflictException(`Coupon code ${d.code} already exists.`);
+      throw e;
+    }
     await this.auditLogService.log({
       action: 'COUPON_CREATED',
       targetEntity: 'Coupon',
       entityId: coupon.id,
-      metadataJson: body,
+      metadataJson: JSON.parse(JSON.stringify(r.data)),
     });
     return { coupon };
   }
 
   @Patch('coupons/:id')
-  async updateCoupon(@Param('id', ParseUUIDPipe) id: string, @Body() body: { description?: string; discountPct?: number; discountInr?: number; maxUses?: number; expiresAt?: string; isActive?: boolean }) {
-    const coupon = await this.prisma.coupon.update({
-      where: { id },
-      data: body,
+  async updateCoupon(@Param('id', ParseUUIDPipe) id: string, @Body() body: Record<string, unknown>) {
+    const current = await this.prisma.coupon.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException('Coupon not found');
+    // the code itself and usesCount can never be changed from here
+    const { code: _code, usesCount: _uses, ...rest } = (body ?? {}) as Record<string, unknown>;
+    const r = checkCouponInput(rest, true, {
+      discountPct: current.discountPct,
+      discountInr: current.discountInr,
+      startsAt: current.startsAt,
+      expiresAt: current.expiresAt,
     });
+    if (!r.ok) throw new BadRequestException(r.error);
+    const coupon = await this.prisma.coupon.update({ where: { id }, data: r.data });
     await this.auditLogService.log({
       action: 'COUPON_UPDATED',
       targetEntity: 'Coupon',
       entityId: id,
-      metadataJson: body,
+      metadataJson: JSON.parse(JSON.stringify(r.data)),
     });
     return { coupon };
   }
 
   @Delete('coupons/:id')
   async deleteCoupon(@Param('id', ParseUUIDPipe) id: string) {
+    const current = await this.prisma.coupon.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException('Coupon not found');
+    if (current.usesCount > 0) {
+      throw new BadRequestException('This coupon has already been used — keep it for the records and switch it off instead.');
+    }
     await this.prisma.coupon.delete({ where: { id } });
     await this.auditLogService.log({
       action: 'COUPON_DELETED',

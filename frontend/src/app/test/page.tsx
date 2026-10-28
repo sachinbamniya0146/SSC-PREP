@@ -10,7 +10,8 @@ import DiagramVenn from "@/components/DiagramVenn";
 import { StemMedia, QFigure } from "@/components/QuestionMedia";
 import { ReportQuestion } from "@/components/ReportQuestion";
 import WeakTopicPractice from "@/components/WeakTopicPractice";
-import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang } from "@/components/SolutionPanel";
+import { SolutionPanel, ReviewQuestionBody, ReviewLangToggle, useReviewLang, parseSolution } from "@/components/SolutionPanel";
+import { TickBox, CheckIcon } from "@/components/TickBox";
 import { useT } from "@/lib/i18n";
 import { sectionIndexAt, sectionRemainingSec, totalMinutes, type SectionPlan, type PatternMeta } from "@/lib/section-plan";
 
@@ -372,20 +373,6 @@ export default function TestPage() {
   // "Show Answer" shows q.explanation when the question carries one; when it does not, the stored
   // explanation of the question is read from the server (GET /explanations/questions/:id), keyed per question
   // like showAns/hintUsed above. Nothing is generated.
-  const [storedExp, setStoredExp] = React.useState<{
-    [qid: string]: { loading?: boolean; error?: string | null; data?: { stepByStepSolution: string; stepByStepSolutionHindi?: string; source?: string } };
-  }>({});
-  const fetchStoredExplanation = async (qid: string) => {
-    setStoredExp((p) => ({ ...p, [qid]: { ...p[qid], loading: true, error: null } }));
-    try {
-      const res = await fetch(`${apiBase()}/explanations/questions/${qid}`, { headers: getAuthHeaders() });
-      const d = await res.json().catch(() => ({}));
-      if (res.ok) setStoredExp((p) => ({ ...p, [qid]: { loading: false, data: d } }));
-      else setStoredExp((p) => ({ ...p, [qid]: { loading: false, error: d.message || tr("An explanation is not available yet.", "Explanation abhi available nahi hai.") } }));
-    } catch {
-      setStoredExp((p) => ({ ...p, [qid]: { loading: false, error: tr("Network error — could not load the explanation.", "Network error — explanation load nahi ho payi.") } }));
-    }
-  };
   const [hintUsed, setHintUsed] = React.useState<{ [qid: string]: boolean }>({});
   const [hintQuota, setHintQuota] = React.useState(3);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
@@ -1512,20 +1499,16 @@ export default function TestPage() {
                     </table>
                   </div>
                   {patternMeta.scribeAvailable && (
-                    <label className="mt-3 flex items-start gap-3 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={scribe}
-                        onChange={(e) => {
-                          setScribe(e.target.checked);
-                          try { localStorage.setItem("ssc_scribe_pref", e.target.checked ? "1" : "0"); } catch { /* ignore */ }
-                        }}
-                        className="mt-0.5 h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-                      />
-                      <span className="text-muted-foreground">
-                        {tr("I need the extra time given to scribe / accessibility candidates.", "Mujhe scribe / accessibility candidates wala extra time chahiye.")}
-                      </span>
-                    </label>
+                    <TickBox
+                      className="mt-3"
+                      checked={scribe}
+                      onChange={(v) => {
+                        setScribe(v);
+                        try { localStorage.setItem("ssc_scribe_pref", v ? "1" : "0"); } catch { /* ignore */ }
+                      }}
+                    >
+                      {tr("I need the extra time given to scribe / accessibility candidates.", "Mujhe scribe / accessibility candidates wala extra time chahiye.")}
+                    </TickBox>
                   )}
                 </section>
               )}
@@ -1543,21 +1526,13 @@ export default function TestPage() {
               </section>
 
               <div className="card sticky bottom-3 z-10 mt-6 p-5 shadow-lift">
-                <label className="flex items-start gap-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={agreed}
-                    onChange={(e) => setAgreed(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-                  />
-                  <span className="text-muted-foreground">
-                    {tr(
-                      "I have read the instructions and will not use unfair means. The test is submitted automatically when the timer reaches zero.",
-                      "Maine instructions padh liye hain aur koi unfair means use nahi karunga. Timer zero hote hi test apne aap submit ho jayega.",
-                    )}
-                  </span>
-                </label>
-                <button disabled={!agreed || starting} onClick={startTest} className="btn btn-primary btn-lg mt-4 w-full">
+                <TickBox checked={agreed} onChange={setAgreed}>
+                  {tr(
+                    "I have read the instructions and will not use unfair means. The test is submitted automatically when the timer reaches zero.",
+                    "Maine instructions padh liye hain aur koi unfair means use nahi karunga. Timer zero hote hi test apne aap submit ho jayega.",
+                  )}
+                </TickBox>
+                <button disabled={!agreed || starting} onClick={startTest} aria-live="polite" className="btn btn-primary btn-lg mt-4 min-h-[52px] w-full touch-manipulation">
                   {starting
                     ? tr("Loading questions…", "Sawal load ho rahe hain…")
                     : agreed
@@ -2128,18 +2103,19 @@ export default function TestPage() {
               {/* Session 22 — question-stem diagram (rare: most diagram
                   questions put the figure in the OPTIONS instead, below). */}
               <StemMedia diagramType={q.questionDiagramType} diagramLabels={q.questionDiagramLabels} imageUrl={q.questionImageUrl} />
-              <div className="mt-5 space-y-2.5">
+              <div className="mt-5 space-y-2.5" role="radiogroup" aria-label={tr("Answer options", "Jawab ke options")}>
                 {q.options.map((o) => {
                   const active = answers[q.id] === o.key;
                   return (
                     <button
                       key={o.key}
                       onClick={() => chooseOption(q.id, o.key)}
-                      className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm transition ${
+                      className={`flex min-h-[52px] w-full touch-manipulation items-start gap-3 rounded-xl border px-3 py-3 text-left text-[15px] transition active:scale-[0.99] sm:px-4 sm:text-sm ${
                         active ? "border-primary bg-primary text-primary-foreground shadow-md" : "border-border bg-card hover:bg-muted"
                       }`}
                       role="radio"
                       aria-checked={active}
+                      aria-label={`${tr("Option", "Option")} ${o.key}${active ? ` — ${tr("selected", "chuna hua")}` : ""}`}
                     >
                       <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${active ? "border-primary-foreground bg-primary-foreground text-primary" : "border-border"}`}>
                         {o.key}
@@ -2166,14 +2142,23 @@ export default function TestPage() {
                           </>
                         )}
                       </span>
+                      {/* visible tick: the chosen option shows a ✓ at the right edge */}
+                      <span
+                        aria-hidden="true"
+                        className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition ${
+                          active ? "border-primary-foreground bg-primary-foreground text-primary" : "border-border text-transparent"
+                        }`}
+                      >
+                        <CheckIcon className="h-3.5 w-3.5" />
+                      </span>
                     </button>
                   );
                 })}
               </div>
 
               {/* Action row */}
-              <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-border pt-5">
-                <button onClick={markAndNext} className="btn bg-primary/10 text-primary hover:bg-primary/20" title="Mark for review & go to next (M)">
+              <div className="mt-5 grid grid-cols-2 gap-2 border-t border-border pt-4 sm:mt-6 sm:flex sm:flex-wrap sm:items-center sm:gap-3 sm:pt-5 [&>.btn]:min-h-[44px] [&>.btn]:touch-manipulation">
+                <button onClick={markAndNext} className="btn col-span-2 bg-primary/10 text-primary hover:bg-primary/20" title="Mark for review & go to next (M)">
                   ⚑ Mark for Review &amp; Next
                 </button>
                 <button onClick={markForReview} className="btn btn-outline" aria-pressed={statusOf(q.id) === "marked" || statusOf(q.id) === "answered-marked"}>
@@ -2196,7 +2181,6 @@ export default function TestPage() {
                     onClick={() => {
                       const willShow = !showAns[q.id];
                       setShowAns((p) => ({ ...p, [q.id]: willShow }));
-                      if (willShow && !q.explanation && !storedExp[q.id]) fetchStoredExplanation(q.id);
                     }}
                     className={`btn ${showAns[q.id] ? "btn-success" : "btn-outline"}`}
                   >
@@ -2217,58 +2201,42 @@ export default function TestPage() {
                     {hintUsed[q.id] ? "Hint shown ✓" : hintQuota <= 0 ? "Hint used all (3/3)" : `💡 Hint (${hintQuota} left)`}
                   </button>
                 )}
-                <div className="flex-1" />
-                <button onClick={saveAndNext} className="btn btn-primary">
+                <div className="hidden flex-1 sm:block" />
+                {/* phones: the bottom bar already has Prev / Palette / Next, so no second "Next" here */}
+                <button onClick={saveAndNext} className="btn btn-primary hidden sm:inline-flex">
                   Save &amp; Next →
                 </button>
               </div>
 
               {/* Show Answer / Hint panel — real DB data, no fabrication */}
               {!isExamMode && (showAns[q.id] || hintUsed[q.id]) && (
-                <div className="mt-4 rounded-xl border border-success/30 bg-success/5 p-4">
-                  <p className="text-xs font-bold text-success">Correct Answer: {q.correctAnswer}</p>
-                  {hintUsed[q.id] && (
-                    <p className="mt-1 text-xs italic text-muted-foreground">
-                      Hint: {q.explanation ? q.explanation.slice(0, 120) + (q.explanation.length > 120 ? "…" : "") : "Explanation available in solution."}
-                    </p>
-                  )}
-                  {showAns[q.id] && q.explanation && (
-                    <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                      <p>{q.explanation}</p>
-                      {/* BUGFIX (Sachin report, Sep 2026 — "solution poora nahi
-                          dikhta"): explanationHindi was fetched and passed into
-                          this component's data shape (see line ~406 above) but
-                          NEVER rendered anywhere on this page — only the
-                          English q.explanation showed here, no matter how
-                          complete the Hindi explanation was in the database.
-                          Bilingual solution display (English + Hindi) is now
-                          shown together whenever both exist, matching what
-                          results/[attemptId]/page.tsx already does correctly. */}
-                      {q.explanationHindi && (
-                        <p className="mt-2 border-t border-success/20 pt-2">🇮🇳 {q.explanationHindi}</p>
-                      )}
-                    </div>
-                  )}
-                  {showAns[q.id] && !q.explanation && (
-                    <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                      {storedExp[q.id]?.loading && <p className="mt-1">{tr("Loading the explanation…", "Explanation load ho rahi hai…")}</p>}
-                      {storedExp[q.id]?.error && (
-                        <p className="mt-1">
-                          {storedExp[q.id]?.error}{" "}
-                          <button onClick={() => fetchStoredExplanation(q.id)} className="font-semibold text-primary underline">Retry</button>
-                        </p>
-                      )}
-                      {storedExp[q.id]?.data && (
-                        <div className="mt-1">
-                          <p className="whitespace-pre-line">{storedExp[q.id]!.data!.stepByStepSolution}</p>
-                          {storedExp[q.id]!.data!.stepByStepSolutionHindi && (
-                            <p className="mt-2 whitespace-pre-line border-t border-primary/20 pt-2">
-                              🇮🇳 {storedExp[q.id]!.data!.stepByStepSolutionHindi}
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                <div className="mt-4 space-y-3 rounded-xl border border-success/30 bg-success/5 p-3 sm:p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-bold text-success">{tr("Correct Answer", "Sahi jawab")}: {q.correctAnswer}</p>
+                    <ReviewLangToggle lang={revLang} onChange={setRevLang} />
+                  </div>
+                  {hintUsed[q.id] && (() => {
+                    // hint = the first words of the stored solution (read without the ##ANSWER/##STEPS markers)
+                    const src = revLang === "hi" && q.explanationHindi ? q.explanationHindi : q.explanation || q.explanationHindi || "";
+                    const plain = (parseSolution(src).steps || src).replace(/\s+/g, " ").trim();
+                    return (
+                      <p className={`text-xs italic text-muted-foreground ${revLang === "hi" && q.explanationHindi ? "font-hindi" : ""}`}>
+                        {tr("Hint", "Hint")}: {plain ? plain.slice(0, 120) + (plain.length > 120 ? "…" : "") : tr("Explanation available in solution.", "Poori explanation solution me milegi.")}
+                      </p>
+                    );
+                  })()}
+                  {showAns[q.id] && (
+                    // Same panel as the results screen: structured solution, English and/or हिंदी (toggle above).
+                    // When the question did not carry a solution, the panel reads the stored one itself.
+                    <SolutionPanel
+                      questionId={q.id}
+                      correctKey={(q.correctAnswer || "").trim().toUpperCase() || null}
+                      correctLabel={q.options.find((o) => (o.key || "").trim().toUpperCase() === (q.correctAnswer || "").trim().toUpperCase())?.text ?? null}
+                      explanation={q.explanation ?? null}
+                      explanationHindi={q.explanationHindi ?? null}
+                      source={null}
+                      lang={revLang}
+                    />
                   )}
                 </div>
               )}
@@ -2385,82 +2353,128 @@ export default function TestPage() {
         </div>
       )}
 
-      {/* REVIEW BEFORE SUBMIT MODAL (section-wise summary, like the real CBT) */}
-      {reviewOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Review before submit">
-          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="card max-h-[90vh] w-full max-w-2xl overflow-y-auto p-5 sm:p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-extrabold">Review test before submit</h2>
-                <p className="mt-1 text-xs text-muted-foreground">Once submitted you cannot change your answers.</p>
-              </div>
-              <div className={`rounded-lg border px-3 py-1 font-mono text-sm font-bold tabular-nums ${timelineColor}`}>{formatSec(timeLeft)}</div>
-            </div>
-            <div className="mt-4 overflow-x-auto rounded-xl border border-border">
-              <table className="w-full min-w-[420px] text-sm">
-                <thead>
-                  <tr className="bg-muted/60 text-left text-xs text-muted-foreground">
-                    <th className="px-3 py-2 font-semibold">Section</th>
-                    <th className="px-3 py-2 text-right font-semibold">Qs</th>
-                    <th className="px-3 py-2 text-right font-semibold">Answered</th>
-                    <th className="px-3 py-2 text-right font-semibold">Not Answered</th>
-                    <th className="px-3 py-2 text-right font-semibold">Marked</th>
-                    <th className="px-3 py-2 text-right font-semibold">Not Visited</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(hasSections ? sectionNames : [""]).map((name) => {
-                    const list = hasSections ? questions.filter((x) => x.section === name) : questions;
-                    const c = tally(list);
-                    return (
-                      <tr key={name || "all"} className="border-t border-border">
-                        <td className="max-w-[10rem] truncate px-3 py-2 font-medium">{name || "Full Paper"}</td>
-                        <td className="px-3 py-2 text-right">{list.length}</td>
-                        <td className="px-3 py-2 text-right font-semibold text-success">{c.answered + c.answeredMarked}</td>
-                        <td className="px-3 py-2 text-right font-semibold text-danger">{c.notAnswered + c.marked}</td>
-                        <td className="px-3 py-2 text-right">{c.marked + c.answeredMarked}</td>
-                        <td className="px-3 py-2 text-right text-muted-foreground">{c.notVisited}</td>
-                      </tr>
-                    );
-                  })}
-                  {hasSections && (
-                    <tr className="border-t border-border bg-muted/30 text-xs font-semibold">
-                      <td className="px-3 py-2">Total</td>
-                      <td className="px-3 py-2 text-right">{questions.length}</td>
-                      <td className="px-3 py-2 text-right text-success">{allCounts.answered + allCounts.answeredMarked}</td>
-                      <td className="px-3 py-2 text-right text-danger">{allCounts.notAnswered + allCounts.marked}</td>
-                      <td className="px-3 py-2 text-right">{allCounts.marked + allCounts.answeredMarked}</td>
-                      <td className="px-3 py-2 text-right">{allCounts.notVisited}</td>
-                    </tr>
+      {/* REVIEW BEFORE SUBMIT (section-wise summary, like the real CBT). Every number below is counted
+          from the live question statuses — nothing is estimated or hard-coded. */}
+      {reviewOpen && (() => {
+        const answeredN = allCounts.answered + allCounts.answeredMarked;
+        const notAnsweredN = allCounts.notAnswered + allCounts.marked; // visited, no answer (incl. "marked" without an answer)
+        const notVisitedN = allCounts.notVisited;
+        const markedN = allCounts.marked + allCounts.answeredMarked;
+        const markedBlankN = allCounts.marked;
+        const posVals: number[] = Array.from(new Set<number>(questions.map((x) => x.marks ?? 1))).sort((x, y) => x - y);
+        const negVals2: number[] = Array.from(new Set<number>(questions.map((x) => x.negativeMarks ?? 0.25))).sort((x, y) => x - y);
+        const fmt = (n: number) => String(Math.round(n * 100) / 100);
+        const tiles: { v: number; en: string; hi: string; cls: string }[] = [
+          { v: answeredN, en: "Answered", hi: "Jawab diya", cls: "border-success/40 bg-success/10 text-success" },
+          { v: notAnsweredN, en: "Not answered", hi: "Jawab nahi diya", cls: "border-danger/40 bg-danger/10 text-danger" },
+          { v: notVisitedN, en: "Not visited", hi: "Dekha nahi", cls: "border-border bg-muted text-muted-foreground" },
+          { v: markedN, en: "Marked for review", hi: "Review ke liye mark", cls: "border-accent/40 bg-accent/10 text-accent" },
+        ];
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={tr("Review before submit", "Submit se pehle review")}>
+            <motion.div
+              initial={{ y: 24, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-t-2xl border border-border bg-background shadow-xl sm:rounded-2xl"
+            >
+              <div className="overflow-y-auto p-4 sm:p-6">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-extrabold">{tr("Submit the test?", "Test submit karna hai?")}</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {tr("Once submitted you cannot change your answers.", "Submit karne ke baad jawab badal nahi sakte.")}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-center">
+                    <div className={`rounded-lg border px-3 py-1 font-mono text-sm font-bold tabular-nums ${timelineColor}`}>{formatSec(timeLeft)}</div>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">{tr("time left", "samay bacha")}</p>
+                  </div>
+                </div>
+
+                {/* the four numbers a student actually decides on */}
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {tiles.map((t) => (
+                    <div key={t.en} className={`rounded-xl border px-3 py-2.5 text-center ${t.cls}`}>
+                      <p className="text-2xl font-extrabold tabular-nums">{t.v}</p>
+                      <p className="text-[11px] font-semibold leading-tight">{tr(t.en, t.hi)}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  {tr(
+                    `Answered + Not answered + Not visited = ${questions.length} questions. "Answered & marked" counts as answered (${allCounts.answeredMarked}).`,
+                    `Answered + Not answered + Not visited = ${questions.length} sawal. "Answered & marked" answered mana jata hai (${allCounts.answeredMarked}).`,
                   )}
-                </tbody>
-              </table>
-            </div>
-            {lockNav && secClock!.idx < plan!.sections.length - 1 && (
-              <p className="mt-3 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger">
-                {tr(
-                  `You are in section ${secClock!.idx + 1} of ${plan!.sections.length}. Submitting now ends the WHOLE test — the remaining sections stay unattempted.`,
-                  `Aap section ${secClock!.idx + 1}/${plan!.sections.length} me ho. Abhi submit karne se POORA test khatam ho jayega — baaki sections attempt nahi honge.`,
+                </p>
+
+                {/* per section: bar + counts (no sideways scrolling on a phone) */}
+                {hasSections && (
+                  <div className="mt-4 space-y-2">
+                    {sectionNames.map((name) => {
+                      const list = questions.filter((x) => x.section === name);
+                      const c = tally(list);
+                      const ans = c.answered + c.answeredMarked;
+                      const pct = list.length ? Math.round((ans / list.length) * 100) : 0;
+                      return (
+                        <div key={name} className="rounded-xl border border-border p-3">
+                          <div className="flex items-center justify-between gap-2 text-sm">
+                            <span className="min-w-0 truncate font-semibold">{name}</span>
+                            <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{ans}/{list.length}</span>
+                          </div>
+                          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
+                            <div className="h-full rounded-full bg-success" style={{ width: `${pct}%` }} />
+                          </div>
+                          <p className="mt-1.5 text-[11px] text-muted-foreground">
+                            <span className="text-danger">{c.notAnswered + c.marked} {tr("not answered", "bina jawab")}</span>
+                            {" · "}{c.notVisited} {tr("not visited", "dekhe nahi")}
+                            {" · "}{c.marked + c.answeredMarked} {tr("marked", "marked")}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
-              </p>
-            )}
-            {unansweredTotal > 0 && (
-              <p className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                {tr(`${unansweredTotal} question(s) are still unanswered.`, `${unansweredTotal} question abhi unanswered hain.`)}
-              </p>
-            )}
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-              <button onClick={() => setReviewOpen(false)} className="btn btn-outline flex-1">Back to test</button>
-              {unansweredTotal > 0 && (
-                <button onClick={unansweredFirst} className="btn btn-outline flex-1">Go to first unanswered</button>
-              )}
-              <button onClick={submitTest} disabled={submitBusy} className="btn btn-primary flex-1 disabled:opacity-50">
-                {submitBusy ? "Submitting…" : "Submit Test"}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
+
+                {/* marking scheme of THIS test */}
+                <p className="mt-4 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                  {tr("Marking", "Marking")}: <span className="font-semibold text-success">+{posVals.map(fmt).join(" / +")}</span> {tr("correct", "sahi")} ·{" "}
+                  <span className="font-semibold text-danger">−{negVals2.map(fmt).join(" / −")}</span> {tr("wrong", "galat")} · 0 {tr("unanswered", "bina jawab")}
+                </p>
+
+                {lockNav && secClock!.idx < plan!.sections.length - 1 && (
+                  <p className="mt-3 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger">
+                    {tr(
+                      `You are in section ${secClock!.idx + 1} of ${plan!.sections.length}. Submitting now ends the WHOLE test — the remaining sections stay unattempted.`,
+                      `Aap section ${secClock!.idx + 1}/${plan!.sections.length} me ho. Abhi submit karne se POORA test khatam ho jayega — baaki sections attempt nahi honge.`,
+                    )}
+                  </p>
+                )}
+                {unansweredTotal > 0 && (
+                  <p className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                    {tr(
+                      `${notAnsweredN + notVisitedN} question(s) have no answer and will score 0.${markedBlankN > 0 ? ` ${markedBlankN} of them are only marked for review.` : ""}`,
+                      `${notAnsweredN + notVisitedN} sawal bina jawab ke hain, inke 0 marks milenge.${markedBlankN > 0 ? ` Inme se ${markedBlankN} sirf review ke liye mark hain.` : ""}`,
+                    )}
+                  </p>
+                )}
+              </div>
+
+              <div
+                className="flex flex-col gap-2 border-t border-border bg-background p-3 sm:flex-row sm:p-4"
+                style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+              >
+                <button onClick={() => setReviewOpen(false)} className="btn btn-outline min-h-[48px] flex-1 touch-manipulation">{tr("Back to test", "Test par wapas")}</button>
+                {unansweredTotal > 0 && (
+                  <button onClick={unansweredFirst} className="btn btn-outline min-h-[48px] flex-1 touch-manipulation">{tr("Go to first unanswered", "Pehle bina-jawab sawal par jao")}</button>
+                )}
+                <button onClick={submitTest} disabled={submitBusy} className="btn btn-primary min-h-[48px] flex-1 touch-manipulation disabled:opacity-50">
+                  {submitBusy ? tr("Submitting…", "Submit ho raha hai…") : tr("Yes, submit test", "Haan, test submit karein")}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        );
+      })()}
 
       {/* SUBMITTING */}
       {submitBusy && !offlinePending && (

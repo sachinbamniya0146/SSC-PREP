@@ -31,6 +31,7 @@ import { istDateKey } from '../gamification/gamification.service';
 import { computeRevisionState } from '../vocab/vocab-revision.util';
 import { VOCAB_UNLOCK_ALL_PRICE_INR, VOCAB_WORD_UNLOCK_PRICE_INR, skipFeeForStreak } from '../vocab/vocab-messages';
 import { grantOrExtendSubscription } from './subscription.util';
+import { couponAmounts, couponProblem, planPricing } from './pricing.util';
 
 interface CashfreeConfig {
   appId: string;
@@ -170,8 +171,18 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ---- Plans ----
+  /**
+   * Plans on sale, each with a `pricing` block computed server-side (running offer, struck-through
+   * price, "you save", per-month). `priceInr` stays the REGULAR price for older clients; the amount
+   * actually charged is `pricing.salePriceInr`.
+   */
   async listPlans() {
-    return this.prisma.plan.findMany({ where: { isActive: true }, orderBy: { priceInr: 'asc' } });
+    const rows = await this.prisma.plan.findMany({
+      where: { isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { durationMonths: 'asc' }, { priceInr: 'asc' }],
+    });
+    const now = new Date();
+    return rows.map((p) => ({ ...p, pricing: planPricing(p, now) }));
   }
 
   async mySubscription(userId: string) {
@@ -211,38 +222,53 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
 
   // ---- Coupons ----
   /**
-   * Validates a coupon and returns the discount. `userId` (when known) also
-   * enforces ONE redemption per user per coupon — before, a single student
-   * could burn a multi-use coupon (e.g. maxUses 100) on repeat purchases.
+   * Validates a coupon and returns the discount.
+   *  - With `planId` the amount is the plan's CURRENT sale price computed here (the client's number is
+   *    ignored); without it (legacy callers) `amountInr` is used and plan rules cannot be checked.
+   *  - `userId` (when known) enforces the coupon's per-student limit (default 1).
+   * All rules live in pricing.util.ts (couponProblem / couponAmounts) so checkout, order creation and the
+   * admin screen can never disagree.
    */
-  async validateCoupon(code: string, amountInr: number, userId?: string) {
+  async validateCoupon(code: string, amountInr: number | undefined, userId?: string, planId?: string) {
     const normalized = String(code || '').trim().toUpperCase();
     if (!normalized) throw new BadRequestException('Enter a coupon code');
-    const amount = Number(amountInr);
+
+    let amount = Number(amountInr);
+    let offerActive = false;
+    let basePlanId: string | undefined;
+    if (planId) {
+      const plan = await this.prisma.plan.findUnique({ where: { id: planId } });
+      if (!plan || !plan.isActive) throw new BadRequestException('Plan not found');
+      const pr = planPricing(plan);
+      amount = pr.salePriceInr;
+      offerActive = pr.offerActive;
+      basePlanId = plan.id;
+    }
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Invalid amount');
 
     const c = await this.prisma.coupon.findUnique({ where: { code: normalized } });
     if (!c) throw new NotFoundException('Invalid coupon code');
-    if (!c.isActive) throw new BadRequestException('Coupon is inactive');
-    if (c.expiresAt && c.expiresAt < new Date()) throw new BadRequestException('Coupon expired');
-    if (c.maxUses > 0 && c.usesCount >= c.maxUses) throw new BadRequestException('Coupon usage limit reached');
 
-    if (userId) {
-      const used = await this.prisma.payment.count({
+    let usedByUser = 0;
+    if (userId && c.perUserLimit > 0) {
+      usedByUser = await this.prisma.payment.count({
         where: { userId, status: 'SUCCESS', metadataJson: { path: ['couponCode'], equals: c.code } },
       });
-      if (used > 0) throw new BadRequestException('You have already used this coupon');
     }
+    const problem = couponProblem(c, { now: new Date(), amountInr: amount, planId: basePlanId, offerActive, usedByUser });
+    if (problem) throw new BadRequestException(problem);
 
-    let discount = 0;
-    if (c.discountPct) {
-      discount = round2((amount * Math.min(c.discountPct, 100)) / 100);
-    } else if (c.discountInr) {
-      discount = Math.min(c.discountInr, amount);
-    }
-    discount = Math.min(discount, amount);
-    const final = Math.max(round2(amount - discount), 0);
-    return { code: c.code, description: c.description, discountPct: c.discountPct, discountInr: c.discountInr, discount, finalAmountInr: final };
+    const { discount, finalAmountInr } = couponAmounts(c, amount);
+    return {
+      code: c.code,
+      description: c.description,
+      discountPct: c.discountPct,
+      discountInr: c.discountInr,
+      maxDiscountInr: c.maxDiscountInr,
+      amountInr: amount,
+      discount,
+      finalAmountInr,
+    };
   }
 
   // ---- Cashfree API helper ----
@@ -308,19 +334,26 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
     if (input.planId) {
       const plan = await this.prisma.plan.findUnique({ where: { id: input.planId } });
       if (!plan || !plan.isActive) throw new BadRequestException('Plan not found');
-      originalAmountInr = plan.priceInr;
+      // Price is decided HERE from the plan row: regular price, minus the running offer (if any),
+      // minus the coupon (if any). The browser never sends an amount.
+      const pricing = planPricing(plan);
+      originalAmountInr = pricing.regularInr;
+      const offerDiscount = pricing.offerDiscountInr;
       let couponCode: string | null = null;
       if (input.couponCode && input.couponCode.trim()) {
-        const v = await this.validateCoupon(input.couponCode, plan.priceInr, userId);
+        const v = await this.validateCoupon(input.couponCode, undefined, userId, plan.id);
         amountInr = v.finalAmountInr;
         discount = v.discount;
         couponCode = v.code; // canonical (upper-case) code — fulfil() looks the coupon up by this
       } else {
-        amountInr = plan.priceInr;
+        amountInr = pricing.salePriceInr;
       }
       productInfo = `SSC Prep Hub - ${plan.name}`;
       planName = plan.name;
-      metadata = { kind: 'PLAN', planId: plan.id, planName: plan.name, durationMonths: plan.durationMonths, originalAmountInr, discount, couponCode };
+      metadata = {
+        kind: 'PLAN', planId: plan.id, planName: plan.name, durationMonths: plan.durationMonths,
+        originalAmountInr, offerDiscount, offerPct: pricing.offerPct, discount, couponCode,
+      };
     } else if (input.chapterId) {
       const chapter = await this.prisma.chapter.findUnique({ where: { id: input.chapterId } });
       if (!chapter) throw new BadRequestException('Chapter not found');
@@ -781,7 +814,10 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
         title: this.describe(m),
         kind: m.kind ?? null,
         amountInr: p.amountInr,
-        discount: m.discount ?? 0,
+        // total saved = running offer + coupon (couponDiscount alone is kept for the "Coupon X (− ₹Y)" line)
+        discount: (m.discount ?? 0) + (m.offerDiscount ?? 0),
+        couponDiscount: m.discount ?? 0,
+        offerDiscount: m.offerDiscount ?? 0,
         couponCode: m.couponCode ?? null,
         status: p.status,
         createdAt: p.createdAt,
@@ -808,7 +844,10 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
       item: this.describe(m),
       kind: m.kind ?? null,
       listPriceInr: m.originalAmountInr ?? p.amountInr + (m.discount ?? 0),
+      // discountInr = coupon part (older invoices); offerDiscountInr = running-offer part (new)
       discountInr: m.discount ?? 0,
+      offerDiscountInr: m.offerDiscount ?? 0,
+      offerPct: m.offerPct ?? null,
       couponCode: m.couponCode ?? null,
       paidInr: p.amountInr,
       validFrom: p.subscription?.startsAt ?? null,

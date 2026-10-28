@@ -788,7 +788,14 @@ model Plan {
   id             String   @id @default(uuid())
   name           String   // e.g. "Monthly Pass (1 Month)", "Super Pass (24 Months)"
   durationMonths Int
-  priceInr       Float
+  priceInr       Float    // regular selling price (what is charged when no offer is running)
+  mrpInr         Float?   // display-only "was ₹X" (struck through, never charged)
+  offerPct       Float?   // time-boxed % off priceInr, 1..90 (admin "Offers")
+  offerLabel     String?  // e.g. "Diwali sale"
+  offerStartsAt  DateTime?
+  offerEndsAt    DateTime?
+  badge          String?  // e.g. "Most popular"
+  sortOrder      Int      @default(0)
   isActive       Boolean  @default(true)
 
   subscriptions Subscription[]
@@ -803,11 +810,17 @@ model Coupon {
   description   String?
   discountPct   Float?    // percentage discount (0–100)
   discountInr   Float?    // flat discount in ₹ (mutually exclusive with discountPct)
-  maxUses       Int       @default(1)
+  maxUses       Int       @default(1)   // total redemptions allowed, 0 = unlimited
   usesCount     Int       @default(0)
   expiresAt     DateTime?
   isActive      Boolean   @default(true)
   createdAt     DateTime  @default(now())
+  startsAt       DateTime?               // not usable before this moment
+  minOrderInr    Float?                  // minimum price the coupon applies on
+  maxDiscountInr Float?                  // cap for % coupons
+  perUserLimit   Int       @default(1)   // redemptions per student, 0 = unlimited
+  planIds        String[]  @default([])  // empty = valid on every plan
+  stackWithOffer Boolean   @default(true) // false = not usable while the plan has a running offer
 
   @@map("coupons")
 }
@@ -1608,6 +1621,7 @@ model VocabQuestion {
   optionsJson   Json     // [{ key: "A", text: "..." }, ...]
   correctAnswer String   // "A" | "B" | "C" | "D"
   explanation   String?  @db.Text
+  explanationHindi String? @db.Text
   questionType  String?  // SYNONYM | ANTONYM | CONTEXT — informational only
   createdAt     DateTime @default(now())
 

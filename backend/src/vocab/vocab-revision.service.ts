@@ -215,6 +215,7 @@ export class VocabRevisionService {
           correctAnswer: q.correctAnswer,
           isCorrect,
           explanation: q.explanation,
+          explanationHindi: q.explanationHindi,
         };
       });
     const total = review.length || 1;

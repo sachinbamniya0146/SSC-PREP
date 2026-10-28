@@ -23,6 +23,7 @@ type AdminQuestion = {
   optionsJson: { key: string; text: string }[] | null;
   correctAnswer: string;
   explanation: string | null;
+  explanationHindi?: string | null;
   questionType: string | null;
 };
 
@@ -189,10 +190,11 @@ export default function AdminVocabPage() {
     options: Record<"A" | "B" | "C" | "D", string>;
     correctAnswer: string;
     explanation: string;
+    explanationHindi: string;
     questionType: string;
   };
   const blankQForm = (): QForm => ({
-    id: null, questionText: "", options: { A: "", B: "", C: "", D: "" }, correctAnswer: "A", explanation: "", questionType: "",
+    id: null, questionText: "", options: { A: "", B: "", C: "", D: "" }, correctAnswer: "A", explanation: "", explanationHindi: "", questionType: "",
   });
   const [qForm, setQForm] = React.useState<QForm | null>(null);
   const [qSaving, setQSaving] = React.useState(false);
@@ -203,7 +205,7 @@ export default function AdminVocabPage() {
       if (o.key === "A" || o.key === "B" || o.key === "C" || o.key === "D") opts[o.key] = o.text;
     }
     setQError("");
-    setQForm({ id: q.id, questionText: q.questionText, options: opts, correctAnswer: q.correctAnswer || "A", explanation: q.explanation ?? "", questionType: q.questionType ?? "" });
+    setQForm({ id: q.id, questionText: q.questionText, options: opts, correctAnswer: q.correctAnswer || "A", explanation: q.explanation ?? "", explanationHindi: q.explanationHindi ?? "", questionType: q.questionType ?? "" });
   };
 
   const saveQuestion = async () => {
@@ -217,6 +219,7 @@ export default function AdminVocabPage() {
       optionsJson: (["A", "B", "C", "D"] as const).map((k) => ({ key: k, text: qForm.options[k].trim() })),
       correctAnswer: qForm.correctAnswer,
       explanation: qForm.explanation.trim(),
+      explanationHindi: qForm.explanationHindi.trim() || null,
       questionType: qForm.questionType || null,
     };
     setQSaving(true);
@@ -567,8 +570,15 @@ export default function AdminVocabPage() {
                   rows={2}
                   value={qForm.explanation}
                   onChange={(e) => setQForm({ ...qForm, explanation: e.target.value })}
-                  placeholder="Solution / explanation"
+                  placeholder="Solution / explanation (English)"
                   className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                />
+                <textarea
+                  rows={2}
+                  value={qForm.explanationHindi}
+                  onChange={(e) => setQForm({ ...qForm, explanationHindi: e.target.value })}
+                  placeholder="हिंदी solution / explanation (optional — test ke baad English ke saath dikhega)"
+                  className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-hindi"
                 />
                 <select
                   value={qForm.questionType}
@@ -622,6 +632,7 @@ export default function AdminVocabPage() {
                     ))}
                   </ul>
                   {q.explanation && <p className="mt-2 text-xs text-muted-foreground">💡 {q.explanation}</p>}
+                  {q.explanationHindi && <p className="mt-1 font-hindi text-xs text-muted-foreground">🇮🇳 {q.explanationHindi}</p>}
                 </li>
               ))}
             </ul>

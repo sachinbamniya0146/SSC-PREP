@@ -1085,6 +1085,11 @@ export default function AdminPage() {
             </a>
             )}
             {access.isAdmin && (
+              <a href="/admin/pricing" className="rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10">
+                💰 Pricing & Coupons
+              </a>
+            )}
+            {access.isAdmin && (
               <a href="/admin/referrals" className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
                 Refer & Earn
               </a>

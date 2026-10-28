@@ -10,6 +10,8 @@ type Row = {
   title: string;
   amountInr: number;
   discount: number;
+  couponDiscount?: number;
+  offerDiscount?: number;
   couponCode: string | null;
   status: "PENDING" | "SUCCESS" | "FAILED" | "REFUNDED";
   createdAt: string;
@@ -66,9 +68,12 @@ export default function PaymentHistoryPage() {
                   <p className="text-xs text-muted-foreground">
                     {new Date(r.createdAt).toLocaleString("en-IN")} · {r.orderId}
                   </p>
+                  {(r.offerDiscount ?? 0) > 0 && (
+                    <p className="text-xs text-green-700">Offer (− ₹{r.offerDiscount})</p>
+                  )}
                   {r.couponCode && (
                     <p className="text-xs text-green-700">
-                      Coupon {r.couponCode} (− ₹{r.discount})
+                      Coupon {r.couponCode} (− ₹{r.couponDiscount ?? r.discount})
                     </p>
                   )}
                 </div>

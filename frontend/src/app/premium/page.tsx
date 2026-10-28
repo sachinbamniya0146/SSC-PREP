@@ -8,12 +8,29 @@ import { startCashfreeCheckout } from "@/lib/vocab-pay";
 import { useT } from "@/lib/i18n";
 import { ShellHeader, PageHeading, CardSkeletons } from "@/components/AppShell";
 
+type PlanPricing = {
+  regularInr: number;
+  salePriceInr: number;
+  strikeInr: number | null;
+  offerActive: boolean;
+  offerPct: number | null;
+  offerLabel: string | null;
+  offerEndsAt: string | null;
+  offerDiscountInr: number;
+  savingsInr: number;
+  savingsPct: number;
+  perMonthInr: number;
+};
+
 type Plan = {
   id: string;
   name: string;
   durationMonths: number;
   priceInr: number;
+  badge?: string | null;
   isActive: boolean;
+  // computed by the server (offer, MRP, per-month); absent only for the plan object inside /payments/subscription
+  pricing?: PlanPricing;
 };
 
 type Subscription = {
@@ -34,6 +51,39 @@ type CouponValidation = {
   discount: number;
   finalAmountInr: number;
 };
+
+/** The price a plan is actually sold at right now (server-computed), with a safe fallback for older API responses. */
+const priceOf = (p: Plan): PlanPricing =>
+  p.pricing ?? {
+    regularInr: p.priceInr, salePriceInr: p.priceInr, strikeInr: null, offerActive: false, offerPct: null, offerLabel: null,
+    offerEndsAt: null, offerDiscountInr: 0, savingsInr: 0, savingsPct: 0, perMonthInr: p.priceInr / Math.max(1, p.durationMonths),
+  };
+
+/** "2d 4h 10m" / "03:12:09" countdown to a deadline; calls onDone once when it passes. */
+function Countdown({ endsAt, onDone }: { endsAt: string; onDone?: () => void }) {
+  const end = React.useMemo(() => new Date(endsAt).getTime(), [endsAt]);
+  const [now, setNow] = React.useState(() => Date.now());
+  const done = React.useRef(false);
+  const fast = end - now < 24 * 3_600_000; // last day: tick every second, otherwise every 30s
+  React.useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), fast ? 1000 : 30_000);
+    return () => window.clearInterval(id);
+  }, [fast]);
+  const left = Math.max(0, end - now);
+  React.useEffect(() => {
+    if (left <= 0 && !done.current) {
+      done.current = true;
+      onDone?.();
+    }
+  }, [left, onDone]);
+  if (left <= 0) return <span>ended</span>;
+  const d = Math.floor(left / 86_400_000);
+  const h = Math.floor((left % 86_400_000) / 3_600_000);
+  const m = Math.floor((left % 3_600_000) / 60_000);
+  const sec = Math.floor((left % 60_000) / 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return <span className="tabular-nums">{d > 0 ? `${d}d ${h}h ${m}m` : `${pad(h)}:${pad(m)}:${pad(sec)}`}</span>;
+}
 
 const inr = (n: number) => `₹${(Math.round(n * 100) / 100).toLocaleString("en-IN", { minimumFractionDigits: n % 1 ? 2 : 0 })}`;
 const fmtDate = (d?: string | null) =>
@@ -75,7 +125,8 @@ export default function PremiumPage() {
       ]);
       if (!plansRes.ok || !subRes.ok) throw new Error("load failed");
       const plansData: Plan[] = await plansRes.json();
-      setPlans(plansData.filter((p) => p.isActive).sort((a, b) => a.durationMonths - b.durationMonths));
+      // server order (admin "order on the page", then duration)
+      setPlans(plansData.filter((p) => p.isActive));
       setSubscription(await subRes.json());
     } catch {
       setLoadError(tr("Plans load nahi ho paye. Page refresh karke dobara try karein.", "Plans load nahi ho paye. Page refresh karke dobara try karein."));
@@ -89,15 +140,37 @@ export default function PremiumPage() {
     loadData();
   }, [loadData]);
 
-  // Price per month → used for the "best value" badge and per-month hint.
-  const perMonth = (p: Plan) => p.priceInr / Math.max(1, p.durationMonths);
+  // Price per month (at today's selling price) → used for the "best value" badge and per-month hint.
+  const perMonth = (p: Plan) => priceOf(p).perMonthInr;
   const bestValueId = React.useMemo(() => {
     if (plans.length < 2) return null;
     return [...plans].sort((a, b) => perMonth(a) - perMonth(b))[0]?.id ?? null;
   }, [plans]);
 
+  // quiet refresh (an offer just ended or started): prices stay correct without a manual reload
+  const refreshPlans = React.useCallback(async () => {
+    try {
+      const r = await fetchAuth(`${API_BASE}/payments/plans`);
+      if (!r.ok) return;
+      const data: Plan[] = await r.json();
+      const active = data.filter((p) => p.isActive);
+      setPlans(active);
+      setSelectedPlan((cur) => (cur ? active.find((p) => p.id === cur.id) ?? cur : cur));
+      setCouponResult(null); // the amount changed — apply the coupon again on the new price
+    } catch {
+      /* keep what is on screen */
+    }
+  }, []);
+
   const selectPlan = (plan: Plan) => {
-    setSelectedPlan(plan);
+    // the subscription card carries a bare plan row: use the live one (with today's price) when it is still on sale
+    const live = plans.find((p) => p.id === plan.id);
+    if (!live) {
+      setSelectedPlan(null);
+      setError(tr("This plan is no longer on sale — please choose one of the plans below.", "Ye plan ab available nahi hai — neeche se koi plan chunein."));
+      return;
+    }
+    setSelectedPlan(live);
     setCouponCode("");
     setCouponResult(null);
     setCouponError("");
@@ -115,7 +188,8 @@ export default function PremiumPage() {
       const res = await fetchAuth(`${API_BASE}/payments/coupon/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: couponCode.trim(), amountInr: selectedPlan.priceInr }),
+        // the server prices the plan itself (offer included) and checks plan-wise coupon rules
+        body: JSON.stringify({ code: couponCode.trim(), planId: selectedPlan.id }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || "Invalid coupon");
@@ -146,7 +220,9 @@ export default function PremiumPage() {
     }
   };
 
-  const finalPrice = selectedPlan ? (couponResult ? couponResult.finalAmountInr : selectedPlan.priceInr) : 0;
+  const selPricing = selectedPlan ? priceOf(selectedPlan) : null;
+  const finalPrice = selectedPlan && selPricing ? (couponResult ? couponResult.finalAmountInr : selPricing.salePriceInr) : 0;
+  const totalSaved = selPricing ? (selPricing.strikeInr ?? selPricing.regularInr) - finalPrice : 0;
   const hasActive = !!subscription?.active && !subscription.admin && !!subscription.endsAt;
   // What the user will actually get: stacks after the current expiry.
   const newEndsAt = React.useMemo(() => {
@@ -248,29 +324,49 @@ export default function PremiumPage() {
         <section className="mb-8">
           <h2 className="mb-5 text-2xl font-bold">{tr("Choose your plan", "Apna plan chunein")}</h2>
           {plans.length === 0 && !loadError && <p className="text-sm text-muted-foreground">{tr("No plans are available right now.", "Abhi koi plan available nahi hai.")}</p>}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 pt-2 sm:grid-cols-2 lg:grid-cols-4">
             {plans.map((plan) => {
               const selected = selectedPlan?.id === plan.id;
+              const pr = priceOf(plan);
+              const ribbon = plan.badge || (bestValueId === plan.id ? "Best value" : null);
               return (
                 <button
                   key={plan.id}
                   type="button"
                   onClick={() => selectPlan(plan)}
                   aria-pressed={selected}
-                  className={`card card-hover relative p-4 text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                  className={`card card-hover relative min-h-[48px] touch-manipulation p-4 text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                     selected ? "!border-primary bg-primary/5 ring-2 ring-primary/30" : ""
                   }`}
                 >
-                  {bestValueId === plan.id && (
+                  {ribbon && (
                     <span className="absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-foreground">
-                      Best value
+                      {ribbon}
                     </span>
                   )}
                   <h3 className="font-semibold">{plan.name}</h3>
-                  <p className="my-2 text-3xl font-bold">{inr(plan.priceInr)}</p>
+                  {pr.offerActive && pr.offerPct != null && (
+                    <span className="mt-1 inline-block rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-bold text-accent">
+                      {pr.offerLabel ? `${pr.offerLabel} · ` : ""}{pr.offerPct}% OFF
+                    </span>
+                  )}
+                  <p className="mt-2 flex items-baseline justify-center gap-2">
+                    {pr.strikeInr != null && <s className="text-sm text-muted-foreground">{inr(pr.strikeInr)}</s>}
+                    <span className="text-3xl font-bold">{inr(pr.salePriceInr)}</span>
+                  </p>
                   <p className="text-sm text-muted-foreground">{durationLabel(plan.durationMonths)}</p>
                   {plan.durationMonths > 1 && (
                     <p className="mt-1 text-xs text-muted-foreground">≈ {inr(perMonth(plan))} / month</p>
+                  )}
+                  {pr.savingsInr > 0 && (
+                    <p className="mt-1 text-xs font-semibold text-success">
+                      {tr("You save", "Aapki bachat")} {inr(pr.savingsInr)} ({pr.savingsPct}%)
+                    </p>
+                  )}
+                  {pr.offerActive && pr.offerEndsAt && (
+                    <p className="mt-1 text-[11px] font-semibold text-warning">
+                      ⏳ {tr("Offer ends in", "Offer khatam hone me")} <Countdown endsAt={pr.offerEndsAt} onDone={refreshPlans} />
+                    </p>
                   )}
                 </button>
               );
@@ -329,8 +425,14 @@ export default function PremiumPage() {
             <div className="mb-4 space-y-1 rounded-lg bg-muted/50 p-4 text-sm">
               <div className="flex justify-between">
                 <span>{selectedPlan.name}</span>
-                <span>{inr(selectedPlan.priceInr)}</span>
+                <span>{inr(selPricing!.regularInr)}</span>
               </div>
+              {selPricing!.offerDiscountInr > 0 && (
+                <div className="flex justify-between text-success">
+                  <span>{selPricing!.offerLabel || tr("Offer", "Offer")} ({selPricing!.offerPct}%)</span>
+                  <span>− {inr(selPricing!.offerDiscountInr)}</span>
+                </div>
+              )}
               {couponResult && (
                 <div className="flex justify-between text-success">
                   <span>Coupon ({couponResult.code})</span>
@@ -341,6 +443,9 @@ export default function PremiumPage() {
                 <span>Total</span>
                 <span>{finalPrice <= 0 ? "FREE" : inr(finalPrice)}</span>
               </div>
+              {totalSaved > 0.009 && (
+                <p className="text-right text-xs font-semibold text-success">{tr("You save", "Aapki bachat")} {inr(totalSaved)}</p>
+              )}
               {newEndsAt && (
                 <p className="pt-2 text-xs text-muted-foreground">
                   {hasActive
