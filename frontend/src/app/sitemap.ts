@@ -16,5 +16,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${base}/weak-topics`, lastModified: now },
     { url: `${base}/results`, lastModified: now },
     { url: `${base}/leaderboard`, lastModified: now },
+    { url: `${base}/terms`, lastModified: now },
+    { url: `${base}/privacy`, lastModified: now },
+    { url: `${base}/refund`, lastModified: now },
   ];
 }

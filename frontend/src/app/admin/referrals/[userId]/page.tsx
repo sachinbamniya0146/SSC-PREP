@@ -11,7 +11,7 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 
 type Detail = {
   user: { id: string; fullName: string; email: string; referralCode: string | null; freeSubFromReferral: boolean };
-  wallet: { balanceInr: number; totalEarnedInr: number; totalWithdrawnInr: number; isSuspended: boolean };
+  wallet: { balanceInr: number; pendingInr?: number; totalEarnedInr: number; totalWithdrawnInr: number; isSuspended: boolean };
   payoutMethod: {
     type: "UPI" | "BANK_ACCOUNT";
     upiId: string | null;
@@ -34,6 +34,10 @@ type Detail = {
     purchaseAmountInr: number;
     commissionPct: number;
     commissionInr: number;
+    status?: "PENDING" | "AVAILABLE" | "REVERSED";
+    holdReason?: string | null;
+    availableAt?: string | null;
+    reversalNote?: string | null;
     createdAt: string;
   }[];
   withdrawals: { id: string; amountInr: number; status: string; createdAt: string }[];
@@ -45,6 +49,8 @@ export default function AdminReferralUserDetailPage() {
   const [data, setData] = React.useState<Detail | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [msg, setMsg] = React.useState<string | null>(null);
+  const [reasonOpen, setReasonOpen] = React.useState(false);
+  const [reason, setReason] = React.useState("");
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -58,15 +64,20 @@ export default function AdminReferralUserDetailPage() {
   }, [userId, load]);
 
   const toggleSuspend = async (suspended: boolean) => {
-    const reason = suspended ? prompt("Reason for suspending?") || "Suspended by admin" : undefined;
+    if (suspended && reason.trim().length < 3) return;
     const res = await fetchAuth(`${API_BASE}/admin/referrals/user/${userId}/suspend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ suspended, reason }),
+      body: JSON.stringify({ suspended, reason: suspended ? reason.trim() : undefined }),
     });
     if (res.ok) {
-      setMsg(suspended ? "✅ Suspended" : "✅ Unsuspended");
+      setMsg(suspended ? "Referral earnings paused." : "Referral earnings restored.");
+      setReasonOpen(false);
+      setReason("");
       await load();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      setMsg(d?.message || "Could not update.");
     }
   };
 
@@ -91,18 +102,36 @@ export default function AdminReferralUserDetailPage() {
         <div className="mt-4">
           {data.wallet.isSuspended ? (
             <button onClick={() => toggleSuspend(false)} className="btn bg-success text-success-foreground text-sm">
-              ✅ Unsuspend Referral Earnings
+              Restore referral earnings
             </button>
           ) : (
-            <button onClick={() => toggleSuspend(true)} className="btn btn-outline text-sm text-destructive">
-              🚫 Suspend Referral Earnings
-            </button>
+            reasonOpen ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  autoFocus
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Reason (min 3 characters)"
+                  className="min-w-[220px] flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                />
+                <button onClick={() => toggleSuspend(true)} disabled={reason.trim().length < 3} className="btn bg-danger text-danger-foreground text-sm">Pause earnings</button>
+                <button onClick={() => setReasonOpen(false)} className="btn btn-outline text-sm">Cancel</button>
+              </div>
+            ) : (
+              <button onClick={() => setReasonOpen(true)} className="btn btn-outline text-sm text-danger">
+                Pause referral earnings
+              </button>
+            )
           )}
         </div>
 
-        <div className="mt-6 grid gap-4 sm:grid-cols-3">
+        <div className="mt-6 grid gap-4 sm:grid-cols-4">
           <div className="card p-4">
-            <p className="text-xs text-muted-foreground">Wallet Balance</p>
+            <p className="text-xs text-muted-foreground">Pending (in hold)</p>
+            <p className="text-2xl font-bold text-warning">₹{(data.wallet.pendingInr ?? 0).toFixed(2)}</p>
+          </div>
+          <div className="card p-4">
+            <p className="text-xs text-muted-foreground">Withdrawable</p>
             <p className="text-2xl font-bold text-primary">₹{data.wallet.balanceInr.toFixed(2)}</p>
           </div>
           <div className="card p-4">
@@ -149,9 +178,16 @@ export default function AdminReferralUserDetailPage() {
             <div key={e.id} className="flex items-center justify-between px-4 py-3 text-sm">
               <div>
                 <p className="font-medium">{e.refereeName}</p>
-                <p className="text-xs text-muted-foreground">Order {e.orderId} · ₹{e.purchaseAmountInr} × {e.commissionPct}%</p>
+                <p className="text-xs text-muted-foreground">
+                  Order {e.orderId} · ₹{e.purchaseAmountInr} × {e.commissionPct}%
+                  {e.status === "PENDING" ? (e.availableAt ? ` · releases ${new Date(e.availableAt).toLocaleDateString("en-IN")}` : ` · needs review${e.holdReason ? ` (${e.holdReason})` : ""}`) : ""}
+                  {e.status === "REVERSED" && e.reversalNote ? ` · reversed: ${e.reversalNote}` : ""}
+                </p>
               </div>
-              <span className="font-bold text-success">+₹{e.commissionInr.toFixed(2)}</span>
+              <div className="text-right">
+                <span className={`font-bold ${e.status === "REVERSED" ? "text-muted-foreground line-through" : "text-success"}`}>+₹{e.commissionInr.toFixed(2)}</span>
+                {e.status && <p className="text-[11px] font-semibold text-muted-foreground">{e.status}</p>}
+              </div>
             </div>
           ))}
           {data.earnings.length === 0 && <p className="px-4 py-3 text-sm text-muted-foreground">No commission earned yet.</p>}

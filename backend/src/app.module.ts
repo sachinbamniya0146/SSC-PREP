@@ -23,7 +23,6 @@ import { StaffModule } from './staff/staff.module';
 import { MocksModule } from './mocks/mocks.module';
 import { BankModule } from './bank/bank.module';
 import { StudyPlanModule } from './study-plan/study-plan.module';
-import { PdfIngestionModule } from './pdf-ingestion/pdf-ingestion.module';
 import { PdfExportModule } from './pdf-export/pdf-export.module';
 import { MonetizationModule } from './monetization/monetization.module';
 import { S3Module } from './s3/s3.module';
@@ -83,7 +82,6 @@ import { envValidationSchema } from './config/env.validation';
     MocksModule,
     BankModule,
     StudyPlanModule,
-    PdfIngestionModule,
     PdfExportModule,
     MonetizationModule,
     S3Module,

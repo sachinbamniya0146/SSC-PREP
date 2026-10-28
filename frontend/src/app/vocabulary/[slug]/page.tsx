@@ -59,6 +59,8 @@ export default function VocabWordDetailPage() {
   const [lockCode, setLockCode] = React.useState("");
   const [lockedWordId, setLockedWordId] = React.useState("");
   const [skipFee, setSkipFee] = React.useState(0);
+  // Oct 28 2026: words the student must re-score at 95% before starting NEW words (a temporary hold — never a lock).
+  const [remasterWords, setRemasterWords] = React.useState<{ slug: string; word: string }[]>([]);
   const [pricing, setPricing] = React.useState<{ wordUnlock: { priceInr: number; message: BiMsg }; unlockAll: { priceInr: number; message: BiMsg } } | null>(null);
   const [confirm, setConfirm] = React.useState<"" | "word" | "all">("");
 
@@ -76,6 +78,7 @@ export default function VocabWordDetailPage() {
         setLockCode(d?.code || "");
         setLockedWordId(d?.wordId || "");
         setSkipFee(d?.skipFeeInr || 0);
+        setRemasterWords(Array.isArray(d?.remaster) ? d.remaster : []);
         fetchAuth(`${API_BASE}/vocab/pricing`).then((pr) => (pr.ok ? pr.json() : null)).then((pj) => pj && setPricing(pj)).catch(() => undefined);
         setNextActionableWordSlug(d?.nextActionableWordSlug || "");
         setNextActionableWord(d?.nextActionableWord || "");
@@ -111,15 +114,32 @@ export default function VocabWordDetailPage() {
 
   if (lockedMessage) {
     const revisionPending = lockCode === "REVISION_PENDING";
+    const remasterHold = lockCode === "REMASTER_REQUIRED";
     return (
       <div className="min-h-screen bg-background text-foreground">
         <main className="mx-auto max-w-md px-4 py-16 text-center">
-          <div className="text-4xl">{revisionPending ? "🔁" : "🔒"}</div>
-          <h1 className="mt-3 text-lg font-bold">{revisionPending ? tr("Revise first", "Pehle aaj ki revision") : "Ye word locked hai / This word is locked"}</h1>
+          <div className="text-4xl">{revisionPending ? "🔁" : remasterHold ? "⚠️" : "🔒"}</div>
+          <h1 className="mt-3 text-lg font-bold">
+            {revisionPending
+              ? tr("Revise first", "Pehle aaj ki revision")
+              : remasterHold
+                ? tr("Re-master first — this word stays unlocked", "Pehle re-master karein — ye word unlocked hi rahega")
+                : "Ye word locked hai / This word is locked"}
+          </h1>
           {lockMsg ? <BiMessage msg={lockMsg} tone="warn" className="mt-3 text-left" /> : <p className="mt-2 text-sm text-muted-foreground">{lockedMessage}</p>}
           {error && <p className="mt-2 text-sm text-danger">{error}</p>}
 
-          {revisionPending ? (
+          {remasterHold && (
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              {remasterWords.map((w) => (
+                <a key={w.slug} href={`/vocabulary/${w.slug}/quiz`} className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-sm font-semibold text-amber-700 dark:text-amber-400">
+                  {w.word} →
+                </a>
+              ))}
+            </div>
+          )}
+
+          {remasterHold ? null : revisionPending ? (
             <div className="mt-6 flex flex-col gap-2">
               <a href="/vocabulary/revision" className="btn bg-primary py-2.5 text-sm font-semibold text-primary-foreground">▶ Start revision (free)</a>
               <a href="/vocabulary/revision" className="text-xs text-muted-foreground underline">Skip for ₹{skipFee || 1} — details on the revision page</a>

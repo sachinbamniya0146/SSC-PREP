@@ -33,7 +33,15 @@
 //     order is reshuffled too (a memorized "3rd option" pattern no longer
 //     works), with the stored A/B/C/D key kept bound to its original text
 //     so submitQuiz()'s scoring needs no remapping.
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+//
+// REVISED (Oct 28 2026) — "word kabhi unlock ho jata hai, fir se lock ho jata hai":
+//  * An unlock is now PERMANENT. The moment a word becomes reachable (or the student works on it) it is pinned in
+//    vocab_word_progress.unlockedAt and never goes back to LOCKED, whatever happens to the word list, to the
+//    student's later revision results or to a lapsed Rs 10/month pass.
+//  * A failed daily-revision answer or a pending revision no longer flips words back to LOCKED. They are a
+//    separate, temporary HOLD on starting NEW words (state stays UNLOCKED, `gate` says why) — the UI shows an
+//    "on hold" badge with a one-tap fix instead of a padlock that appears and disappears.
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { istDateKey } from '../gamification/gamification.service';
 import { computeRevisionState } from './vocab-revision.util';
@@ -68,9 +76,13 @@ function shuffledCopy<T>(arr: T[]): T[] {
 }
 
 export type VocabWordState = 'LOCKED' | 'UNLOCKED' | 'MASTERED';
+/** Why an UNLOCKED, not-yet-mastered word cannot be started right now (temporary, never a lock). */
+export type VocabGate = 'REVISION_PENDING' | 'REMASTER_REQUIRED' | null;
 
 @Injectable()
 export class VocabService {
+  private readonly logger = new Logger(VocabService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   // ---------------------------------------------------------------------
@@ -88,57 +100,109 @@ export class VocabService {
     return { active, expiresAt: sub?.expiresAt ?? null, amountInr: 10, periodDays: 30 };
   }
 
+  /**
+   * Persist "this word is open for this student" so it can never fall back to LOCKED. Safe to call repeatedly and
+   * concurrently (createMany skips existing rows, updateMany only touches rows that still have no pin).
+   * A failure here must never break reading the word list, so it is logged and swallowed.
+   */
+  private async pinUnlocked(userId: string, wordIds: string[]) {
+    if (!wordIds.length) return;
+    const now = new Date();
+    try {
+      await this.prisma.vocabWordProgress.createMany({
+        data: wordIds.map((wordId) => ({ userId, wordId, unlockedAt: now })),
+        skipDuplicates: true,
+      });
+      await this.prisma.vocabWordProgress.updateMany({
+        where: { userId, wordId: { in: wordIds }, unlockedAt: null },
+        data: { unlockedAt: now },
+      });
+    } catch (e) {
+      this.logger.warn(`could not pin unlocked words for ${userId}: ${(e as Error)?.message}`);
+    }
+  }
+
   private async loadWordsWithProgress(userId: string) {
     // Oct 2026 — "ek baar unlock hua word dobara lock nahi hona chahiye".
-    // The old rule was a strict CHAIN (word N unlocks only if word N-1 is mastered), so any change to the
-    // list re-locked students: a word inserted/re-ordered in the middle, a word deleted (its progress rows
-    // cascade away) or a re-upload that shuffled orderIndex. Now the unlock state is a FRONTIER:
-    // everything up to one word past the furthest word the student has MASTERED stays unlocked, whatever
-    // happens to the words around it. Inactive (soft-deleted) words still count for the frontier, so
-    // removing a word from the list can never push a student backwards.
+    // Unlock state is a FRONTIER plus a permanent pin:
+    //  * frontier = the furthest word the student has MASTERED (a later revision mistake never moves it back);
+    //    everything up to one word past it is reachable;
+    //  * every reachable word is pinned (unlockedAt) the first time it is seen, and a word the student has
+    //    already attempted, bought (forceUnlocked) or mastered is open for good;
+    //  * an active Rs 100 "unlock all" / legacy monthly pass opens every word while it lasts.
+    // Inactive (soft-deleted) words still count for the frontier, so removing a word from the list can never push
+    // a student backwards; and because reachable words are pinned, inserting / re-ordering words cannot re-lock one
+    // the student has already been shown as open.
     const [allWords, progressRows, subscribedMonthly, userState] = await Promise.all([
       this.prisma.vocabWord.findMany({ orderBy: [{ orderIndex: 'asc' }, { createdAt: 'asc' }] }),
       this.prisma.vocabWordProgress.findMany({ where: { userId } }),
       this.hasActiveSubscription(userId),
       this.prisma.vocabUserState.findUnique({ where: { userId } }),
     ]);
-    // Legacy Rs 10/month subscription OR the new one-time Rs 100 "unlock all".
     const subscribed = subscribedMonthly || !!userState?.allUnlockedAt;
     const progressByWord = new Map(progressRows.map((p) => [p.wordId, p]));
 
-    let frontier = -1; // index (in allWords) of the furthest cleanly-mastered word
-    let firstRemaster = Number.POSITIVE_INFINITY; // first mastered word that failed a revision (blocks later NEW words)
+    let frontier = -1; // index (in allWords) of the furthest mastered word
     allWords.forEach((w, i) => {
-      const pr = progressByWord.get(w.id);
-      if (pr?.masteredAt) {
-        if (pr.remasterRequired) firstRemaster = Math.min(firstRemaster, i);
-        else frontier = i;
-      }
+      if (progressByWord.get(w.id)?.masteredAt) frontier = i;
     });
 
+    // First ACTIVE word after the frontier = the one the student may start next. (Counting positions in the full
+    // list would lock everything whenever an inactive word happens to sit right after the frontier / at the start.)
+    let nextOpenIndex = Number.POSITIVE_INFINITY;
+    for (let i = frontier + 1; i < allWords.length; i++) {
+      if (allWords[i].isActive) {
+        nextOpenIndex = i;
+        break;
+      }
+    }
+
+    const toPin: string[] = [];
     const out: { word: (typeof allWords)[number]; progress: (typeof progressRows)[number] | undefined; state: VocabWordState }[] = [];
     allWords.forEach((w, i) => {
       if (!w.isActive) return;
       const progress = progressByWord.get(w.id);
       const mastered = !!progress?.masteredAt;
-      const reachable = i <= Math.min(frontier + 1, firstRemaster);
-      const state: VocabWordState = mastered
-        ? 'MASTERED'
-        : reachable || progress?.forceUnlocked || subscribed
-          ? 'UNLOCKED'
-          : 'LOCKED';
+      const reachable = i <= nextOpenIndex;
+      const pinned = !!progress?.unlockedAt || !!progress?.forceUnlocked || (progress?.attemptsCount ?? 0) > 0;
+      let state: VocabWordState;
+      if (mastered) state = 'MASTERED';
+      else if (pinned) state = 'UNLOCKED';
+      else if (reachable) {
+        state = 'UNLOCKED';
+        toPin.push(w.id); // first time this word is open for the student -> make it permanent
+      } else if (subscribed) state = 'UNLOCKED';
+      else state = 'LOCKED';
       out.push({ word: w, progress, state });
     });
+    if (toPin.length) await this.pinUnlocked(userId, toPin);
     return out;
+  }
+
+  /**
+   * Words that were mastered but then failed a daily-revision question: the student must re-score 95% on each
+   * before starting NEW words. (Paying "unlock all" / holding a word via force-unlock skips this hold, exactly as
+   * before — it never applied to them.)
+   */
+  private async pendingRemaster(userId: string) {
+    const rows = await this.prisma.vocabWordProgress.findMany({
+      where: { userId, remasterRequired: true, masteredAt: { not: null }, word: { isActive: true } },
+      select: { word: { select: { slug: true, word: true, orderIndex: true } } },
+    });
+    return rows.map((r) => r.word).sort((a, b) => a.orderIndex - b.orderIndex);
   }
 
   /** Word list for the vocabulary hub — grid of locked/unlocked/mastered cards. */
   async listWords(userId: string) {
     const rows = await this.loadWordsWithProgress(userId);
     const masteredCount = rows.filter((r) => r.state === 'MASTERED').length;
+    const gate = await this.currentGate(userId);
     return {
       totalWords: rows.length,
       masteredCount,
+      // Temporary hold on starting NEW words (never a lock): the hub shows a banner + an "on hold" badge.
+      gate: gate.code,
+      remaster: gate.remaster,
       words: rows.map((r) => ({
         id: r.word.id,
         slug: r.word.slug,
@@ -146,12 +210,34 @@ export class VocabService {
         orderIndex: r.word.orderIndex,
         meaningHindi: r.word.meaningHindi,
         state: r.state,
+        // only an open, not-yet-mastered word can be on hold
+        gated: r.state === 'UNLOCKED' && gate.code !== null && !this.bypassesRemaster(r.progress, gate),
         bestScorePct: r.progress?.bestScorePct ?? 0,
         attemptsCount: r.progress?.attemptsCount ?? 0,
         needsRevision: r.state === 'MASTERED' && (r.progress?.lastWrongCount ?? 0) > 0,
         needsRemaster: !!r.progress?.remasterRequired,
       })),
     };
+  }
+
+  /** Is the student currently blocked from starting new words, and why? */
+  private async currentGate(userId: string): Promise<{ code: VocabGate; remaster: { slug: string; word: string }[]; paid: boolean }> {
+    const [rev, userState, sub, remaster] = await Promise.all([
+      computeRevisionState(this.prisma, userId),
+      this.prisma.vocabUserState.findUnique({ where: { userId } }),
+      this.hasActiveSubscription(userId),
+      this.pendingRemaster(userId),
+    ]);
+    const paid = !!userState?.allUnlockedAt || sub;
+    const remasterList = remaster.map((w) => ({ slug: w.slug, word: w.word }));
+    // Revision-due applies to everyone (same as before); the re-master hold never applied to paying students.
+    const code: VocabGate = rev.due ? 'REVISION_PENDING' : remasterList.length && !paid ? 'REMASTER_REQUIRED' : null;
+    return { code, remaster: remasterList, paid };
+  }
+
+  /** A paid word (force-unlock) or a paid pass skips the re-master hold, but never the daily revision. */
+  private bypassesRemaster(progress: { forceUnlocked?: boolean } | undefined, gate: { code: VocabGate; paid: boolean }) {
+    return gate.code === 'REMASTER_REQUIRED' && (gate.paid || !!progress?.forceUnlocked);
   }
 
   /**
@@ -173,6 +259,24 @@ export class VocabService {
       messages: msg,
       poolSize: st.poolWordIds.length,
       skipFeeInr: st.skipFeeInr,
+    });
+  }
+
+  /**
+   * NEW (Oct 28 2026): the re-master hold. A word the student mastered but then missed in a daily revision must be
+   * re-scored at 95% before NEW words can be started. This used to be implemented by flipping later words back to
+   * LOCKED (the "unlock then lock again" bug); it is now an explicit, explained 403 that never changes a word's state.
+   */
+  private async assertRemasterClear(userId: string, state: VocabWordState, progress: { forceUnlocked?: boolean } | undefined) {
+    if (state === 'MASTERED') return;
+    const gate = await this.currentGate(userId);
+    if (gate.code !== 'REMASTER_REQUIRED' || this.bypassesRemaster(progress, gate)) return;
+    const msg = VOCAB_MSG.remasterRequired(gate.remaster.map((w) => w.word));
+    throw new ForbiddenException({
+      message: msg.en,
+      code: 'REMASTER_REQUIRED',
+      messages: msg,
+      remaster: gate.remaster,
     });
   }
 
@@ -207,6 +311,7 @@ export class VocabService {
       });
     }
     await this.assertRevisionClear(userId, row.state);
+    await this.assertRemasterClear(userId, row.state, row.progress);
     const questionCount = await this.prisma.vocabQuestion.count({ where: { wordId: row.word.id } });
     return {
       id: row.word.id,
@@ -254,6 +359,7 @@ export class VocabService {
       });
     }
     await this.assertRevisionClear(userId, row.state);
+    await this.assertRemasterClear(userId, row.state, row.progress);
     const questions = await this.prisma.vocabQuestion.findMany({ where: { wordId: row.word.id } });
     // Question order shuffled on every call (every retry), plus — NEW —
     // each question's OPTION order is now shuffled too, so neither the
@@ -299,6 +405,7 @@ export class VocabService {
       throw new ForbiddenException({ message: msg.en, code: 'WORD_LOCKED', messages: msg, unlockPriceInr: VOCAB_WORD_UNLOCK_PRICE_INR });
     }
     await this.assertRevisionClear(userId, row.state);
+    await this.assertRemasterClear(userId, row.state, row.progress);
 
     const questions = await this.prisma.vocabQuestion.findMany({ where: { wordId: word.id } });
     if (questions.length === 0) {
@@ -352,6 +459,14 @@ export class VocabService {
         masteredAt: alreadyMastered ? existing!.masteredAt : justMastered ? new Date() : null,
       },
     });
+
+    // Mastering a word opens the next active one — pin it right away so it stays open whatever the admin does to
+    // the word list afterwards.
+    if (justMastered && !alreadyMastered) {
+      const at = rows.findIndex((r) => r.word.id === word.id);
+      const next = at >= 0 ? rows[at + 1] : undefined;
+      if (next && !next.progress?.unlockedAt && !next.progress?.masteredAt) await this.pinUnlocked(userId, [next.word.id]);
+    }
 
     return {
       scorePct,

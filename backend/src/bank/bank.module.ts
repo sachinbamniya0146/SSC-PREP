@@ -16,6 +16,7 @@ import { PracticeTemplateService } from './practice-template.service';
 import { DuplicateReviewService } from './duplicate-review.service';
 import { TaxonomyDedupeService } from './taxonomy-dedupe.service';
 import { TaxonomyDedupeController } from './taxonomy-dedupe.controller';
+import { QuestionReviewStatusController } from './question-review-status.controller';
 import { WeakTopicModule } from '../weak-topics/weak-topic.module';
 
 // BUG FIX (audit round 3): BankUploadService was never listed as a provider
@@ -27,7 +28,7 @@ import { WeakTopicModule } from '../weak-topics/weak-topic.module';
 // BankUploadController's POST /bank/admin/upload/syllabus-excel route.
 @Module({
   imports: [WeakTopicModule],
-  controllers: [BankController, BankUploadController, BankUploadJobController, BankAdminController, QuestionEditController, DuplicateReviewController, TaxonomyDedupeController],
+  controllers: [BankController, BankUploadController, BankUploadJobController, BankAdminController, QuestionEditController, DuplicateReviewController, TaxonomyDedupeController, QuestionReviewStatusController],
   providers: [BankService, QuestionBankPracticeService, BankUploadService, BankUploadJobService, TaxonomyImportService, BankAdminService, QuestionEditService, DuplicateReviewService, PracticeTemplateService, TaxonomyDedupeService],
   exports: [TaxonomyDedupeService, BankService, QuestionBankPracticeService, BankUploadService, TaxonomyImportService, BankAdminService, QuestionEditService],
 })

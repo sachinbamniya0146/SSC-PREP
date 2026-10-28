@@ -119,7 +119,20 @@ export class GamificationService {
 
     const better = await this.prisma.user.count({ where: { xp: { gt: user.xp } } });
     const total = await this.prisma.user.count();
-    return { ...user, rank: better + 1, totalUsers: total, today: istDateKey(new Date()) };
+    const today = istDateKey(new Date());
+    // Daily-goal progress: questions answered since 00:00 IST today (tests,
+    // practice sets and sectionals all write AttemptAnswer rows). Best effort —
+    // a failure here must never break the dashboard.
+    let todayAnswered = 0;
+    try {
+      const dayStart = new Date(`${today}T00:00:00+05:30`);
+      todayAnswered = await this.prisma.attemptAnswer.count({
+        where: { testAttempt: { userId, startedAt: { gte: dayStart } }, selectedOption: { not: null } },
+      });
+    } catch {
+      todayAnswered = 0;
+    }
+    return { ...user, rank: better + 1, totalUsers: total, today, todayAnswered };
   }
 
   /** Leaderboard: top N by XP (weekly or all-time), plus the caller's row. Rows cached 30s; myRank computed fresh per user. */

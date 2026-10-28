@@ -45,6 +45,8 @@ type Subscription = {
   lastEndedAt?: string | null;
 };
 
+type WelcomeOffer = { eligible: boolean; pct: number; maxInr: number; discountInr: number; finalInr: number | null };
+
 type CouponValidation = {
   code: string;
   description?: string | null;
@@ -114,6 +116,8 @@ export default function PremiumPage() {
   const [couponBusy, setCouponBusy] = React.useState(false);
   const [processing, setProcessing] = React.useState(false);
   const [error, setError] = React.useState("");
+  // "Referred by a friend" discount on the first plan (server decides; the order is priced by the server too)
+  const [welcome, setWelcome] = React.useState<WelcomeOffer | null>(null);
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
@@ -161,6 +165,19 @@ export default function PremiumPage() {
       /* keep what is on screen */
     }
   }, []);
+
+  const loadWelcome = React.useCallback(async (planId?: string) => {
+    try {
+      const r = await fetchAuth(`${API_BASE}/payments/welcome-offer${planId ? `?planId=${encodeURIComponent(planId)}` : ""}`);
+      if (r.ok) setWelcome(await r.json());
+    } catch {
+      /* no welcome offer shown — the server still applies it when the order is created */
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void loadWelcome(selectedPlan?.id);
+  }, [selectedPlan?.id, loadWelcome]);
 
   const selectPlan = (plan: Plan) => {
     // the subscription card carries a bare plan row: use the live one (with today's price) when it is still on sale
@@ -221,7 +238,11 @@ export default function PremiumPage() {
   };
 
   const selPricing = selectedPlan ? priceOf(selectedPlan) : null;
-  const finalPrice = selectedPlan && selPricing ? (couponResult ? couponResult.finalAmountInr : selPricing.salePriceInr) : 0;
+  // Same rule as the server: the friend discount is never stacked on a coupon — the student gets the cheaper one.
+  const welcomeFinal = selPricing && welcome?.eligible && welcome.discountInr > 0 ? selPricing.salePriceInr - welcome.discountInr : null;
+  const welcomeWins = welcomeFinal != null && (!couponResult || welcomeFinal < couponResult.finalAmountInr);
+  const couponWins = !!couponResult && !welcomeWins;
+  const finalPrice = selectedPlan && selPricing ? (welcomeWins ? welcomeFinal! : couponWins ? couponResult!.finalAmountInr : selPricing.salePriceInr) : 0;
   const totalSaved = selPricing ? (selPricing.strikeInr ?? selPricing.regularInr) - finalPrice : 0;
   const hasActive = !!subscription?.active && !subscription.admin && !!subscription.endsAt;
   // What the user will actually get: stacks after the current expiry.
@@ -320,6 +341,20 @@ export default function PremiumPage() {
           </div>
         )}
 
+        {welcome?.eligible && welcome.pct > 0 && (
+          <div className="mb-6 flex items-start gap-3 rounded-xl border border-accent/40 bg-accent/10 p-4">
+            <span className="text-2xl" aria-hidden>🎁</span>
+            <div>
+              <p className="font-semibold">
+                {tr(`${welcome.pct}% off your first plan — a friend invited you`, `Pehle plan par ${welcome.pct}% off — dost ne invite kiya`)}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {tr(`Applied automatically at checkout (up to ${inr(welcome.maxInr)}). It can't be combined with a coupon — you get whichever is cheaper.`, `Checkout par apne aap lagega (max ${inr(welcome.maxInr)}). Coupon ke saath combine nahi hota — jo sasta ho wahi lagega.`)}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Plans */}
         <section className="mb-8">
           <h2 className="mb-5 text-2xl font-bold">{tr("Choose your plan", "Apna plan chunein")}</h2>
@@ -413,10 +448,18 @@ export default function PremiumPage() {
                 )}
               </div>
               {couponError && <p className="mt-1 text-sm text-danger">{couponError}</p>}
-              {couponResult && (
+              {couponResult && couponWins && (
                 <div className="mt-2 rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
                   <strong>{couponResult.code}</strong> applied{couponResult.description ? `: ${couponResult.description}` : ""} — you save{" "}
                   <strong>{inr(couponResult.discount)}</strong>
+                </div>
+              )}
+              {couponResult && welcomeWins && (
+                <div className="mt-2 rounded-lg border border-info/30 bg-info/10 p-3 text-sm">
+                  {tr(
+                    `Your friend's invite discount (${inr(welcome!.discountInr)}) is better than this coupon, so that one is used. Offers are not combined.`,
+                    `Dost ke invite ka discount (${inr(welcome!.discountInr)}) is coupon se behtar hai, isliye wahi lagega. Offers combine nahi hote.`,
+                  )}
                 </div>
               )}
             </div>
@@ -433,10 +476,16 @@ export default function PremiumPage() {
                   <span>− {inr(selPricing!.offerDiscountInr)}</span>
                 </div>
               )}
-              {couponResult && (
+              {couponWins && (
                 <div className="flex justify-between text-success">
-                  <span>Coupon ({couponResult.code})</span>
-                  <span>− {inr(couponResult.discount)}</span>
+                  <span>Coupon ({couponResult!.code})</span>
+                  <span>− {inr(couponResult!.discount)}</span>
+                </div>
+              )}
+              {welcomeWins && welcome && (
+                <div className="flex justify-between text-success">
+                  <span>{tr("Friend's invite discount", "Dost ke invite ka discount")} ({welcome.pct}%)</span>
+                  <span>− {inr(welcome.discountInr)}</span>
                 </div>
               )}
               <div className="flex justify-between border-t border-border pt-2 text-lg font-semibold">

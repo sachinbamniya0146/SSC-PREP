@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { logoutAndClear } from "@/lib/session-cache";
+import { useAccess } from "@/lib/permissions";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard" },
@@ -18,6 +19,7 @@ const nav = [
 /** Header for signed-in student pages: nav, theme switch and account menu. */
 export function AppHeader({ name }: { name?: string }) {
   const path = usePathname() || "";
+  const access = useAccess();
   const [open, setOpen] = React.useState(false);
   const [menu, setMenu] = React.useState(false);
   const ref = React.useRef<HTMLDivElement | null>(null);
@@ -80,6 +82,7 @@ export function AppHeader({ name }: { name?: string }) {
             {menu && (
               <div role="menu" className="animate-pop absolute right-0 mt-2 w-52 overflow-hidden rounded-xl border border-border bg-card p-1 shadow-lift">
                 {[
+                  ...(access.isStaff ? [{ href: "/admin", label: access.isAdmin ? "Admin console" : "Staff workspace" }] : []),
                   { href: "/profile", label: "My profile" },
                   { href: "/premium", label: "Premium plans" },
                   { href: "/referral", label: "Refer & earn" },
@@ -112,7 +115,7 @@ export function AppHeader({ name }: { name?: string }) {
       {open && (
         <nav className="border-t border-border bg-background lg:hidden" aria-label="Mobile">
           <div className="container-page grid grid-cols-2 gap-1 py-2">
-            {nav.map((l) => (
+            {[...nav, ...(access.isStaff ? [{ href: "/admin", label: "Admin" }] : [])].map((l) => (
               <a key={l.href} href={l.href} className="rounded-lg px-3 py-3 text-sm font-medium hover:bg-muted">
                 {l.label}
               </a>

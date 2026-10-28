@@ -329,6 +329,7 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
     let mockTitle: string | undefined;
     let discount = 0;
     let originalAmountInr = 0;
+    let welcomeDiscountApplied = 0;
     let metadata: Record<string, any> = { kind: '' };
 
     if (input.planId) {
@@ -340,11 +341,28 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
       originalAmountInr = pricing.regularInr;
       const offerDiscount = pricing.offerDiscountInr;
       let couponCode: string | null = null;
+      // "Referred by a friend" welcome discount (first plan only). It is never stacked on a coupon: the student
+      // simply gets whichever of the two is cheaper.
+      let welcome = { discountInr: 0, pct: 0, maxInr: 0 };
+      try {
+        welcome = await this.referralService.welcomeDiscount(userId, pricing.salePriceInr);
+      } catch (e) {
+        this.logger.warn(`[referral] welcome discount lookup failed, charging without it: ${(e as Error)?.message}`);
+      }
+      let welcomeApplied = 0;
       if (input.couponCode && input.couponCode.trim()) {
         const v = await this.validateCoupon(input.couponCode, undefined, userId, plan.id);
-        amountInr = v.finalAmountInr;
-        discount = v.discount;
-        couponCode = v.code; // canonical (upper-case) code — fulfil() looks the coupon up by this
+        if (welcome.discountInr > 0 && round2(pricing.salePriceInr - welcome.discountInr) < v.finalAmountInr) {
+          amountInr = round2(pricing.salePriceInr - welcome.discountInr);
+          welcomeApplied = welcome.discountInr;
+        } else {
+          amountInr = v.finalAmountInr;
+          discount = v.discount;
+          couponCode = v.code; // canonical (upper-case) code — fulfil() looks the coupon up by this
+        }
+      } else if (welcome.discountInr > 0) {
+        amountInr = round2(pricing.salePriceInr - welcome.discountInr);
+        welcomeApplied = welcome.discountInr;
       } else {
         amountInr = pricing.salePriceInr;
       }
@@ -353,7 +371,9 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
       metadata = {
         kind: 'PLAN', planId: plan.id, planName: plan.name, durationMonths: plan.durationMonths,
         originalAmountInr, offerDiscount, offerPct: pricing.offerPct, discount, couponCode,
+        ...(welcomeApplied > 0 ? { referralDiscount: welcomeApplied, referralDiscountPct: welcome.pct } : {}),
       };
+      welcomeDiscountApplied = welcomeApplied;
     } else if (input.chapterId) {
       const chapter = await this.prisma.chapter.findUnique({ where: { id: input.chapterId } });
       if (!chapter) throw new BadRequestException('Chapter not found');
@@ -482,7 +502,32 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
       chapterName,
       mockTitle,
       discount,
+      welcomeDiscount: welcomeDiscountApplied,
     };
+  }
+
+  /**
+   * What the "referred by a friend" discount would be on a plan right now — the premium page shows it before
+   * the student pays. Always safe to call: not-entitled just returns eligible=false.
+   */
+  async welcomeOffer(userId: string, planId?: string) {
+    const out = { eligible: false, pct: 0, maxInr: 0, discountInr: 0, finalInr: null as number | null };
+    try {
+      const plan = planId ? await this.prisma.plan.findUnique({ where: { id: planId } }) : null;
+      const price = plan && plan.isActive ? planPricing(plan).salePriceInr : 0;
+      const w = await this.referralService.welcomeDiscount(userId, price > 0 ? price : 100);
+      const eligible = await this.referralService.welcomeEligibility(userId);
+      out.eligible = eligible;
+      out.pct = w.pct;
+      out.maxInr = w.maxInr;
+      if (eligible && price > 0) {
+        out.discountInr = w.discountInr;
+        out.finalInr = round2(price - w.discountInr);
+      }
+    } catch (e) {
+      this.logger.warn(`[referral] welcome offer lookup failed: ${(e as Error)?.message}`);
+    }
+    return out;
   }
 
   /** One-click renewal of the plan the user last had (used by the "Renew" button). */
@@ -580,6 +625,22 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
     const cfPaymentId = parsedBody?.data?.payment?.cf_payment_id;
     const eventType = parsedBody?.type; // PAYMENT_SUCCESS_WEBHOOK | PAYMENT_FAILED_WEBHOOK | PAYMENT_USER_DROPPED_WEBHOOK
 
+    // Refund finished -> the commission that payment earned goes back (this must run before the
+    // "already fulfilled" shortcut below, because a refunded payment IS a fulfilled one).
+    if (String(eventType || '').startsWith('REFUND') && String(parsedBody?.data?.refund?.refund_status || '').toUpperCase() === 'SUCCESS') {
+      const refundOrderId = parsedBody?.data?.refund?.order_id ?? orderId;
+      const refunded = refundOrderId ? await this.prisma.payment.findUnique({ where: { gatewayOrderId: refundOrderId } }) : null;
+      if (refunded) {
+        try {
+          await this.referralService.reverseForPayment(refunded.id, 'Payment refunded');
+        } catch (e) {
+          this.logger.error(`[referral] reversal after refund failed for ${refunded.id}: ${(e as Error)?.message}`);
+          throw e; // 5xx -> Cashfree retries the webhook
+        }
+      }
+      return { ok: true, refund: true };
+    }
+
     if (!orderId) return { ok: true, ignored: true, reason: 'no_order_id' };
 
     const payment = await this.prisma.payment.findUnique({ where: { gatewayOrderId: orderId } });
@@ -615,10 +676,11 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
    * Referral commission is a side effect of a payment. A referral error must
    * never turn an already-granted purchase into a failed API call.
    */
-  private async safeReferral(userId: string, payment: { id: string; amountInr: number }): Promise<void> {
+  private async safeReferral(userId: string, payment: { id: string; amountInr: number }, kind: string | undefined): Promise<void> {
     if (!(payment.amountInr > 0)) return; // free activation earns no commission
     try {
-      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr });
+      // only a PLAN purchase earns commission (the referral service ignores every other kind)
+      await this.referralService.onPaidPurchase(userId, { id: payment.id, amountInr: payment.amountInr, kind });
     } catch (e) {
       this.logger.error(`[referral] onPaidPurchase failed for payment ${payment.id}: ${(e as Error)?.message}`);
     }
@@ -670,7 +732,7 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
       { timeout: 20_000, maxWait: 10_000 },
     );
 
-    if (done) await this.safeReferral(payment.userId, payment);
+    if (done) await this.safeReferral(payment.userId, payment, meta.kind);
   }
 
   /** Grants what the payment bought. Runs inside fulfil()'s transaction. */
@@ -815,9 +877,10 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
         kind: m.kind ?? null,
         amountInr: p.amountInr,
         // total saved = running offer + coupon (couponDiscount alone is kept for the "Coupon X (− ₹Y)" line)
-        discount: (m.discount ?? 0) + (m.offerDiscount ?? 0),
+        discount: (m.discount ?? 0) + (m.offerDiscount ?? 0) + (m.referralDiscount ?? 0),
         couponDiscount: m.discount ?? 0,
         offerDiscount: m.offerDiscount ?? 0,
+        referralDiscount: m.referralDiscount ?? 0,
         couponCode: m.couponCode ?? null,
         status: p.status,
         createdAt: p.createdAt,
@@ -843,11 +906,13 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
       customer: { name: p.user.fullName, email: p.user.email, phone: p.user.phone },
       item: this.describe(m),
       kind: m.kind ?? null,
-      listPriceInr: m.originalAmountInr ?? p.amountInr + (m.discount ?? 0),
+      listPriceInr: m.originalAmountInr ?? p.amountInr + (m.discount ?? 0) + (m.referralDiscount ?? 0),
       // discountInr = coupon part (older invoices); offerDiscountInr = running-offer part (new)
       discountInr: m.discount ?? 0,
       offerDiscountInr: m.offerDiscount ?? 0,
       offerPct: m.offerPct ?? null,
+      referralDiscountInr: m.referralDiscount ?? 0,
+      referralDiscountPct: m.referralDiscountPct ?? null,
       couponCode: m.couponCode ?? null,
       paidInr: p.amountInr,
       validFrom: p.subscription?.startsAt ?? null,

@@ -33,6 +33,74 @@ export class AdminController {
   ) {}
 
   // ---- Dashboard Overview ----
+  /**
+   * Home screen of the admin console: one cheap round-trip with everything an admin wants to see first —
+   * who joined, what was earned, and which queues are waiting for a human (chats, error reports, withdrawals,
+   * commissions on hold, questions awaiting review).
+   */
+  @Get('overview')
+  async overview() {
+    const now = new Date();
+    // "today" means today in India (IST = UTC+5:30), because that is when the admin's day starts
+    const ist = new Date(now.getTime() + 5.5 * 3_600_000);
+    const startOfTodayIst = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()) - 5.5 * 3_600_000);
+    const d7 = new Date(now.getTime() - 7 * 86_400_000);
+    const d30 = new Date(now.getTime() - 30 * 86_400_000);
+    const paid = (gte: Date) => this.prisma.payment.aggregate({ where: { status: 'SUCCESS', createdAt: { gte } }, _sum: { amountInr: true }, _count: true });
+
+    const [
+      totalUsers, newUsers7d, suspendedUsers, activeSubscribers,
+      today, last7, last30,
+      openChats, openReports, withdrawals, commissionReview, questionsAwaitingReview,
+      recentSignups, recentPayments,
+    ] = await Promise.all([
+      this.prisma.user.count(),
+      this.prisma.user.count({ where: { createdAt: { gte: d7 } } }),
+      this.prisma.user.count({ where: { isSuspended: true } }),
+      this.prisma.subscription.count({ where: { status: 'ACTIVE', endsAt: { gt: now } } }),
+      paid(startOfTodayIst), paid(d7), paid(d30),
+      this.prisma.supportConversation.count({ where: { status: 'OPEN' } }),
+      this.prisma.questionErrorReport.count({ where: { status: 'OPEN' } }),
+      this.prisma.withdrawalRequest.aggregate({ where: { status: 'REQUESTED' }, _sum: { amountInr: true }, _count: true }),
+      this.prisma.referralEarning.count({ where: { status: 'PENDING', availableAt: null } }),
+      this.prisma.question.count({ where: { reviewStatus: { in: ['AI_DRAFT', 'IN_REVIEW'] } } }),
+      this.prisma.user.findMany({ orderBy: { createdAt: 'desc' }, take: 6, select: { id: true, fullName: true, email: true, createdAt: true } }),
+      this.prisma.payment.findMany({
+        where: { status: 'SUCCESS', amountInr: { gt: 0 } },
+        orderBy: { createdAt: 'desc' },
+        take: 6,
+        select: { id: true, amountInr: true, createdAt: true, metadataJson: true, user: { select: { fullName: true } } },
+      }),
+    ]);
+
+    const r2 = (n: number | null | undefined) => Math.round((n ?? 0) * 100) / 100;
+    return {
+      users: { total: totalUsers, new7d: newUsers7d, suspended: suspendedUsers, activeSubscribers },
+      revenue: {
+        todayInr: r2(today._sum.amountInr), todayCount: today._count,
+        last7dInr: r2(last7._sum.amountInr), last7dCount: last7._count,
+        last30dInr: r2(last30._sum.amountInr), last30dCount: last30._count,
+      },
+      queues: {
+        openChats,
+        openReports,
+        pendingWithdrawals: withdrawals._count,
+        pendingWithdrawalsInr: r2(withdrawals._sum.amountInr),
+        commissionsInReview: commissionReview,
+        questionsAwaitingReview,
+      },
+      recentSignups,
+      recentPayments: recentPayments.map((p) => ({
+        id: p.id,
+        amountInr: r2(p.amountInr),
+        createdAt: p.createdAt,
+        user: p.user?.fullName ?? 'Student',
+        kind: ((p.metadataJson as any)?.kind as string | undefined) ?? null,
+        item: ((p.metadataJson as any)?.planName as string | undefined) ?? null,
+      })),
+    };
+  }
+
   @Get('dashboard')
   async dashboard(@Query('days') days?: string) {
     const since = new Date();
@@ -1337,6 +1405,7 @@ export class AdminController {
       status: r.status, // PENDING = signed up, no purchase yet | PAIDED = purchased via this code | REWARDED = hit the free-sub milestone
       purchasesCount: r.purchasesCount,
       rewardedAt: r.rewardedAt,
+      flagReason: r.flagReason,
       createdAt: r.createdAt,
     }));
   }
@@ -1371,7 +1440,7 @@ export class AdminController {
 
     return {
       user,
-      wallet: wallet || { balanceInr: 0, totalEarnedInr: 0, totalWithdrawnInr: 0, isSuspended: false },
+      wallet: wallet || { balanceInr: 0, pendingInr: 0, totalEarnedInr: 0, totalWithdrawnInr: 0, isSuspended: false },
       payoutMethod,
       referrals: referrals.map((r) => ({
         id: r.id,
@@ -1388,6 +1457,10 @@ export class AdminController {
         purchaseAmountInr: e.purchaseAmountInr,
         commissionPct: e.commissionPct,
         commissionInr: e.commissionInr,
+        status: e.status,
+        holdReason: e.holdReason,
+        availableAt: e.availableAt,
+        reversalNote: e.reversalNote,
         createdAt: e.createdAt,
       })),
       withdrawals,

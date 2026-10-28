@@ -288,3 +288,56 @@ code {
     background-size: 22px 22px;
   }
 }
+
+/* ---------- Purchase celebration (gift reveal) ---------- */
+@keyframes gift-wobble {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  15% { transform: rotate(-9deg) scale(1.06); }
+  30% { transform: rotate(8deg) scale(1.08); }
+  45% { transform: rotate(-6deg) scale(1.05); }
+  60% { transform: rotate(4deg) scale(1.04); }
+  75% { transform: rotate(0deg) scale(1.02); }
+}
+@keyframes pop-in {
+  0% { opacity: 0; transform: translateY(14px) scale(0.92); }
+  60% { opacity: 1; transform: translateY(-2px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes glow-ring {
+  0% { transform: scale(0.8); opacity: 0.55; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+@keyframes shine-sweep {
+  0% { transform: translateX(-120%) skewX(-18deg); }
+  100% { transform: translateX(260%) skewX(-18deg); }
+}
+.gift-wobble { animation: gift-wobble 1.6s ease-in-out infinite; transform-origin: 50% 80%; }
+.pop-in { animation: pop-in 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+.glow-ring { animation: glow-ring 1.8s ease-out infinite; }
+.shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.45), transparent);
+  animation: shine-sweep 2.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gift-wobble, .pop-in, .glow-ring, .shine::after { animation: none !important; }
+}
+
+/* ---------- Admin console shell ----------
+   Every /admin page is rendered inside <AdminShell> (sidebar + top bar). The pages written before the shell
+   carry their own sticky header (logo, back link, title, buttons). Those headers now sit inside the shell as a
+   flat page-title strip instead of a second sticky bar, and their logo is hidden. */
+.admin-content > div { min-height: 0 !important; }
+.admin-content header.sticky {
+  position: static !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  padding-top: 0.75rem !important;
+  padding-bottom: 0.75rem !important;
+}
+.admin-content [data-legacy-chrome] { display: none !important; }
+.admin-content header.sticky + main { padding-top: 1rem; }

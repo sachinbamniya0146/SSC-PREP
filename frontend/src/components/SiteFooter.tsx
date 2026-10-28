@@ -58,6 +58,11 @@ export function SiteFooter() {
       <div className="border-t border-border">
         <div className="container-page flex flex-col items-center justify-between gap-2 py-5 text-xs text-muted-foreground sm:flex-row">
           <span>© {new Date().getFullYear()} SSC Prep Hub · sscprephub.in</span>
+          <nav aria-label="Legal" className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+            <a href="/terms" className="transition hover:text-primary">Terms</a>
+            <a href="/privacy" className="transition hover:text-primary">Privacy</a>
+            <a href="/refund" className="transition hover:text-primary">Refunds</a>
+          </nav>
           <span>Made for aspirants, by aspirants.</span>
         </div>
       </div>

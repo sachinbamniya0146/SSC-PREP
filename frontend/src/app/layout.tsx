@@ -13,6 +13,7 @@ import LanguageSync from "@/components/LanguageSync";
 import NavTracker from "@/components/NavTracker";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import AppStatus from "@/components/AppStatus";
+import { ReferralCapture } from "@/components/ReferralCapture";
 
 // FIX (Sep 2026 — "hindi font me mistake ho rahi hai matrao ki"): the app
 // referenced 'Noto Sans Devanagari' by NAME in a CSS variable, but never
@@ -108,6 +109,7 @@ export default function RootLayout({
           <NavTracker />
           <MobileTabBar />
           <AppStatus />
+          <ReferralCapture />
         </ThemeProvider>
       </body>
     </html>

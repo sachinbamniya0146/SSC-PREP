@@ -81,11 +81,11 @@ export class UserModerationService {
       this.prisma.subscription.count({ where: { userId, status: 'ACTIVE', endsAt: { gt: now } } }),
       this.prisma.payment.count({ where: { userId } }),
       this.prisma.payment.count({ where: { userId, status: 'SUCCESS' } }),
-      this.prisma.referralWallet.findUnique({ where: { userId }, select: { balanceInr: true } }),
+      this.prisma.referralWallet.findUnique({ where: { userId }, select: { balanceInr: true, pendingInr: true } }),
       this.prisma.withdrawalRequest.count({ where: { userId, status: { in: ['REQUESTED', 'APPROVED', 'PROCESSING'] } } }),
       this.prisma.testAttempt.count({ where: { userId } }),
     ]);
-    const walletBalanceInr = wallet?.balanceInr ?? 0;
+    const walletBalanceInr = (wallet?.balanceInr ?? 0) + (wallet?.pendingInr ?? 0);
     return {
       email: user.email,
       fullName: user.fullName,

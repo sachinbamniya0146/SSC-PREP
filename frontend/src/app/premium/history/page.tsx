@@ -10,6 +10,7 @@ type Row = {
   title: string;
   amountInr: number;
   discount: number;
+  referralDiscount?: number;
   couponDiscount?: number;
   offerDiscount?: number;
   couponCode: string | null;
@@ -70,6 +71,9 @@ export default function PaymentHistoryPage() {
                   </p>
                   {(r.offerDiscount ?? 0) > 0 && (
                     <p className="text-xs text-green-700">Offer (− ₹{r.offerDiscount})</p>
+                  )}
+                  {(r.referralDiscount ?? 0) > 0 && (
+                    <p className="text-xs text-green-700">Friend&apos;s invite discount (− ₹{r.referralDiscount})</p>
                   )}
                   {r.couponCode && (
                     <p className="text-xs text-green-700">

@@ -16,6 +16,8 @@ type Invoice = {
   discountInr: number;
   offerDiscountInr?: number;
   offerPct?: number | null;
+  referralDiscountInr?: number;
+  referralDiscountPct?: number | null;
   couponCode: string | null;
   paidInr: number;
   validFrom: string | null;
@@ -93,6 +95,12 @@ export default function InvoicePage() {
               <tr className="border-b text-green-700">
                 <td className="py-2">Offer{inv.offerPct ? ` (${inv.offerPct}%)` : ""}</td>
                 <td className="py-2 text-right">− ₹{inv.offerDiscountInr}</td>
+              </tr>
+            )}
+            {(inv.referralDiscountInr ?? 0) > 0 && (
+              <tr className="border-b text-green-700">
+                <td className="py-2">Friend&apos;s invite discount{inv.referralDiscountPct ? ` (${inv.referralDiscountPct}%)` : ""}</td>
+                <td className="py-2 text-right">− ₹{inv.referralDiscountInr}</td>
               </tr>
             )}
             {inv.discountInr > 0 && (

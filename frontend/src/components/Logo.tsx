@@ -15,7 +15,8 @@ type LogoProps = {
  */
 export function Logo({ size = 36, withWordmark = true, className }: LogoProps) {
   return (
-    <span className={clsx("flex items-center gap-2.5", className)}>
+    // the emblem-only variant is what the old per-page admin headers used; the admin shell hides those (see globals.css)
+    <span className={clsx("flex items-center gap-2.5", className)} data-legacy-chrome={withWordmark ? undefined : ""}>
       <Image
         src="/logo.png"
         alt="SSC Prep Hub"

@@ -15,7 +15,38 @@ export default function DashboardPage() {
     role?: string;
     permissions?: StaffPermission[];
   } | null>(null);
-  const [gami, setGami] = React.useState<{ currentStreak: number; longestStreak: number; xp: number; coins: number; hintQuota: number; rank: number } | null>(null);
+  const [gami, setGami] = React.useState<{
+    currentStreak: number;
+    longestStreak: number;
+    xp: number;
+    coins: number;
+    hintQuota: number;
+    rank: number;
+    totalUsers?: number;
+    today?: string;
+    todayAnswered?: number;
+    lastPracticeDate?: string | null;
+  } | null>(null);
+  // Smart study signals (all real endpoints): weak list + spaced-repetition queue.
+  const [weak, setWeak] = React.useState<{ weakCount: number; top: Array<{ id: string; label: string; subjectName: string; wrongCount: number; chapterId: string | null }> } | null>(null);
+  const [reviewDue, setReviewDue] = React.useState<number | null>(null);
+  const [dailyGoal, setDailyGoal] = React.useState<number>(20);
+  React.useEffect(() => {
+    try {
+      const v = parseInt(localStorage.getItem("ssc_daily_goal") || "", 10);
+      if ([10, 20, 30, 50].includes(v)) setDailyGoal(v);
+    } catch {
+      /* storage blocked — keep default */
+    }
+  }, []);
+  const chooseGoal = (n: number) => {
+    setDailyGoal(n);
+    try {
+      localStorage.setItem("ssc_daily_goal", String(n));
+    } catch {
+      /* ignore */
+    }
+  };
   // CHANGED ("sabhi SSC exams ko bhi pattern year ke saath dikhana he, na
   // sirf CGL"): bank.service.ts's meta() already attaches a live
   // `pattern: { name, totalQuestions, totalMarks, durationMinutes }` to
@@ -112,6 +143,20 @@ export default function DashboardPage() {
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => d && setSubscription(d))
         .catch(() => undefined);
+      fetchAuth(`${API_BASE}/bank/weak-topics`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!d) return;
+          setWeak({
+            weakCount: d.summary?.weakCount ?? 0,
+            top: Array.isArray(d.weak) ? d.weak.slice(0, 3) : [],
+          });
+        })
+        .catch(() => undefined);
+      fetchAuth(`${API_BASE}/review/stats`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d && typeof d.dueCount === "number" && setReviewDue(d.dueCount))
+        .catch(() => undefined);
     }
     return () => window.removeEventListener("ssc-user-updated", readUser);
   }, []);
@@ -128,6 +173,15 @@ export default function DashboardPage() {
   const isStaffOnly = user?.role === "MODERATOR";
   const staffPerms: StaffPermission[] = user?.permissions ?? [];
 
+  const answeredToday = gami?.todayAnswered ?? 0;
+  const goalPct = Math.min(100, Math.round((answeredToday / dailyGoal) * 100));
+  const goalDone = answeredToday >= dailyGoal;
+  // Streak is "at risk" when the student has a running streak but hasn't
+  // practised yet today (IST day, same rule as the server).
+  const istKey = (iso: string) => new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  const practisedToday = !!(gami?.lastPracticeDate && gami?.today && istKey(gami.lastPracticeDate) === gami.today);
+  const streakAtRisk = !!gami && gami.currentStreak > 0 && !practisedToday;
+
   const firstName = user?.fullName?.split(" ")[0] || "Student";
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
@@ -142,14 +196,64 @@ export default function DashboardPage() {
         {/* Greeting + live stats */}
         <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-6 sm:p-8">
           <div className="hero-bg pointer-events-none absolute inset-0 opacity-70" />
-          <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="relative grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center">
             <div>
               <p className="text-sm font-medium text-muted-foreground">{greeting}</p>
               <h1 className="mt-1 text-3xl font-extrabold tracking-tight sm:text-4xl">{firstName}</h1>
-              <p className="mt-2 text-sm text-muted-foreground">Today&apos;s goal: 10 questions. Keep the streak alive.</p>
+
+              {/* Daily goal */}
+              <div className="mt-4 max-w-md">
+                <div className="flex items-baseline justify-between text-sm">
+                  <span className="font-semibold">
+                    {goalDone ? tr("Daily goal complete 🎉", "Aaj ka goal complete 🎉") : tr("Today's goal", "Aaj ka goal")}
+                  </span>
+                  <span className="tabular-nums text-muted-foreground">
+                    {answeredToday} / {dailyGoal} {tr("questions", "sawal")}
+                  </span>
+                </div>
+                <div
+                  className="mt-2 h-2.5 overflow-hidden rounded-full bg-muted"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={goalPct}
+                  aria-label="Daily goal progress"
+                >
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 ${goalDone ? "bg-success" : "bg-primary"}`}
+                    style={{ width: `${goalPct}%` }}
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                  <span>{tr("Daily target:", "Roz ka target:")}</span>
+                  {[10, 20, 30, 50].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => chooseGoal(n)}
+                      aria-pressed={dailyGoal === n}
+                      className={`rounded-full border px-2.5 py-0.5 font-semibold transition ${
+                        dailyGoal === n ? "border-primary bg-primary text-primary-foreground" : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {streakAtRisk && (
+                <p className="mt-4 inline-flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm font-medium">
+                  🔥 {tr(
+                    `Your ${gami!.currentStreak}-day streak ends tonight — answer a few questions to keep it alive.`,
+                    `Aapka ${gami!.currentStreak} din ka streak aaj raat khatam ho sakta hai — kuch sawal solve karke bachaiye.`,
+                  )}
+                </p>
+              )}
+
               <div className="mt-5 flex flex-wrap gap-2">
-                <a href="/question-bank-practice" className="btn btn-primary">Start practice</a>
-                <a href="/mocks" className="btn btn-outline">Take a mock</a>
+                <a href="/question-bank-practice" className="btn btn-primary">{tr("Start practice", "Practice shuru karein")}</a>
+                <a href="/mocks" className="btn btn-outline">{tr("Take a mock", "Mock dein")}</a>
               </div>
             </div>
             <dl className="grid grid-cols-3 gap-3 sm:gap-4">
@@ -166,6 +270,55 @@ export default function DashboardPage() {
             </dl>
           </div>
         </section>
+
+        {/* Today's smart plan — built from the student's own data */}
+        {!isStaffOnly && (
+          <section className="mt-6 grid gap-3 md:grid-cols-3" aria-label="Today's plan">
+            <a href="/review" className="card card-hover p-5">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold">🔁 {tr("Revision queue", "Revision queue")}</h3>
+                <span className={`badge ${reviewDue ? "badge-primary" : "badge-success"}`}>
+                  {reviewDue === null ? "…" : reviewDue > 0 ? `${reviewDue} ${tr("due", "baaki")}` : tr("All clear", "Sab clear")}
+                </span>
+              </div>
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                {reviewDue
+                  ? tr("Questions you got wrong come back at the right time — revise them before you forget.", "Galat hue sawal sahi samay par wapas aate hain — bhoolne se pehle revise karein.")
+                  : tr("Nothing due right now. Wrong answers will show up here automatically.", "Abhi kuch baaki nahi. Galat jawab yahan apne aap aa jayenge.")}
+              </p>
+            </a>
+            <a href="/weak-topics" className="card card-hover p-5">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold">🎯 {tr("Weak topics", "Kamzor topics")}</h3>
+                <span className={`badge ${weak && weak.weakCount > 0 ? "badge-danger" : "badge-success"}`}>
+                  {weak === null ? "…" : weak.weakCount > 0 ? weak.weakCount : "0"}
+                </span>
+              </div>
+              {weak && weak.top.length > 0 ? (
+                <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+                  {weak.top.map((w) => (
+                    <li key={w.id} className="truncate">
+                      • {w.label || w.subjectName}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1.5 text-sm text-muted-foreground">
+                  {tr("No weak topics yet — attempt a few tests and we will find them for you.", "Abhi koi kamzor topic nahi — kuch test dein, hum dhoondh denge.")}
+                </p>
+              )}
+            </a>
+            <a href="/vocabulary" className="card card-hover p-5">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold">📖 {tr("Vocabulary", "Vocabulary")}</h3>
+                <span className="badge badge-primary">{tr("Continue", "Jari rakhein")}</span>
+              </div>
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                {tr("Pick up where you stopped. Words you unlock stay unlocked.", "Jahan ruke the wahin se shuru karein. Unlock hue words unlock hi rehte hain.")}
+              </p>
+            </a>
+          </section>
+        )}
 
         {isStaffOnly && (
           <div className="mt-8 rounded-xl border border-primary/30 bg-primary/[0.04] p-5">
@@ -192,135 +345,21 @@ export default function DashboardPage() {
         )}
 
         {isAdmin && (
-          <div className="mt-8 rounded-xl border border-amber-500/30 bg-amber-500/[0.04] p-5">
-            <div className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-amber-500" />
-              <h2 className="font-semibold text-amber-700 dark:text-amber-400">Admin Tools</h2>
+          <a
+            href="/admin"
+            className="mt-8 flex items-center justify-between gap-4 rounded-xl border border-amber-500/30 bg-amber-500/[0.05] p-5 transition hover:border-amber-500/60"
+          >
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-amber-500" />
+                <h2 className="font-semibold text-amber-700 dark:text-amber-400">Admin console</h2>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Users, referrals, payments, questions and support — everything in one place.
+              </p>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Logged in as {user?.role} — these panels are hidden from regular students.
-            </p>
-            {/* CORRECTION: an earlier version of this section linked to
-                "/review", assuming it was an admin moderation queue. It is
-                not — /review is the STUDENT-facing spaced-repetition
-                practice queue (backend/src/review/review.service.ts,
-                ReviewCard/dueAt/intervalDays/easeFactor — SM-2 style
-                revision of a student's own wrong answers). Only linking to
-                pages that are genuinely admin-only and already built. */}
-            <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              <a href="/admin" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Admin Panel</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Users, plans, bulk question upload</div>
-              </a>
-              <a href="/admin/staff" className="group rounded-lg border border-primary/40 bg-primary/5 px-4 py-3 transition hover:border-primary">
-                <div className="text-sm font-semibold text-primary">👥 Staff Access</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Email se Questions / Practice / Vocabulary access dein</div>
-              </a>
-              {/* SESSION 13 FIX: backend/src/pdf-ingestion/pdf-ingestion.controller.ts
-                  had 15 working endpoints (upload, batch progress, chunk retry,
-                  approve/reject, translation queue) with NO frontend page at all —
-                  an admin could not upload a single PDF through the UI. Now wired
-                  to /admin/pdf-studio. */}
-              <a href="/admin/pdf-studio" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">PDF Ingestion Studio</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Upload PDFs, track batches, review AI-drafted questions</div>
-              </a>
-              <a href="/verification" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Question Verification</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Approve/reject questions, ingestion batches, solver recompute</div>
-              </a>
-              {/* SESSION 13 FIX: backend/src/report-error already had the full
-                  student-report review workflow (list/resolve/unsuspend) working —
-                  students could report a wrong question via /quiz, but no admin
-                  page existed to see or act on those reports. Now wired to
-                  /admin/error-reports. */}
-              <a href="/admin/error-reports" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Error Reports</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Review student-reported errors, unsuspend flagged questions</div>
-              </a>
-              {/* RESTORED (2026-09-26 — this block was silently dropped from
-                  the dashboard's admin quick-links grid at some point after
-                  the original support-chat build, most likely lost while
-                  this grid was being edited for the Vocabulary Mastery
-                  launch. This is almost certainly the real reason Support
-                  Chat "disappeared" for admin — the /admin panel's own header
-                  link (added separately, see frontend/src/app/admin/page.tsx)
-                  is a second, independent way in, but this was the original
-                  one and is restored here so neither is missing. */}
-              <a href="/admin/support-chat" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">💬 Support Chat</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Live chat inbox — reply to students directly</div>
-              </a>
-              {/* SESSION 13 FIX: GET /bank/admin/coverage (backend/src/bank/bank.service.ts
-                  contentCoverageReport()) already ran the full exam×subject ×
-                  translation-coverage SQL — nobody could see the result without
-                  querying the DB by hand. Now wired to /admin/coverage. */}
-              <a href="/admin/coverage" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Content Coverage</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Exam × subject counts and Hindi translation coverage</div>
-              </a>
-              {/* SESSION 14 FIX (pending item #1 from Session 13's handoff):
-                  bank-upload.service.ts's validateReferences() requires a
-                  pre-existing chapterId on every uploaded question row and
-                  never creates one on the fly — but nothing in the UI could
-                  create a chapter, which blocked Bulk Question Upload
-                  entirely on any subject with zero chapters. Backend
-                  (bank.controller.ts GET/POST /bank/admin/chapters) already
-                  existed; now wired to /admin/chapters. */}
-              <a href="/admin/chapters" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Chapter Management</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Create chapters so Bulk Upload has a valid chapterId to target</div>
-              </a>
-              {/* NEW ("chapter mein bhi topic hona tha jaise English mein
-                  Noun, Pronoun — vesa har subject mein"): Topic model
-                  already existed but had no create UI anywhere, mirroring
-                  the exact gap Chapter Management above once had. Now
-                  wired to /admin/topics. */}
-              <a href="/admin/topics" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Topic Management</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Create topics inside chapters for topic-level analysis</div>
-              </a>
-              <a href="/admin/duplicate-topics" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Duplicate Topics</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Find copies of the same topic / sub-topic and merge them (with undo)</div>
-              </a>
-              {/* NEW ("admin pura ek ek question ko dekh paye"): every
-                  Excel/CSV/JSON/Word bulk-upload question that goes
-                  PENDING (missing Hindi translation) had no review queue
-                  anywhere — the existing approve/reject endpoints are
-                  strictly PDF-ingestion-batch-scoped and never see these.
-                  Now wired to /admin/questions/review. */}
-              <a href="/admin/questions/review" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Question Review</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Pending questions (missing Hindi, etc.) — edit/approve/reject</div>
-              </a>
-              {/* ROOT-CAUSE FIX: there was NO way anywhere in the app —
-                  backend or frontend — to create an Exam (SSC CGL, SSC CHSL,
-                  etc.) itself. bank.service.ts's meta() (powers "Choose Your
-                  Exam" below) and tests.service.ts's sectionalExamForFamily()
-                  both depend entirely on Exam rows existing; without this
-                  page an admin had no recovery path if an exam was missing
-                  or misconfigured except direct database access. Now wired
-                  to /admin/exams (backend/src/admin/admin.controller.ts
-                  listExams()/createExam()/updateExam()). */}
-              <a href="/admin/exams" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Exam Management</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Create/activate exams — required before they appear for students</div>
-              </a>
-              {/* BUG FIX: backend/src/admin/admin-help.controller.ts's
-                  GET /admin/help/formats and /admin/help/prompts (upload
-                  format cheatsheet + AI-prompt templates for generating
-                  questions/explanations) were fully built but never called
-                  from anywhere in the frontend — only /admin/help/templates/*
-                  (the file downloads) was wired, inside the Bulk Upload
-                  section on /admin. There was no dedicated "Help" page or
-                  dashboard tile at all. Now wired to /admin/help. */}
-              <a href="/admin/help" className="group rounded-lg border border-border/60 bg-card px-4 py-3 transition hover:border-amber-500/40">
-                <div className="text-sm font-semibold group-hover:text-amber-600 dark:group-hover:text-amber-400">Admin Help</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">Upload format cheatsheet + ready-to-use AI prompts</div>
-              </a>
-            </div>
-          </div>
+            <span className="btn btn-outline btn-sm shrink-0">Open →</span>
+          </a>
         )}
 
         {/* Exam picker + plan */}

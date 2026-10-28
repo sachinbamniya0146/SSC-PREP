@@ -960,6 +960,9 @@ model Referral {
   status          ReferralStatus @default(PENDING) // PENDING -> PAID -> REWARDED
   purchasesCount  Int      @default(0) // number of PAID purchases by referee
   rewardedAt      DateTime?
+  // Set when an automatic check found something worth a human look (e.g. SAME_DEVICE). Commission for a flagged
+  // referral stays on hold until an admin approves or reverses it.
+  flagReason      String?
   createdAt       DateTime @default(now())
 
   referrer User @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
@@ -993,7 +996,8 @@ enum ReferralStatus {
 model ReferralWallet {
   id                String   @id @default(uuid())
   userId            String   @unique
-  balanceInr        Float    @default(0) // withdrawable balance right now
+  balanceInr        Float    @default(0) // withdrawable balance right now (released commission only)
+  pendingInr        Float    @default(0) // commission still in the hold window (not withdrawable yet)
   totalEarnedInr    Float    @default(0) // lifetime commission earned
   totalWithdrawnInr Float    @default(0) // lifetime amount paid out
   isSuspended       Boolean  @default(false) // admin can freeze a user's referral earning/withdrawal ability
@@ -1018,6 +1022,14 @@ model ReferralEarning {
   purchaseAmountInr Float
   commissionPct  Float    // the % actually applied (20 or 30) at the time of this purchase
   commissionInr  Float    // the actual ₹ credited to the referrer's wallet
+  // PENDING   = inside the hold window (refund protection) or waiting for an admin check -> counted in wallet.pendingInr
+  // AVAILABLE = released -> counted in wallet.balanceInr (withdrawable)
+  // REVERSED  = taken back (refund / fraud) -> counted nowhere
+  status         EarningStatus @default(AVAILABLE)
+  availableAt    DateTime?  // when a PENDING earning is released automatically (null = needs an admin to approve)
+  holdReason     String?    // why it is waiting for an admin (e.g. SAME_DEVICE)
+  reversedAt     DateTime?
+  reversalNote   String?
   createdAt      DateTime @default(now())
 
   referral Referral @relation(fields: [referralId], references: [id], onDelete: Cascade)
@@ -1026,12 +1038,29 @@ model ReferralEarning {
   payment  Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 
   @@index([referrerId])
+  @@index([status, availableAt])
   @@map("referral_earnings")
 }
 
 // The bank/UPI destination a user wants their withdrawals sent to. Only one
 // active payout method per user at a time (keep it simple — re-saving
 // overwrites, never leaves an ambiguous "which one gets paid" situation).
+enum EarningStatus {
+  PENDING
+  AVAILABLE
+  REVERSED
+}
+
+// Small admin-editable key/value store (JSON). First user: the Refer & Earn rules ("referral.config").
+model AppSetting {
+  key       String   @id
+  valueJson Json
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
 enum PayoutMethodType {
   UPI
   BANK_ACCOUNT
@@ -1665,6 +1694,9 @@ model VocabWordProgress {
   // locked. Cleared by VocabService.submitQuiz() on a >=95% pass.
   remasterRequired Boolean  @default(false)
   lastRevisedAt  DateTime?
+  // NEW (Oct 28 2026): set the first time this word became open for the student (they reached it, or worked on
+  // it). Once set the word can never go back to LOCKED — see VocabService.loadWordsWithProgress().
+  unlockedAt     DateTime?
   updatedAt      DateTime  @updatedAt
 
   user User      @relation(fields: [userId], references: [id], onDelete: Cascade)

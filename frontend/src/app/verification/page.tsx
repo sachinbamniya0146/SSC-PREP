@@ -132,7 +132,7 @@ export default function VerificationPage() {
   // v1 §7.4 — human review gate control (admin only)
   const setReviewStatus = async (qid: string, reviewStatus: string) => {
     try {
-      const r = await fetchAuth(`${apiBase}/admin/pdf-ingestion/questions/${qid}/review-status`, {
+      const r = await fetchAuth(`${apiBase}/admin/questions/${qid}/review-status`, {
         method: "PUT",
         headers: { ...headers(), "Content-Type": "application/json" },
         body: JSON.stringify({ reviewStatus }),

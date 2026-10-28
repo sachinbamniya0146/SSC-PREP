@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Req, Param, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Req, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import type { Request } from 'express';
 import { MonetizationService } from './monetization.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -32,6 +32,12 @@ export class MonetizationController {
     // plan-specific coupon rules can be checked. amountInr is only kept for older clients.
     // userId lets the service enforce the coupon's per-student limit.
     return this.service.validateCoupon(body.code, body.amountInr, user.userId, body.planId);
+  }
+
+  // The "referred by a friend" discount on a plan (shown on the premium page before paying).
+  @Get('welcome-offer')
+  welcomeOffer(@CurrentUser() user: { userId: string }, @Query('planId') planId?: string) {
+    return this.service.welcomeOffer(user.userId, planId);
   }
 
   @Get('history')

@@ -5,6 +5,7 @@ import * as React from "react";
 import { AuthBrandPanel } from "@/components/AuthBrandPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { api } from "@/lib/api";
+import { readSavedReferral, clearSavedReferral } from "@/components/ReferralCapture";
 
 type AuthResponse = {
   user: { id: string; email: string; fullName: string; role: string; preferredLanguage?: string };
@@ -35,9 +36,33 @@ export default function SignupPage() {
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const ref = params.get("ref");
+    const ref = params.get("ref") || readSavedReferral();
     if (ref) setReferralCode(ref.trim().toUpperCase());
   }, []);
+
+  // "Rahul invited you — 10% off your first plan": look the code up while the visitor types / after the link fills it
+  const [invite, setInvite] = React.useState<{ valid: boolean; referrerFirstName?: string; discountPct?: number; discountMaxInr?: number } | null>(null);
+  const [acceptedTerms, setAcceptedTerms] = React.useState(false);
+  React.useEffect(() => {
+    const code = referralCode.trim().replace(/[^A-Za-z0-9]/g, "");
+    if (code.length < 4) {
+      setInvite(null);
+      return;
+    }
+    let cancelled = false;
+    const t = window.setTimeout(async () => {
+      try {
+        const d = await api<{ valid: boolean; referrerFirstName?: string; discountPct?: number; discountMaxInr?: number }>(`/referral/preview/${encodeURIComponent(code)}`);
+        if (!cancelled) setInvite(d);
+      } catch {
+        if (!cancelled) setInvite(null);
+      }
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [referralCode]);
 
   // Google Sign-Up (Google Identity Services) — mirrors login/page.tsx's
   // implementation exactly, added for parity: the signup page previously
@@ -185,6 +210,10 @@ export default function SignupPage() {
       setError("Mobile number must be at least 10 digits");
       return;
     }
+    if (!acceptedTerms) {
+      setError("Please accept the Terms & Conditions and Privacy Policy to create your account.");
+      return;
+    }
     setLoading(true);
     try {
       const data = await api<AuthResponse>("/auth/signup", {
@@ -201,6 +230,7 @@ export default function SignupPage() {
       localStorage.setItem("ssc_refresh_token", data.refreshToken);
       localStorage.setItem("ssc_user", JSON.stringify(data.user));
       setStoredLang(data.user?.preferredLanguage === "hinglish" ? "hinglish" : "en");
+      clearSavedReferral();
       window.location.href = "/dashboard";
     } catch (err) {
       const message = err instanceof Error ? err.message : "Signup failed";
@@ -244,6 +274,11 @@ export default function SignupPage() {
           {googleClientId && (
             <>
               <div className="flex justify-center" id="google-signup-btn" />
+              <p className="-mt-2 text-center text-xs text-muted-foreground">
+                By continuing with Google you agree to our{" "}
+                <a href="/terms" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">Terms</a> and{" "}
+                <a href="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">Privacy Policy</a>.
+              </p>
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="h-px flex-1 bg-border" /> or <span className="h-px flex-1 bg-border" />
               </div>
@@ -301,9 +336,16 @@ export default function SignupPage() {
               placeholder="e.g. RAHUL123"
               className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm uppercase outline-none focus:border-primary"
             />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Got a code from a friend? Enter it here — it auto-fills if you came from a referral link.
-            </p>
+            {invite?.valid ? (
+              <p className="mt-1.5 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
+                🎁 <b>{invite.referrerFirstName}</b> invited you
+                {invite.discountPct ? ` — you get ${invite.discountPct}% off your first plan (up to ₹${invite.discountMaxInr}).` : "."}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Got a code from a friend? Enter it here — it auto-fills if you came from a referral link.
+              </p>
+            )}
           </div>
           <div>
             <label className="mb-1.5 block text-sm font-medium">Password</label>
@@ -376,6 +418,21 @@ export default function SignupPage() {
               </p>
             )}
           </div>
+          <label className="flex items-start gap-2.5 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={acceptedTerms}
+              onChange={(e) => setAcceptedTerms(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0"
+              required
+            />
+            <span>
+              I agree to the{" "}
+              <a href="/terms" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">Terms &amp; Conditions</a>
+              {" "}and{" "}
+              <a href="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">Privacy Policy</a>.
+            </span>
+          </label>
           <button
             type="submit"
             disabled={loading}

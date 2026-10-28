@@ -1,37 +1,64 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { AppShell, PageHeading, ErrorNote, CardSkeletons, EmptyState } from "@/components/AppShell";
 
-type ReferralStat = {
-  totalReferrals: number;
-  paidReferrals: number;
-  totalPurchases: number;
-  rewardThreshold: number;
-  progressPercent: number;
-  rewarded: boolean;
-  upgradeThreshold: number;
-  upgradeProgressPercent: number;
-  currentCommissionPct: number;
-  nextTierAt: number | null;
+type Rules = {
+  refereeDiscountPct: number;
+  refereeDiscountMaxInr: number;
+  lowTierPct: number;
+  highTierPct: number;
+  highTierAfter: number;
+  holdDays: number;
+  minWithdrawInr: number;
+  minPaidReferralsToWithdraw: number;
+  freeMonthAt: number;
+  freeUpgradeAt: number;
 };
 
-type Wallet = {
-  balanceInr: number;
-  totalEarnedInr: number;
-  totalWithdrawnInr: number;
-  isSuspended: boolean;
-  suspendedReason: string | null;
-  canWithdraw: boolean;
-  minPaidReferralsToWithdraw: number;
+type Me = {
+  enabled: boolean;
+  referralCode: string;
+  shareLink: string;
+  referredBy: string | null;
+  rules: Rules;
+  stats: {
+    totalReferrals: number;
+    paidReferrals: number;
+    totalPurchases: number;
+    currentCommissionPct: number;
+    friendsToNextTier: number | null;
+    freeMonthClaimed: boolean;
+    milestones: { key: string; label: string; at: number; done: boolean; progressPercent: number }[];
+  };
+  wallet: {
+    balanceInr: number;
+    pendingInr: number;
+    totalEarnedInr: number;
+    totalWithdrawnInr: number;
+    isSuspended: boolean;
+    suspendedReason: string | null;
+    canWithdraw: boolean;
+    withdrawBlockReason: string | null;
+    hasPayoutMethod: boolean;
+    nextRelease: { at: string; amountInr: number } | null;
+  };
+  referrals: { id: string; name: string; joinedAt: string; purchases: number; status: "PENDING" | "PAIDED" | "REWARDED" }[];
 };
 
 type Earning = {
   id: string;
-  refereeName: string;
+  name: string;
   purchaseAmountInr: number;
   commissionPct: number;
   commissionInr: number;
+  status: "PENDING" | "AVAILABLE" | "REVERSED";
+  availableAt: string | null;
+  underReview: boolean;
+  reversalNote: string | null;
   createdAt: string;
 };
 
@@ -48,53 +75,82 @@ type Withdrawal = {
 type PayoutMethod = {
   type: "UPI" | "BANK_ACCOUNT";
   upiId: string | null;
-  bankAccountNo: string | null; // masked
+  bankAccountNo: string | null;
   bankIfsc: string | null;
   bankAccountName: string | null;
 } | null;
 
-const statusColor: Record<Withdrawal["status"], string> = {
-  REQUESTED: "bg-warning/20 text-warning",
-  APPROVED: "bg-warning/20 text-warning",
-  PROCESSING: "bg-warning/20 text-warning",
-  PAID: "bg-success/20 text-success",
-  REJECTED: "bg-destructive/20 text-destructive",
-  FAILED: "bg-destructive/20 text-destructive",
+const inr = (n: number) =>
+  `₹${(Math.round(n * 100) / 100).toLocaleString("en-IN", { minimumFractionDigits: Math.round(n * 100) % 100 ? 2 : 0 })}`;
+const fmtDate = (d?: string | null) => (d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "");
+const daysUntil = (d: string) => Math.max(0, Math.ceil((new Date(d).getTime() - Date.now()) / 86_400_000));
+
+const WD_BADGE: Record<Withdrawal["status"], { cls: string; label: string }> = {
+  REQUESTED: { cls: "badge badge-warning", label: "Requested" },
+  APPROVED: { cls: "badge badge-info", label: "Approved" },
+  PROCESSING: { cls: "badge badge-info", label: "Sending" },
+  PAID: { cls: "badge badge-success", label: "Paid" },
+  REJECTED: { cls: "badge badge-danger", label: "Rejected" },
+  FAILED: { cls: "badge badge-danger", label: "Failed" },
 };
 
+function Stat({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: "success" | "warning" | "primary" }) {
+  const color = tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "primary" ? "text-primary" : "";
+  return (
+    <div className="card p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={`mt-1 text-2xl font-bold tabular-nums ${color}`}>{value}</p>
+      {hint ? <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p> : null}
+    </div>
+  );
+}
+
+function Bar({ pct, tone = "primary" }: { pct: number; tone?: "primary" | "success" }) {
+  return (
+    <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+      <div className={`h-full rounded-full transition-all duration-500 ${tone === "success" ? "bg-success" : "bg-primary"}`} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+    </div>
+  );
+}
+
 export default function ReferralPage() {
-  const [code, setCode] = React.useState("");
-  const [shareLink, setShareLink] = React.useState("");
-  // "I was referred by a friend" — code applied to MY account (null = none yet)
-  const [referredBy, setReferredBy] = React.useState<string | null>(null);
-  const [applyCode, setApplyCode] = React.useState("");
-  const [applyMsg, setApplyMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
-  const [applying, setApplying] = React.useState(false);
-  const [stats, setStats] = React.useState<ReferralStat | null>(null);
-  const [wallet, setWallet] = React.useState<Wallet | null>(null);
-  const [refs, setRefs] = React.useState<
-    { id: string; refereeName: string; purchases: number; status: string }[]
-  >([]);
+  const tr = useT();
+  const [me, setMe] = React.useState<Me | null>(null);
   const [earnings, setEarnings] = React.useState<Earning[]>([]);
   const [withdrawals, setWithdrawals] = React.useState<Withdrawal[]>([]);
-  const [payoutMethod, setPayoutMethod] = React.useState<PayoutMethod>(null);
+  const [payout, setPayout] = React.useState<PayoutMethod>(null);
   const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState("");
+  const [tab, setTab] = React.useState<"friends" | "earnings" | "withdraw">("friends");
+  const [toast, setToast] = React.useState<{ ok: boolean; text: string } | null>(null);
+  const toastTimer = React.useRef<number | undefined>(undefined);
 
-  // Payout method form state
+  // "I have a friend's code"
+  const [applyCode, setApplyCode] = React.useState("");
+  const [applying, setApplying] = React.useState(false);
+
+  // payout method
   const [pmType, setPmType] = React.useState<"UPI" | "BANK_ACCOUNT">("UPI");
   const [upiId, setUpiId] = React.useState("");
   const [bankAccountNo, setBankAccountNo] = React.useState("");
   const [bankIfsc, setBankIfsc] = React.useState("");
   const [bankAccountName, setBankAccountName] = React.useState("");
+  const [editingMethod, setEditingMethod] = React.useState(false);
   const [savingMethod, setSavingMethod] = React.useState(false);
-  const [methodMsg, setMethodMsg] = React.useState<string | null>(null);
 
-  // Withdraw form state
-  const [withdrawAmount, setWithdrawAmount] = React.useState("");
+  // withdraw
+  const [amount, setAmount] = React.useState("");
   const [withdrawing, setWithdrawing] = React.useState(false);
-  const [withdrawMsg, setWithdrawMsg] = React.useState<string | null>(null);
+  const [cancelId, setCancelId] = React.useState<string | null>(null);
 
-  const load = async () => {
+  const say = React.useCallback((ok: boolean, text: string) => {
+    setToast({ ok, text });
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 4500);
+  }, []);
+  React.useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
+  const load = React.useCallback(async () => {
     try {
       const [meRes, earnRes, wdRes, pmRes] = await Promise.all([
         fetchAuth(`${API_BASE}/referral/me`),
@@ -102,20 +158,13 @@ export default function ReferralPage() {
         fetchAuth(`${API_BASE}/referral/withdrawals`),
         fetchAuth(`${API_BASE}/referral/payout-method`),
       ]);
-      if (meRes.ok) {
-        const d = await meRes.json();
-        setCode(d.referralCode);
-        setShareLink(d.shareLink);
-        setReferredBy(d.referredBy ?? null);
-        setStats(d.stats);
-        setWallet(d.wallet);
-        setRefs(d.referrals);
-      }
+      if (!meRes.ok) throw new Error("load");
+      setMe(await meRes.json());
       if (earnRes.ok) setEarnings(await earnRes.json());
       if (wdRes.ok) setWithdrawals(await wdRes.json());
       if (pmRes.ok) {
-        const pm = await pmRes.json();
-        setPayoutMethod(pm);
+        const pm: PayoutMethod = await pmRes.json();
+        setPayout(pm);
         if (pm) {
           setPmType(pm.type);
           setUpiId(pm.upiId || "");
@@ -123,21 +172,53 @@ export default function ReferralPage() {
           setBankAccountName(pm.bankAccountName || "");
         }
       }
+      setLoadError("");
+    } catch {
+      setLoadError(tr("Could not load your referral details. Please try again.", "Referral details load nahi hui. Dobara try karein."));
     } finally {
       setLoading(false);
     }
-  };
-
-  React.useEffect(() => {
-    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const applyReferral = async () => {
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+
+  const shareText = me
+    ? tr(
+        `Prepare for SSC with SSCPrepHub — mock tests, PYQs and vocabulary in one place. Join with my link${me.rules.refereeDiscountPct > 0 ? ` and get ${me.rules.refereeDiscountPct}% off your first plan` : ""}: ${me.shareLink}`,
+        `SSCPrepHub se SSC ki taiyari karo — mock tests, PYQ aur vocabulary ek jagah. Mere link se join karo${me.rules.refereeDiscountPct > 0 ? ` aur pehle plan par ${me.rules.refereeDiscountPct}% off pao` : ""}: ${me.shareLink}`,
+      )
+    : "";
+
+  const copy = async (text: string, okMsg: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      say(true, okMsg);
+    } catch {
+      say(false, tr("Could not copy — please select and copy it manually.", "Copy nahi hua — kripya manually copy karein."));
+    }
+  };
+
+  const nativeShare = async () => {
+    if (!me) return;
+    const nav = navigator as Navigator & { share?: (d: { title?: string; text?: string; url?: string }) => Promise<void> };
+    if (nav.share) {
+      try {
+        await nav.share({ title: "SSCPrepHub", text: shareText.replace(me.shareLink, "").trim(), url: me.shareLink });
+        return;
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+      }
+    }
+    void copy(shareText, tr("Invite message copied", "Invite message copy ho gaya"));
+  };
+
+  const applyFriendCode = async () => {
     const c = applyCode.trim();
     if (!c || applying) return;
     setApplying(true);
-    setApplyMsg(null);
     try {
       const res = await fetchAuth(`${API_BASE}/referral/apply`, {
         method: "POST",
@@ -145,64 +226,46 @@ export default function ReferralPage() {
         body: JSON.stringify({ code: c }),
       });
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setApplyMsg({ ok: false, text: d?.message || "Could not apply this code." });
-      } else {
-        setApplyMsg({ ok: !!d.applied, text: d.message || (d.applied ? "Referral code applied." : "Code not applied.") });
+      if (!res.ok) say(false, d?.message || tr("Could not apply this code.", "Ye code apply nahi hua."));
+      else {
+        say(!!d.applied, d.message || (d.applied ? "Code applied." : "Code not applied."));
         if (d.applied) {
-          setReferredBy(c.toUpperCase());
           setApplyCode("");
+          await load();
         }
       }
     } catch {
-      setApplyMsg({ ok: false, text: "Network error — please try again." });
+      say(false, tr("Network error — please try again.", "Network error — dobara try karein."));
     } finally {
       setApplying(false);
     }
   };
 
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(
-        shareLink || `${window.location.origin}/signup?ref=${code}`,
-      );
-      alert("🔗 Referral link copied! Share with friends.");
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const savePayoutMethod = async () => {
-    setMethodMsg(null);
+  const saveMethod = async () => {
     setSavingMethod(true);
     try {
-      const body =
-        pmType === "UPI"
-          ? { type: "UPI", upiId }
-          : { type: "BANK_ACCOUNT", bankAccountNo, bankIfsc, bankAccountName };
+      const body = pmType === "UPI" ? { type: "UPI", upiId: upiId.trim() } : { type: "BANK_ACCOUNT", bankAccountNo: bankAccountNo.trim(), bankIfsc: bankIfsc.trim().toUpperCase(), bankAccountName: bankAccountName.trim() };
       const res = await fetchAuth(`${API_BASE}/referral/payout-method`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d?.message || "Could not save payout method");
-      setMethodMsg("✅ Payout method saved!");
+      if (!res.ok) throw new Error(d?.message || "Could not save payout details");
+      say(true, tr("Payout details saved", "Payout details save ho gayi"));
+      setEditingMethod(false);
+      setBankAccountNo("");
       await load();
     } catch (e) {
-      setMethodMsg(`❌ ${(e as Error).message}`);
+      say(false, (e as Error).message);
     } finally {
       setSavingMethod(false);
     }
   };
 
-  const requestWithdrawal = async () => {
-    setWithdrawMsg(null);
-    const amt = Number(withdrawAmount);
-    if (!amt || amt <= 0) {
-      setWithdrawMsg("❌ Enter a valid amount");
-      return;
-    }
+  const withdraw = async () => {
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) return say(false, tr("Enter a valid amount.", "Sahi amount daalein."));
     setWithdrawing(true);
     try {
       const res = await fetchAuth(`${API_BASE}/referral/withdraw`, {
@@ -212,375 +275,420 @@ export default function ReferralPage() {
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d?.message || "Withdrawal request failed");
-      setWithdrawMsg("✅ Withdrawal requested! Admin will review and process it.");
-      setWithdrawAmount("");
+      say(true, tr("Withdrawal requested. We will review it and send the money to your account.", "Withdrawal request ho gayi. Hum review karke paisa bhej denge."));
+      setAmount("");
       await load();
     } catch (e) {
-      setWithdrawMsg(`❌ ${(e as Error).message}`);
+      say(false, (e as Error).message);
     } finally {
       setWithdrawing(false);
     }
   };
 
   const cancelWithdrawal = async (id: string) => {
-    if (!confirm("Cancel this pending withdrawal request?")) return;
-    const res = await fetchAuth(`${API_BASE}/referral/withdrawals/${id}/cancel`, { method: "POST" });
-    if (res.ok) await load();
+    try {
+      const res = await fetchAuth(`${API_BASE}/referral/withdrawals/${id}/cancel`, { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d?.message || "Could not cancel");
+      say(true, tr("Request cancelled. The amount is back in your wallet.", "Request cancel ho gayi. Paisa wallet me wapas aa gaya."));
+      await load();
+    } catch (e) {
+      say(false, (e as Error).message);
+    } finally {
+      setCancelId(null);
+    }
   };
 
+  const inputCls =
+    "w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";
+
+  if (loading) {
+    return (
+      <AppShell width="lg">
+        <PageHeading title={tr("Refer & Earn", "Refer & Earn")} />
+        <CardSkeletons count={3} />
+      </AppShell>
+    );
+  }
+
+  if (!me) {
+    return (
+      <AppShell width="lg">
+        <PageHeading title={tr("Refer & Earn", "Refer & Earn")} />
+        <ErrorNote onRetry={() => void load()}>{loadError || "Something went wrong."}</ErrorNote>
+      </AppShell>
+    );
+  }
+
+  const { rules, stats, wallet } = me;
+  const hasFriendOffer = rules.refereeDiscountPct > 0;
+  const openWithdrawal = withdrawals.find((w) => ["REQUESTED", "APPROVED", "PROCESSING"].includes(w.status));
+  const maxWithdraw = Math.max(0, wallet.balanceInr);
+
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <a href="/dashboard" className="btn btn-outline text-sm">
-            Back to Dashboard
-          </a>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-4xl px-4 py-10">
-        <h1 className="text-2xl font-bold">Refer &amp; Earn 🎁</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Earn <span className="font-semibold text-primary">20% commission</span> on every friend&apos;s
-          purchase. Cross <b>10 paid referrals</b> and it jumps to{" "}
-          <span className="font-semibold text-primary">30%</span> — plus a free 30-day subscription. Hit{" "}
-          <b>20 paid referrals</b> and get a free 6-month plan upgrade too.
-        </p>
-
-        {loading && <p className="mt-8 text-muted-foreground">Loading your referral stats…</p>}
-
-        {!loading && (
-          <>
-            {wallet?.isSuspended && (
-              <div className="mt-6 rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-                ⚠️ Your referral earnings are currently suspended by admin
-                {wallet.suspendedReason ? `: ${wallet.suspendedReason}` : "."}
-              </div>
-            )}
-
-            {/* ---- Wallet ---- */}
-            {wallet && (
-              <div className="mt-8 grid gap-4 sm:grid-cols-3">
-                <div className="card p-5">
-                  <p className="text-xs text-muted-foreground">Wallet Balance</p>
-                  <p className="mt-1 text-3xl font-bold text-primary">₹{wallet.balanceInr.toFixed(2)}</p>
-                </div>
-                <div className="card p-5">
-                  <p className="text-xs text-muted-foreground">Total Earned (Lifetime)</p>
-                  <p className="mt-1 text-3xl font-bold">₹{wallet.totalEarnedInr.toFixed(2)}</p>
-                </div>
-                <div className="card p-5">
-                  <p className="text-xs text-muted-foreground">Total Withdrawn</p>
-                  <p className="mt-1 text-3xl font-bold">₹{wallet.totalWithdrawnInr.toFixed(2)}</p>
-                </div>
-              </div>
-            )}
-
-            {/* ---- Referral counts ---- */}
-            {stats && (
-              <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                <div className="card p-5">
-                  <p className="text-xs text-muted-foreground">Total Referred</p>
-                  <p className="mt-1 text-3xl font-bold">{stats.totalReferrals}</p>
-                </div>
-                <div className="card p-5">
-                  <p className="text-xs text-muted-foreground">Paid Referrals ✅</p>
-                  <p className="mt-1 text-3xl font-bold">{stats.paidReferrals}</p>
-                </div>
-                <div className="card p-5">
-                  <p className="text-xs text-muted-foreground">Current Commission Rate</p>
-                  <p className="mt-1 text-3xl font-bold text-primary">{stats.currentCommissionPct}%</p>
-                  {stats.nextTierAt && (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Reach {stats.nextTierAt} paid referrals for 30%
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ---- Progress bars ---- */}
-            {stats && (
-              <div className="card mt-6 p-5">
-                <div className="mb-2 flex items-center justify-between text-sm">
-                  <span>Free 30-day subscription ({stats.paidReferrals}/{stats.rewardThreshold})</span>
-                  <span className="font-semibold">{stats.progressPercent}%</span>
-                </div>
-                <div className="h-3 w-full overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all"
-                    style={{ width: `${Math.min(stats.progressPercent, 100)}%` }}
-                  />
-                </div>
-                {stats.rewarded && (
-                  <p className="mt-2 text-sm font-semibold text-success">🎉 You&apos;ve earned your FREE subscription!</p>
-                )}
-
-                <div className="mb-2 mt-5 flex items-center justify-between text-sm">
-                  <span>Free 6-month upgrade ({stats.paidReferrals}/{stats.upgradeThreshold})</span>
-                  <span className="font-semibold">{stats.upgradeProgressPercent}%</span>
-                </div>
-                <div className="h-3 w-full overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-accent to-primary transition-all"
-                    style={{ width: `${Math.min(stats.upgradeProgressPercent, 100)}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* ---- Referral code / share link ---- */}
-            {code && (
-              <div className="card mt-6 p-5">
-                <p className="text-sm text-muted-foreground">Your referral code</p>
-                <div className="mt-2 flex flex-wrap items-center gap-3">
-                  <span className="rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-2xl font-black tracking-widest text-primary">
-                    {code}
-                  </span>
-                  <button onClick={copyLink} className="btn bg-primary text-primary-foreground hover:opacity-90">
-                    📋 Copy Share Link
-                  </button>
-                </div>
-                <p className="mt-3 break-all text-xs text-muted-foreground">{shareLink}</p>
-              </div>
-            )}
-
-            {/* ---- Got a friend's code? ---- */}
-            <div className="card mt-6 p-5">
-              <p className="text-sm font-semibold">Were you referred by a friend?</p>
-              {referredBy ? (
-                <p className="mt-1 text-sm text-muted-foreground">
-                  ✅ Referral code <span className="font-bold text-primary">{referredBy}</span> is applied to your account.
-                </p>
-              ) : (
-                <>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Enter their code before your first purchase so they get their reward. You can only add one code.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <input
-                      value={applyCode}
-                      onChange={(e) => setApplyCode(e.target.value.toUpperCase())}
-                      onKeyDown={(e) => { if (e.key === "Enter") applyReferral(); }}
-                      placeholder="FRIEND'S CODE"
-                      maxLength={20}
-                      className="w-48 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold tracking-widest outline-none focus:border-primary"
-                    />
-                    <button
-                      onClick={applyReferral}
-                      disabled={applying || !applyCode.trim()}
-                      className="btn bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                    >
-                      {applying ? "Applying…" : "Apply code"}
-                    </button>
-                  </div>
-                </>
-              )}
-              {applyMsg && (
-                <p className={`mt-2 text-xs font-medium ${applyMsg.ok ? "text-success" : "text-destructive"}`}>{applyMsg.text}</p>
-              )}
-            </div>
-
-            {/* ---- Payout method ---- */}
-            <div className="card mt-8 p-5">
-              <h2 className="text-lg font-semibold">Payout Method</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Where should we send your withdrawal? Powered by Cashfree —{" "}
-                <a
-                  href="https://www.cashfree.com/docs/payments/online/web/redirect"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline"
-                >
-                  learn more
-                </a>
-                .
-              </p>
-
-              <div className="mt-4 flex gap-2">
-                <button
-                  onClick={() => setPmType("UPI")}
-                  className={`btn text-sm ${pmType === "UPI" ? "bg-primary text-primary-foreground" : "btn-outline"}`}
-                >
-                  UPI
-                </button>
-                <button
-                  onClick={() => setPmType("BANK_ACCOUNT")}
-                  className={`btn text-sm ${pmType === "BANK_ACCOUNT" ? "bg-primary text-primary-foreground" : "btn-outline"}`}
-                >
-                  Bank Account
-                </button>
-              </div>
-
-              {pmType === "UPI" ? (
-                <div className="mt-4">
-                  <label className="text-xs text-muted-foreground">UPI ID</label>
-                  <input
-                    value={upiId}
-                    onChange={(e) => setUpiId(e.target.value)}
-                    placeholder="yourname@okhdfcbank"
-                    className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                  />
-                </div>
-              ) : (
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="text-xs text-muted-foreground">Account Number</label>
-                    <input
-                      value={bankAccountNo}
-                      onChange={(e) => setBankAccountNo(e.target.value)}
-                      placeholder="1234567890123"
-                      className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">IFSC Code</label>
-                    <input
-                      value={bankIfsc}
-                      onChange={(e) => setBankIfsc(e.target.value.toUpperCase())}
-                      placeholder="HDFC0000001"
-                      className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="text-xs text-muted-foreground">Account Holder Name</label>
-                    <input
-                      value={bankAccountName}
-                      onChange={(e) => setBankAccountName(e.target.value)}
-                      placeholder="As per bank records"
-                      className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <button
-                onClick={savePayoutMethod}
-                disabled={savingMethod}
-                className="btn mt-4 bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
-              >
-                {savingMethod ? "Saving…" : "Save Payout Method"}
-              </button>
-              {methodMsg && <p className="mt-2 text-sm">{methodMsg}</p>}
-              {payoutMethod && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Currently saved: {payoutMethod.type === "UPI" ? payoutMethod.upiId : `${payoutMethod.bankAccountName} · ${payoutMethod.bankAccountNo}`}
-                </p>
-              )}
-            </div>
-
-            {/* ---- Withdraw ---- */}
-            <div className="card mt-6 p-5">
-              <h2 className="text-lg font-semibold">Withdraw Earnings</h2>
-              {wallet && !wallet.canWithdraw && !wallet.isSuspended && (
-                <p className="mt-1 text-sm text-muted-foreground">
-                  You need at least {wallet.minPaidReferralsToWithdraw} paid referrals to withdraw. Keep sharing!
-                </p>
-              )}
-              {wallet?.canWithdraw && (
-                <div className="mt-3 flex flex-wrap items-center gap-3">
-                  <input
-                    type="number"
-                    min={1}
-                    max={wallet.balanceInr}
-                    value={withdrawAmount}
-                    onChange={(e) => setWithdrawAmount(e.target.value)}
-                    placeholder={`Up to ₹${wallet.balanceInr.toFixed(2)}`}
-                    className="w-40 rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                  />
-                  <button
-                    onClick={requestWithdrawal}
-                    disabled={withdrawing || wallet.balanceInr <= 0}
-                    className="btn bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                  >
-                    {withdrawing ? "Requesting…" : "Request Withdrawal"}
-                  </button>
-                </div>
-              )}
-              {withdrawMsg && <p className="mt-2 text-sm">{withdrawMsg}</p>}
-
-              {withdrawals.length > 0 && (
-                <div className="mt-5 divide-y divide-border rounded-2xl border border-border bg-card">
-                  {withdrawals.map((w) => (
-                    <div key={w.id} className="flex items-center justify-between px-4 py-3">
-                      <div>
-                        <p className="font-medium">₹{w.amountInr.toFixed(2)}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {new Date(w.createdAt).toLocaleDateString()} · {w.payoutMethodType}
-                          {w.adminNote ? ` · ${w.adminNote}` : ""}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusColor[w.status]}`}>
-                          {w.status}
-                        </span>
-                        {w.status === "REQUESTED" && (
-                          <button onClick={() => cancelWithdrawal(w.id)} className="text-xs text-destructive underline">
-                            Cancel
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* ---- Earnings history ---- */}
-            {earnings.length > 0 && (
-              <div className="mt-8">
-                <h2 className="text-lg font-semibold">Commission History</h2>
-                <div className="mt-3 divide-y divide-border rounded-2xl border border-border bg-card">
-                  {earnings.map((e) => (
-                    <div key={e.id} className="flex items-center justify-between px-5 py-4">
-                      <div>
-                        <p className="font-medium">{e.refereeName}</p>
-                        <p className="text-xs text-muted-foreground">
-                          Purchase ₹{e.purchaseAmountInr} · {e.commissionPct}% commission · {new Date(e.createdAt).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <span className="font-bold text-success">+₹{e.commissionInr.toFixed(2)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ---- Referred people ---- */}
-            <div className="mt-8">
-              <h2 className="text-lg font-semibold">People you referred</h2>
-              {refs.length === 0 ? (
-                <p className="mt-3 text-sm text-muted-foreground">No referrals yet. Share your code to start earning!</p>
-              ) : (
-                <div className="mt-3 divide-y divide-border rounded-2xl border border-border bg-card">
-                  {refs.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between px-5 py-4">
-                      <div>
-                        <p className="font-medium">{r.refereeName}</p>
-                        <p className="text-xs text-muted-foreground">{r.purchases} paid purchase(s)</p>
-                      </div>
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                          r.status === "REWARDED"
-                            ? "bg-success/20 text-success"
-                            : r.status === "PAIDED"
-                              ? "bg-warning/20 text-warning"
-                              : "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        {r.status}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
+    <AppShell width="lg">
+      <PageHeading
+        title={tr("Refer & Earn", "Refer & Earn")}
+        subtitle={tr(
+          "Your friends save on their first plan, and you earn real cash every time they buy.",
+          "Dost ko pehle plan par bachat, aapko har purchase par real cash.",
         )}
-      </main>
-    </div>
+        actions={
+          <Link href="/terms#referral" className="btn btn-outline btn-sm">
+            {tr("Programme rules", "Programme rules")}
+          </Link>
+        }
+      />
+
+      {!me.enabled && (
+        <div className="mb-5 rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm">
+          <b className="text-warning">{tr("The referral programme is paused.", "Referral programme abhi paused hai.")}</b>{" "}
+          {tr("New invites earn nothing for now. Money already in your wallet stays yours and can still be withdrawn.", "Naye invites par abhi kuch nahi milega. Wallet ka paisa aapka hi hai, withdraw ho sakta hai.")}
+        </div>
+      )}
+      {wallet.isSuspended && (
+        <div className="mb-5 rounded-xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">
+          {tr("Your referral earnings are paused by admin", "Aapki referral earnings admin ne pause ki hain")}
+          {wallet.suspendedReason ? `: ${wallet.suspendedReason}` : "."}
+        </div>
+      )}
+
+      {/* Hero — code + share */}
+      <section className="relative overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-card to-accent/10 p-5 sm:p-7">
+        <div className="grid gap-6 md:grid-cols-[1.3fr_1fr] md:items-center">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-primary">{tr("Your invite code", "Aapka invite code")}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <span className="select-all rounded-xl border-2 border-dashed border-primary/40 bg-background px-4 py-2 font-mono text-2xl font-extrabold tracking-[0.2em] text-primary">
+                {me.referralCode}
+              </span>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => copy(me.referralCode, tr("Code copied", "Code copy ho gaya"))}>
+                {tr("Copy code", "Code copy")}
+              </button>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <a
+                className="btn btn-primary"
+                href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {tr("Share on WhatsApp", "WhatsApp par share")}
+              </a>
+              <button type="button" className="btn btn-outline" onClick={nativeShare}>
+                {tr("Share…", "Share…")}
+              </button>
+              <button type="button" className="btn btn-outline" onClick={() => copy(me.shareLink, tr("Invite link copied", "Invite link copy ho gaya"))}>
+                {tr("Copy link", "Link copy")}
+              </button>
+            </div>
+            <p className="mt-3 break-all text-xs text-muted-foreground">{me.shareLink}</p>
+          </div>
+
+          <ol className="space-y-3 text-sm">
+            {[
+              [tr("Share your link", "Link share karein"), hasFriendOffer ? tr(`Your friend gets ${rules.refereeDiscountPct}% off their first plan (up to ${inr(rules.refereeDiscountMaxInr)}).`, `Dost ko pehle plan par ${rules.refereeDiscountPct}% off (max ${inr(rules.refereeDiscountMaxInr)}).`) : tr("Your friend signs up with your code.", "Dost aapke code se signup karta hai.")],
+              [tr("Friend buys a plan", "Dost plan kharidta hai"), tr(`You earn ${rules.lowTierPct}% of what they pay${rules.highTierPct > rules.lowTierPct ? `, ${rules.highTierPct}% from your ${rules.highTierAfter}th paying friend` : ""}.`, `Aap unke payment ka ${rules.lowTierPct}% kamate hain${rules.highTierPct > rules.lowTierPct ? `, ${rules.highTierAfter}th paying dost se ${rules.highTierPct}%` : ""}.`)],
+              [tr("Withdraw to UPI / bank", "UPI / bank me withdraw karein"), tr(`Commission becomes withdrawable ${rules.holdDays > 0 ? `${rules.holdDays} days after the purchase` : "immediately"}.`, `Commission ${rules.holdDays > 0 ? `purchase ke ${rules.holdDays} din baad` : "turant"} withdraw ke liye ready hota hai.`)],
+            ].map(([t, d], i) => (
+              <li key={i} className="flex gap-3">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">{i + 1}</span>
+                <span>
+                  <b>{t}</b>
+                  <br />
+                  <span className="text-muted-foreground">{d}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      {/* Wallet */}
+      <section className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label={tr("Withdrawable", "Withdrawable")} value={inr(wallet.balanceInr)} tone="success" hint={wallet.balanceInr < 0 ? tr("Adjusted after a refund", "Refund ke baad adjust hua") : undefined} />
+        <Stat
+          label={tr("Pending", "Pending")}
+          value={inr(wallet.pendingInr)}
+          tone="warning"
+          hint={wallet.nextRelease ? tr(`${inr(wallet.nextRelease.amountInr)} unlocks in ${daysUntil(wallet.nextRelease.at)}d`, `${inr(wallet.nextRelease.amountInr)} ${daysUntil(wallet.nextRelease.at)} din me unlock`) : undefined}
+        />
+        <Stat label={tr("Total earned", "Total kamaya")} value={inr(wallet.totalEarnedInr)} />
+        <Stat label={tr("Paid out", "Payout hua")} value={inr(wallet.totalWithdrawnInr)} />
+      </section>
+
+      {/* Progress */}
+      <section className="mt-5 grid gap-4 md:grid-cols-2">
+        <div className="card p-5">
+          <div className="flex items-baseline justify-between">
+            <h2 className="font-semibold">{tr("Your commission rate", "Aapka commission rate")}</h2>
+            <span className="text-2xl font-extrabold text-primary">{stats.currentCommissionPct}%</span>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {stats.friendsToNextTier != null
+              ? tr(`${stats.friendsToNextTier} more paying ${stats.friendsToNextTier === 1 ? "friend" : "friends"} and it rises to ${rules.highTierPct}%.`, `${stats.friendsToNextTier} aur paying dost aur rate ${rules.highTierPct}% ho jayega.`)
+              : tr("You are on the top rate. 🎉", "Aap top rate par hain. 🎉")}
+          </p>
+          <div className="mt-3">
+            <Bar pct={rules.highTierAfter > 0 ? (stats.paidReferrals / rules.highTierAfter) * 100 : 100} tone="success" />
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {stats.totalReferrals} {tr("joined", "joined")} · {stats.paidReferrals} {tr("bought a plan", "ne plan kharida")}
+          </p>
+        </div>
+
+        <div className="card p-5">
+          <h2 className="font-semibold">{tr("Milestone rewards", "Milestone rewards")}</h2>
+          <div className="mt-3 space-y-3">
+            {stats.milestones.map((m) => (
+              <div key={m.key}>
+                <div className="mb-1 flex items-center justify-between text-sm">
+                  <span className={m.done ? "font-semibold text-success" : ""}>{m.done ? "✓ " : ""}{m.label}</span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {Math.min(stats.paidReferrals, m.at)}/{m.at}
+                  </span>
+                </div>
+                <Bar pct={m.progressPercent} tone={m.done ? "success" : "primary"} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Have a friend's code */}
+      {!me.referredBy && (
+        <section className="card mt-5 p-5">
+          <h2 className="font-semibold">{tr("Did a friend invite you?", "Kisi dost ne invite kiya?")}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {tr("Add their code before your first purchase", "Pehli purchase se pehle unka code daalein")}
+            {hasFriendOffer ? tr(` and get ${rules.refereeDiscountPct}% off your first plan.`, ` aur pehle plan par ${rules.refereeDiscountPct}% off pao.`) : "."}
+          </p>
+          <div className="mt-3 flex gap-2">
+            <input
+              className={`${inputCls} max-w-xs font-mono uppercase tracking-widest`}
+              value={applyCode}
+              onChange={(e) => setApplyCode(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && void applyFriendCode()}
+              placeholder="FRIEND CODE"
+              maxLength={20}
+              aria-label={tr("Friend's referral code", "Dost ka referral code")}
+            />
+            <button className="btn btn-primary" onClick={() => void applyFriendCode()} disabled={!applyCode.trim() || applying}>
+              {applying ? "…" : tr("Apply", "Lagayein")}
+            </button>
+          </div>
+        </section>
+      )}
+      {me.referredBy && (
+        <p className="mt-5 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm">
+          ✓ {tr("You joined with code", "Aap is code se join hue")} <b className="font-mono">{me.referredBy}</b>.
+          {hasFriendOffer ? ` ${tr(`Your ${rules.refereeDiscountPct}% welcome discount is applied automatically on your first plan.`, `Pehle plan par ${rules.refereeDiscountPct}% welcome discount apne aap lagega.`)}` : ""}
+        </p>
+      )}
+
+      {/* Tabs */}
+      <div className="mt-8 flex gap-1 overflow-x-auto border-b border-border" role="tablist">
+        {(
+          [
+            ["friends", tr("Friends", "Dost"), me.referrals.length],
+            ["earnings", tr("Earnings", "Kamai"), earnings.length],
+            ["withdraw", tr("Withdraw", "Withdraw"), withdrawals.length],
+          ] as const
+        ).map(([k, label, n]) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={tab === k}
+            onClick={() => setTab(k)}
+            className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${tab === k ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          >
+            {label} <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{n}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4">
+        {tab === "friends" &&
+          (me.referrals.length === 0 ? (
+            <EmptyState icon="🤝" title={tr("No friends yet", "Abhi koi dost nahi")} body={tr("Share your link — they will show up here the moment they sign up.", "Link share karein — signup karte hi yahan dikhenge.")} />
+          ) : (
+            <ul className="card divide-y divide-border">
+              {me.referrals.map((r) => (
+                <li key={r.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{r.name}</p>
+                    <p className="text-xs text-muted-foreground">{tr("Joined", "Join kiya")} {fmtDate(r.joinedAt)}</p>
+                  </div>
+                  <span className={`badge ${r.status === "PENDING" ? "badge-warning" : "badge-success"}`}>
+                    {r.status === "PENDING" ? tr("Signed up", "Signup hua") : tr(`Bought a plan${r.purchases > 1 ? ` ×${r.purchases}` : ""}`, `Plan kharida${r.purchases > 1 ? ` ×${r.purchases}` : ""}`)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ))}
+
+        {tab === "earnings" &&
+          (earnings.length === 0 ? (
+            <EmptyState icon="💰" title={tr("No earnings yet", "Abhi koi kamai nahi")} body={tr("You earn when a friend buys a plan. It shows up here as Pending first.", "Dost plan kharide to kamai yahan pehle Pending dikhti hai.")} />
+          ) : (
+            <ul className="card divide-y divide-border">
+              {earnings.map((e) => (
+                <li key={e.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{e.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {fmtDate(e.createdAt)} · {e.commissionPct}% of {inr(e.purchaseAmountInr)}
+                      {e.status === "PENDING" && !e.underReview && e.availableAt ? ` · ${tr("unlocks", "unlock")} ${fmtDate(e.availableAt)}` : ""}
+                      {e.status === "PENDING" && e.underReview ? ` · ${tr("under review", "review me")}` : ""}
+                      {e.status === "REVERSED" && e.reversalNote ? ` · ${e.reversalNote}` : ""}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className={`font-bold tabular-nums ${e.status === "REVERSED" ? "text-muted-foreground line-through" : "text-success"}`}>+{inr(e.commissionInr)}</p>
+                    <span className={`badge ${e.status === "AVAILABLE" ? "badge-success" : e.status === "PENDING" ? "badge-warning" : "badge-danger"}`}>
+                      {e.status === "AVAILABLE" ? tr("Withdrawable", "Withdrawable") : e.status === "PENDING" ? tr("Pending", "Pending") : tr("Reversed", "Reverse")}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ))}
+
+        {tab === "withdraw" && (
+          <div className="space-y-4">
+            {/* payout method */}
+            <div className="card p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-semibold">{tr("Where should we send your money?", "Paisa kahan bhejein?")}</h3>
+                {payout && !editingMethod && (
+                  <button className="btn btn-outline btn-sm" onClick={() => setEditingMethod(true)}>
+                    {tr("Change", "Badlein")}
+                  </button>
+                )}
+              </div>
+              {payout && !editingMethod ? (
+                <p className="mt-2 text-sm">
+                  {payout.type === "UPI" ? (
+                    <>UPI · <b>{payout.upiId}</b></>
+                  ) : (
+                    <>
+                      Bank · <b>{payout.bankAccountName}</b> · {payout.bankAccountNo} · {payout.bankIfsc}
+                    </>
+                  )}
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  <div className="inline-flex rounded-lg border border-border p-0.5 text-sm">
+                    {(["UPI", "BANK_ACCOUNT"] as const).map((t) => (
+                      <button key={t} type="button" onClick={() => setPmType(t)} className={`rounded-md px-3 py-1.5 font-medium ${pmType === t ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>
+                        {t === "UPI" ? "UPI" : tr("Bank account", "Bank account")}
+                      </button>
+                    ))}
+                  </div>
+                  {pmType === "UPI" ? (
+                    <input className={inputCls} value={upiId} onChange={(e) => setUpiId(e.target.value)} placeholder="yourname@okhdfcbank" autoCapitalize="none" aria-label="UPI ID" />
+                  ) : (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input className={inputCls} value={bankAccountName} onChange={(e) => setBankAccountName(e.target.value)} placeholder={tr("Account holder name (as per bank)", "Account holder ka naam (bank ke hisaab se)")} />
+                      <input className={inputCls} value={bankAccountNo} onChange={(e) => setBankAccountNo(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder={tr("Account number", "Account number")} />
+                      <input className={`${inputCls} uppercase`} value={bankIfsc} onChange={(e) => setBankIfsc(e.target.value.toUpperCase())} placeholder="IFSC (e.g. HDFC0000001)" maxLength={11} />
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <button className="btn btn-primary" onClick={() => void saveMethod()} disabled={savingMethod}>
+                      {savingMethod ? "…" : tr("Save details", "Details save karein")}
+                    </button>
+                    {editingMethod && (
+                      <button className="btn btn-outline" onClick={() => setEditingMethod(false)}>
+                        {tr("Cancel", "Cancel")}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* request */}
+            <div className="card p-5">
+              <h3 className="font-semibold">{tr("Request a withdrawal", "Withdrawal request karein")}</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {tr(
+                  `Minimum ${inr(rules.minWithdrawInr)}. Opens after ${rules.minPaidReferralsToWithdraw} friends have bought a plan. Only released commission (“Withdrawable”) can be withdrawn.`,
+                  `Minimum ${inr(rules.minWithdrawInr)}. ${rules.minPaidReferralsToWithdraw} dost ke plan kharidne ke baad khulta hai. Sirf “Withdrawable” commission nikal sakte hain.`,
+                )}
+              </p>
+              {!wallet.canWithdraw && wallet.withdrawBlockReason && (
+                <p className="mt-3 rounded-lg bg-muted px-3 py-2 text-sm">{wallet.withdrawBlockReason}</p>
+              )}
+              {wallet.canWithdraw && !wallet.hasPayoutMethod && (
+                <p className="mt-3 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning">{tr("Save your UPI / bank details above first.", "Pehle upar UPI / bank details save karein.")}</p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <input
+                  className={`${inputCls} max-w-[200px]`}
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))}
+                  inputMode="decimal"
+                  placeholder={`Up to ${inr(maxWithdraw)}`}
+                  disabled={!wallet.canWithdraw}
+                  aria-label={tr("Amount", "Amount")}
+                />
+                <button className="btn btn-outline" type="button" disabled={!wallet.canWithdraw} onClick={() => setAmount(String(Math.floor(maxWithdraw * 100) / 100))}>
+                  {tr("Max", "Max")}
+                </button>
+                <button className="btn btn-primary" onClick={() => void withdraw()} disabled={!wallet.canWithdraw || !wallet.hasPayoutMethod || withdrawing || !amount}>
+                  {withdrawing ? "…" : tr("Withdraw", "Withdraw")}
+                </button>
+              </div>
+            </div>
+
+            {/* history */}
+            {withdrawals.length > 0 && (
+              <ul className="card divide-y divide-border">
+                {withdrawals.map((w) => (
+                  <li key={w.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                    <div>
+                      <p className="font-bold tabular-nums">{inr(w.amountInr)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {fmtDate(w.createdAt)} · {w.payoutMethodType === "UPI" ? "UPI" : "Bank"}
+                        {w.adminNote ? ` · ${w.adminNote}` : ""}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={WD_BADGE[w.status].cls}>{WD_BADGE[w.status].label}</span>
+                      {w.status === "REQUESTED" &&
+                        (cancelId === w.id ? (
+                          <>
+                            <button className="btn btn-sm btn-outline" onClick={() => void cancelWithdrawal(w.id)}>{tr("Yes, cancel", "Haan, cancel")}</button>
+                            <button className="btn btn-sm btn-ghost" onClick={() => setCancelId(null)}>{tr("No", "Nahi")}</button>
+                          </>
+                        ) : (
+                          <button className="btn btn-sm btn-outline" onClick={() => setCancelId(w.id)}>{tr("Cancel", "Cancel")}</button>
+                        ))}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {openWithdrawal && <p className="text-xs text-muted-foreground">{tr("One withdrawal at a time. You can request again once this one is finished.", "Ek time par ek hi withdrawal. Ye khatam hone ke baad dobara request kar sakte hain.")}</p>}
+          </div>
+        )}
+      </div>
+
+      <p className="mt-8 text-center text-xs text-muted-foreground">
+        {tr("Commission is calculated on the amount your friend actually pays for a plan. If a purchase is refunded, its commission is taken back. Self-referrals and fake accounts are not allowed — see the ", "Commission us amount par milta hai jo dost plan ke liye asal me pay karta hai. Refund hone par uska commission wapas ho jata hai. Self-referral aur fake accounts allowed nahi — dekhein ")}
+        <Link href="/terms#referral" className="font-medium text-primary hover:underline">{tr("referral terms", "referral terms")}</Link>.
+      </p>
+
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed inset-x-4 bottom-20 z-[60] mx-auto max-w-md rounded-xl border px-4 py-3 text-sm font-medium shadow-lg sm:bottom-6 ${toast.ok ? "border-success/40 bg-card text-success" : "border-danger/40 bg-card text-danger"}`}
+        >
+          {toast.text}
+        </div>
+      )}
+    </AppShell>
   );
 }

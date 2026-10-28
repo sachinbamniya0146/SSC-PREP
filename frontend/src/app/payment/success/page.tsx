@@ -6,12 +6,16 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Suspense } from "react";
 import { useT } from "@/lib/i18n";
+import { PurchaseCelebration, type CelebrationPlan } from "@/components/PurchaseCelebration";
 
 function PaymentSuccessContent() {
   const tr = useT();
   const searchParams = useSearchParams();
   const [status, setStatus] = React.useState<"checking" | "success" | "pending" | "failed">("checking");
   const [message, setMessage] = React.useState("");
+  const [kind, setKind] = React.useState<string | null>(null);
+  const [plan, setPlan] = React.useState<CelebrationPlan>(null);
+  const [celebrate, setCelebrate] = React.useState(false);
 
   // Cashfree migration: we no longer read a payment status/hash out of the
   // URL and trust it — the URL only tells us WHICH order_id to ask about.
@@ -57,7 +61,36 @@ function PaymentSuccessContent() {
         }
 
         setStatus("success");
+        setKind(data.kind ?? null);
         setMessage(data.duplicate ? "Payment already confirmed." : tr("Payment successful! Your purchase is now active.", "Payment successful! Aapka purchase activate ho gaya hai."));
+
+        // One celebration per order: opening this page again later just shows the normal confirmation.
+        const key = `ssc_celebrated_${orderId}`;
+        let seen = false;
+        try {
+          seen = localStorage.getItem(key) === "1";
+        } catch {
+          /* private mode: celebrate (it is only ever shown right after verify) */
+        }
+        if (!seen) {
+          if (data.kind === "PLAN") {
+            try {
+              const sr = await fetchAuth(`${API_BASE}/payments/subscription`);
+              if (sr.ok) {
+                const sub = await sr.json();
+                if (sub?.active && sub.plan) setPlan({ name: sub.plan.name, endsAt: sub.endsAt ?? null, daysLeft: sub.daysLeft ?? null });
+              }
+            } catch {
+              /* the popup still works without the plan card */
+            }
+          }
+          try {
+            localStorage.setItem(key, "1");
+          } catch {
+            /* ignore */
+          }
+          setCelebrate(true);
+        }
       } catch (e: any) {
         setStatus("failed");
         setMessage(e.message || "Network error while verifying payment");
@@ -80,6 +113,9 @@ function PaymentSuccessContent() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex items-center justify-center px-4">
+      {celebrate && status === "success" && (
+        <PurchaseCelebration kind={kind} plan={plan} orderId={searchParams.get("order_id") || ""} onClose={() => setCelebrate(false)} />
+      )}
       <div className="max-w-md w-full text-center">
         {status === "success" ? (
           <>
