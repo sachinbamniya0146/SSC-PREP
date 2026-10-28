@@ -8,6 +8,7 @@
 // practice — until then it stays here and keeps being counted.
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { ShellHeader } from "@/components/AppShell";
 import { useT } from "@/lib/i18n";
 
 type Item = {
@@ -106,15 +107,13 @@ export default function WeakTopicsPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-30 border-b border-border bg-background/90 px-4 py-3 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <a href="/dashboard" className="text-sm font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-          <span className="text-sm font-bold">🎯 My weak list</span>
-          <a href="/study-plan" className="text-xs font-semibold text-primary">Planner</a>
-        </div>
-      </header>
+      <ShellHeader />
 
       <main className="mx-auto max-w-3xl space-y-4 px-3 py-5">
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-lg font-bold">🎯 {tr("My weak list", "Meri weak list")}</h1>
+          <a href="/study-plan" className="text-xs font-semibold text-primary hover:underline">{tr("Planner", "Planner")}</a>
+        </div>
         {error && <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-600">{error}</div>}
         {loading && <p className="py-10 text-center text-sm text-muted-foreground">{tr("Checking your tests…", "Aapke tests check ho rahe hain…")}</p>}
 

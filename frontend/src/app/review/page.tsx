@@ -4,6 +4,7 @@ import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import { StemMedia, OptionBody, RichText } from "@/components/QuestionMedia";
 import { useT } from "@/lib/i18n";
+import { ShellHeader } from "@/components/AppShell";
 
 type ReviewCardData = {
   id: string;
@@ -132,18 +133,12 @@ export default function ReviewPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <span className="text-sm text-muted-foreground">Spaced Repetition 🔁</span>
-        </div>
-      </header>
+      <ShellHeader />
 
       <main className="mx-auto max-w-3xl px-4 py-10">
         <div className="flex items-center justify-between">
           <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Spaced Repetition 🔁</p>
             <h1 className="text-2xl font-bold">Review Queue</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Wrong and skipped questions come here — repeated at 1d → 3d → 7d → 14d → 30d intervals.

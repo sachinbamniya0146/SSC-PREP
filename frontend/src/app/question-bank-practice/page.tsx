@@ -4,6 +4,7 @@ import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import BiMessage from "@/components/BiMessage";
 import { useT } from "@/lib/i18n";
+import { ShellHeader } from "@/components/AppShell";
 
 // ---------------------------------------------------------------------------
 // REWRITTEN (Sep 21 2026) — "practice vale me topic subtopic ka pura syllabus
@@ -187,14 +188,7 @@ export default function QuestionBankPracticePage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-          <div className="mx-auto flex max-w-4xl items-center justify-between">
-            <a href="/dashboard" className="text-lg font-bold">
-              ← <span className="text-primary">SSC</span>PrepHub
-            </a>
-            <a href="/dashboard" className="btn btn-outline text-sm">Dashboard</a>
-          </div>
-        </header>
+        <ShellHeader />
         <main className="mx-auto max-w-4xl px-4 py-10">
           <div className="text-center py-20">
             <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent mx-auto"></div>
@@ -213,14 +207,7 @@ export default function QuestionBankPracticePage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">
-            ← <span className="text-primary">SSC</span>PrepHub
-          </a>
-          <a href="/dashboard" className="btn btn-outline text-sm">Dashboard</a>
-        </div>
-      </header>
+      <ShellHeader />
       <main className="mx-auto max-w-4xl px-4 py-10">
         <h1 className="text-2xl font-bold">📚 Question Bank Practice</h1>
         <p className="mt-1 text-sm text-muted-foreground">

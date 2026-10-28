@@ -6,6 +6,7 @@ import { SkeletonCards } from "@/components/Skeleton";
 import { clearBookmarkCache } from "@/lib/bookmark-store";
 import { useFeatures } from "@/lib/features";
 import { useT } from "@/lib/i18n";
+import { ShellHeader } from "@/components/AppShell";
 
 type Opt = { key: string; text: string; textHi?: string | null; diagramType?: string | null; diagramLabels?: (string | null)[] | null; imageUrl?: string | null };
 type Bm = {
@@ -181,12 +182,7 @@ export default function BookmarksPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-40 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-          <a href="/question-bank" className="btn btn-outline btn-sm">{tr("Browse Bank", "Bank dekho")}</a>
-        </div>
-      </header>
+      <ShellHeader />
 
       <main className="mx-auto max-w-4xl px-4 py-8">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -196,11 +192,14 @@ export default function BookmarksPage() {
               {tr("Questions you saved for revision", "Revision ke liye save kiye sawal")} ({filtering ? `${total} / ${allCount}` : allCount || total})
             </p>
           </div>
-          {total > 0 && (
-            <button onClick={practice} disabled={startingPractice} className="btn btn-primary">
-              {startingPractice ? tr("Starting…", "Shuru ho raha…") : `🚀 ${tr("Practice", "Practice")} ${subjectId ? tr("this subject", "ye subject") : tr("my bookmarks", "mere bookmarks")}`}
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <a href="/question-bank" className="btn btn-outline">{tr("Browse Bank", "Bank dekho")}</a>
+            {total > 0 && (
+              <button onClick={practice} disabled={startingPractice} className="btn btn-primary">
+                {startingPractice ? tr("Starting…", "Shuru ho raha…") : `🚀 ${tr("Practice", "Practice")} ${subjectId ? tr("this subject", "ye subject") : tr("my bookmarks", "mere bookmarks")}`}
+              </button>
+            )}
+          </div>
         </div>
         {practiceError && <p className="mt-2 text-sm text-danger">{practiceError}</p>}
         {!on("bookmarks") && (

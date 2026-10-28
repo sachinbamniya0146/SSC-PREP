@@ -6,6 +6,7 @@ import { useFeatures, FeatureOff } from "@/lib/features";
 import { INDIAN_STATES } from "@/lib/states";
 import { Skeleton } from "@/components/Skeleton";
 import { useT } from "@/lib/i18n";
+import { ShellHeader } from "@/components/AppShell";
 
 type Row = { id: string; fullName: string; xp: number; currentStreak: number; longestStreak: number; coins: number; rank: number; state?: string | null; isMe?: boolean };
 type LB = { period: string; scope: "india" | "state"; state: string | null; needState: boolean; rows: Row[]; myRank: number | null; me: Row | null };
@@ -55,22 +56,7 @@ export default function LeaderboardPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-40 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-2">
-          <a href="/dashboard" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-          <div className="flex items-center gap-2">
-            {(["all", "weekly"] as const).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${period === p ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-muted"}`}
-              >
-                {p === "all" ? tr("All-time", "All-time") : tr("This Week", "Is hafte")}
-              </button>
-            ))}
-          </div>
-        </div>
-      </header>
+      <ShellHeader />
 
       <main className="mx-auto max-w-3xl px-4 py-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
@@ -78,19 +64,34 @@ export default function LeaderboardPage() {
             <h1 className="text-2xl font-bold">🏆 {tr("Leaderboard", "Leaderboard")}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{tr("Top scorers by XP - attempt tests & daily quizzes to climb!", "XP ke hisaab se top students - tests aur daily quiz karke upar chadho!")}</p>
           </div>
-          {stateOn && (
+          <div className="flex flex-wrap items-center gap-2">
             <div className="inline-flex rounded-full border border-border p-0.5 text-xs font-semibold">
-              {(["india", "state"] as const).map((k) => (
+              {(["all", "weekly"] as const).map((p) => (
                 <button
-                  key={k}
-                  onClick={() => setScope(k)}
-                  className={`rounded-full px-4 py-1.5 transition ${scope === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  key={p}
+                  onClick={() => setPeriod(p)}
+                  aria-pressed={period === p}
+                  className={`rounded-full px-4 py-1.5 transition ${period === p ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                  {k === "india" ? tr("All India", "All India") : tr("My state", "Mera state")}
+                  {p === "all" ? tr("All-time", "All-time") : tr("This Week", "Is hafte")}
                 </button>
               ))}
             </div>
-          )}
+            {stateOn && (
+              <div className="inline-flex rounded-full border border-border p-0.5 text-xs font-semibold">
+                {(["india", "state"] as const).map((k) => (
+                  <button
+                    key={k}
+                    onClick={() => setScope(k)}
+                    aria-pressed={scope === k}
+                    className={`rounded-full px-4 py-1.5 transition ${scope === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {k === "india" ? tr("All India", "All India") : tr("My state", "Mera state")}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {data?.needState && scope === "state" && (

@@ -5,6 +5,7 @@ import { useFeatures, FeatureOff } from "@/lib/features";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
 import { useT } from "@/lib/i18n";
+import { ShellHeader } from "@/components/AppShell";
 
 type PlanData = {
   plan: {
@@ -117,15 +118,7 @@ function StudyPlanPageInner() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 px-4 py-4 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-          <div className="flex items-center gap-3 text-sm">
-            {!plan && <button onClick={() => setStep("create")} className="btn btn-primary">Create Plan</button>}
-            <a href="/dashboard" className="btn btn-outline">Dashboard</a>
-          </div>
-        </div>
-      </header>
+      <ShellHeader />
 
       <main className="mx-auto max-w-4xl px-4 py-10">
         <a href="/study-plan/board" className="mb-6 block rounded-xl border border-primary/40 bg-primary/5 p-4 text-sm font-semibold text-primary hover:bg-primary/10">

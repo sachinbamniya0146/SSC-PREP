@@ -3,6 +3,7 @@ import * as React from "react";
 import { api } from "@/lib/api";
 import HelpDeskPanel from "@/components/HelpDeskPanel";
 import { useT } from "@/lib/i18n";
+import { ShellHeader } from "@/components/AppShell";
 
 export default function HelpPage() {
   const tr = useT();
@@ -25,11 +26,15 @@ export default function HelpPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-40 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-lg">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <a href="/dashboard" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
-        </div>
-      </header>
+      {state === "out" ? (
+        <header className="sticky top-0 z-40 border-b border-border bg-background/80 px-4 py-3 backdrop-blur-lg">
+          <div className="mx-auto flex max-w-3xl items-center justify-between">
+            <a href="/dashboard" className="text-lg font-bold">← <span className="text-primary">SSC</span>PrepHub</a>
+          </div>
+        </header>
+      ) : (
+        <ShellHeader />
+      )}
       <main className="mx-auto max-w-3xl px-4 py-8">
         <h1 className="text-2xl font-bold">{tr("Help Center", "Help Center")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{tr("Quick answers, your tickets and live chat with our team - all in one place.", "Jaldi jawab, aapke tickets aur team ke saath live chat - sab ek jagah.")}</p>
