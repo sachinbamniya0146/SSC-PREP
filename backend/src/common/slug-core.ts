@@ -121,3 +121,18 @@ export function lookupSubject(m: Map<string, string>, raw: string | null | undef
   if (!v) return undefined;
   return m.get(v) ?? m.get(v.toLowerCase()) ?? m.get(subjectCoreKey(v)) ?? m.get(`sub-${subjectCoreKey(v)}`);
 }
+
+/**
+ * S45: the Master Package writes chapter ids as "chap-<name>-<subject>" ("chap-percentage-quantitative_aptitude") while the
+ * database stores "percentage" / "alphabet-series" / "static_gk". Returns the chapter part as words ("percentage",
+ * "static gk"), or null when the cell is not in that form. Compared through the normal name key, so it also matches the name.
+ */
+export function chapterRefWords(raw: string | null | undefined): string | null {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (!/^chap[-_]./.test(v)) return null;
+  // "chap-<name>-<subject>": the subject is the LAST hyphen part when it is a subject-like token (letters / underscores)
+  const parts = v.slice(5).split('-');
+  const inner = parts.length > 1 ? parts.slice(0, -1).join('-') : parts[0];
+  const words = inner.replace(/[_-]+/g, ' ').trim();
+  return words || null;
+}

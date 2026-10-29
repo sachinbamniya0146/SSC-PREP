@@ -30,7 +30,7 @@ import { setNumberForPaper } from './pyq-mock-titles';
 import { pickQuestionsSheetName } from '../common/excel-sheet';
 import { normalizeShiftOrUndefined } from '../common/shift';
 import { buildExamAliasMap, examAliasKey } from '../common/exam-ref';
-import { lookupSubject, subjectAliasMap } from '../common/slug-core';
+import { chapterRefWords, lookupSubject, subjectAliasMap } from '../common/slug-core';
 import { KindTally, clearPaperFields, newKindTally, questionNoWarning, rowKind, tallyRow } from '../common/row-kind';
 import { compareQuestions } from '../common/duplicate-compare';
 import { buildZip } from '../common/zip';
@@ -2640,6 +2640,13 @@ export class BankUploadService {
     // fallback for when the row's subjectId itself hasn't resolved yet.
     const chapterNameInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${normalizeTaxonomyName(c.name)}`, c.id]));
     const chapterNameToId = new Map(chapters.map(c => [normalizeTaxonomyName(c.name), c.id]));
+    // S45: the slug as words too ("static_gk" -> "static gk"), so a Master Package id "chap-static_gk-general_awareness" finds it
+    for (const c of chapters) {
+      const k = normalizeTaxonomyName(c.slug.replace(/[_-]+/g, ' '));
+      if (!k) continue;
+      if (!chapterNameInSubjectToId.has(`${c.subjectId}::${k}`)) chapterNameInSubjectToId.set(`${c.subjectId}::${k}`, c.id);
+      if (!chapterNameToId.has(k)) chapterNameToId.set(k, c.id);
+    }
 
     const result: UploadResult = {
       success: false,
@@ -2951,6 +2958,13 @@ export class BankUploadService {
     // BUGFIX — same name-based fallback as processBulkQuestions() above.
     const chapterNameInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${normalizeTaxonomyName(c.name)}`, c.id]));
     const chapterNameToId = new Map(chapters.map(c => [normalizeTaxonomyName(c.name), c.id]));
+    // S45: the slug as words too ("static_gk" -> "static gk"), so a Master Package id "chap-static_gk-general_awareness" finds it
+    for (const c of chapters) {
+      const k = normalizeTaxonomyName(c.slug.replace(/[_-]+/g, ' '));
+      if (!k) continue;
+      if (!chapterNameInSubjectToId.has(`${c.subjectId}::${k}`)) chapterNameInSubjectToId.set(`${c.subjectId}::${k}`, c.id);
+      if (!chapterNameToId.has(k)) chapterNameToId.set(k, c.id);
+    }
 
     const result: UploadResult = {
       success: false,
@@ -3335,6 +3349,12 @@ export class BankUploadService {
         // subject the chapter belongs to, or wasn't scoped) — same
         // last-match-wins fallback tier chapterSlugToId already used.
         question.chapterId = chapterNameToId.get(normalizeTaxonomyName(question.chapterId))!;
+      } else {
+        // S45: Master Package style "chap-<name>-<subject>" -> the chapter of that name (in the row's subject first)
+        const words = chapterRefWords(question.chapterId);
+        const key = words ? normalizeTaxonomyName(words) : '';
+        const hit = key ? chapterNameInSubjectToId.get(`${question.subjectId}::${key}`) ?? chapterNameToId.get(key) : undefined;
+        if (hit) question.chapterId = hit;
       }
       // else: leave as raw text — validateReferences() below reports a
       // proper "chapterId not found" error instead of silently dropping it.

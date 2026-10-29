@@ -1,4 +1,4 @@
-import { examCoreKey, findExamBySlugs, isEnglishSubjectSlug, subjectCoreKey, subjectIdsFor } from './slug-core';
+import { chapterRefWords, examCoreKey, findExamBySlugs, isEnglishSubjectSlug, subjectCoreKey, subjectIdsFor } from './slug-core';
 
 describe('slug core keys (both spellings mean the same exam / subject)', () => {
   it('exam: exam- prefix, case, spaces and underscores do not matter', () => {
@@ -46,5 +46,16 @@ describe('slug core keys (both spellings mean the same exam / subject)', () => {
   it('English in every spelling is Hindi-exempt, nothing else is', () => {
     for (const s of ['english', 'sub-english', 'English_Language', 'sub-english_grammar']) expect(isEnglishSubjectSlug(s)).toBe(true);
     for (const s of ['englishx', 'sub-hindi', 'reasoning', '']) expect(isEnglishSubjectSlug(s)).toBe(false);
+  });
+});
+
+describe('Master Package chapter ids (S45)', () => {
+  it('"chap-<name>-<subject>" gives the chapter words', () => {
+    expect(chapterRefWords('chap-percentage-quantitative_aptitude')).toBe('percentage');
+    expect(chapterRefWords('chap-coding_decoding-reasoning')).toBe('coding decoding');
+    expect(chapterRefWords('chap-static_gk-general_awareness')).toBe('static gk');
+    expect(chapterRefWords('Chap-Physics-general_science')).toBe('physics');
+    expect(chapterRefWords('percentage')).toBeNull();
+    expect(chapterRefWords('')).toBeNull();
   });
 });

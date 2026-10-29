@@ -1182,8 +1182,10 @@ export class QuestionBankPracticeService {
           // chapters that actually have practice questions first, then the rest of the syllabus
           .sort((a, b) => (b.questionCount > 0 ? 1 : 0) - (a.questionCount > 0 ? 1 : 0)),
       }))
-      // a subject with no chapters at all (empty duplicate) is just noise for a student
-      .filter((s) => s.chapters.length > 0)
+      // a subject with no chapters at all (empty duplicate) is just noise for a student. S45: so is a subject with chapters but
+      // no practice question at all (old syllabus-import copies like "General Intelligence & Reasoning", or a new subject whose
+      // questions are not uploaded yet) - it appears by itself once its first practice question is live.
+      .filter((s) => s.chapters.length > 0 && s.questionCount > 0)
       .sort((a, b) => (b.questionCount > 0 ? 1 : 0) - (a.questionCount > 0 ? 1 : 0));
 
     return {

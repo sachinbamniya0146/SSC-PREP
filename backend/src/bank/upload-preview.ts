@@ -13,7 +13,7 @@
 import { normalizeTaxonomyKey } from '../common/taxonomy-key';
 import { isHindiExemptSubjectSlug } from '../common/question-visibility';
 import { rowKind, RowKind } from '../common/row-kind';
-import { subjectCoreKey } from '../common/slug-core';
+import { chapterRefWords, subjectCoreKey } from '../common/slug-core';
 
 /** Practice questions wanted per sub-topic (Sachin: "har topic/subtopic ke 100 question"). */
 export const PRACTICE_TARGET = 100;
@@ -57,7 +57,12 @@ function matchRef<T extends NamedRef>(raw: string, list: readonly T[]): T | unde
   const bySlug = list.find((x) => x.slug === v);
   if (bySlug) return bySlug;
   const key = normalizeTaxonomyKey(v);
-  return key ? list.find((x) => normalizeTaxonomyKey(x.name) === key || normalizeTaxonomyKey(x.slug) === key) : undefined;
+  const hit = key ? list.find((x) => normalizeTaxonomyKey(x.name) === key || normalizeTaxonomyKey(x.slug) === key) : undefined;
+  if (hit) return hit;
+  // S45: "chap-percentage-quantitative_aptitude" (Master Package id) -> the chapter named / slugged "percentage"
+  const words = chapterRefWords(v);
+  const k2 = words ? normalizeTaxonomyKey(words) : '';
+  return k2 ? list.find((x) => normalizeTaxonomyKey(x.name) === k2 || normalizeTaxonomyKey(x.slug.replace(/[_-]+/g, ' ')) === k2) : undefined;
 }
 
 /** S41: a subject cell also matches the same subject in its other spelling ("sub-english" == "english"). */
