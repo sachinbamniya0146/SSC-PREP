@@ -3,7 +3,7 @@ import { Injectable, BadRequestException, ConflictException, ForbiddenException,
 import { PrismaService } from '../prisma/prisma.service';
 import { randomBytes } from 'crypto';
 import { ReferralConfigService } from './referral-config.service';
-import { ReferralConfig, commissionPctFor, maskName, releaseAt, round2, welcomeDiscountFor } from './referral-config';
+import { ReferralConfig, commissionPctFor, effectiveMinFriends, maskName, releaseAt, round2, welcomeDiscountFor } from './referral-config';
 import { OPEN_WD_STATUSES, STUDENT_FAILED_NOTE } from './withdrawal.util';
 
 const RELEASE_EVERY_MS = 10 * 60_000;
@@ -289,6 +289,46 @@ export class ReferralService implements OnModuleInit, OnModuleDestroy {
     return n;
   }
 
+  /** Admin: set (0..100) or clear (null) the per-student "paying friends needed to withdraw" rule. */
+  async setWithdrawRule(adminId: string, userId: string, minFriends: number | null, note: string | null) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!user) throw new NotFoundException('User not found');
+    const data = {
+      withdrawMinFriends: minFriends,
+      withdrawRuleNote: minFriends === null ? null : note,
+      withdrawRuleSetAt: minFriends === null ? null : new Date(),
+      withdrawRuleSetById: minFriends === null ? null : adminId,
+    };
+    const before = await this.prisma.referralWallet.findUnique({ where: { userId }, select: { withdrawMinFriends: true } });
+    await this.prisma.referralWallet.upsert({ where: { userId }, create: { userId, ...data }, update: data });
+    return { before: before?.withdrawMinFriends ?? null, after: minFriends };
+  }
+
+  /**
+   * Admin: let ONE student have their pending commission now instead of waiting for the hold days (e.g. "1 friend paid,
+   * pay her today"). Commissions that are flagged for review (availableAt = null: same device etc.) are NOT touched - those
+   * need the per-commission Approve. A frozen wallet releases nothing.
+   */
+  async releaseUserNow(userId: string): Promise<{ released: number; skippedFlagged: number }> {
+    const wallet = await this.prisma.referralWallet.findUnique({ where: { userId }, select: { isSuspended: true } });
+    if (wallet?.isSuspended) throw new ForbiddenException('This student\'s referral earnings are paused. Restore them first.');
+    const rows = await this.prisma.referralEarning.findMany({
+      where: { referrerId: userId, status: 'PENDING' },
+      select: { id: true, availableAt: true },
+      take: 500,
+    });
+    let released = 0;
+    let skippedFlagged = 0;
+    for (const r of rows) {
+      if (!r.availableAt) {
+        skippedFlagged++;
+        continue;
+      }
+      if (await this.releaseOne(r.id)) released++;
+    }
+    return { released, skippedFlagged };
+  }
+
   /** Admin: a flagged commission looked fine -> start (and finish) its release. */
   async approveHeldEarning(earningId: string): Promise<{ ok: true }> {
     const e = await this.prisma.referralEarning.findUnique({ where: { id: earningId } });
@@ -502,10 +542,11 @@ export class ReferralService implements OnModuleInit, OnModuleDestroy {
     const currentCommissionPct = commissionPctFor(paidCount, cfg);
     const balance = round2(wallet.balanceInr);
 
+    const minFriends = effectiveMinFriends(wallet.withdrawMinFriends, cfg); // admin can lower it for one student
     let withdrawBlock: string | null = null;
     if (wallet.isSuspended) withdrawBlock = wallet.suspendedReason || 'Your referral earnings are paused by admin.';
-    else if (paidCount < cfg.minPaidReferralsToWithdraw)
-      withdrawBlock = `Withdrawals open after ${cfg.minPaidReferralsToWithdraw} friends have bought a plan (you have ${paidCount}).`;
+    else if (paidCount < minFriends)
+      withdrawBlock = `Withdrawals open after ${minFriends} friends have bought a plan (you have ${paidCount}).`;
     else if (balance < cfg.minWithdrawInr) withdrawBlock = `Minimum withdrawal is ₹${cfg.minWithdrawInr}.`;
     else if (openWithdrawals > 0) withdrawBlock = 'You already have a withdrawal in progress.';
 
@@ -523,7 +564,7 @@ export class ReferralService implements OnModuleInit, OnModuleDestroy {
         highTierAfter: cfg.highTierAfter,
         holdDays: cfg.holdDays,
         minWithdrawInr: cfg.minWithdrawInr,
-        minPaidReferralsToWithdraw: cfg.minPaidReferralsToWithdraw,
+        minPaidReferralsToWithdraw: minFriends,
         freeMonthAt: cfg.freeMonthAt,
         freeUpgradeAt: cfg.freeUpgradeAt,
       },
@@ -660,9 +701,10 @@ export class ReferralService implements OnModuleInit, OnModuleDestroy {
     const paidCount = await this.prisma.referral.count({
       where: { referrerId: userId, status: { in: ['PAIDED', 'REWARDED'] } },
     });
-    if (paidCount < cfg.minPaidReferralsToWithdraw) {
+    const minFriends = effectiveMinFriends(wallet.withdrawMinFriends, cfg);
+    if (paidCount < minFriends) {
       throw new BadRequestException(
-        `You need at least ${cfg.minPaidReferralsToWithdraw} friends who bought a plan to withdraw. You currently have ${paidCount}.`,
+        `You need at least ${minFriends} friends who bought a plan to withdraw. You currently have ${paidCount}.`,
       );
     }
 

@@ -37,8 +37,8 @@ const run = (svc: BankUploadJobService, rows: any[][], over: any = {}) =>
 describe('mixed PYQ + practice dry-run', () => {
   it('counts both kinds, one questionNo warning, practice plan, no job-level crash', async () => {
     const rows = [
-      line({ year: 2024, shift: 'Shift 4', examDate: '2024-06-20', examTier: 'TIER_1', 'questionText*': 'pyq 1' }),
-      line({ year: 2024, shift: 'Shift 4', examDate: '2024-06-20', examTier: 'TIER_1', 'questionText*': 'pyq 2' }),
+      line({ year: 2024, shift: 'Shift 4', examDate: '20/06/2024', examTier: 'TIER_1', 'questionText*': 'pyq 1' }),
+      line({ year: 2024, shift: 'Shift 4', examDate: '20/06/2024', examTier: 'TIER_1', 'questionText*': 'pyq 2' }),
       line({ 'questionText*': 'practice 1', topicId: 'Weighted Percentage' }),
       line({ 'questionText*': 'practice 2', topicId: 'Weighted Percentage' }),
       line({ 'questionText*': 'practice 3' }),

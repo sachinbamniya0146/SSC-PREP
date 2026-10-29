@@ -118,3 +118,21 @@ export function maskName(fullName: string | null | undefined): string {
   if (parts.length === 1) return parts[0];
   return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`;
 }
+
+/**
+ * How many paying friends THIS student needs before they can withdraw: the admin's per-student override when there is one
+ * (0 = nobody needed), otherwise the programme rule. Used by the student screen and by the withdrawal request, so both agree.
+ */
+export function effectiveMinFriends(overrideForUser: number | null | undefined, cfg: ReferralConfig): number {
+  if (overrideForUser === null || overrideForUser === undefined) return cfg.minPaidReferralsToWithdraw;
+  const n = Math.round(Number(overrideForUser));
+  return Number.isFinite(n) && n >= 0 ? n : cfg.minPaidReferralsToWithdraw;
+}
+
+/** Admin input for the override: null (back to the programme rule) or a whole number 0..100. */
+export function parseWithdrawOverride(raw: unknown): { ok: true; value: number | null } | { ok: false; error: string } {
+  if (raw === null || raw === undefined || raw === '') return { ok: true, value: null };
+  const n = typeof raw === 'string' ? Number(raw.trim()) : Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 100) return { ok: false, error: 'Friends needed must be a whole number from 0 to 100 (or empty to follow the programme rule).' };
+  return { ok: true, value: n };
+}

@@ -15,6 +15,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { isoToDmy } from "@/lib/exam-date";
 
 type Opt = { key: string; text: string; textHi: string; imageUrl: string | null };
 type QView = {
@@ -111,7 +112,7 @@ function QuestionColumn({ title, q, diffs, missing }: { title: string; q: QView 
         <Field label="Exam" diff={diffs.has("examId")}>{q.examName ?? "—"}</Field>
         <Field label="Year" diff={diffs.has("year")}>{q.year ?? "—"}</Field>
         <Field label="Shift" diff={diffs.has("shift")}>{q.shift ?? "—"}</Field>
-        <Field label="Date" diff={diffs.has("examDate")}>{q.examDate ?? "—"}</Field>
+        <Field label="Date" diff={diffs.has("examDate")}>{isoToDmy(q.examDate) || "—"}</Field>
       </div>
       {(q.examTier || q.tierPaper) && (
         <div className="grid grid-cols-2 gap-1.5">

@@ -7,7 +7,7 @@ import { Injectable } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { PrismaService } from '../prisma/prisma.service';
-import { ANSWER_LIST, DIFFICULTY_LIST, MIXED_COLUMNS, MIXED_PYQ_ONLY_KEYS, PRACTICE_COLUMNS, SHIFT_LIST, TIER_LIST, TIER_PAPER_LIST, ValidationSpec, buildDataValidationsXml, headerLabel, injectSheetXml } from './bank-template';
+import { ANSWER_LIST, DIFFICULTY_LIST, MIXED_COLUMNS, MIXED_PYQ_ONLY_KEYS, PRACTICE_COLUMNS, SHIFT_LIST, TIER_LIST, TIER_PAPER_LIST, ValidationSpec, buildDataValidationsXml, examDateValidation, headerLabel, injectSheetXml } from './bank-template';
 
 @Injectable()
 export class PracticeTemplateService {
@@ -188,6 +188,7 @@ export class PracticeTemplateService {
       ['2. PYQ row: examId, examTier, examDate, year, shift (when printed), questionNo (when known). The site puts all rows of the same exam + tier + date + shift into ONE mock.'],
       ['3. Practice row: leave year, shift, paperCode, examDate, examTier, tierPaper and questionNo EMPTY (they are ignored anyway). Fill chapterId + topicId + subTopicId: practice questions are counted per sub-topic (target 100 each).'],
       ['4. Students never see the exam date. They see Year -> Shift -> Set. Only the admin sees dates.'],
+      ['4a. EXAM DATE FORMAT - ONE format only: DD/MM/YYYY (day/month/year), e.g. 12/09/2025. Two digits for day and month, four for the year, "/" between. 2025-09-12, 12-09-2025, 12 Sep 2025 or an Excel date value are REJECTED with a message that tells you what to write. Format the examDate column as Text before typing so Excel does not turn it into a date value.'],
       [''],
       ['SHIFT / QUESTION NUMBER'],
       ['5. Shift 1, 2, 3 and 4 are all accepted. Morning = Shift 1, Afternoon = Shift 2, Evening = Shift 3 - ONLY when the source prints the session. Never guess.'],
@@ -240,6 +241,7 @@ export class PracticeTemplateService {
       { col: idx('shift'), formula: rng('F', SHIFT_LIST.length), title: 'shift', message: 'Shift 1 / 2 / 3 / 4 - empty when the source does not print the shift, and always empty on a practice row.', strict: false },
       { col: idx('examTier'), formula: rng('G', TIER_LIST.length), title: 'examTier', message: 'TIER_1 or TIER_2 - empty on a practice row.', strict: false },
       { col: idx('tierPaper'), formula: rng('H', TIER_PAPER_LIST.length), title: 'tierPaper', message: 'PAPER_1 / PAPER_2 / PAPER_3 (optional).', strict: false },
+      examDateValidation(idx('examDate')),
     ];
     const zip = await JSZip.loadAsync(raw);
     const sheetPath = await this.firstSheetPath(zip);

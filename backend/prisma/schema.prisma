@@ -1019,6 +1019,12 @@ model ReferralWallet {
   totalWithdrawnInr Float    @default(0) // lifetime amount paid out
   isSuspended       Boolean  @default(false) // admin can freeze a user's referral earning/withdrawal ability
   suspendedReason   String?
+  // 30 Oct 2026: admin can let ONE student withdraw with fewer paying friends than the programme rule asks for
+  // (null = follow the programme rule; 0 = no friend needed; 1, 2 ... = needs that many paying friends).
+  withdrawMinFriends     Int?
+  withdrawRuleNote       String?
+  withdrawRuleSetAt      DateTime?
+  withdrawRuleSetById    String?
   updatedAt         DateTime @updatedAt
   createdAt         DateTime @default(now())
 

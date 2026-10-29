@@ -40,7 +40,7 @@ describe('PracticeTemplateService.buildMixed (PYQ + Practice in one Excel)', () 
 
     const zip = await JSZip.loadAsync(buf);
     const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
-    expect(xml).toContain('<dataValidations count="8">');
+    expect(xml).toContain('<dataValidations count="9">');
     expect(xml).toContain('Lists!$F$2:$F$5'); // Shift 1..4
     expect(xml).toContain('Lists!$G$2:$G$3'); // TIER_1 / TIER_2
     expect(xml).toContain('state="frozen"');
@@ -56,7 +56,7 @@ describe('PracticeTemplateService.buildMixed (PYQ + Practice in one Excel)', () 
     for (const k of MIXED_PYQ_ONLY_KEYS) {
       expect(String(practice[col(k)] ?? '')).toBe('');
     }
-    expect(String(pyq[col('examDate')])).toBe('2025-09-12');
+    expect(String(pyq[col('examDate')])).toBe('12/09/2025');
     expect(String(pyq[col('examTier')])).toBe('TIER_1');
     expect(String(pyq[col('shift')])).toBe('Shift 2');
     expect(String(practice[col('subjectId')])).toBe('sub-quantitative_aptitude');

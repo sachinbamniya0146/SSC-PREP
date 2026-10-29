@@ -14,6 +14,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
+import { isoToDmy } from "@/lib/exam-date";
 import ExistingQuestions from "@/components/ExistingQuestions";
 import { normalizeShift } from "@/lib/shift";
 
@@ -143,7 +144,7 @@ export default function AddQuestionPage() {
     subTopicId: subTopicId || undefined,
     year: kind === "pyq" ? year : undefined,
     shift: kind === "pyq" ? shift : undefined,
-    examDate: kind === "pyq" ? examDate : undefined,
+    examDate: kind === "pyq" ? isoToDmy(examDate) || undefined : undefined, // the server accepts DD/MM/YYYY only
     paperCode: kind === "pyq" ? paperCode : undefined,
     questionText,
     questionTextHindi,

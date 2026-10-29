@@ -95,7 +95,7 @@ export class QuestionEditService {
     const s = String(v ?? '').trim();
     if (!s) return null;
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-    if (!m) throw new BadRequestException('Exam date must be in YYYY-MM-DD format.');
+    if (!m) throw new BadRequestException('Exam date is not valid - pick it in the date box (DD/MM/YYYY).');
     const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
     if (dt.getUTCFullYear() !== +m[1] || dt.getUTCMonth() !== +m[2] - 1 || dt.getUTCDate() !== +m[3]) {
       throw new BadRequestException('Exam date is invalid.');

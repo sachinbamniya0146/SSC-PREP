@@ -7,6 +7,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { isoToDmy } from "@/lib/exam-date";
 
 interface Paper {
   id: string; title: string; titleLocked?: boolean; examId: string | null; examName?: string | null; examTier: string | null; tierPaper: string | null;
@@ -96,7 +97,7 @@ export default function AdminPyqPapersPage() {
   const papers = data?.papers ?? [];
   const count = (s: Paper["status"]) => papers.filter((p) => p.status === s).length;
   const needle = q.trim().toLowerCase();
-  const rows = papers.filter((p) => (filter === "ALL" || p.status === filter) && (!needle || `${p.title} ${p.examName ?? ""} ${p.examDate} ${p.shift ?? ""}`.toLowerCase().includes(needle)));
+  const rows = papers.filter((p) => (filter === "ALL" || p.status === filter) && (!needle || `${p.title} ${p.examName ?? ""} ${p.examDate ?? ""} ${isoToDmy(p.examDate)} ${p.shift ?? ""}`.toLowerCase().includes(needle)));
   const card = "rounded-xl border border-border bg-card p-4";
 
   return (
@@ -164,7 +165,7 @@ export default function AdminPyqPapersPage() {
                         <p className="text-[10px] text-muted-foreground">{p.examName ?? "—"}</p>
                         <p className="break-all text-[10px] text-muted-foreground">{p.id}</p>
                       </td>
-                      <td className="p-2 whitespace-nowrap">{p.examDate ?? "—"}</td>
+                      <td className="p-2 whitespace-nowrap">{isoToDmy(p.examDate) || "—"}</td>
                       <td className="p-2">{p.shift ?? "—"}</td>
                       <td className="p-2 whitespace-nowrap">{tierText(p.examTier)} {paperText(p.tierPaper)}</td>
                       <td className="p-2">

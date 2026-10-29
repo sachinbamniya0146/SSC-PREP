@@ -20,6 +20,7 @@ import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
 import { normalizeShift } from "@/lib/shift";
+import { isoToDmy } from "@/lib/exam-date";
 
 type TaxTopic = { id: string; name: string; nameHindi?: string | null; slug: string; _count: { questions: number }; subTopics: TaxSubTopic[] };
 type TaxSubTopic = { id: string; name: string; nameHindi?: string | null; slug: string; _count: { questions: number } };
@@ -709,7 +710,7 @@ export default function QuestionManagerPage() {
                     <td className="px-3 py-2 align-top text-xs text-muted-foreground">
                       {[r.chapter?.name, r.topic?.name, r.subTopic?.name].filter(Boolean).join(" › ") || "—"}
                     </td>
-                    <td className="px-3 py-2 align-top text-xs">{r.year ?? "—"}{r.shift ? ` · ${r.shift}` : ""}{r.examDate ? ` · ${r.examDate.split("-").reverse().join("/")}` : ""}</td>
+                    <td className="px-3 py-2 align-top text-xs">{r.year ?? "—"}{r.shift ? ` · ${r.shift}` : ""}{r.examDate ? ` · ${isoToDmy(r.examDate)}` : ""}</td>
                     <td className="px-3 py-2 align-top"><a href={`/admin/questions/edit?q=${r.questionNo ?? r.id}`} className="whitespace-nowrap rounded-lg border border-primary/40 px-2 py-1 text-xs font-semibold text-primary">✏️ Edit</a></td>
                   </tr>
                 ))}

@@ -4,6 +4,7 @@ import * as React from "react";
 import { api, API_BASE, fetchAuth } from "@/lib/api";
 import { useAccess } from "@/lib/permissions";
 import AdminImageTools from "@/components/AdminImageTools";
+import { isoToDmy } from "@/lib/exam-date";
 
 interface User {
   id: string;
@@ -1466,7 +1467,7 @@ export default function AdminUploadsPage() {
                     <p className="font-semibold text-emerald-700 dark:text-emerald-400">🗓️ Ye file {uploadResult.papers!.length} real paper me judegi:</p>
                     <ul className="mt-1 space-y-0.5">
                       {uploadResult.papers!.slice(0, 30).map((p) => (
-                        <li key={p.key}>{p.examDate} · {p.examTier === "TIER_2" ? "Tier 2" : "Tier 1"}{p.tierPaper !== "PAPER_1" ? ` · ${p.tierPaper.replace("PAPER_", "Paper ")}` : ""}{p.shift ? ` · ${p.shift}` : ""} — <strong>{p.rows}</strong> rows</li>
+                        <li key={p.key}>{isoToDmy(p.examDate)} · {p.examTier === "TIER_2" ? "Tier 2" : "Tier 1"}{p.tierPaper !== "PAPER_1" ? ` · ${p.tierPaper.replace("PAPER_", "Paper ")}` : ""}{p.shift ? ` · ${p.shift}` : ""} — <strong>{p.rows}</strong> rows</li>
                       ))}
                     </ul>
                     <a href="/admin/pyq-papers" className="mt-1 inline-block text-primary underline">View paper progress →</a>

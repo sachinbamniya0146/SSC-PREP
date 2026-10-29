@@ -112,40 +112,20 @@ function normalizeTaxonomyName(raw: string): string {
   return normalizeTaxonomyKey(splitBilingualCell(raw).en);
 }
 
-const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 /**
- * Accepts the date formats admins actually type into Excel and returns
- * YYYY-MM-DD (or undefined when the cell is blank). Excel serial numbers,
- * 2025-09-12, 12-09-2025, 12/09/2025 (day first — Indian format) and
- * "12 Sep 2025" are understood; anything else fails the row with a clear message.
+ * 30 Oct 2026 (Sachin): the exam date is accepted in ONE format only - DD/MM/YYYY (e.g. 12/09/2025). Every other spelling
+ * (2025-09-12, 12-09-2025, 12 Sep 2025, an Excel date value) fails the row with a message that says what to write, because
+ * the server must never guess day/month order. Returns YYYY-MM-DD (how it is stored) or undefined when the cell is blank.
+ * The rule itself lives in common/exam-date-format.ts.
  */
 export function normalizeExamDate(raw: string): string | undefined {
-  const v = String(raw ?? '').trim();
-  if (!v) return undefined;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const valid = (y: number, mo: number, d: number) => {
-    const dt = new Date(Date.UTC(y, mo - 1, d));
-    return y >= 2000 && y <= 2100 && dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
-  };
-  let m: RegExpExecArray | null;
-  if ((m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(v))) {
-    if (valid(+m[1], +m[2], +m[3])) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
-  } else if ((m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(v))) {
-    if (valid(+m[3], +m[2], +m[1])) return `${m[3]}-${pad(+m[2])}-${pad(+m[1])}`;
-  } else if ((m = /^(\d{1,2})[\s-]([A-Za-z]{3,9})[\s-,]*(\d{4})$/.exec(v))) {
-    const mo = MONTHS_SHORT.findIndex((x) => x.toLowerCase() === m![2].slice(0, 3).toLowerCase()) + 1;
-    if (mo && valid(+m[3], mo, +m[1])) return `${m[3]}-${pad(mo)}-${pad(+m[1])}`;
-  } else if (/^\d{5}(\.\d+)?$/.test(v)) {
-    const dt = new Date(Math.round((parseFloat(v) - 25569) * 86400 * 1000)); // Excel serial -> UTC date
-    if (valid(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate())) return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
-  }
-  throw new Error(`Invalid examDate "${v}": use YYYY-MM-DD or DD-MM-YYYY (e.g. 2025-09-12)`);
+  return parseExamDate(raw);
 }
 
 import { hasSolution, applyInlineMedia, hasBase64Media, parseJsonQuestions, buildJsonTemplate, mediaKey, shortDigest, questionMediaSignature, hasAnyMedia } from './question-media.util';
 import { normalizeQuestionMath } from '../common/math-text';
 import { buildPaperPreview, PaperPreview } from '../common/pyq-paper-preview';
+import { parseExamDate, isoToDmy } from '../common/exam-date-format';
 
 export interface BulkUploadQuestion {
   examId: string;
@@ -208,7 +188,7 @@ export interface BulkUploadQuestion {
   year?: number;
   shift?: string;
   paperCode?: string;
-  examDate?: string; // YYYY-MM-DD (real exam date of a PYQ shift)
+  examDate?: string; // stored as YYYY-MM-DD; typed/uploaded ONLY as DD/MM/YYYY (common/exam-date-format.ts)
   // 26 Oct 2026 (date-wise mocks): with examId + examDate + shift these make ONE real paper, see common/pyq-paper-key.ts
   examTier?: string; // TIER_1 | TIER_2
   tierPaper?: string; // PAPER_1 | PAPER_2 | PAPER_3 (blank = PAPER_1)
@@ -301,7 +281,7 @@ function toExportRow(q: any) {
     year: q.year ?? '',
     shift: q.shift ?? '',
     paperCode: q.paperCode ?? '',
-    examDate: q.examDate ?? '',
+    examDate: isoToDmy(q.examDate), // DD/MM/YYYY: the only format the upload accepts, so a download re-uploads intact
     // date-wise + tier-wise mocks: same column names the upload parser reads, so a download re-uploads intact
     examTier: q.examTier ?? '',
     tierPaper: q.tierPaper ?? '',
@@ -2002,7 +1982,7 @@ export class BankUploadService {
     const workbook = XLSX.utils.book_new();
 
     // Main template sheet
-    const sheetData = [[...template.headers, 'examDate', 'examTier', 'tierPaper', 'questionNo', 'explanationImageUrl', 'questionSvg'], ...template.sampleRows.map((r, i) => [...JSON.parse(r), i === 0 ? '2023-09-12' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''])];
+    const sheetData = [[...template.headers, 'examDate', 'examTier', 'tierPaper', 'questionNo', 'explanationImageUrl', 'questionSvg'], ...template.sampleRows.map((r, i) => [...JSON.parse(r), i === 0 ? '12/09/2023' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''])];
     const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Questions Template');
 
@@ -2020,7 +2000,7 @@ export class BankUploadService {
       ['5. year should be a valid year (e.g., 2023, 2024) — set this to enable Year-wise PYQ tests.'],
       ['6. shift + paperCode are optional but help students filter/identify the exact paper.'],
       ['6b. shift accepts Shift 1/2/3 OR words: morning/subah = Shift 1, afternoon/dopahar = Shift 2, evening/shaam = Shift 3 (even a time like 9:00 AM / 4 PM). It is saved automatically as Shift 1 / Shift 2 / Shift 3.'],
-      ['6a. examDate (YYYY-MM-DD or DD-MM-YYYY) = the real date of the paper, examTier = TIER_1 or TIER_2 (tierPaper = PAPER_1/2/3 only for Tier 2 days with several papers).'],
+      ['6a. examDate = the real date (ONLY DD/MM/YYYY, e.g. 12/09/2025 - no other format is accepted; format the column as Text) of the paper, examTier = TIER_1 or TIER_2 (tierPaper = PAPER_1/2/3 only for Tier 2 days with several papers).'],
       ['   Same exam + examTier + examDate + shift = ONE mock, no matter how many uploads or what paperCode says. The mock grows as you upload more subjects'],
       ['   of that paper and becomes visible to students when it has all the questions of its exam pattern. Tier 1 and Tier 2 are always separate mocks.'],
       ['   questionNo = the question\'s printed number inside the paper (the mock follows this order). Practice questions: leave all of these blank.'],
@@ -2437,7 +2417,7 @@ export class BankUploadService {
         year: q.year ?? '',
         shift: q.shift ?? '',
         paperCode: q.paperCode ?? '',
-        examDate: q.examDate ?? '',
+        examDate: isoToDmy(q.examDate),
         // same column names the upload parser reads (see toExportRow), so a gap file re-uploads into the same paper
         examTier: q.examTier ?? '',
         tierPaper: q.tierPaper ?? '',
@@ -2491,7 +2471,7 @@ export class BankUploadService {
   generateCSVTemplate(): Buffer {
     const template = this.getTemplates().csv;
     const lines = [[...template.headers, 'examDate', 'examTier', 'tierPaper', 'questionNo', 'explanationImageUrl', 'questionSvg'].join(',')];
-    template.sampleRows.forEach((row, i) => lines.push(this.escapeCSVRow([...JSON.parse(row), i === 0 ? '2023-09-12' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''])));
+    template.sampleRows.forEach((row, i) => lines.push(this.escapeCSVRow([...JSON.parse(row), i === 0 ? '12/09/2023' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''])));
     return Buffer.from(lines.join('\n'), 'utf-8');
   }
 
@@ -2501,7 +2481,7 @@ export class BankUploadService {
   generateTextTemplate(): Buffer {
     const template = this.getTemplates().text;
     const lines = [[...template.headers, 'examDate', 'examTier', 'tierPaper', 'questionNo', 'explanationImageUrl', 'questionSvg'].join('\t')];
-    template.sampleRows.forEach((row, i) => lines.push([...JSON.parse(row), i === 0 ? '2023-09-12' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''].join('\t')));
+    template.sampleRows.forEach((row, i) => lines.push([...JSON.parse(row), i === 0 ? '12/09/2023' : '', i === 0 ? 'TIER_1' : '', '', i === 0 ? '1' : '', '', ''].join('\t')));
     return Buffer.from(lines.join('\n'), 'utf-8');
   }
 

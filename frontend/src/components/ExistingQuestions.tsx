@@ -8,6 +8,7 @@
 // only (students never get a date anywhere).
 import * as React from "react";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import { isoToDmy } from "@/lib/exam-date";
 
 type Row = {
   id: string;
@@ -142,7 +143,7 @@ export default function ExistingQuestions(props: { examId?: string; subjectId?: 
                       {r.exam?.name ? `${r.exam.name} · ` : ""}
                       {r.year ?? ""}
                       {r.shift ? ` · ${r.shift}` : ""}
-                      {r.examDate ? ` · ${r.examDate}` : ""}
+                      {r.examDate ? ` · ${isoToDmy(r.examDate)}` : ""}
                     </span>
                   )}
                   {r.status !== "live" && <span className="rounded bg-amber-500/20 px-1.5 py-0.5">{r.status}</span>}

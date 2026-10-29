@@ -7,6 +7,8 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, api, fetchAuth } from "@/lib/api";
+import DateField from "@/components/DateField";
+import { isoToDmy } from "@/lib/exam-date";
 
 type Counts = Record<string, number>;
 interface Overview {
@@ -143,7 +145,7 @@ export default function AdminPyqDatesPage() {
         {msg && <p className={`rounded-lg border p-2 text-sm break-all ${msg.ok ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700" : "border-red-500/40 bg-red-500/10 text-red-700"}`}>{msg.text}</p>}
 
         <section className={card}>
-          <p className="text-sm">Enter the exam date and Tier 1 / Tier 2 <b>yourself</b> here: open a question in the list below → type the date (YYYY-MM-DD or DD-MM-YYYY) → press <b>Save date</b>. As soon as the date is saved, that paper's shift-wise mock also shows the new date.</p>
+          <p className="text-sm">Enter the exam date and Tier 1 / Tier 2 <b>yourself</b> here: open a question in the list below → type the date in <b>DD/MM/YYYY</b> only (e.g. 12/09/2025) → press <b>Save date</b>. As soon as the date is saved, that paper's shift-wise mock also shows the new date.</p>
           <div className="mt-3"><button onClick={downloadLog} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold">⬇️ Status Excel</button></div>
         </section>
 
@@ -201,7 +203,7 @@ export default function AdminPyqDatesPage() {
                     </span>
                     <span className="shrink-0 text-right text-xs">
                       <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${st.c}`}>{st.t}</span>
-                      <span className="mt-0.5 block font-mono">{it.question.examDate || it.proposedDate || "—"}</span>
+                      <span className="mt-0.5 block font-mono">{isoToDmy(it.question.examDate || it.proposedDate) || "—"}</span>
                       <span className="block text-[11px] text-muted-foreground">{tierText(it.examTier ?? it.question.examTier)}</span>
                     </span>
                   </button>
@@ -210,12 +212,12 @@ export default function AdminPyqDatesPage() {
                       {it.note && <p><b>Note:</b> {it.note}</p>}
                       <div className="flex flex-wrap items-end gap-2">
                         {it.proposedDate && it.status !== "MAPPED" && it.status !== "MANUAL" && (
-                          <button onClick={() => act("Accept", () => post(`items/${it.questionId}/accept`))} className="rounded-lg bg-emerald-600 px-3 py-1.5 font-bold text-white">✔ Accept {it.proposedDate}</button>
+                          <button onClick={() => act("Accept", () => post(`items/${it.questionId}/accept`))} className="rounded-lg bg-emerald-600 px-3 py-1.5 font-bold text-white">✔ Accept {isoToDmy(it.proposedDate)}</button>
                         )}
                         {it.proposedDate && it.status === "NEEDS_REVIEW" && <button onClick={() => act("Reject", () => post(`items/${it.questionId}/reject`))} className="rounded-lg border border-red-500/40 px-3 py-1.5 font-semibold text-red-600">✖ Reject</button>}
-                        <input className={`${field} w-32`} placeholder="YYYY-MM-DD" value={manual.date} onChange={(e) => setManual({ ...manual, date: e.target.value })} />
+                        <div className="w-36"><DateField className={`${field} w-full`} placeholder="DD/MM/YYYY" value={manual.date} onChange={(iso) => setManual({ ...manual, date: iso })} /></div>
                         <select className={field} value={manual.tier} onChange={(e) => setManual({ ...manual, tier: e.target.value })}><option value="">Tier?</option><option value="TIER_1">Tier 1</option><option value="TIER_2">Tier 2</option></select>
-                        <button onClick={() => act("Date save", () => post(`items/${it.questionId}/manual`, { examDate: manual.date, examTier: manual.tier || null }))} className="rounded-lg border border-primary/40 px-3 py-1.5 font-semibold text-primary">✍️ Save date</button>
+                        <button onClick={() => act("Date save", () => post(`items/${it.questionId}/manual`, { examDate: isoToDmy(manual.date), examTier: manual.tier || null }))} className="rounded-lg border border-primary/40 px-3 py-1.5 font-semibold text-primary">✍️ Save date</button>
                       </div>
                     </div>
                   )}

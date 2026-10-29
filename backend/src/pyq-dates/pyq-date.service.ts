@@ -2,7 +2,8 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { BankUploadService } from '../bank/bank-upload.service';
-import { Tier, cleanQuestionText, isValidIsoDate, normalizeTier, toIsoDate } from './pyq-date.util';
+import { Tier, cleanQuestionText, isValidIsoDate, normalizeTier } from './pyq-date.util';
+import { parseExamDate } from '../common/exam-date-format';
 
 /**
  * PYQ exam dates (manual).
@@ -107,8 +108,10 @@ export class PyqDateService {
   }
 
   async setManual(questionId: string, dto: { examDate?: string; examTier?: string | null }) {
-    const iso = toIsoDate(dto.examDate);
-    if (!iso) throw new BadRequestException('Invalid date — use YYYY-MM-DD or DD-MM-YYYY.');
+    // 30 Oct 2026: the admin types the date ONLY as DD/MM/YYYY (same single format as the Excel upload); stored as YYYY-MM-DD.
+    let iso: string | undefined;
+    try { iso = parseExamDate(dto.examDate); } catch (e) { throw new BadRequestException(e instanceof Error ? e.message : 'Invalid date.'); }
+    if (!iso || !isValidIsoDate(iso)) throw new BadRequestException('Invalid date — write it as DD/MM/YYYY (e.g. 12/09/2025), a real past date from 2010 onwards.');
     const tier = dto.examTier === null || dto.examTier === '' || dto.examTier === undefined ? null : normalizeTier(dto.examTier);
     if (dto.examTier && !tier) throw new BadRequestException('Tier can only be Tier 1 or Tier 2.');
     const q = await this.prisma.question.findUnique({ where: { id: questionId }, select: { id: true, year: true, examId: true, shift: true, paperCode: true } });

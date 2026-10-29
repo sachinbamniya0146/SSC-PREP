@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { isoToDmy } from '../common/exam-date-format';
 import { Prisma } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
@@ -145,7 +146,7 @@ export class PyqExportService {
           Topic: q.topic?.name ?? '',
           'Sub-Topic': q.subTopic?.name ?? '',
           Year: q.year ?? '',
-          'Exam Date': q.examDate ?? '',
+          'Exam Date': isoToDmy(q.examDate),
           Shift: q.shift ?? '',
           'Paper Code': q.paperCode ?? '',
           'Question (EN)': cell(cleanQuestionText(q.questionText)),
@@ -195,7 +196,7 @@ export class PyqExportService {
       case 'hierarchy': return [r.exam, r.subject, r.chapter];
       case 'tier': return [r.tier];
       case 'year': return [String(r.year ?? 'No year')];
-      case 'date': return [r.examDate || 'No date mapped'];
+      case 'date': return [isoToDmy(r.examDate) || 'No date mapped'];
       default: return ['All PYQ'];
     }
   }
@@ -239,7 +240,7 @@ export class PyqExportService {
     addTable('Exam-wise', ['Exam', 'Tier', 'Questions', 'With exam date', 'Without date'], count((r) => [r.exam, r.tier]).map((e) => [...(e.k as string[]), e.n, e.d, e.n - e.d]));
     addTable('Subject-wise', ['Exam', 'Subject', 'Questions', 'With exam date', 'Without date'], count((r) => [r.exam, r.subject]).map((e) => [...(e.k as string[]), e.n, e.d, e.n - e.d]));
     addTable('Chapter-wise', ['Exam', 'Subject', 'Chapter', 'Questions', 'With exam date', 'Without date'], count((r) => [r.exam, r.subject, r.chapter]).map((e) => [...(e.k as string[]), e.n, e.d, e.n - e.d]));
-    addTable('Date-wise (each paper / shift)', ['Exam', 'Tier', 'Year', 'Exam Date', 'Shift', 'Questions'], count((r) => [r.exam, r.tier, r.year ?? '', r.examDate || 'not mapped', r.shift]).map((e) => [...(e.k as Array<string | number>), e.n]));
+    addTable('Date-wise (each paper / shift)', ['Exam', 'Tier', 'Year', 'Exam Date', 'Shift', 'Questions'], count((r) => [r.exam, r.tier, r.year ?? '', isoToDmy(r.examDate) || 'not mapped', r.shift]).map((e) => [...(e.k as Array<string | number>), e.n]));
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = [{ wch: 34 }, { wch: 28 }, { wch: 30 }, { wch: 18 }, { wch: 14 }, { wch: 14 }];
@@ -338,7 +339,7 @@ export class PyqExportService {
           Question: cell(cleanQuestionText(m.question.questionText).slice(0, 300)),
           Status: m.status,
           'Proposed Date': m.proposedDate ?? '',
-          'Date In Question': m.question.examDate ?? '',
+          'Date In Question': isoToDmy(m.question.examDate),
           Tier: m.examTier === 'TIER_1' ? 'Tier 1' : m.examTier === 'TIER_2' ? 'Tier 2' : '',
           'Agree / Passes': `${m.agreeCount}/${m.passesDone}`,
           Confidence: m.confidence ?? '',

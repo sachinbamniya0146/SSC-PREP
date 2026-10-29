@@ -1,5 +1,6 @@
 // Practice-question Excel template + "edit by ID" helpers (Oct 15 2026, Task B). Pure: no Nest / Prisma imports, unit-tested.
 import { normalizeExamTier, normalizeTierPaper, parsePaperQuestionNo } from '../common/pyq-paper-key';
+import { parseExamDate } from '../common/exam-date-format';
 
 export interface TemplateColumn {
   key: string;            // header the parser reads (without the trailing *)
@@ -78,7 +79,7 @@ export const MIXED_COLUMNS: TemplateColumn[] = [
   { key: 'marks', required: false, hint: 'Marks of the question as per THAT exam (CGL Tier 1 = 2, Tier 2 = 3; other exams differ). Empty = 1.', example: '2', width: 10 },
   { key: 'negativeMarks', required: false, hint: 'Negative marks as per THAT exam (CGL Tier 1 = 0.5). Empty = 0.25.', example: '0.5', width: 14 },
   { key: 'difficulty', required: false, hint: 'EASY / MEDIUM / HARD. Empty = MEDIUM.', example: 'MEDIUM', width: 12, list: 'difficulty' },
-  { key: 'examDate', required: false, hint: 'PYQ row: the REAL exam date, YYYY-MM-DD. Verified from the PDF or an official source, never guessed. Practice row: EMPTY. (Only the admin ever sees dates.)', example: '2025-09-12', width: 14 },
+  { key: 'examDate', required: false, hint: 'PYQ row: the REAL exam date, ONLY in DD/MM/YYYY (two-digit day and month, four-digit year, e.g. 12/09/2025). No other format is accepted. Format this column as TEXT before typing. Verified from the PDF or an official source, never guessed. Practice row: EMPTY. (Only the admin ever sees dates.)', example: '12/09/2025', width: 14 },
   { key: 'examTier', required: false, hint: 'PYQ row: TIER_1 or TIER_2 (Railway CBT-1 = TIER_1, CBT-2 = TIER_2). Practice row: EMPTY.', example: 'TIER_1', width: 12, list: 'tiers' },
   { key: 'tierPaper', required: false, hint: 'Optional: PAPER_1 / PAPER_2 / PAPER_3 when one tier has several papers on the same day. Empty = PAPER_1.', example: '', width: 12, list: 'papers' },
   { key: 'questionNo', required: false, hint: 'PYQ row: the question number printed in the ORIGINAL paper (1-100). Not known: EMPTY (never a chapter-compilation serial number). Practice row: EMPTY.', example: '7', width: 12 },
@@ -108,6 +109,30 @@ export interface ValidationSpec {
   title: string;
   message: string;
   strict: boolean;          // true = reject other values, false = warn only
+  custom?: boolean;         // true = `formula` is a yes/no rule written for the FIRST data row (row 2), not a list
+}
+
+/**
+ * Excel rule for the examDate column: blank, or TEXT written as DD/MM/YYYY (real day 01-31, month 01-12, year 2000-2100).
+ * Written for row 2; Excel adjusts the row for the rest of the column. A date VALUE (not text) is refused on purpose - see
+ * common/exam-date-format.ts. The server checks the same rule again on upload, this only stops the typo while typing.
+ */
+export function examDateValidation(col: number): ValidationSpec {
+  const L = columnLetter(col);
+  const c = `${L}2`;
+  const formula =
+    `OR(${c}="",AND(ISTEXT(${c}),LEN(${c})=10,MID(${c},3,1)="/",MID(${c},6,1)="/",` +
+    `ISNUMBER(VALUE(MID(${c},1,2))),ISNUMBER(VALUE(MID(${c},4,2))),ISNUMBER(VALUE(MID(${c},7,4))),` +
+    `VALUE(MID(${c},1,2))>=1,VALUE(MID(${c},1,2))<=31,VALUE(MID(${c},4,2))>=1,VALUE(MID(${c},4,2))<=12,` +
+    `VALUE(MID(${c},7,4))>=2000,VALUE(MID(${c},7,4))<=2100))`;
+  return {
+    col,
+    formula,
+    title: 'examDate - only DD/MM/YYYY',
+    message: 'Write the date ONLY as DD/MM/YYYY, e.g. 12/09/2025. Format the column as Text first (Format Cells -> Text). Leave empty on a practice row.',
+    strict: true,
+    custom: true,
+  };
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -117,7 +142,7 @@ export function buildDataValidationsXml(specs: ValidationSpec[], maxRow = 5000):
   if (!specs.length) return '';
   const items = specs.map((s) => {
     const L = columnLetter(s.col);
-    return `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" errorStyle="${s.strict ? 'stop' : 'warning'}" errorTitle="${esc(s.title)}" error="${esc(s.message)}" promptTitle="${esc(s.title)}" prompt="${esc(s.message)}" sqref="${L}2:${L}${maxRow}"><formula1>${esc(s.formula)}</formula1></dataValidation>`;
+    return `<dataValidation type="${s.custom ? 'custom' : 'list'}" allowBlank="1" showInputMessage="1" showErrorMessage="1" errorStyle="${s.strict ? 'stop' : 'warning'}" errorTitle="${esc(s.title)}" error="${esc(s.message)}" promptTitle="${esc(s.title)}" prompt="${esc(s.message)}" sqref="${L}2:${L}${maxRow}"><formula1>${esc(s.formula)}</formula1></dataValidation>`;
   });
   return `<dataValidations count="${items.length}">${items.join('')}</dataValidations>`;
 }
@@ -182,7 +207,15 @@ export function buildUpdateBody(
       else body[k] = n;
     }
   }
-  if (!practiceOnly) for (const k of ['year', 'shift', 'paperCode', 'examDate']) if (get(k)) body[k] = get(k);
+  if (!practiceOnly) for (const k of ['year', 'shift', 'paperCode']) if (get(k)) body[k] = get(k);
+  // 30 Oct 2026: the date is read ONLY as DD/MM/YYYY (same rule as an upload); the update API gets the stored YYYY-MM-DD form
+  if (!practiceOnly && get('examDate')) {
+    try {
+      body.examDate = parseExamDate(get('examDate'));
+    } catch (e) {
+      problems.push(e instanceof Error ? e.message : 'examDate is invalid');
+    }
+  }
   // date-wise + tier-wise mocks (26 Oct 2026)
   if (!practiceOnly) {
     if (get('examTier')) {

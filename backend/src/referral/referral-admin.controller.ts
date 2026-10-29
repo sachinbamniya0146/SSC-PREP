@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -7,7 +7,7 @@ import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-use
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { ReferralService } from './referral.service';
 import { ReferralConfigService } from './referral-config.service';
-import { DEFAULT_REFERRAL_CONFIG } from './referral-config';
+import { DEFAULT_REFERRAL_CONFIG, parseWithdrawOverride } from './referral-config';
 
 /** Admin control for the Refer & Earn programme: rules, commission review, reversals. */
 @Controller('admin/referral-program')
@@ -67,6 +67,42 @@ export class ReferralAdminController {
       metadataJson: { note } as any,
     });
     return r;
+  }
+
+  // 30 Oct 2026 (Sachin: "admin kisi ko bhi 2 refer ke pehle ya 1 refer par hi paise nikalne ka option de sake").
+  // Per-student override of "paying friends needed before a withdrawal". minFriends: 0..100, or null = follow the programme rule.
+  @Post('users/:userId/withdraw-rule')
+  async setWithdrawRule(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() body: { minFriends?: number | string | null; note?: string },
+  ) {
+    const parsed = parseWithdrawOverride(body?.minFriends);
+    if (!parsed.ok) throw new BadRequestException(parsed.error);
+    const note = String(body?.note ?? '').trim().slice(0, 200) || null;
+    const r = await this.referral.setWithdrawRule(admin.userId, userId, parsed.value, note);
+    await this.audit.log({
+      userId: admin.userId,
+      action: 'REFERRAL_WITHDRAW_RULE_CHANGED',
+      targetEntity: 'User',
+      entityId: userId,
+      metadataJson: { ...r, note } as any,
+    });
+    return { ok: true, withdrawMinFriends: parsed.value };
+  }
+
+  // Release this student's pending commission now (skips the hold days). Flagged ones still need their own Approve.
+  @Post('users/:userId/release-pending')
+  async releaseUserPending(@CurrentUser() admin: AuthenticatedUser, @Param('userId', ParseUUIDPipe) userId: string) {
+    const r = await this.referral.releaseUserNow(userId);
+    await this.audit.log({
+      userId: admin.userId,
+      action: 'REFERRAL_PENDING_RELEASED_BY_ADMIN',
+      targetEntity: 'User',
+      entityId: userId,
+      metadataJson: r as any,
+    });
+    return { ok: true, ...r };
   }
 
   @Post('release-now')

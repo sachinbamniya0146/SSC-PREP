@@ -286,6 +286,38 @@ async function runNew() {
     check('M27 student sees a fixed sentence for FAILED (no gateway text), the UTR only when PAID, no internal notes', !/Cashfree|secret/.test(byId[f.id].note) && byId[p.id].paymentRef === 'UTR998877' && byId[a2.id].paymentRef === null && byId[a2.id].note === null);
   }
 
+  // ---- 30 Oct 2026: admin lets ONE student withdraw with fewer paying friends than the programme rule ----
+  {
+    const cfg3 = { ...DEFAULT_REFERRAL_CONFIG, minPaidReferralsToWithdraw: 3 };
+    const mk = (paid, override) => {
+      const db = makeDb(seed());
+      db.t.referral = db.t.referral.slice(0, paid);
+      wallet(db, 'u2').withdrawMinFriends = override;
+      return { db, rs: new ReferralService(db, { get: async () => cfg3 }) };
+    };
+    let x = mk(1, null);
+    let r = await settle([x.rs.requestWithdrawal('u2', 400)]);
+    check('R1 1 paying friend, rule 3, no override: refused and no money moves', r[0].startsWith('err:') && x.db.t.withdrawalRequest.length === 0 && wallet(x.db, 'u2').balanceInr === 1000, JSON.stringify(r));
+    x = mk(1, 1);
+    r = await settle([x.rs.requestWithdrawal('u2', 400)]);
+    check('R2 1 paying friend, admin override = 1: allowed, balance reduced once', okCount(r) === 1 && x.db.t.withdrawalRequest.length === 1 && wallet(x.db, 'u2').balanceInr === 600, JSON.stringify(r));
+    x = mk(0, 0);
+    r = await settle([x.rs.requestWithdrawal('u2', 400)]);
+    check('R3 0 paying friends, admin override = 0: allowed', okCount(r) === 1 && wallet(x.db, 'u2').balanceInr === 600, JSON.stringify(r));
+    x = mk(1, 2);
+    r = await settle([x.rs.requestWithdrawal('u2', 400)]);
+    check('R4 override = 2 with 1 friend: refused, message names 2', r[0].startsWith('err:') && /at least 2 friends/.test(r[0]), JSON.stringify(r));
+    x = mk(2, null);
+    r = await settle([x.rs.requestWithdrawal('u2', 400)]);
+    check('R5 override cleared (null) goes back to the programme rule (3): 2 friends refused', r[0].startsWith('err:') && /at least 3 friends/.test(r[0]), JSON.stringify(r));
+    x = mk(1, 1);
+    r = await settle([x.rs.requestWithdrawal('u2', 400), x.rs.requestWithdrawal('u2', 400), x.rs.requestWithdrawal('u2', 400)]);
+    check('R6 override does not weaken the double-tap protection (one request only)', okCount(r) === 1 && x.db.t.withdrawalRequest.length === 1 && wallet(x.db, 'u2').balanceInr === 600, JSON.stringify(r));
+    x = mk(0, 0); wallet(x.db, 'u2').isSuspended = true;
+    r = await settle([x.rs.requestWithdrawal('u2', 400)]);
+    check('R7 a paused (suspended) wallet still cannot withdraw even with an override', r[0].startsWith('err:') && x.db.t.withdrawalRequest.length === 0, JSON.stringify(r));
+  }
+
   // ---- Cashfree mode ----
   {
     const cf = makeCashfree(); const db = makeDb(seed()); const svc = new WithdrawalService(db, live, auditLog);

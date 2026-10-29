@@ -11,7 +11,7 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 
 type Detail = {
   user: { id: string; fullName: string; email: string; referralCode: string | null; freeSubFromReferral: boolean };
-  wallet: { balanceInr: number; pendingInr?: number; totalEarnedInr: number; totalWithdrawnInr: number; isSuspended: boolean };
+  wallet: { balanceInr: number; pendingInr?: number; totalEarnedInr: number; totalWithdrawnInr: number; isSuspended: boolean; withdrawMinFriends?: number | null; withdrawRuleNote?: string | null };
   payoutMethod: {
     type: "UPI" | "BANK_ACCOUNT";
     upiId: string | null;
@@ -61,11 +61,19 @@ export default function AdminReferralUserDetailPage() {
   const [msg, setMsg] = React.useState<string | null>(null);
   const [reasonOpen, setReasonOpen] = React.useState(false);
   const [reason, setReason] = React.useState("");
+  const [ruleMin, setRuleMin] = React.useState<number | null>(null); // the programme-wide rule (Rules tab)
+  const [ruleNote, setRuleNote] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
 
   const load = React.useCallback(async () => {
     setLoading(true);
     const res = await fetchAuth(`${API_BASE}/admin/referrals/user/${userId}`);
     if (res.ok) setData(await res.json());
+    const st = await fetchAuth(`${API_BASE}/admin/referral-program/settings`).catch(() => null);
+    if (st && st.ok) {
+      const j = await st.json().catch(() => null);
+      if (j?.config) setRuleMin(Number(j.config.minPaidReferralsToWithdraw));
+    }
     setLoading(false);
   }, [userId]);
 
@@ -89,6 +97,32 @@ export default function AdminReferralUserDetailPage() {
       const d = await res.json().catch(() => ({}));
       setMsg(d?.message || "Could not update.");
     }
+  };
+
+  // Per-student "friends needed to withdraw": 0 / 1 / 2 ... or null = follow the programme rule
+  const setWithdrawRule = async (minFriends: number | null) => {
+    setBusy(true);
+    const res = await fetchAuth(`${API_BASE}/admin/referral-program/users/${userId}/withdraw-rule`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ minFriends, note: ruleNote.trim() || undefined }),
+    });
+    const d = await res.json().catch(() => ({}));
+    setMsg(res.ok ? (minFriends === null ? "Back to the programme rule." : `Saved: this student can withdraw once ${minFriends} friend(s) have bought a plan.`) : d?.message || "Could not save.");
+    if (res.ok) {
+      setRuleNote("");
+      await load();
+    }
+    setBusy(false);
+  };
+
+  const releasePending = async () => {
+    setBusy(true);
+    const res = await fetchAuth(`${API_BASE}/admin/referral-program/users/${userId}/release-pending`, { method: "POST" });
+    const d = await res.json().catch(() => ({}));
+    setMsg(res.ok ? `Released ${d.released} commission(s) now${d.skippedFlagged ? ` · ${d.skippedFlagged} flagged one(s) still need Approve` : ""}.` : d?.message || "Could not release.");
+    if (res.ok) await load();
+    setBusy(false);
   };
 
   if (loading) return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
@@ -134,6 +168,44 @@ export default function AdminReferralUserDetailPage() {
             )
           )}
         </div>
+
+        {(() => {
+          const paidFriends = data.referrals.filter((r) => r.status === "PAIDED" || r.status === "REWARDED").length;
+          const override = data.wallet.withdrawMinFriends ?? null;
+          const needed = override ?? ruleMin ?? 0;
+          const canWithdraw = paidFriends >= needed;
+          return (
+            <div className="card mt-4 p-4 text-sm">
+              <p className="font-semibold">Withdrawal rule for this student</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Paying friends: <b>{paidFriends}</b> · Needed: <b>{needed}</b>
+                {override === null ? ` (programme rule${ruleMin === null ? "" : `: ${ruleMin}`}, change it for everyone in Rules)` : " (set by admin for this student only)"} ·{" "}
+                <b className={canWithdraw ? "text-success" : "text-warning"}>{canWithdraw ? "can request a withdrawal now" : "cannot withdraw yet"}</b>
+                {data.wallet.withdrawRuleNote ? ` · note: ${data.wallet.withdrawRuleNote}` : ""}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input
+                  value={ruleNote}
+                  onChange={(e) => setRuleNote(e.target.value)}
+                  placeholder="Note (optional, only admins see it)"
+                  className="min-w-[200px] flex-1 rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                />
+                {[0, 1, 2].map((n) => (
+                  <button key={n} disabled={busy || override === n} onClick={() => setWithdrawRule(n)} className={`btn text-xs ${override === n ? "bg-primary text-primary-foreground" : "btn-outline"}`}>
+                    {n === 0 ? "Allow now (0 friends)" : `Allow from ${n} friend${n > 1 ? "s" : ""}`}
+                  </button>
+                ))}
+                <button disabled={busy || override === null} onClick={() => setWithdrawRule(null)} className="btn btn-outline text-xs">Use programme rule</button>
+              </div>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                The minimum amount (Rules tab) and the hold days still apply. If a friend has paid but the commission is still <b>Pending</b>, press <b>Release pending now</b> so the money becomes withdrawable today.
+              </p>
+              <button disabled={busy || (data.wallet.pendingInr ?? 0) <= 0} onClick={releasePending} className="btn btn-outline mt-2 text-xs">
+                Release pending now (₹{(data.wallet.pendingInr ?? 0).toFixed(2)})
+              </button>
+            </div>
+          );
+        })()}
 
         <div className="mt-6 grid gap-4 sm:grid-cols-4">
           <div className="card p-4">
