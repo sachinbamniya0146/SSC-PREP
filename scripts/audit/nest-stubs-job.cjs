@@ -10,7 +10,7 @@ Module._load = function (req, parent, ...rest) {
   if (req === '@prisma/client') return { Prisma: {}, AttemptStatus: { SUBMITTED: 'SUBMITTED', IN_PROGRESS: 'IN_PROGRESS' } };
   if (/study-plan-progress\.util$/.test(req)) return { applyAttemptToChapters: async () => undefined };
   if (/pyq-paper-builder$/.test(req)) return { legacyPaperCeiling: () => 0 };
-  if (/\.spec(\.ts)?$/.test(req) || (/bank-(upload-job|admin)\.service$/.test(req) && !/\.\.\//.test(req))) return origLoad.call(this, req, parent, ...rest);
+  if (/\.spec(\.ts)?$/.test(req) || (/(bank-(upload-job|admin)|question-bank-practice)\.service$/.test(req) && !/\.\.\//.test(req))) return origLoad.call(this, req, parent, ...rest);
   if (/(weak-topic|prisma|gamification|telegram|question-bank-practice|features|search|admin|upload|bank-upload|monetization|referral)\.service$/.test(req) || /bank-upload|question-edit|meili/.test(req)) {
     return new Proxy({}, { get: (t, k) => (k === '__esModule' ? false : class {}) });
   }

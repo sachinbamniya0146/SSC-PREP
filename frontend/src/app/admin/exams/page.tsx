@@ -26,8 +26,12 @@ type AdminExam = {
   slug: string;
   code: string;
   isActive: boolean;
+  category?: string | null;
   _count?: { questions: number };
 };
+
+// S41: the exam catalog (GET /admin/exams/common) - every exam of SSC, Railway, Banking, Insurance, Defence and State Police.
+type CatalogExam = { name: string; slug: string; code: string; category: string; status: "NEW" | "EXISTS"; existingSlug?: string };
 
 export default function ExamManagementPage() {
   const router = useRouter();
@@ -47,6 +51,9 @@ export default function ExamManagementPage() {
   const [savingId, setSavingId] = React.useState<string>("");
   const [commonBusy, setCommonBusy] = React.useState(false);
   const [commonMsg, setCommonMsg] = React.useState("");
+  const [catalog, setCatalog] = React.useState<CatalogExam[]>([]);
+  const [catLabels, setCatLabels] = React.useState<Record<string, string>>({});
+  const [picked, setPicked] = React.useState<Set<string>>(new Set());
 
   // Tracks the last auto-computed slug/code so onNameChange() only
   // overwrites slug/code while they still match its own previous guess —
@@ -82,6 +89,12 @@ export default function ExamManagementPage() {
       }
       const data: AdminExam[] = await r.json();
       setExams(data);
+      const c = await fetchAuth(`${API_BASE}/admin/exams/common`);
+      if (c.ok) {
+        const d = await c.json().catch(() => ({}));
+        setCatalog(Array.isArray(d?.exams) ? d.exams : []);
+        setCatLabels(d?.categories && typeof d.categories === "object" ? d.categories : {});
+      }
     } catch (e) {
       setListErr(e instanceof Error ? e.message : "Could not load exams");
     } finally {
@@ -143,14 +156,14 @@ export default function ExamManagementPage() {
   }
 
   // S37: add Selection Post / Railway / Delhi Police ... in one click (only the missing ones are created).
-  async function addCommonExams() {
+  async function addCommonExams(slugs?: string[]) {
     setCommonBusy(true);
     setCommonMsg("");
     try {
       const r = await fetchAuth(`${API_BASE}/admin/exams/common`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(slugs && slugs.length ? { slugs } : {}),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -163,6 +176,7 @@ export default function ExamManagementPage() {
         (made.length ? `Created: ${made.join(", ")}. ` : "Nothing new to create. ") +
           (skip.length ? `Already there: ${skip.join("; ")}.` : ""),
       );
+      setPicked(new Set());
       await loadExams();
     } catch (e) {
       setCommonMsg(e instanceof Error ? e.message : "Could not add the common exams");
@@ -276,21 +290,69 @@ export default function ExamManagementPage() {
           )}
         </div>
 
-        {/* ---- Common exams quick-add (S37) ---- */}
+        {/* ---- Exam catalog (S37, full catalog S41) ---- */}
         <div className="mt-6 rounded-xl border border-border bg-card p-5">
-          <h2 className="font-semibold">🚆 Add common exams (Selection Post, Railway, Delhi Police ...)</h2>
+          <h2 className="font-semibold">🗂️ Exam catalog (SSC, Railway, Banking, Insurance, Defence, State Police)</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            PYQ of other exams go in the same Excel, but the exam must exist first. One click adds SSC Selection Post, GD, Steno, JE,
-            Delhi Police, RRB NTPC / Group D / ALP / JE. Only the missing ones are created; an exam that already exists (same slug,
-            code or name) is skipped. Marking scheme (ExamPattern) is set separately.
+            PYQ of every exam go in the same Excel, but the exam must exist first. Adding an exam is safe: students see an exam
+            only when it has at least one published question - until then it stays hidden, and it appears by itself as soon as
+            its first question is live. Exams that already exist (same slug, code or name) are never created twice. Marking
+            scheme: Exam Patterns → &quot;Sync presets&quot;.
           </p>
-          <button
-            onClick={addCommonExams}
-            disabled={commonBusy}
-            className="btn mt-3 bg-primary px-5 py-2 text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          >
-            {commonBusy ? "Adding..." : "Add common exams"}
-          </button>
+          {catalog.length > 0 && (
+            <div className="mt-4 space-y-4">
+              {Object.keys(catLabels).map((cat) => {
+                const rows = catalog.filter((c) => c.category === cat);
+                if (!rows.length) return null;
+                return (
+                  <div key={cat}>
+                    <h3 className="text-sm font-semibold">
+                      {catLabels[cat]} <span className="text-xs font-normal text-muted-foreground">({rows.filter((r) => r.status === "EXISTS").length}/{rows.length} added)</span>
+                    </h3>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {rows.map((c) =>
+                        c.status === "EXISTS" ? (
+                          <span key={c.slug} className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-700 dark:text-emerald-400" title={`already there as ${c.existingSlug}`}>
+                            ✓ {c.name}
+                          </span>
+                        ) : (
+                          <label key={c.slug} className="flex cursor-pointer items-center gap-1 rounded-full border border-border px-3 py-1 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={picked.has(c.slug)}
+                              onChange={(ev) => {
+                                const next = new Set(picked);
+                                if (ev.target.checked) next.add(c.slug);
+                                else next.delete(c.slug);
+                                setPicked(next);
+                              }}
+                            />
+                            {c.name}
+                          </label>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              onClick={() => addCommonExams([...picked])}
+              disabled={commonBusy || picked.size === 0}
+              className="btn bg-primary px-5 py-2 text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {commonBusy ? "Adding..." : `Add selected (${picked.size})`}
+            </button>
+            <button
+              onClick={() => addCommonExams()}
+              disabled={commonBusy || !catalog.some((c) => c.status === "NEW")}
+              className="btn btn-outline px-5 py-2 disabled:opacity-50"
+            >
+              Add all missing ({catalog.filter((c) => c.status === "NEW").length})
+            </button>
+          </div>
           {commonMsg && <p className="mt-3 rounded-lg border border-border bg-muted/40 p-3 text-sm">{commonMsg}</p>}
         </div>
 
@@ -324,6 +386,9 @@ export default function ExamManagementPage() {
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       slug: <code>{e.slug}</code> · {e._count?.questions ?? 0} questions total
+                      {e.category ? ` · ${catLabels[e.category] ?? e.category}` : ""}
+                      {" · "}
+                      {e.isActive && (e._count?.questions ?? 0) > 0 ? "students see it" : "hidden from students until it has published questions"}
                     </p>
                     <button
                       onClick={() => copyId(e.id)}

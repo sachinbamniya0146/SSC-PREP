@@ -8,6 +8,8 @@ import { cacheClearPrefix, cacheGet, cacheSet } from '../common/cache';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { findTaxonomyTwin, makeTaxonomySlug } from '../common/taxonomy-key';
 import { uniqueSlug } from '../common/taxonomy-merge';
+import { HINDI_EXEMPT_SUBJECT_FILTER } from '../common/slug-core';
+import { examCategoryOf } from '../common/common-exams';
 
 export interface QuestionCard {
   id: string;
@@ -137,7 +139,7 @@ export class BankService implements OnModuleInit {
       // FIX Error #8: raw SQL now matches PUBLISHED_QUESTION_WHERE
       // (isApproved AND isActive AND NOT autoSuspended), not isApproved alone.
       this.prisma.$queryRaw`
-        SELECT e.id, e.name, e.slug, COUNT(q.id)::int AS count
+        SELECT e.id, e.name, e.slug, e.code, e."isActive", COUNT(q.id)::int AS count
         FROM exams e LEFT JOIN questions q ON q."examId" = e.id
           AND q."isApproved" = true AND q."isActive" = true AND q."autoSuspended" = false
         GROUP BY e.id ORDER BY e.name;`,
@@ -160,9 +162,15 @@ export class BankService implements OnModuleInit {
     // v7 §2 — exam rows carry their live ExamPattern (no hardcoded year labels)
     const examRows = (exams as any[]).map((e) => {
       const p = patternByExam.get(e.id);
-      return p ? { ...e, pattern: { name: p.name, totalQuestions: p.totalQuestions, totalMarks: p.totalMarks, durationMinutes: p.durationMinutes } } : e;
+      // S41: SSC / RAILWAY / BANKING / INSURANCE / DEFENCE / STATE_POLICE (catalog match), so pickers can group exams.
+      const withCat = { ...e, category: examCategoryOf({ name: e.name, slug: e.slug, code: e.code ?? '' }) };
+      return p ? { ...withCat, pattern: { name: p.name, totalQuestions: p.totalQuestions, totalMarks: p.totalMarks, durationMinutes: p.durationMinutes } } : withCat;
     });
-    const out = { exams: examRows, subjects, totalQuestions: total, approxHindiCovered: totalHi };
+    // S41 ("jin exams ke questions add ho vhi dikhe, baki hidden"): students only get exams that are switched on AND have
+    // at least one published question, so the full exam catalog (Railway, Banking, Defence ...) can be created up front
+    // and each exam appears by itself as soon as its first question is live. Admin screens read `allExams`.
+    const visibleExams = examRows.filter((e: any) => e.isActive !== false && Number(e.count) > 0);
+    const out = { exams: visibleExams, allExams: examRows, subjects, totalQuestions: total, approxHindiCovered: totalHi };
     cacheSet('bank:meta', out, 300_000);
     return out;
   }
@@ -1674,7 +1682,7 @@ export class BankService implements OnModuleInit {
     // bilingual gate (v3 §3): empty/NULL dono exclude — EXCEPT subject
     // "english", which needs no Hindi translation (the question itself IS
     // the English-language test).
-    const where: any = { ...PUBLISHED_QUESTION_WHERE, OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }] };
+    const where: any = { ...PUBLISHED_QUESTION_WHERE, OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER] };
     if (f.examId) where.examId = f.examId;
     else where.examId = { not: null }; // spec §3: exam badge har question par
     if (f.subjectId) where.subjectId = f.subjectId;

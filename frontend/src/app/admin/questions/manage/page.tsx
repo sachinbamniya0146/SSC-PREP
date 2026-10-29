@@ -133,7 +133,7 @@ export default function QuestionManagerPage() {
       ]);
       if (examsRes.ok) {
         const d = await examsRes.json();
-        setExams(Array.isArray(d?.exams) ? d.exams : []);
+        setExams(Array.isArray(d?.allExams) ? d.allExams : Array.isArray(d?.exams) ? d.exams : []);
       }
       if (treeRes.ok) setTaxonomy(await treeRes.json());
     } catch {

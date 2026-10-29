@@ -15,7 +15,8 @@ import { readPatternSections } from '../common/section-plan';
 import { cacheClearPrefix } from '../common/cache';
 import { EXAM_PRESETS, planPresetSync, type ExistingPattern } from '../common/exam-presets';
 import { MARKING_CACHE_PREFIX } from '../tests/marking-scheme';
-import { planCommonExams } from '../common/common-exams';
+import { EXAM_CATEGORY_LABEL, examCategoryOf, planCommonExams } from '../common/common-exams';
+import { HINDI_EXEMPT_SUBJECT_FILTER, findExamBySlugs, subjectCoreKey, subjectResolver } from '../common/slug-core';
 
 // v1 §10 — Admin dashboards: revenue overview + audit log viewer + user management.
 // All endpoints are ADMIN-only (global JwtAuthGuard is on the module).
@@ -876,12 +877,14 @@ export class AdminController {
   // missing/misconfigured on the live DB. This closes that gap.
   @Get('exams')
   async listExams() {
-    return this.prisma.exam.findMany({
+    const rows = await this.prisma.exam.findMany({
       orderBy: { name: 'asc' },
       include: {
         _count: { select: { questions: true } },
       },
     });
+    // S41: catalog category for grouping; students see an exam only once it has a published question (GET /bank/meta).
+    return rows.map((e: (typeof rows)[number]) => ({ ...e, category: examCategoryOf(e) }));
   }
 
   @Post('exams')
@@ -923,7 +926,7 @@ export class AdminController {
   @Get('exams/common')
   async listCommonExams() {
     const existing = await this.prisma.exam.findMany({ select: { name: true, slug: true, code: true } });
-    return planCommonExams(existing);
+    return { categories: EXAM_CATEGORY_LABEL, exams: planCommonExams(existing) };
   }
 
   @Post('exams/common')
@@ -1046,18 +1049,26 @@ export class AdminController {
   }
 
   private async buildPresetPlan() {
-    const [exams, patterns] = await Promise.all([
+    const [exams, patterns, subjects] = await Promise.all([
       this.prisma.exam.findMany({ select: { id: true, slug: true } }),
       this.prisma.examPattern.findMany({
         select: { id: true, examId: true, name: true, isActive: true, totalQuestions: true, totalMarks: true, durationMinutes: true, negativeMarks: true, sections: true, lockPreviousSections: true },
       }),
+      this.prisma.subject.findMany({ select: { id: true, slug: true } }),
     ]);
     const actions = planPresetSync({ presets: EXAM_PRESETS, exams, patterns: patterns as ExistingPattern[] });
+    // S42: a section whose subject is not in the database yet (General Science, Mathematics, Hindi ... before the
+    // syllabus import) cannot be composed into a mock; say so instead of letting the first student hit "Subject not found".
+    const subjectIdsOf = subjectResolver(subjects);
     return {
-      checkedOn: '28 Oct 2026',
+      checkedOn: '29 Oct 2026',
       actions: actions.map((a) => {
         const p = EXAM_PRESETS.find((x) => x.key === a.presetKey);
-        return { ...a, remark: p?.remark ?? null, source: p?.source ?? null };
+        const missing = (p?.sections ?? []).filter((s) => s.subjectSlug && !subjectIdsOf(s.subjectSlug).length).map((s) => s.subjectSlug as string);
+        const warnings = missing.length
+          ? [...a.warnings, `subject not in the database yet: ${[...new Set(missing)].join(', ')} — import the syllabus workbook first (Admin -> Topics -> Bulk Syllabus Import)`]
+          : a.warnings;
+        return { ...a, warnings, remark: p?.remark ?? null, source: p?.source ?? null };
       }),
     };
   }
@@ -1072,11 +1083,13 @@ export class AdminController {
     const rows = readPatternSections(pattern.sections);
     const subjects = await this.prisma.subject.findMany({ select: { id: true, slug: true, name: true } });
     const bySlug = new Map(subjects.map((s) => [s.slug.toLowerCase(), s]));
-    const idToSlug = new Map(subjects.map((s) => [s.id, s.slug.toLowerCase()]));
+    const subjectIdsOf = subjectResolver(subjects); // S41: "reasoning" == "sub-reasoning"
+    const idToSlug = new Map<string, string>(subjects.map((s) => [s.id, s.slug.toLowerCase()]));
 
     const sections = await Promise.all(
       rows.map(async (r, index) => {
-        const subj = r.subjectSlug ? bySlug.get(r.subjectSlug) : undefined;
+        const ids = r.subjectSlug ? subjectIdsOf(r.subjectSlug) : [];
+        const subj = r.subjectSlug ? bySlug.get(r.subjectSlug) ?? subjects.find((s: { id: string }) => s.id === ids[0]) : undefined;
         const need = r.questions ?? 0;
         let available = 0;
         if (subj) {
@@ -1085,9 +1098,9 @@ export class AdminController {
               isApproved: true,
               isActive: true,
               autoSuspended: false,
-              subjectId: subj.id,
+              subjectId: { in: ids },
               examId: pattern.examId,
-              OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+              OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
             },
           });
         }
@@ -1124,8 +1137,8 @@ export class AdminController {
               where: { isApproved: true, isActive: true, autoSuspended: false, examId: pattern.examId, year: t.year, shift: t.shift },
               _count: { _all: true },
             });
-            const present = new Set(grouped.map((g) => idToSlug.get(g.subjectId)).filter(Boolean) as string[]);
-            missing = rows.filter((r) => !r.subjectSlug || !present.has(r.subjectSlug)).map((r) => r.name);
+            const present = new Set(grouped.map((g) => subjectCoreKey(idToSlug.get(g.subjectId as string))).filter(Boolean));
+            missing = rows.filter((r) => !r.subjectSlug || !present.has(subjectCoreKey(r.subjectSlug))).map((r) => r.name);
             if (missing.length) warning = 'missing_sections';
           }
         } else if (blockedSections.length) {
@@ -1261,7 +1274,7 @@ export class AdminController {
   // and edit the pattern if anything differs; nothing is hardcoded in the exam engine.
   @Post('exam-patterns/seed-ssc-2026')
   async seedSsc2026Patterns(@CurrentUser() user: AuthenticatedUser) {
-    const exam = await this.prisma.exam.findUnique({ where: { slug: 'cgl' } });
+    const exam = findExamBySlugs(await this.prisma.exam.findMany(), ['cgl']); // S41: "cgl" or "exam-cgl"
     if (!exam) throw new BadRequestException('Exam with slug "cgl" not found — create it first');
     const note =
       'Seeded 25 Oct 2026 from the Drishti SSC blog "SSC CGL New Exam Pattern 2026" (1 Jun 2026). NOT yet checked against the official SSC notice — verify marks, negative marking and timers on ssc.gov.in.';

@@ -31,6 +31,7 @@ import { durationOf, placeAmong, shortName } from './rank.util';
 import { hasCanonicalPaper, paperQuestionIds, readPaperSnapshot } from './attempt-paper';
 import { ATTEMPT_DONE, isAttemptDone } from '../common/attempt-status';
 import { dropDuplicateQuestions, rememberQuestions, uniquePool } from '../common/question-fingerprint';
+import { HINDI_EXEMPT_SUBJECT_FILTER, findExamBySlugs, subjectResolver } from '../common/slug-core';
 
 /** Fisher–Yates, in place. Used so a practice set is different on every start (sectional). */
 function shuffleInPlace<T>(arr: T[]): T[] {
@@ -1204,7 +1205,7 @@ async saveAnswers(
     const patternUsable = !!pattern && patternRows.length > 0 && patternRows.every((r) => r.subjectSlug && (r.questions ?? 0) > 0);
     const famExam = patternUsable
       ? await this.prisma.exam.findUnique({ where: { id: pattern!.examId }, select: { id: true, name: true } })
-      : await this.prisma.exam.findUnique({ where: { slug: fam }, select: { id: true, name: true } });
+      : await this.familyExam(fam);
     if (!famExam) {
       throw new BadRequestException(`Exam not set up for "${fam}" yet — cannot compose an exam-specific paper.`);
     }
@@ -1241,14 +1242,14 @@ async saveAnswers(
           ];
 
     const subs = await this.prisma.subject.findMany({ select: { id: true, slug: true, name: true } });
-    const slugToId = new Map(subs.map((s) => [s.slug.toLowerCase(), s.id]));
+    const subjectIdsOf = subjectResolver(subs); // S41: "reasoning" and "sub-reasoning" are the same subject
 
     const usedAcross = new Set<string>();
     const usedFp = new Set<string>(); // content of the questions already picked for earlier sections (same question, other row)
     const out: any[] = [];
     for (const sec of sections) {
-      const subjectId = slugToId.get(sec.subjectSlug);
-      if (!subjectId) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
+      const subjectIds = subjectIdsOf(sec.subjectSlug);
+      if (!subjectIds.length) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
       const rows: any[] = await this.prisma.question.findMany({
         // examId now pinned to famExam.id (see BUGFIX comment above the
         // exam lookup) instead of the old `examId: { not: null }`, which
@@ -1263,9 +1264,9 @@ async saveAnswers(
         // Comprehension"). Every OTHER subject still requires Hindi.
         where: {
           ...PUBLISHED_QUESTION_WHERE,
-          subjectId,
+          subjectId: { in: subjectIds },
           examId: famExam.id,
-          OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+          OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
         },
         include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
         orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
@@ -1642,6 +1643,13 @@ async saveAnswers(
   // section blueprints paper() uses, so behaviour stays consistent between
   // "take a full paper" and "practice one exam sectionally".
   // The sections of a sectional exam (one blueprint per exam family, used by the composer AND by the resume of a stored list).
+  // S41: the exam of a family ("cgl") in either spelling ("cgl" seeded by the app, "exam-cgl" created from the Excel IDs).
+  private async familyExam(family: string): Promise<{ id: string; name: string } | null> {
+    const exams: { id: string; slug: string; name: string }[] = await this.prisma.exam.findMany({ select: { id: true, slug: true, name: true } });
+    const hit = findExamBySlugs(exams, [family]);
+    return hit ? { id: hit.id, name: hit.name } : null;
+  }
+
   private sectionalBlueprint(family: SectionalFamily) {
     return family === 'mts'
       ? [
@@ -1667,7 +1675,7 @@ async saveAnswers(
     // out of any exam's questions as long as the subject matched — the
     // sectional-practice sibling of the exact same cross-exam-mixing bug
     // fixed in paper().
-    const famExam = await this.prisma.exam.findUnique({ where: { slug: family }, select: { id: true, name: true } });
+    const famExam = await this.familyExam(family);
     if (!famExam) {
       throw new BadRequestException(`Exam not set up for "${family}" yet — cannot compose an exam-specific sectional paper.`);
     }
@@ -1675,7 +1683,7 @@ async saveAnswers(
     const subs = await this.prisma.subject.findMany({
       select: { id: true, slug: true, name: true },
     });
-    const slugToId = new Map(subs.map((s) => [s.slug.toLowerCase(), s.id]));
+    const subjectIdsOf = subjectResolver(subs); // S41: "reasoning" and "sub-reasoning" are the same subject
     // 28 Oct 2026: the family exam's preset (Tier 1 / Paper 1) decides marks and negative marking.
     const scheme = await this.markingSchemeFor({ examId: famExam.id }, []);
 
@@ -1683,16 +1691,16 @@ async saveAnswers(
     const usedFp = new Set<string>(); // content of the questions already picked for earlier sections (same question, other row)
     const picks: { sec: (typeof sections)[number]; rows: any[] }[] = [];
     for (const sec of sections) {
-      const subjectId = slugToId.get(sec.subjectSlug);
-      if (!subjectId) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
+      const subjectIds = subjectIdsOf(sec.subjectSlug);
+      if (!subjectIds.length) throw new BadRequestException(`Subject not found: ${sec.subjectSlug}`);
       const rows: any[] = await this.prisma.question.findMany({
         where: {
           ...PUBLISHED_QUESTION_WHERE,
-          subjectId,
+          subjectId: { in: subjectIds },
           examId: famExam.id,
           // BUGFIX: same English-needs-no-translation fix as paper() above —
           // English Comprehension IS the English text, nothing to translate.
-          OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+          OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
         },
         include: { exam: { select: { name: true } }, chapter: { select: { name: true } } },
         orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
@@ -1753,10 +1761,10 @@ async saveAnswers(
   // however the bank changed since. A question deleted / unpublished since is simply left out. Used when a running attempt is resumed.
   async sectionalExamFromIds(family: SectionalFamily, ids: string[]) {
     const sections = this.sectionalBlueprint(family);
-    const famExam = await this.prisma.exam.findUnique({ where: { slug: family }, select: { id: true, name: true } });
+    const famExam = await this.familyExam(family);
     if (!famExam) throw new BadRequestException(`Exam not set up for "${family}" yet — cannot compose an exam-specific sectional paper.`);
     const subs = await this.prisma.subject.findMany({ select: { id: true, slug: true, name: true } });
-    const slugToId = new Map(subs.map((s: { id: string; slug: string }) => [s.slug.toLowerCase(), s.id]));
+    const subjectIdsOf = subjectResolver(subs);
     const scheme = await this.markingSchemeFor({ examId: famExam.id }, []);
     const rows: any[] = await this.prisma.question.findMany({
       where: { id: { in: ids } },
@@ -1764,8 +1772,8 @@ async saveAnswers(
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
     const picks: { sec: (typeof sections)[number]; rows: any[] }[] = sections.map((sec) => {
-      const subjectId = slugToId.get(sec.subjectSlug);
-      return { sec, rows: ids.map((id) => byId.get(id)).filter((r): r is any => !!r && r.subjectId === subjectId) };
+      const subjectIds = new Set(subjectIdsOf(sec.subjectSlug));
+      return { sec, rows: ids.map((id) => byId.get(id)).filter((r): r is any => !!r && subjectIds.has(r.subjectId)) };
     });
     return this.shapeSectionalExam(family, scheme, picks);
   }
@@ -1840,7 +1848,7 @@ async saveAnswers(
         -- BUGFIX: English Comprehension needs no Hindi translation (the
         -- question itself IS the English-language test) — don't hide
         -- valid English questions from this count just for lacking one.
-        AND ((q."questionTextHindi" IS NOT NULL AND q."questionTextHindi" <> '') OR s.slug = 'english')
+        AND ((q."questionTextHindi" IS NOT NULL AND q."questionTextHindi" <> '') OR s.slug IN ('english', 'sub-english', 'sub_english') OR s.slug LIKE 'english-%' OR s.slug LIKE 'english\\_%' OR s.slug LIKE 'sub-english-%' OR s.slug LIKE 'sub-english\\_%')
       GROUP BY s.id ORDER BY s.name;`;
     return rows;
   }
@@ -1855,7 +1863,7 @@ async saveAnswers(
         subjectId,
         // BUGFIX: same English-needs-no-translation exemption as paper()/
         // sectionalExamForFamily() above.
-        OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+        OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
         examId: { not: null },
       },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
@@ -1982,7 +1990,7 @@ async saveAnswers(
       // questionTextHindi here blocked valid English PYQs from ever
       // appearing in a year-wise paper ("No bilingual questions available
       // for this selection yet"). Every other subject still requires it.
-      OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+      OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
     };
     // NEW — optional shift narrowing (see bank.service.ts shifts() +
     // common/pyq-paper.ts doc-comment): a year with multiple shifts (the
@@ -2253,7 +2261,7 @@ async saveAnswers(
         chapterId: ch.chapterId,
         // BUGFIX: same English-needs-no-translation exemption as the
         // other paper composers in this file.
-        OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+        OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
         examId: { not: null },
         id: { notIn: [...attemptedQuestionIds] }, // don't repeat same questions
       };

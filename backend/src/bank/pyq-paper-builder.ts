@@ -18,6 +18,8 @@ import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { readPatternSections } from '../common/section-plan';
 import { buildMarkingScheme, totalMarksFor } from '../common/marking';
 import { MAX_PYQ_PAPER_QUESTIONS, dedupeKeyedPaperRows } from '../common/pyq-paper';
+import { subjectCoreKey } from '../common/slug-core';
+import { classifyPatternName } from '../common/exam-presets';
 import {
   KEYED_PAPER_CEILING,
   PaperParts,
@@ -50,14 +52,16 @@ export async function findPatternForPaper(prisma: PaperBuilderPrisma, examId: st
     where: { examId, isActive: true },
     select: { id: true, name: true, totalQuestions: true, durationMinutes: true, sections: true },
   });
-  const tierRe = tier === 'TIER_2' ? /tier[\s_-]*(2|ii)\b/i : /tier[\s_-]*(1|i)\b/i;
-  const ofTier = patterns.filter((x) => tierRe.test(x.name));
-  if (ofTier.length <= 1) return ofTier[0];
-  const n = tierPaper.slice(-1);
-  const roman = ['', 'i', 'ii', 'iii'][Number(n)] ?? n;
-  const paperRe = new RegExp(`paper[\\s_-]*(${n}|${roman})\\b`, 'i');
-  const byPaper = ofTier.filter((x) => paperRe.test(x.name));
-  return byPaper.length === 1 ? byPaper[0] : undefined;
+  // S42: tier read by the shared classifier ("Tier 1", "CBT 1", "Prelims", "Phase I" ...). An exam whose patterns carry
+  // no tier at all (Group D, RPF, GD ...) uses them for its Tier 1 papers - before this a 120-question RPF paper fell back
+  // to the 100 ceiling because "RPF Constable CBT" has no "Tier 1" in its name.
+  const keyed = patterns.map((p) => ({ p, k: classifyPatternName(p.name) }));
+  let ofTier = keyed.filter((x) => x.k.tier === (tier === 'TIER_2' ? 'TIER_2' : 'TIER_1'));
+  if (!ofTier.length && tier !== 'TIER_2' && keyed.every((x) => x.k.tier === null)) ofTier = keyed;
+  if (ofTier.length <= 1) return ofTier[0]?.p;
+  const want = effectiveTierPaper(tierPaper);
+  const byPaper = ofTier.filter((x) => x.k.paper === want);
+  return byPaper.length === 1 ? byPaper[0].p : undefined;
 }
 
 /**
@@ -252,7 +256,7 @@ export async function analyzeKeyedPaper(
 
   const bySubject = new Map<string, { name: string; slug: string; have: number; need: number | null }>();
   for (const r of kept as any[]) {
-    const slug = String(r.subject?.slug ?? 'other');
+    const slug = r.subject?.slug ? subjectCoreKey(String(r.subject.slug)) : 'other'; // S41: one row per subject, either spelling
     const cur = bySubject.get(slug) ?? { name: String(r.subject?.name ?? 'Other'), slug, have: 0, need: null };
     cur.have += 1;
     bySubject.set(slug, cur);
@@ -262,9 +266,10 @@ export async function analyzeKeyedPaper(
   for (const sec of sections) {
     if (!sec.subjectSlug) continue;
     const need = sec.questions ?? 0;
-    const cur = bySubject.get(sec.subjectSlug) ?? { name: sec.name, slug: sec.subjectSlug, have: 0, need: null };
+    const key = subjectCoreKey(sec.subjectSlug);
+    const cur = bySubject.get(key) ?? { name: sec.name, slug: sec.subjectSlug, have: 0, need: null };
     cur.need = need;
-    bySubject.set(sec.subjectSlug, cur);
+    bySubject.set(key, cur);
     if (cur.have < need) shortSections.push(`${sec.name}: ${need - cur.have} more needed (${cur.have}/${need})`);
   }
 

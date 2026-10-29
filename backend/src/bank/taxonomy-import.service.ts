@@ -28,6 +28,8 @@ import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
 import { findTaxonomyTwin, makeTaxonomySlug } from '../common/taxonomy-key';
 import { uniqueSlug } from '../common/taxonomy-merge';
+import { coreFromName, isSyllabusHeader, newChapterSlug, newSubjectSlug, pickSubject } from '../common/syllabus-import-plan';
+import { subjectCoreKey } from '../common/slug-core';
 import { cacheClearPrefix } from '../common/cache';
 
 interface ParsedSubTopic {
@@ -229,6 +231,9 @@ export class TaxonomyImportService {
       const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
       if (rows.length < 5) continue; // not enough rows to hold the expected layout
 
+      // S41: only a real syllabus sheet (header row 4 = S.No. | Chapter No. | Chapter | Topic | Sub-Topic) is read, so an
+      // info sheet ("Exam Syllabus Map", "How to use" ...) in the same workbook is never mistaken for a subject.
+      if (!isSyllabusHeader(rows[3])) continue;
       const subjectEn = rows[0]?.[0] != null ? String(rows[0][0]).trim() : null;
       const subjectHi = rows[1]?.[0] != null ? String(rows[1][0]).trim() : null;
       if (!subjectEn) continue; // doesn't match the expected layout — skip this sheet
@@ -301,6 +306,11 @@ export class TaxonomyImportService {
     }
 
     const summary: TaxonomyImportSummary = { subjects: 0, chapters: 0, topics: 0, subTopics: 0, details: [] };
+    // S41: subjects are matched in either spelling ("reasoning" / "sub-reasoning") or by name; see common/syllabus-import-plan.ts.
+    const allSubjects: { id: string; slug: string; name: string; chapters: number }[] = (await this.prisma.subject.findMany({ select: { id: true, slug: true, name: true, _count: { select: { chapters: true } } } })).map(
+      (x: { id: string; slug: string; name: string; _count?: { chapters?: number } }) => ({ id: x.id, slug: x.slug, name: x.name, chapters: x._count?.chapters ?? 0 }),
+    );
+    const dbUsesChapPrefix = (await this.prisma.chapter.count({ where: { slug: { startsWith: 'chap-' } } })) > 0;
 
     for (const s of subjects) {
       // See CORE_SUBJECT_SLUG_BY_SHEET_NAME doc-comment above: for the four
@@ -308,7 +318,10 @@ export class TaxonomyImportService {
       // slug instead of slugifying the syllabus's full official title —
       // that's what stops this import from spawning duplicate subjects.
       const coreSlug = CORE_SUBJECT_SLUG_BY_SHEET_NAME[s.sheetName.toLowerCase()];
-      const subjectSlug = coreSlug ?? this.slugify(s.name);
+      const sheetCore = coreSlug ?? coreFromName(s.sheetName);
+      const existingSubject = pickSubject([sheetCore, coreFromName(s.name), subjectCoreKey(this.slugify(s.name))], [s.name, s.sheetName], allSubjects, coreSlug);
+      const subjectSlug = existingSubject?.slug ?? newSubjectSlug(sheetCore, allSubjects.map((x) => x.slug));
+      const keepName = !!coreSlug || !!existingSubject;
       const subjectRow = await this.prisma.subject.upsert({
         where: { slug: subjectSlug },
         create: { name: s.name, nameHindi: s.nameHindi, slug: subjectSlug },
@@ -320,7 +333,12 @@ export class TaxonomyImportService {
         // existing English name, so it must stay exactly as it was.
         // Non-core subjects (no alias match) keep the old behavior of
         // updating both name and nameHindi from the sheet.
-        update: coreSlug ? { nameHindi: s.nameHindi } : { name: s.name, nameHindi: s.nameHindi },
+        update: keepName ? { nameHindi: s.nameHindi ?? undefined } : { name: s.name, nameHindi: s.nameHindi },
+      });
+      if (!existingSubject) allSubjects.push({ id: subjectRow.id, slug: subjectRow.slug, name: subjectRow.name, chapters: 0 });
+      const chapterSiblings: { id: string; name: string; nameHindi: string | null; slug: string }[] = await this.prisma.chapter.findMany({
+        where: { subjectId: subjectRow.id },
+        select: { id: true, name: true, nameHindi: true, slug: true },
       });
       summary.subjects++;
 
@@ -329,12 +347,20 @@ export class TaxonomyImportService {
       let subTopicCount = 0;
 
       for (const c of s.chapters) {
-        const chapterSlug = this.slugify(c.name);
+        // S41: an existing chapter of the same normalised name is reused (no second "Percentage" next to
+        // "chap-percentage-quantitative_aptitude"); a new one follows the spelling its siblings use.
+        const chapterTwin = findTaxonomyTwin(chapterSiblings, c.name, c.nameHindi);
+        const chapterSlug =
+          chapterTwin && chapterTwin.kind !== 'similar'
+            ? chapterTwin.row.slug
+            : newChapterSlug(c.name, subjectCoreKey(subjectRow.slug), chapterSiblings.map((x) => x.slug), dbUsesChapPrefix);
         const chapterRow = await this.prisma.chapter.upsert({
           where: { subjectId_slug: { subjectId: subjectRow.id, slug: chapterSlug } },
           create: { subjectId: subjectRow.id, name: c.name, nameHindi: c.nameHindi, slug: chapterSlug },
-          update: { name: c.name, nameHindi: c.nameHindi },
+          // an existing chapter keeps its English name (questions and Excel sheets match on it); Hindi is refreshed
+          update: chapterTwin && chapterTwin.kind !== 'similar' ? { nameHindi: c.nameHindi ?? undefined } : { name: c.name, nameHindi: c.nameHindi },
         });
+        if (!chapterSiblings.some((x) => x.id === chapterRow.id)) chapterSiblings.push({ id: chapterRow.id, name: chapterRow.name, nameHindi: chapterRow.nameHindi, slug: chapterRow.slug });
         chapterCount++;
 
         for (const t of c.topics) {

@@ -495,8 +495,8 @@ export default function AdminPatternsPage() {
               <h2 className="text-base font-semibold">{t("Official marking presets", "Official marking presets")}</h2>
               <p className="text-xs text-muted-foreground">
                 {t(
-                  "Marks per question, minus marking, total and duration from the SSC notices. Only these numbers change; your names, timers and lock stay.",
-                  "Marks, negative marking, totals and duration as per the SSC notice. Only these numbers change; your names, timers and locks stay the same.",
+                  "Marks per question, minus marking, total and duration from the exam notices (SSC, Railway, Banking, Defence, State Police). 'SECONDARY' = read from a coaching / prep site, compare with the notice. Only these numbers change; your names, timers and lock stay. A preset is skipped until its exam exists (Admin -> Exams -> Exam catalog).",
+                  "Marks, negative marking, total aur duration exam notice ke hisaab se (SSC, Railway, Banking, Defence, State Police). 'SECONDARY' = coaching site se padha, notice se milao. Sirf ye numbers badalte hain; aapke naam, timers aur lock wahi rehte hain. Exam na ho to preset skip hota hai (Admin -> Exams -> Exam catalog).",
                 )}
               </p>
             </div>

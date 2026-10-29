@@ -15,6 +15,7 @@
  *   - the exam row is missing -> skipped and reported, nothing is created.
  */
 import { readPatternSections } from './section-plan';
+import { findExamBySlugs, subjectCoreKey } from './slug-core';
 
 export type PresetVerification = 'OFFICIAL' | 'SECONDARY';
 export type PresetTier = 'TIER_1' | 'TIER_2' | null;
@@ -56,7 +57,13 @@ const SUB = {
   quant: 'quantitative_aptitude',
   english: 'english',
   computer: 'computer',
+  // S42: subjects of the other exams (created by the S43 syllabus workbook; either spelling matches, see slug-core)
+  science: 'general_science',
+  hindi: 'hindi',
+  maths: 'mathematics',
 } as const;
+
+const RRB_SATHEE = 'rrb.iitk.ac.in SATHEE (IIT Kanpur, Govt of India initiative)';
 
 const CGL_SCHEME = 'ssc.gov.in CGL Scheme of Examination (Static/CGL.pdf) + CGL 2025 notice para 13.7-13.8';
 const CHSL_SCHEME = 'ssc.gov.in CHSL Scheme of Examination (Static/CHSL.pdf) + CHSL 2026 notice para 13.8-13.9';
@@ -321,6 +328,550 @@ export const EXAM_PRESETS: ExamPreset[] = [
     source: 'IIT Kanpur SATHEE + Mahendras Phase XIV page; the notice PDF could not be opened',
     remark: 'Same pattern for Matriculation, Higher Secondary and Graduation levels (only difficulty differs). 2 marks, -0.50, 60 min (80 scribe).',
   },
+  // ============================================================================================================
+  // S42 (29 Oct 2026) - exams outside SSC. Every number below was read from the page named in `source`; NONE of these
+  // was read from the official notice itself (RRB / IBPS / SBI / RBI / UPSC / UPPRPB PDFs could not be opened from here,
+  // except the RRB JE CEN 03/2024 notice copy), so all are 'SECONDARY': compare with the current notice before trusting.
+  // Not here on purpose (sources disagreed or gave no section split): RRB ALP CBT 2, banking / insurance MAINS,
+  // LIC AAO / LIC Assistant, AFCAT, Agniveer, Coast Guard, CAPF AC, Delhi Police Head Constable, Bihar / Rajasthan /
+  // MP / Haryana Police. The admin creates those patterns by hand (Admin -> Exam Patterns).
+  // ============================================================================================================
+
+  // ---- Railway (RRB / RPF): 1 mark per question, 1/3 mark deducted per wrong answer ----
+  {
+    key: 'rrb-ntpc-cbt1',
+    examSlugs: ['rrb-ntpc', 'ntpc'],
+    name: 'RRB NTPC CBT 1',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 90,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'General Awareness', subjectSlug: SUB.ga, questions: 40, marks: 40 },
+      { name: 'Mathematics', subjectSlug: SUB.quant, questions: 30, marks: 30 },
+      { name: 'General Intelligence & Reasoning', subjectSlug: SUB.reasoning, questions: 30, marks: 30 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 30,
+    verification: 'SECONDARY',
+    source: RRB_SATHEE + ' (rrb-ntpc exam pattern)',
+    remark: 'Same CBT 1 for Graduate and Under-Graduate posts. -1/3 per wrong answer as in every RRB CBT. 120 min with scribe.',
+  },
+  {
+    key: 'rrb-ntpc-cbt2',
+    examSlugs: ['rrb-ntpc', 'ntpc'],
+    name: 'RRB NTPC CBT 2',
+    match: { tier: 'TIER_2', paper: 'PAPER_1' },
+    totalQuestions: 120,
+    totalMarks: 120,
+    durationMinutes: 90,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'General Awareness', subjectSlug: SUB.ga, questions: 50, marks: 50 },
+      { name: 'Mathematics', subjectSlug: SUB.quant, questions: 35, marks: 35 },
+      { name: 'General Intelligence & Reasoning', subjectSlug: SUB.reasoning, questions: 35, marks: 35 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 30,
+    verification: 'SECONDARY',
+    source: RRB_SATHEE + ' (rrb-ntpc exam pattern)',
+    remark: 'Post-wise CBT 2 papers have the same structure. Typing / CBAT tests are not MCQ papers and are not modelled.',
+  },
+  {
+    key: 'rrb-group-d',
+    examSlugs: ['rrb-group-d', 'group-d', 'rrb-gd'],
+    name: 'RRB Group D CBT',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 90,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'General Science', subjectSlug: SUB.science, questions: 25, marks: 25 },
+      { name: 'Mathematics', subjectSlug: SUB.quant, questions: 25, marks: 25 },
+      { name: 'General Intelligence & Reasoning', subjectSlug: SUB.reasoning, questions: 30, marks: 30 },
+      { name: 'General Awareness & Current Affairs', subjectSlug: SUB.ga, questions: 20, marks: 20 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 30,
+    verification: 'SECONDARY',
+    source: RRB_SATHEE + ' (rrb-group-d exam pattern: "1/3 marks shall be deducted for each wrong answer")',
+    remark: 'The notice calls the section split indicative (small variation possible).',
+  },
+  {
+    key: 'rrb-alp-cbt1',
+    examSlugs: ['rrb-alp', 'alp'],
+    name: 'RRB ALP CBT 1',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 75,
+    totalMarks: 75,
+    durationMinutes: 60,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'Mathematics', subjectSlug: SUB.quant, questions: 25, marks: 25 },
+      { name: 'Mental Ability (General Intelligence & Reasoning)', subjectSlug: SUB.reasoning, questions: 25, marks: 25 },
+      { name: 'General Science', subjectSlug: SUB.science, questions: 25, marks: 25 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 20,
+    verification: 'SECONDARY',
+    source: 'pw.live RRB ALP exam pattern 2026 + testbook (CEN 01/2026: "General Awareness and Current Affairs section has been removed")',
+    remark: 'Latest notice (CEN 01/2026). Older papers (CEN 01/2024, 01/2025) had Maths 20, Reasoning 25, Science 20, GA 10 - edit the pattern if your mocks are for those papers. CBT 2 (Part A 100 Q / 90 min, Part B 75 Q trade, qualifying) is not here: no official section split was found.',
+  },
+  {
+    key: 'rrb-technician',
+    examSlugs: ['rrb-technician', 'technician'],
+    name: 'RRB Technician Grade III CBT',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 90,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'Mathematics', subjectSlug: SUB.quant, questions: 25, marks: 25 },
+      { name: 'General Intelligence & Reasoning', subjectSlug: SUB.reasoning, questions: 25, marks: 25 },
+      { name: 'General Science', subjectSlug: SUB.science, questions: 40, marks: 40 },
+      { name: 'General Awareness', subjectSlug: SUB.ga, questions: 10, marks: 10 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 30,
+    verification: 'SECONDARY',
+    source: RRB_SATHEE + ' (rrb-technician exam pattern, Grade III)',
+    remark: 'Grade I Signal has another split (GA 10, Reasoning 15, Computers 20, Maths 20, Basic Science & Engineering 35) - create it by hand if needed. The page does not print the negative marking; -1/3 is the RRB rule, confirm in the notice.',
+  },
+  {
+    key: 'rrb-je-cbt1',
+    examSlugs: ['rrb-je'],
+    name: 'RRB JE CBT 1',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 90,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'Mathematics', subjectSlug: SUB.quant, questions: 30, marks: 30 },
+      { name: 'General Intelligence & Reasoning', subjectSlug: SUB.reasoning, questions: 25, marks: 25 },
+      { name: 'General Awareness', subjectSlug: SUB.ga, questions: 15, marks: 15 },
+      { name: 'General Science', subjectSlug: SUB.science, questions: 30, marks: 30 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 30,
+    verification: 'SECONDARY',
+    source: 'RRB JE CEN 03/2024 notification (copy hosted by sscadda.com), 1st stage CBT table',
+    remark: 'Section split is indicative per the notice. The excerpt read did not print the negative marking; -1/3 is the RRB rule, confirm in the notice.',
+  },
+  {
+    key: 'rrb-je-cbt2',
+    examSlugs: ['rrb-je'],
+    name: 'RRB JE CBT 2',
+    match: { tier: 'TIER_2', paper: 'PAPER_1' },
+    totalQuestions: 150,
+    totalMarks: 150,
+    durationMinutes: 120,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'General Awareness', subjectSlug: SUB.ga, questions: 15, marks: 15 },
+      { name: 'Physics & Chemistry', subjectSlug: SUB.science, questions: 15, marks: 15 },
+      { name: 'Basics of Computers and Applications', subjectSlug: SUB.computer, questions: 10, marks: 10 },
+      { name: 'Basics of Environment and Pollution Control', subjectSlug: SUB.science, questions: 10, marks: 10 },
+      { name: 'Technical Abilities', subjectSlug: null, questions: 100, marks: 100 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 40,
+    verification: 'SECONDARY',
+    source: 'RRB JE CEN 03/2024 notification (copy hosted by sscadda.com), 2nd stage CBT table',
+    remark: 'Technical Abilities depends on the engineering branch, so it has no subject here (the mock cannot compose it automatically). Virtual calculator allowed.',
+  },
+  {
+    key: 'rpf-constable',
+    examSlugs: ['rpf-constable'],
+    name: 'RPF Constable CBT',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 120,
+    totalMarks: 120,
+    durationMinutes: 90,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'General Awareness', subjectSlug: SUB.ga, questions: 50, marks: 50 },
+      { name: 'Basic Arithmetic', subjectSlug: SUB.quant, questions: 35, marks: 35 },
+      { name: 'General Intelligence & Reasoning', subjectSlug: SUB.reasoning, questions: 35, marks: 35 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: RRB_SATHEE + ' (rpf-constable exam pattern: "deduction of 1/3 mark")',
+    remark: '10th standard level.',
+  },
+  {
+    key: 'rpf-si',
+    examSlugs: ['rpf-si'],
+    name: 'RPF SI CBT',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 120,
+    totalMarks: 120,
+    durationMinutes: 90,
+    negativeMarks: 1 / 3,
+    sections: [
+      { name: 'General Awareness', subjectSlug: SUB.ga, questions: 50, marks: 50 },
+      { name: 'Arithmetic', subjectSlug: SUB.quant, questions: 35, marks: 35 },
+      { name: 'General Intelligence & Reasoning', subjectSlug: SUB.reasoning, questions: 35, marks: 35 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: RRB_SATHEE + ' (rpf-si exam pattern: marks 50 / 35 / 35, 1/3 negative)',
+    remark: 'The page gives marks per section (1 mark per question), so questions = marks.',
+  },
+
+  // ---- Banking / Insurance PRELIMS: 1 mark per question, 0.25 deducted per wrong answer, sectional timers ----
+  {
+    key: 'ibps-po-pre',
+    examSlugs: ['ibps-po'],
+    name: 'IBPS PO Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 60,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'English Language', subjectSlug: SUB.english, questions: 30, marks: 30, durationMinutes: 20 },
+      { name: 'Quantitative Aptitude', subjectSlug: SUB.quant, questions: 35, marks: 35, durationMinutes: 20 },
+      { name: 'Reasoning Ability', subjectSlug: SUB.reasoning, questions: 35, marks: 35, durationMinutes: 20 },
+    ],
+    lockSections: true,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'store.pw.live IBPS PO syllabus 2025 (prelims table)',
+    remark: 'Mains changes almost every year (2025: Section A / B with 2-mark and 1-mark questions) - create the Mains pattern by hand from the notice.',
+  },
+  {
+    key: 'ibps-clerk-pre',
+    examSlugs: ['ibps-clerk'],
+    name: 'IBPS Clerk Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 60,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'English Language', subjectSlug: SUB.english, questions: 30, marks: 30, durationMinutes: 20 },
+      { name: 'Numerical Ability', subjectSlug: SUB.quant, questions: 35, marks: 35, durationMinutes: 20 },
+      { name: 'Reasoning Ability', subjectSlug: SUB.reasoning, questions: 35, marks: 35, durationMinutes: 20 },
+    ],
+    lockSections: true,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'edutap.in IBPS Clerk exam pattern 2026',
+    remark: 'Mains not modelled (sources disagree on the section times).',
+  },
+  {
+    key: 'ibps-rrb-po-pre',
+    examSlugs: ['ibps-rrb-po'],
+    name: 'IBPS RRB PO Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 80,
+    totalMarks: 80,
+    durationMinutes: 45,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'Reasoning', subjectSlug: SUB.reasoning, questions: 40, marks: 40 },
+      { name: 'Quantitative Aptitude', subjectSlug: SUB.quant, questions: 40, marks: 40 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'bankersadda.com IBPS RRB syllabus (80 questions, 80 marks, 45 minutes, 2 sections, -0.25)',
+    remark: 'One composite 45-minute timer, sectional cut-off. 40 + 40 is the usual split; the page gave only the totals.',
+  },
+  {
+    key: 'ibps-rrb-clerk-pre',
+    examSlugs: ['ibps-rrb-clerk'],
+    name: 'IBPS RRB Clerk Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 80,
+    totalMarks: 80,
+    durationMinutes: 45,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'Reasoning Ability', subjectSlug: SUB.reasoning, questions: 40, marks: 40 },
+      { name: 'Numerical Ability', subjectSlug: SUB.quant, questions: 40, marks: 40 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'bankersadda.com IBPS RRB syllabus (80 questions, 80 marks, 45 minutes, 2 sections, -0.25)',
+    remark: 'Office Assistant (Multipurpose). One composite 45-minute timer. 40 + 40 is the usual split; the page gave only the totals.',
+  },
+  {
+    key: 'sbi-po-pre',
+    examSlugs: ['sbi-po'],
+    name: 'SBI PO Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 60,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'English Language', subjectSlug: SUB.english, questions: 40, marks: 40, durationMinutes: 20 },
+      { name: 'Quantitative Aptitude', subjectSlug: SUB.quant, questions: 30, marks: 30, durationMinutes: 20 },
+      { name: 'Reasoning Ability', subjectSlug: SUB.reasoning, questions: 30, marks: 30, durationMinutes: 20 },
+    ],
+    lockSections: true,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'oliveboard.in "SBI PO 2025 changes" (2025 pattern: English 40, Quant 30, Reasoning 30) + careers360 (same split)',
+    remark: 'Before 2025 the split was 30 / 35 / 35. Mains (2025: 170 Q, 200 marks, 3 h) is not modelled.',
+  },
+  {
+    key: 'sbi-clerk-pre',
+    examSlugs: ['sbi-clerk'],
+    name: 'SBI Clerk Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 60,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'English Language', subjectSlug: SUB.english, questions: 30, marks: 30, durationMinutes: 20 },
+      { name: 'Numerical Ability', subjectSlug: SUB.quant, questions: 35, marks: 35, durationMinutes: 20 },
+      { name: 'Reasoning Ability', subjectSlug: SUB.reasoning, questions: 35, marks: 35, durationMinutes: 20 },
+    ],
+    lockSections: true,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'store.pw.live SBI Clerk exam pattern',
+    remark: 'Junior Associates. Mains (190 Q, 200 marks, 2 h 40 min) is not modelled.',
+  },
+  {
+    key: 'rbi-assistant-pre',
+    examSlugs: ['rbi-assistant'],
+    name: 'RBI Assistant Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 60,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'English Language', subjectSlug: SUB.english, questions: 30, marks: 30, durationMinutes: 20 },
+      { name: 'Numerical Ability', subjectSlug: SUB.quant, questions: 35, marks: 35, durationMinutes: 20 },
+      { name: 'Reasoning Ability', subjectSlug: SUB.reasoning, questions: 35, marks: 35, durationMinutes: 20 },
+    ],
+    lockSections: true,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'testbook.com RBI Assistant syllabus & exam pattern',
+  },
+  {
+    key: 'rbi-grade-b-p1',
+    examSlugs: ['rbi-grade-b'],
+    name: 'RBI Grade B Phase I',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 200,
+    totalMarks: 200,
+    durationMinutes: 120,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'General Awareness', subjectSlug: SUB.ga, questions: 80, marks: 80, durationMinutes: 25 },
+      { name: 'Reasoning', subjectSlug: SUB.reasoning, questions: 60, marks: 60, durationMinutes: 45 },
+      { name: 'English Language', subjectSlug: SUB.english, questions: 30, marks: 30, durationMinutes: 25 },
+      { name: 'Quantitative Aptitude', subjectSlug: SUB.quant, questions: 30, marks: 30, durationMinutes: 25 },
+    ],
+    lockSections: true,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'practicemock.com RBI Grade B exam pattern (Phase 1, 2026)',
+    remark: 'Phase I is qualifying (sectional + overall cut-off). Phase II (descriptive + ESI / F&M) is not modelled.',
+  },
+  {
+    key: 'niacl-ao-pre',
+    examSlugs: ['niacl-ao'],
+    name: 'NIACL AO Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 60,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'English Language', subjectSlug: SUB.english, questions: 30, marks: 30, durationMinutes: 20 },
+      { name: 'Quantitative Aptitude', subjectSlug: SUB.quant, questions: 35, marks: 35, durationMinutes: 20 },
+      { name: 'Reasoning Ability', subjectSlug: SUB.reasoning, questions: 35, marks: 35, durationMinutes: 20 },
+    ],
+    lockSections: true,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'embibe.com NIACL AO exam pattern',
+  },
+  {
+    key: 'niacl-assistant-pre',
+    examSlugs: ['niacl-assistant'],
+    name: 'NIACL Assistant Prelims',
+    match: { tier: 'TIER_1', paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 60,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'English Language', subjectSlug: SUB.english, questions: 30, marks: 30, durationMinutes: 20 },
+      { name: 'Numerical Ability', subjectSlug: SUB.quant, questions: 35, marks: 35, durationMinutes: 20 },
+      { name: 'Reasoning', subjectSlug: SUB.reasoning, questions: 35, marks: 35, durationMinutes: 20 },
+    ],
+    lockSections: true,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'embibe.com NIACL Assistant prelims exam pattern',
+  },
+
+  // ---- Defence (UPSC): one third of the question's marks deducted per wrong answer ----
+  {
+    key: 'cds-p1',
+    examSlugs: ['cds', 'upsc-cds'],
+    name: 'UPSC CDS Paper I (English)',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 120,
+    totalMarks: 100,
+    durationMinutes: 120,
+    negativeMarks: Math.round((100 / 120 / 3) * 10000) / 10000,
+    sections: [{ name: 'English', subjectSlug: SUB.english, questions: 120, marks: 100 }],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'career.aglasem.com CDS exam pattern ("one third of the marks assigned to a question is deducted")',
+    remark: 'Each paper is a separate 2-hour session. 100 / 120 = 0.833 marks per question, -0.278 per wrong answer.',
+  },
+  {
+    key: 'cds-p2',
+    examSlugs: ['cds', 'upsc-cds'],
+    name: 'UPSC CDS Paper II (General Knowledge)',
+    match: { tier: null, paper: 'PAPER_2' },
+    totalQuestions: 120,
+    totalMarks: 100,
+    durationMinutes: 120,
+    negativeMarks: Math.round((100 / 120 / 3) * 10000) / 10000,
+    sections: [{ name: 'General Knowledge', subjectSlug: SUB.ga, questions: 120, marks: 100 }],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'career.aglasem.com CDS exam pattern',
+  },
+  {
+    key: 'cds-p3',
+    examSlugs: ['cds', 'upsc-cds'],
+    name: 'UPSC CDS Paper III (Elementary Mathematics)',
+    match: { tier: null, paper: 'PAPER_3' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 120,
+    negativeMarks: Math.round((1 / 3) * 10000) / 10000,
+    sections: [{ name: 'Elementary Mathematics', subjectSlug: SUB.quant, questions: 100, marks: 100 }],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'career.aglasem.com CDS exam pattern',
+    remark: 'IMA / INA / AFA only (OTA candidates write Papers I and II).',
+  },
+  {
+    key: 'nda-p1',
+    examSlugs: ['nda', 'upsc-nda'],
+    name: 'UPSC NDA Paper I (Mathematics)',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 120,
+    totalMarks: 300,
+    durationMinutes: 150,
+    negativeMarks: Math.round((2.5 / 3) * 10000) / 10000,
+    sections: [{ name: 'Mathematics', subjectSlug: SUB.maths, questions: 120, marks: 300 }],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'pwonlyias.com UPSC NDA exam pattern (2.5 marks, -0.83)',
+    remark: 'Class 11-12 Mathematics (subject "Mathematics", not the SSC Quantitative Aptitude).',
+  },
+  {
+    key: 'nda-p2',
+    examSlugs: ['nda', 'upsc-nda'],
+    name: 'UPSC NDA Paper II (General Ability Test)',
+    match: { tier: null, paper: 'PAPER_2' },
+    totalQuestions: 150,
+    totalMarks: 600,
+    durationMinutes: 150,
+    negativeMarks: Math.round((4 / 3) * 10000) / 10000,
+    sections: [
+      { name: 'Part A · English', subjectSlug: SUB.english, questions: 50, marks: 200 },
+      { name: 'Part B · General Knowledge', subjectSlug: SUB.ga, questions: 100, marks: 400 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'pwonlyias.com UPSC NDA exam pattern (4 marks, -1.33; English 50 Q / 200, GK 100 Q / 400)',
+    remark: 'GK covers Physics, Chemistry, General Science, History, Geography and current events (all under General Awareness here).',
+  },
+
+  // ---- State police ----
+  {
+    key: 'up-police-constable',
+    examSlugs: ['up-police-constable', 'uppc'],
+    name: 'UP Police Constable Written Exam',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 150,
+    totalMarks: 300,
+    durationMinutes: 120,
+    negativeMarks: 0.5,
+    sections: [
+      { name: 'General Knowledge', subjectSlug: SUB.ga, questions: 38, marks: 76 },
+      { name: 'General Hindi', subjectSlug: SUB.hindi, questions: 37, marks: 74 },
+      { name: 'Numerical & Mental Ability', subjectSlug: SUB.quant, questions: 38, marks: 76 },
+      { name: 'Mental Aptitude / IQ / Reasoning', subjectSlug: SUB.reasoning, questions: 37, marks: 74 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'oliveboard.in UP Police Constable syllabus (38 / 37 / 38 / 37, +2 / -0.5) + aglasem (150 Q, 300 marks, 2 h, -0.5)',
+    remark: 'Hindi questions are written in Hindi; they still need the English text column filled (the Hindi gate applies to every subject except English).',
+  },
+  {
+    key: 'up-police-si',
+    examSlugs: ['up-police-si', 'upsi'],
+    name: 'UP Police SI Written Exam',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 160,
+    totalMarks: 400,
+    durationMinutes: 120,
+    negativeMarks: 0,
+    sections: [
+      { name: 'General Hindi', subjectSlug: SUB.hindi, questions: 40, marks: 100 },
+      { name: 'Basic Law / Constitution / General Knowledge', subjectSlug: SUB.ga, questions: 40, marks: 100 },
+      { name: 'Numerical & Mental Ability', subjectSlug: SUB.quant, questions: 40, marks: 100 },
+      { name: 'Mental Aptitude / IQ / Reasoning', subjectSlug: SUB.reasoning, questions: 40, marks: 100 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'career.aglasem.com UP Police SI exam pattern (4 x 40 Q, 2.5 marks each, "no negative marking")',
+    remark: 'Sectional minimum 35% applies. No negative marking per the source - confirm in the current notice.',
+  },
+
+  // ---- SSC: Delhi Police ----
+  {
+    key: 'dp-constable',
+    examSlugs: ['dp', 'delhi-police', 'delhi-police-constable'],
+    name: 'Delhi Police Constable CBE',
+    match: { tier: null, paper: 'PAPER_1' },
+    totalQuestions: 100,
+    totalMarks: 100,
+    durationMinutes: 90,
+    negativeMarks: 0.25,
+    sections: [
+      { name: 'General Knowledge / Current Affairs', subjectSlug: SUB.ga, questions: 50, marks: 50 },
+      { name: 'Reasoning', subjectSlug: SUB.reasoning, questions: 25, marks: 25 },
+      { name: 'Numerical Ability', subjectSlug: SUB.quant, questions: 15, marks: 15 },
+      { name: 'Computer Fundamentals', subjectSlug: SUB.computer, questions: 10, marks: 10 },
+    ],
+    lockSections: false,
+    scribeExtraMinutes: 0,
+    verification: 'SECONDARY',
+    source: 'oliveboard.in SSC Delhi Police Constable exam pattern 2025',
+    remark: 'Constable (Executive). Head Constable has a different paper - create it by hand.',
+  },
 ];
 
 // ------------------------------------------------------------------------------------------------ classify
@@ -330,10 +881,16 @@ export interface PatternKey {
   paper: PresetPaper;
 }
 
-/** "SSC CGL 2026 — Tier 2 Paper I (Session I)" -> { TIER_2, PAPER_1 }. No tier word = no tier; no paper word = Paper 1. */
+/**
+ * "SSC CGL 2026 — Tier 2 Paper I (Session I)" -> { TIER_2, PAPER_1 }. No tier word = no tier; no paper word = Paper 1.
+ * S42: the stage words of other exams count too - "CBT 1" / "Prelims" / "Phase I" / "Stage I" = Tier 1 and
+ * "CBT 2" / "Mains" / "Phase II" / "Stage II" = Tier 2 (RRB, IBPS, SBI, RBI), the same mapping the Master Package asks for.
+ */
 export function classifyPatternName(name: string): PatternKey {
   const n = String(name ?? '');
-  const tier: PresetTier = /tier[\s_-]*(2|ii)\b/i.test(n) ? 'TIER_2' : /tier[\s_-]*(1|i)\b/i.test(n) ? 'TIER_1' : null;
+  const t2 = /tier[\s_-]*(2|ii)\b/i.test(n) || /\bcbt[\s_-]*(2|ii)\b/i.test(n) || /\bmains?\b/i.test(n) || /\b(phase|stage)[\s_-]*(2|ii)\b/i.test(n);
+  const t1 = /tier[\s_-]*(1|i)\b/i.test(n) || /\bcbt[\s_-]*(1|i)\b/i.test(n) || /\bprelim(s|inary)?\b/i.test(n) || /\b(phase|stage)[\s_-]*(1|i)\b/i.test(n);
+  const tier: PresetTier = t2 ? 'TIER_2' : t1 ? 'TIER_1' : null;
   const m = /paper[\s_-]*(1|2|3|iii|ii|i)\b/i.exec(n);
   const token = m ? m[1].toLowerCase() : '1';
   const paper: PresetPaper = token === '2' || token === 'ii' ? 'PAPER_2' : token === '3' || token === 'iii' ? 'PAPER_3' : 'PAPER_1';
@@ -397,7 +954,7 @@ export function mergeSections(existing: unknown, preset: PresetSection[]): Prese
   const used = new Set<number>();
   return preset.map((ps, i) => {
     let at = -1;
-    if (ps.subjectSlug) at = old.findIndex((o, j) => !used.has(j) && o.subjectSlug === ps.subjectSlug);
+    if (ps.subjectSlug) at = old.findIndex((o, j) => !used.has(j) && !!o.subjectSlug && subjectCoreKey(o.subjectSlug) === subjectCoreKey(ps.subjectSlug));
     else if (old[i] && !used.has(i) && !old[i].subjectSlug) at = i;
     const o = at >= 0 ? old[at] : undefined;
     if (at >= 0) used.add(at);
@@ -423,7 +980,7 @@ export function planPresetSync(input: {
   const out: SyncAction[] = [];
   for (const p of input.presets) {
     const base = { presetKey: p.key, presetName: p.name, verification: p.verification, changes: [] as string[], warnings: [] as string[] };
-    const exam = input.exams.find((e) => p.examSlugs.includes(e.slug.toLowerCase()));
+    const exam = findExamBySlugs(input.exams, p.examSlugs); // S41: "cgl" and "exam-cgl" are the same exam
     if (!exam) {
       out.push({ ...base, kind: 'skip', warnings: [`exam not found (looked for slug: ${p.examSlugs.join(', ')}) — create the exam first`] });
       continue;

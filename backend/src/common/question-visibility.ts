@@ -21,6 +21,8 @@
  * condition needs to be added to "published" in the future, add it here
  * ONCE and every caller picks it up automatically.
  */
+import { isEnglishSubjectSlug } from './slug-core';
+
 export const PUBLISHED_QUESTION_WHERE = {
   isApproved: true,
   isActive: true,
@@ -80,7 +82,7 @@ export function kindWhere(kind?: QuestionKind): { year?: null | { not: null } } 
 // "admin ne Noun ke 200 questions upload kiye par students ko nahi dikh rahe"
 // bug. Shared here so upload + approve + read use the same rule.
 // ---------------------------------------------------------------------------
+// S41: one rule in every spelling (english / sub-english / english_language ...) - see common/slug-core.ts.
 export function isHindiExemptSubjectSlug(slug?: string | null): boolean {
-  const s = (slug ?? '').toLowerCase().trim();
-  return s === 'english' || s === 'sub-english' || s.startsWith('english-') || s.startsWith('english_');
+  return isEnglishSubjectSlug(slug);
 }

@@ -334,6 +334,23 @@ export class QuestionBankPracticeService {
       take: 50000,
     });
 
+    // S44: practice follows the SYLLABUS, not the exam badge. A new exam (RRB, banking ...) usually has only a few practice
+    // questions of its own while the same chapter / topic already has hundreds tagged with another exam - the student used to
+    // get a 3-question set (or "not available"). Now the exam's own questions come first and the same-scope practice of the
+    // other exams fills the rest of the set. The exam filter still decides the ORDER, never hides the student's own exam.
+    let ownIds: Set<string> | null = null;
+    if (scope.examId && poolRows.length < size) {
+      const own = new Set<string>(poolRows.map((r: { id: string }) => r.id));
+      ownIds = own;
+      const others = await this.prisma.question.findMany({
+        where: { ...where, examId: { not: null, notIn: [scope.examId] } },
+        select: { id: true, difficulty: true },
+        orderBy: { createdAt: 'asc' },
+        take: 50000,
+      });
+      poolRows = [...poolRows, ...others.filter((r: { id: string }) => !own.has(r.id))];
+    }
+
     // PYQ fallback (weak-topic practice only — see allowPyqFallback
     // doc-comment on getOrCreateSet): when this exact scope has fewer
     // practice-only questions than a full set needs (including zero), top
@@ -401,7 +418,12 @@ export class QuestionBankPracticeService {
     // the student warms up and finishes on the hardest questions.
     const diffById = new Map<string, string>(poolRows.map((r: any) => [r.id, String(r.difficulty ?? 'MEDIUM')]));
     let chosen: string[];
-    if (unseen.length >= size) {
+    if (ownIds && unseen.length >= size) {
+      // topped-up set: every unseen question of the student's own exam, then a level-balanced fill from the other exams
+      const own = ownIds;
+      const mine = unseen.filter((id: string) => own.has(id));
+      chosen = [...mine, ...this.pickBalancedByLevel(unseen.filter((id: string) => !own.has(id)), diffById, size - mine.length)];
+    } else if (unseen.length >= size) {
       chosen = this.pickBalancedByLevel(unseen, diffById, size);
     } else {
       // Pool exhausted for this student: everything unseen + the
@@ -1124,7 +1146,7 @@ export class QuestionBankPracticeService {
 
     const examIds = examGroups.map((g) => g.examId).filter((id): id is string => Boolean(id));
     const exams = examIds.length
-      ? await this.prisma.exam.findMany({ where: { id: { in: examIds } }, select: { id: true, name: true } })
+      ? await this.prisma.exam.findMany({ where: { id: { in: examIds }, isActive: true }, select: { id: true, name: true } }) // S44: a hidden exam is not offered
       : [];
     const examCountMap = new Map(examGroups.map((g) => [g.examId, g._count._all]));
 

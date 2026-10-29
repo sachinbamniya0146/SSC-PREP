@@ -14,6 +14,7 @@
  * Pure (no Prisma, no Nest) so it is table-testable; the DB lookups live in tests/marking-scheme.ts.
  */
 import { SectionPlan, negativeUnderPlan, readPatternSections, sectionIndexForSubject } from './section-plan';
+import { subjectCoreKey } from './slug-core';
 
 export type MarkingSource = 'plan' | 'pattern' | 'question';
 
@@ -48,7 +49,7 @@ export type PatternForMarking = {
   sections: unknown;
 };
 
-const round3 = (n: number) => Math.round(n * 1000) / 1000;
+const round4 = (n: number) => Math.round(n * 10000) / 10000;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Turns an ExamPattern row into a marking scheme. null = the pattern has no usable section (marks and questions > 0). */
@@ -61,7 +62,8 @@ export function buildMarkingScheme(pattern: PatternForMarking | null | undefined
     name: r.name,
     subjectSlug: r.subjectSlug ?? null,
     questions: r.questions as number,
-    marksPerQuestion: round3((r.marks as number) / (r.questions as number)),
+    // 4 decimals (S42): UPSC CDS gives 100 marks for 120 questions; 0.833 x 120 = 99.96, 0.8333 x 120 rounds to the full 100
+    marksPerQuestion: round4((r.marks as number) / (r.questions as number)),
     negative: r.negativeMarks != null ? r.negativeMarks : patternNeg,
   }));
   const first = sections[0];
@@ -80,7 +82,8 @@ export function buildMarkingScheme(pattern: PatternForMarking | null | undefined
 export function schemeRuleFor(scheme: MarkingScheme, subjectSlug?: string | null): { marks: number; negative: number } | null {
   const slug = (subjectSlug ?? '').trim().toLowerCase();
   if (slug) {
-    const hit = scheme.sections.find((s) => s.subjectSlug && s.subjectSlug === slug);
+    // S41: exact slug first, then the same subject in its other spelling ("sub-english" == "english").
+    const hit = scheme.sections.find((s) => s.subjectSlug && s.subjectSlug === slug) ?? scheme.sections.find((s) => s.subjectSlug && subjectCoreKey(s.subjectSlug) === subjectCoreKey(slug));
     if (hit) return { marks: hit.marksPerQuestion, negative: hit.negative };
   }
   return scheme.uniform;

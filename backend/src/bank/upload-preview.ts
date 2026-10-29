@@ -13,6 +13,7 @@
 import { normalizeTaxonomyKey } from '../common/taxonomy-key';
 import { isHindiExemptSubjectSlug } from '../common/question-visibility';
 import { rowKind, RowKind } from '../common/row-kind';
+import { subjectCoreKey } from '../common/slug-core';
 
 /** Practice questions wanted per sub-topic (Sachin: "har topic/subtopic ke 100 question"). */
 export const PRACTICE_TARGET = 100;
@@ -59,6 +60,14 @@ function matchRef<T extends NamedRef>(raw: string, list: readonly T[]): T | unde
   return key ? list.find((x) => normalizeTaxonomyKey(x.name) === key || normalizeTaxonomyKey(x.slug) === key) : undefined;
 }
 
+/** S41: a subject cell also matches the same subject in its other spelling ("sub-english" == "english"). */
+function matchSubject<T extends NamedRef>(raw: string, list: readonly T[]): T | undefined {
+  const hit = matchRef(raw, list);
+  if (hit) return hit;
+  const core = subjectCoreKey(firstLine(raw));
+  return core ? list.find((x) => subjectCoreKey(x.slug) === core) : undefined;
+}
+
 export function previewKind(r: Pick<PreviewRow, 'yearRaw' | 'examDate'>, practiceOnly: boolean): RowKind {
   if (practiceOnly) return 'PRACTICE';
   const y = r.yearRaw.trim();
@@ -83,7 +92,7 @@ export function rowsWithoutHindi(rows: readonly PreviewRow[], subjects: readonly
   const out: number[] = [];
   for (const r of rows) {
     if (r.hasHindi) continue;
-    const s = matchRef(r.subject, subjects);
+    const s = matchSubject(r.subject, subjects);
     if (s && isHindiExemptSubjectSlug(s.slug)) continue;
     out.push(r.row);
   }
@@ -119,7 +128,7 @@ export interface PracticePlanRow {
 export function buildPracticePlan(rows: readonly PreviewRow[], lists: TaxonomyLists, existing: ReadonlyMap<string, number>): { plan: PracticePlanRow[]; truncated: boolean } {
   const groups = new Map<string, PracticePlanRow>();
   for (const r of rows) {
-    const subject = matchRef(r.subject, lists.subjects);
+    const subject = matchSubject(r.subject, lists.subjects);
     const chapters = subject ? lists.chapters.filter((c) => c.subjectId === subject.id) : lists.chapters;
     const chapter = matchRef(r.chapter, chapters) ?? matchRef(r.chapter, lists.chapters);
     const topicName = firstLine(r.topic);

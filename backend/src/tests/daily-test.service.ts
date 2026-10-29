@@ -4,6 +4,7 @@ import { dropDuplicateQuestions } from '../common/question-fingerprint';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { istDateKey } from '../gamification/gamification.service';
+import { HINDI_EXEMPT_SUBJECT_FILTER, subjectResolver } from '../common/slug-core';
 
 // BUGFIX: "today" for the Daily Test must be an IST calendar day (this is a
 // product for Indian government-exam aspirants, and gamification streaks
@@ -151,12 +152,11 @@ export class DailyTestService {
     let sectionLabels: string[] = [];
     if (pattern) {
       const sections = (pattern.sections as any[]) || [];
-      const subjectBySlug = new Map(
-        (await this.prisma.subject.findMany({ select: { id: true, slug: true } })).map((s) => [s.slug, s.id]),
-      );
+      const subjectIdsOf = subjectResolver(await this.prisma.subject.findMany({ select: { id: true, slug: true } })); // S41: both spellings
       for (const sec of sections) {
         const target = Math.max(1, Math.round(N * ((sec.questions || 0) / (pattern.totalQuestions || 100))));
-        const sid = sec.subjectSlug ? subjectBySlug.get(sec.subjectSlug) : undefined;
+        const sidList = sec.subjectSlug ? subjectIdsOf(sec.subjectSlug) : [];
+        const sid = sidList.length ? sidList : undefined;
         if (sid) {
           const ids = await this.composeIds(plan.examId, sid, target);
           if (ids.length >= Math.max(1, Math.floor(target / 2))) {
@@ -236,16 +236,16 @@ export class DailyTestService {
 
   // ---- composition helpers ----
 
-  private async composeIds(examId: string, subjectId: string | undefined, n: number): Promise<string[]> {
+  private async composeIds(examId: string, subjectId: string | string[] | undefined, n: number): Promise<string[]> {
     const rows: any[] = await this.prisma.question.findMany({
       where: {
         ...PUBLISHED_QUESTION_WHERE,
         examId,
-        ...(subjectId ? { subjectId } : {}),
+        ...(Array.isArray(subjectId) ? { subjectId: { in: subjectId } } : subjectId ? { subjectId } : {}),
         // BUGFIX: subject "english" needs no Hindi translation — same fix
         // as tests.service.ts/bank.service.ts (the question itself IS the
         // English-language test).
-        OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+        OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
       },
       orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
       take: 1000,

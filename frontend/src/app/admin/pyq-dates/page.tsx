@@ -90,7 +90,7 @@ export default function AdminPyqDatesPage() {
   React.useEffect(() => {
     if (!ok) return;
     void loadOverview();
-    fetchAuth(`${API_BASE}/bank/meta`).then(async (r) => { if (r.ok) { const d = await r.json(); setExams(d?.exams ?? []); } }).catch(() => undefined);
+    fetchAuth(`${API_BASE}/bank/meta`).then(async (r) => { if (r.ok) { const d = await r.json(); setExams(d?.allExams ?? d?.exams ?? []); } }).catch(() => undefined);
   }, [ok, loadOverview]);
   React.useEffect(() => { if (ok) void loadItems(); }, [ok, loadItems]);
 

@@ -127,7 +127,10 @@ function EditInner() {
     (async () => {
       try {
         const [e, t] = await Promise.all([fetchAuth(`${API_BASE}/bank/meta`), fetchAuth(`${API_BASE}/bank/admin/taxonomy/tree`)]);
-        if (e.ok) setExams(((await e.json()) as { exams?: Exam[] })?.exams ?? []);
+        if (e.ok) {
+          const d = (await e.json()) as { exams?: Exam[]; allExams?: Exam[] };
+          setExams(d?.allExams ?? d?.exams ?? []);
+        }
         if (t.ok) setTax(await t.json());
       } catch {
         setError("Could not load the exam / syllabus list — please refresh the page.");

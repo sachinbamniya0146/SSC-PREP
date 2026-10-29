@@ -55,7 +55,7 @@ export default function AdminPyqExportPage() {
     (async () => {
       try {
         const [m, t] = await Promise.all([fetchAuth(`${API_BASE}/bank/meta`), fetchAuth(`${API_BASE}/bank/admin/taxonomy/tree`)]);
-        if (m.ok) { const d = await m.json(); setExams(Array.isArray(d?.exams) ? d.exams : []); }
+        if (m.ok) { const d = await m.json(); setExams(Array.isArray(d?.allExams) ? d.allExams : Array.isArray(d?.exams) ? d.exams : []); }
         if (t.ok) { const d = await t.json(); setTax(Array.isArray(d) ? d : []); }
       } catch { /* filters just stay empty */ }
     })();

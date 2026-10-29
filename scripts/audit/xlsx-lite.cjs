@@ -65,7 +65,7 @@ function unzipStore(buf) {
 
 // ---------- xlsx ----------
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const unesc = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#10;/g, '\n').replace(/&amp;/g, '&');
+const unesc = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d))).replace(/&amp;/g, '&');
 function colLetter(i) { let n = i, s = ''; do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0); return s; }
 function colIndex(letters) { let n = 0; for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; }
 const utils = {
@@ -121,14 +121,19 @@ function read(buf) {
   const wbXml = z['xl/workbook.xml'] || '';
   const names = [...wbXml.matchAll(/<sheet\b[^>]*name="([^"]+)"/g)].map((m) => unesc(m[1]));
   const wb = { SheetNames: names, Sheets: {} };
+  // S43: shared strings too (files written by Excel / openpyxl), so a real workbook can be read in a sandbox test
+  const shared = [...(z['xl/sharedStrings.xml'] || '').matchAll(/<si>(.*?)<\/si>/gs)].map((m) => [...m[1].matchAll(/<t[^>]*>(.*?)<\/t>/gs)].map((x) => unesc(x[1])).join(''));
   names.forEach((n, i) => {
     const xml = z[`xl/worksheets/sheet${i + 1}.xml`] || '';
     const ws = {};
     let maxC = 0, maxR = 0;
-    for (const m of xml.matchAll(/<c r="([A-Z]+)(\d+)"([^>]*)>(.*?)<\/c>/gs)) {
-      const t = /<t[^>]*>(.*?)<\/t>/s.exec(m[4]);
-      const v = /<v>(.*?)<\/v>/s.exec(m[4]);
-      ws[`${m[1]}${m[2]}`] = t ? { t: 's', v: unesc(t[1]) } : { t: 'n', v: v ? Number(v[1]) : '' };
+    for (const m of xml.matchAll(/<c r="([A-Z]+)(\d+)"([^>]*?)(?:\/>|>(.*?)<\/c>)/gs)) {
+      const body = m[4] || '';
+      const t = /<t[^>]*>(.*?)<\/t>/s.exec(body);
+      const v = /<v>(.*?)<\/v>/s.exec(body);
+      if (!t && !v) continue;
+      const isShared = /\bt="s"/.test(m[3]);
+      ws[`${m[1]}${m[2]}`] = t ? { t: 's', v: unesc(t[1]) } : isShared ? { t: 's', v: shared[Number(v[1])] ?? '' } : { t: 'n', v: v ? Number(v[1]) : '' };
       maxC = Math.max(maxC, colIndex(m[1])); maxR = Math.max(maxR, Number(m[2]));
     }
     ws['!ref'] = `A1:${colLetter(maxC)}${Math.max(maxR, 1)}`;

@@ -8,6 +8,7 @@ import { BankUploadService } from './bank-upload.service';
 import { normalizeMathText, normalizeQuestionMath } from '../common/math-text';
 import { normalizeShift } from '../common/shift';
 import { normalizeExamTier, normalizeTierPaper, parsePaperQuestionNo } from '../common/pyq-paper-key';
+import { isHindiExemptSubjectSlug } from '../common/question-visibility';
 
 // =============================================================================
 // QuestionEditService  (NEW — Oct 3 2026)
@@ -421,7 +422,7 @@ export class QuestionEditService {
     // ---- publish state ----
     const hasHindi = !!questionTextHindi.trim();
     const subjectExempt = subjectId
-      ? !!(await this.prisma.subject.findFirst({ where: { id: subjectId, slug: 'english' }, select: { id: true } }))
+      ? isHindiExemptSubjectSlug((await this.prisma.subject.findUnique({ where: { id: subjectId }, select: { slug: true } }))?.slug)
       : false;
     const imageOnly = !questionText.trim() && !!questionImageUrl;
     const status = has('status') ? String(body.status) : '';

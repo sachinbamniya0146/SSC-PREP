@@ -8,6 +8,7 @@
  *
  * Everything here is pure (no Prisma, no Date.now()) so it is unit-testable and shared by tests.service.ts.
  */
+import { subjectCoreKey } from './slug-core';
 
 export type PatternSectionInput = {
   name: string;
@@ -132,7 +133,9 @@ export function sectionIndexAt(plan: SectionPlan, elapsedMs: number): number {
 export function sectionIndexForSubject(plan: SectionPlan, subjectSlug: string | null | undefined): number {
   const slug = (subjectSlug ?? '').trim().toLowerCase();
   if (slug) {
-    const hit = plan.sections.find((s) => s.subjectSlug && s.subjectSlug === slug);
+    // S41: exact slug first, then the same subject in its other spelling ("sub-reasoning" == "reasoning"); before this a
+    // question saved under the Excel spelling landed in the LAST section of a strict-timer mock.
+    const hit = plan.sections.find((s) => s.subjectSlug && s.subjectSlug === slug) ?? plan.sections.find((s) => s.subjectSlug && subjectCoreKey(s.subjectSlug) === subjectCoreKey(slug));
     if (hit) return hit.index;
   }
   return plan.sections.length - 1;

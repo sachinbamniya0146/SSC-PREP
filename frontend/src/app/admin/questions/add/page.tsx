@@ -121,7 +121,7 @@ export default function AddQuestionPage() {
         const [e, t] = await Promise.all([fetchAuth(`${API_BASE}/bank/meta`), fetchAuth(`${API_BASE}/bank/admin/taxonomy/tree`)]);
         if (e.ok) {
           const d = await e.json();
-          setExams(Array.isArray(d?.exams) ? d.exams : []);
+          setExams(Array.isArray(d?.allExams) ? d.allExams : Array.isArray(d?.exams) ? d.exams : []);
         }
         if (t.ok) setTax(await t.json());
       } catch {

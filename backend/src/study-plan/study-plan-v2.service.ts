@@ -20,6 +20,7 @@ import { istDateKey } from '../gamification/gamification.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { applyAttemptToChapters, CHAPTER_COMPLETE_PCT } from './study-plan-progress.util';
 import { activeStreak, bucketAnswered, clampDailyTarget, istDayStart, istKey, lastDayKeys, paceOf } from './study-plan-pace.util';
+import { HINDI_EXEMPT_SUBJECT_FILTER, subjectCoreKey } from '../common/slug-core';
 
 interface BiMsg {
   en: string;
@@ -111,8 +112,10 @@ export class StudyPlanV2Service {
     ]);
     const slugs = new Set<string>();
     for (const p of patterns) for (const sec of (p.sections as any[]) || []) if (sec?.subjectSlug) slugs.add(String(sec.subjectSlug));
+    // S41: a pattern's "reasoning" also means the Excel's "sub-reasoning" (and the other way round).
+    const cores = new Set([...slugs].map((s) => subjectCoreKey(s)));
     const bySlug = slugs.size
-      ? await this.prisma.subject.findMany({ where: { slug: { in: [...slugs] } }, select: { id: true } })
+      ? (await this.prisma.subject.findMany({ select: { id: true, slug: true } })).filter((s: { slug: string }) => cores.has(subjectCoreKey(s.slug)))
       : [];
     return [...new Set([...bySlug.map((s) => s.id), ...qSubjects.map((q) => q.subjectId).filter((x): x is string => !!x)])];
   }
@@ -353,7 +356,8 @@ export class StudyPlanV2Service {
     const pattern = await this.prisma.examPattern.findFirst({ where: { examId: test.examId, isActive: true }, orderBy: { totalQuestions: 'desc' } });
     const sections = ((pattern?.sections as any[]) ?? []).filter(Boolean);
     const subjectRows = await this.prisma.subject.findMany({ select: { id: true, slug: true } });
-    const slugToId = new Map(subjectRows.map((s) => [s.slug, s.id]));
+    // S41: subjects are keyed by their CORE slug, so "reasoning" and "sub-reasoning" share one weight and one pool.
+    const coreOfId = new Map(subjectRows.map((s) => [s.id, subjectCoreKey(s.slug)]));
 
     // Pool: published questions of the chosen chapters. Preference order:
     // (this exam & never seen) > (other exam & never seen) > (this exam & seen) > (other & seen).
@@ -362,7 +366,7 @@ export class StudyPlanV2Service {
         where: {
           ...PUBLISHED_QUESTION_WHERE,
           chapterId: { in: chapterIds },
-          OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+          OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
         },
         select: { id: true, chapterId: true, subjectId: true, examId: true, optionsJson: true },
         take: 6000,
@@ -392,8 +396,9 @@ export class StudyPlanV2Service {
     }
     for (const t of [...tiers.keys()].sort((a, b) => a - b)) {
       for (const r of shuffled(tiers.get(t)!)) {
-        if (!pool.has(r.subjectId)) pool.set(r.subjectId, new Map());
-        const ch = pool.get(r.subjectId)!;
+        const sk = coreOfId.get(r.subjectId) ?? r.subjectId;
+        if (!pool.has(sk)) pool.set(sk, new Map());
+        const ch = pool.get(sk)!;
         if (!ch.has(r.chapterId)) ch.set(r.chapterId, []);
         ch.get(r.chapterId)!.push(r.id);
       }
@@ -407,7 +412,7 @@ export class StudyPlanV2Service {
     const weightBySubject = new Map<string, number>();
     const sectionOrder = new Map<string, number>();
     sections.forEach((sec, idx) => {
-      const sid = sec.subjectSlug ? slugToId.get(String(sec.subjectSlug)) : undefined;
+      const sid = sec.subjectSlug ? subjectCoreKey(String(sec.subjectSlug)) : undefined;
       if (!sid) return;
       weightBySubject.set(sid, (weightBySubject.get(sid) ?? 0) + (Number(sec.questions) || 0));
       if (!sectionOrder.has(sid)) sectionOrder.set(sid, idx);

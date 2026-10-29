@@ -30,6 +30,7 @@ import { setNumberForPaper } from './pyq-mock-titles';
 import { pickQuestionsSheetName } from '../common/excel-sheet';
 import { normalizeShiftOrUndefined } from '../common/shift';
 import { buildExamAliasMap, examAliasKey } from '../common/exam-ref';
+import { lookupSubject, subjectAliasMap } from '../common/slug-core';
 import { KindTally, clearPaperFields, newKindTally, questionNoWarning, rowKind, tallyRow } from '../common/row-kind';
 import { compareQuestions } from '../common/duplicate-compare';
 import { buildZip } from '../common/zip';
@@ -2628,7 +2629,7 @@ export class BankUploadService {
     // naming convention, which is already globally unique in practice).
     // 29 Oct 2026 (S37): the slug, the id, the exam code and the exam name (any case) all find the exam
     const examSlugToId = buildExamAliasMap(exams);
-    const subjectSlugToId = new Map(subjects.map(s => [s.slug, s.id]));
+    const subjectSlugToId = subjectAliasMap(subjects); // S41: exact slug first, then the other spelling / the name
     const chapterSlugToId = new Map(chapters.map(c => [c.slug, c.id]));
     const chapterSlugInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${c.slug}`, c.id]));
     const topicSlugInChapterToId = new Map(topics.map(t => [`${t.chapterId}::${t.slug}`, t.id]));
@@ -2942,7 +2943,7 @@ export class BankUploadService {
 
     // 29 Oct 2026 (S37): the slug, the id, the exam code and the exam name (any case) all find the exam
     const examSlugToId = buildExamAliasMap(exams);
-    const subjectSlugToId = new Map(subjects.map(s => [s.slug, s.id]));
+    const subjectSlugToId = subjectAliasMap(subjects); // S41: exact slug first, then the other spelling / the name
     const chapterSlugToId = new Map(chapters.map(c => [c.slug, c.id]));
     const chapterSlugInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${c.slug}`, c.id]));
     const topicSlugInChapterToId = new Map(topics.map(t => [`${t.chapterId}::${t.slug}`, t.id]));
@@ -3313,8 +3314,9 @@ export class BankUploadService {
       const examHit = examSlugToId.get(question.examId) ?? examSlugToId.get(examAliasKey(question.examId));
       if (examHit) question.examId = examHit;
     }
-    if (question.subjectId && subjectSlugToId.has(question.subjectId)) {
-      question.subjectId = subjectSlugToId.get(question.subjectId)!;
+    if (question.subjectId) {
+      const subjectHit = lookupSubject(subjectSlugToId, question.subjectId);
+      if (subjectHit) question.subjectId = subjectHit;
     }
     if (question.chapterId) {
       const scoped = chapterSlugInSubjectToId.get(`${question.subjectId}::${question.chapterId}`);

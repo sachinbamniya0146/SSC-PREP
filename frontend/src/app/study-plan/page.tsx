@@ -56,7 +56,11 @@ function StudyPlanPageInner() {
       const metaRes = await fetchAuth(`${API_BASE}/bank/meta`);
       if (!metaRes.ok) throw new Error("meta");
       const meta = await metaRes.json().catch(() => null);
-      setExams(Array.isArray(meta?.exams) ? meta.exams : []);
+      // S41: /bank/meta lists only exams that have questions; a plan made earlier keeps its own exam in the list.
+      const visible: Exam[] = Array.isArray(meta?.exams) ? meta.exams : [];
+      const all: Exam[] = Array.isArray(meta?.allExams) ? meta.allExams : [];
+      const own = plan?.examId && !visible.some((x) => x.id === plan.examId) ? all.find((x) => x.id === plan.examId) : undefined;
+      setExams(own ? [...visible, own] : visible);
       if (plan?.id) {
         setExisting({ examId: plan.examId, targetDate: String(plan.targetDate).slice(0, 10) });
         setSelectedExam(plan.examId);

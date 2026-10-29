@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
 import { PdfRenderer } from './pdf-renderer';
 import { buildPaperHtml, buildAnswerKeyHtml, PdfQuestion, PdfTestMeta } from './pdf-templates';
+import { HINDI_EXEMPT_SUBJECT_FILTER } from '../common/slug-core';
 
 @Injectable()
 export class PdfExportService {
@@ -30,7 +31,7 @@ export class PdfExportService {
         ...PUBLISHED_QUESTION_WHERE,
         // BUGFIX: subject "english" needs no Hindi translation — same fix
         // as tests.service.ts/bank.service.ts.
-        OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }],
+        OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER],
         examId: { not: null },
       },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
@@ -306,7 +307,7 @@ export class PdfExportService {
     const rows: any[] = await this.prisma.question.findMany({
       // BUGFIX: subject "english" needs no Hindi translation — same fix as
       // tests.service.ts/bank.service.ts.
-      where: { ...PUBLISHED_QUESTION_WHERE, chapterId, OR: [{ questionTextHindi: { not: '' } }, { subject: { slug: 'english' } }] },
+      where: { ...PUBLISHED_QUESTION_WHERE, chapterId, OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER] },
       include: { chapter: { select: { name: true } }, exam: { select: { name: true } } },
       orderBy: [{ year: 'desc' }, { createdAt: 'asc' }],
       take: 150,
