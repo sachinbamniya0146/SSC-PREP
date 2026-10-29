@@ -7,7 +7,7 @@ export interface TemplateColumn {
   hint: string;           // English help shown as a cell comment + in the "Columns guide" sheet
   example: string;
   width: number;
-  list?: 'answers' | 'difficulty' | 'exams' | 'subjects' | 'chapters';
+  list?: 'answers' | 'difficulty' | 'exams' | 'subjects' | 'chapters' | 'shifts' | 'tiers' | 'papers';
 }
 
 /** Order = order of the columns in the sheet. `id` is first: blank = new question, filled = update that question. */
@@ -38,6 +38,54 @@ export const PRACTICE_COLUMNS: TemplateColumn[] = [
 
 export const ANSWER_LIST = ['A', 'B', 'C', 'D'];
 export const DIFFICULTY_LIST = ['EASY', 'MEDIUM', 'HARD'];
+export const SHIFT_LIST = ['Shift 1', 'Shift 2', 'Shift 3', 'Shift 4'];
+export const TIER_LIST = ['TIER_1', 'TIER_2'];
+export const TIER_PAPER_LIST = ['PAPER_1', 'PAPER_2', 'PAPER_3'];
+
+/**
+ * "PYQ + Practice" template (S37, 29 Oct 2026): the 34 columns of the Master Package v3/v4 sheet, in the SAME order,
+ * so a file made from the Master Package uploads as it is. One row = one question; a row with year / examDate is a PYQ,
+ * a row with both empty is a practice question (shift, paperCode, examDate, examTier, tierPaper and questionNo are then ignored).
+ */
+export const MIXED_COLUMNS: TemplateColumn[] = [
+  { key: 'examId', required: true, hint: 'Exam slug from the Reference IDs sheet. An exam that is not there yet (Selection Post, Railway ...) must first be created in Admin -> Exams.', example: 'exam-cgl', width: 16, list: 'exams' },
+  { key: 'subjectId', required: true, hint: 'Subject slug - dropdown.', example: 'sub-quantitative_aptitude', width: 24, list: 'subjects' },
+  { key: 'chapterId', required: true, hint: 'Chapter slug or the exact chapter name (as in the book / syllabus). The chapter must already exist.', example: 'chap-percentage-quantitative_aptitude', width: 30, list: 'chapters' },
+  { key: 'topicId', required: false, hint: 'Topic name or slug (from the syllabus). A new name is created under the chapter automatically.', example: 'Basic Percentage Concepts', width: 24 },
+  { key: 'subTopicId', required: false, hint: 'Sub-topic name or slug. A new name is created under the topic automatically. Practice questions are counted per sub-topic (target 100).', example: 'Percentage change', width: 22 },
+  { key: 'questionText', required: true, hint: 'English question text. No line breaks inside the cell.', example: 'What is 20% of 150?', width: 46 },
+  { key: 'questionTextHindi', required: false, hint: 'Hindi question text. If empty the question is saved but students do NOT see it (English subject is exempt: it needs no Hindi question).', example: '150 का 20% क्या है?', width: 40 },
+  { key: 'questionDiagramType', required: false, hint: 'Venn / figure code V1..V8 (see the Diagram types sheet of the Master Package). Image-based and non-verbal questions are normally NOT put in the Excel.', example: '', width: 14 },
+  { key: 'questionDiagramLabels', required: false, hint: 'Labels of the diagram, separated by commas.', example: '', width: 18 },
+  { key: 'optionA', required: true, hint: 'Option A text only (no "A)" prefix).', example: '25', width: 16 },
+  { key: 'optionA_Hindi', required: false, hint: 'Option A in Hindi (English subject: leave empty, options are never translated).', example: '25', width: 16 },
+  { key: 'optionB', required: true, hint: 'Option B text only.', example: '30', width: 16 },
+  { key: 'optionB_Hindi', required: false, hint: 'Option B in Hindi.', example: '30', width: 16 },
+  { key: 'optionC', required: true, hint: 'Option C text only.', example: '35', width: 16 },
+  { key: 'optionC_Hindi', required: false, hint: 'Option C in Hindi.', example: '35', width: 16 },
+  { key: 'optionD', required: true, hint: 'Option D text only.', example: '40', width: 16 },
+  { key: 'optionD_Hindi', required: false, hint: 'Option D in Hindi.', example: '40', width: 16 },
+  { key: 'optionDiagramTypes', required: false, hint: 'Diagram codes of the options, separated by | (V1|V3|V6|V2).', example: '', width: 16 },
+  { key: 'optionDiagramLabels', required: false, hint: 'Labels of the option diagrams (| between options, commas between labels).', example: '', width: 16 },
+  { key: 'questionImageUrl', required: false, hint: 'Only when a real image asset exists. Image questions are normally added by the admin by hand.', example: '', width: 16 },
+  { key: 'optionImageUrls', required: false, hint: 'Image links of the options, separated by |.', example: '', width: 16 },
+  { key: 'correctAnswer', required: true, hint: 'Only A, B, C or D - dropdown.', example: 'B', width: 14, list: 'answers' },
+  { key: 'explanation', required: true, hint: 'English solution ("Detailed Logical Explanation:" with numbered steps). A row without a solution is NOT uploaded.', example: 'Detailed Logical Explanation:\n1. 20% of 150 = 150 × 20 / 100 = 30', width: 46 },
+  { key: 'explanationHindi', required: false, hint: 'Hindi solution ("विस्तृत तार्किक व्याख्या:" with numbered steps).', example: 'विस्तृत तार्किक व्याख्या:\n1. 150 का 20% = 150 × 20 / 100 = 30', width: 40 },
+  { key: 'year', required: false, hint: 'PYQ row: year of the exam (year of examDate). Practice row: EMPTY.', example: '2025', width: 10 },
+  { key: 'shift', required: false, hint: 'PYQ row: Shift 1 / 2 / 3 / 4 exactly as printed. Morning=Shift 1, Afternoon=Shift 2, Evening=Shift 3 only when the source says so. Not printed: EMPTY. Practice row: EMPTY.', example: 'Shift 2', width: 12, list: 'shifts' },
+  { key: 'paperCode', required: false, hint: 'PYQ row: label like SSC-CGL-T-I-12-Sep-2025-S2 (only a label, grouping uses exam + tier + date + shift). Practice row: EMPTY.', example: 'SSC-CGL-T-I-12-Sep-2025-S2', width: 28 },
+  { key: 'marks', required: false, hint: 'Marks of the question as per THAT exam (CGL Tier 1 = 2, Tier 2 = 3; other exams differ). Empty = 1.', example: '2', width: 10 },
+  { key: 'negativeMarks', required: false, hint: 'Negative marks as per THAT exam (CGL Tier 1 = 0.5). Empty = 0.25.', example: '0.5', width: 14 },
+  { key: 'difficulty', required: false, hint: 'EASY / MEDIUM / HARD. Empty = MEDIUM.', example: 'MEDIUM', width: 12, list: 'difficulty' },
+  { key: 'examDate', required: false, hint: 'PYQ row: the REAL exam date, YYYY-MM-DD. Verified from the PDF or an official source, never guessed. Practice row: EMPTY. (Only the admin ever sees dates.)', example: '2025-09-12', width: 14 },
+  { key: 'examTier', required: false, hint: 'PYQ row: TIER_1 or TIER_2 (Railway CBT-1 = TIER_1, CBT-2 = TIER_2). Practice row: EMPTY.', example: 'TIER_1', width: 12, list: 'tiers' },
+  { key: 'tierPaper', required: false, hint: 'Optional: PAPER_1 / PAPER_2 / PAPER_3 when one tier has several papers on the same day. Empty = PAPER_1.', example: '', width: 12, list: 'papers' },
+  { key: 'questionNo', required: false, hint: 'PYQ row: the question number printed in the ORIGINAL paper (1-100). Not known: EMPTY (never a chapter-compilation serial number). Practice row: EMPTY.', example: '7', width: 12 },
+];
+
+/** Columns that only a PYQ row fills - a practice row leaves (and the importer ignores) every one of them. */
+export const MIXED_PYQ_ONLY_KEYS: readonly string[] = ['year', 'shift', 'paperCode', 'examDate', 'examTier', 'tierPaper', 'questionNo'];
 
 export function headerLabel(c: TemplateColumn): string {
   return c.required ? `${c.key}*` : c.key;

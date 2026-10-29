@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { Response } from 'express';
+import * as XLSX from 'xlsx';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -31,6 +32,43 @@ export class BankAdminController {
       q?.skip ? parseInt(q.skip, 10) || 0 : 0,
       q?.take ? parseInt(q.take, 10) || 30 : 30,
     );
+  }
+
+  // GET /bank/admin/manage/existing?chapterId=..&topicId=..&subTopicId=..&kind=pyq|practice&q=..&skip=&take=
+  // -> { counts: { total, pyq, practice, live, hidden, practiceTarget, practiceMissing }, total, visibleTotal, data: [...] }  (S39, admin only)
+  @Department('QUESTIONS', 'PRACTICE')
+  @Get('existing')
+  existing(@Query() q: any) {
+    return this.admin.existing(
+      this.admin.parseFilter(q),
+      q?.skip ? parseInt(q.skip, 10) || 0 : 0,
+      q?.take ? parseInt(q.take, 10) || 20 : 20,
+    );
+  }
+
+  // GET /bank/admin/manage/practice-gauge?subjectId=..   (S39) -> { target, rows: [lowest coverage first], totals }
+  @Department('QUESTIONS', 'PRACTICE')
+  @Get('practice-gauge')
+  practiceGauge(@Query('subjectId') subjectId?: string) {
+    return this.admin.practiceGauge(subjectId?.trim() || undefined);
+  }
+
+  // GET /bank/admin/manage/practice-gauge/export?subjectId=..  (S39) -> Excel of the same rows (what to upload next)
+  @Department('QUESTIONS', 'PRACTICE')
+  @Get('practice-gauge/export')
+  async practiceGaugeExport(@Query('subjectId') subjectId: string | undefined, @Res() res: Response) {
+    const g = await this.admin.practiceGauge(subjectId?.trim() || undefined);
+    const head = ['Subject', 'Chapter', 'Topic', 'Sub-topic', 'Practice (live)', 'Target', 'Missing', 'Done %', 'PYQ (live)'];
+    const aoa = [head, ...g.rows.map((r) => [r.subject, r.chapter, r.topic ?? '', r.subTopic ?? '', r.practice, r.target, r.missing, r.pct, r.pyq])];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 22 }, { wch: 28 }, { wch: 28 }, { wch: 28 }, { wch: 14 }, { wch: 8 }, { wch: 9 }, { wch: 8 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Practice gauge');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    const name = `practice-coverage-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(buf);
   }
 
   // GET /bank/admin/manage/export?<same filters as the list>&format=excel|csv|json&split=none|subject|chapter|subject_chapter|year|shift|exam&includeAll=1 (pending/hidden bhi)

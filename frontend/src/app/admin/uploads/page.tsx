@@ -72,7 +72,35 @@ interface UploadResult {
   papers?: Array<{ key: string; examId: string; examTier: string; tierPaper: string; examDate: string; shift: string | null; rows: number }>;
   pending?: Array<{ row: number; reason: string; message: string }>;
   pendingTotal?: number;
+  // 29 Oct 2026 (S37): one Excel = PYQ rows + practice rows
+  pyqRows?: number;
+  practiceRows?: number;
+  pyqWithoutQuestionNo?: number;
+  practicePlan?: PracticePlanRow[];
+  practicePlanTruncated?: boolean;
+  unknownExams?: Array<{ value: string; rows: number[]; count: number }>;
+  hindiMissingRows?: number[];
 }
+
+interface PracticePlanRow {
+  subject?: string;
+  chapterId?: string;
+  subjectId?: string;
+  topicId?: string;
+  subTopicId?: string;
+  chapter: string;
+  topic: string;
+  subTopic: string;
+  count: number;
+  existing: number;
+  after: number;
+  target: number;
+  missing: number;
+  topicNew: boolean;
+  subTopicNew: boolean;
+}
+
+type UploadKind = "practice" | "pyq" | "mixed";
 
 interface UploadJobState {
   status: "RUNNING" | "DONE" | "FAILED";
@@ -422,6 +450,29 @@ export default function AdminUploadsPage() {
     }
   }
 
+  // S37: ONE Excel for PYQ + practice (34 columns, dropdowns, Reference IDs of every exam / chapter / topic / sub-topic)
+  async function downloadMixedTemplate() {
+    setTemplateDownloading(true);
+    setError("");
+    try {
+      const res = await fetchAuth(`${API_BASE}/bank/admin/upload/template/pyq-practice`);
+      if (!res.ok) throw new Error(`Template download fail (HTTP ${res.status})`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "pyq-practice-template.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Template download fail");
+    } finally {
+      setTemplateDownloading(false);
+    }
+  }
+
   // Full question-bank export — same auth-header-needed reasoning as
   // downloadTemplate() above (GET /bank/admin/upload/export is ADMIN/
   // MODERATOR-only). Defaults to Excel since that's the easiest to skim;
@@ -494,7 +545,7 @@ export default function AdminUploadsPage() {
   }
 
   // Uploads ONE file and returns its result (+ rejected-rows url). Throws with the real server message on failure.
-  async function uploadOneFile(file: File, kind: "practice" | "pyq"): Promise<{ result: UploadResult; rejectedUrl: string | null }> {
+  async function uploadOneFile(file: File, kind: UploadKind): Promise<{ result: UploadResult; rejectedUrl: string | null }> {
     const fmt = formatForFile(file);
     // JSON (text / SVG-code / image questions) runs as a background job too.
     if (fmt === "json" || (checkOnly && (fmt === "excel" || fmt === "csv"))) {
@@ -505,6 +556,7 @@ export default function AdminUploadsPage() {
     formData.append("kind", kind);
     formData.append("requireSolution", String(requireSolution));
     if (kind === "practice") formData.append("isPracticeOnly", "true");
+    // mixed: no flag - every row decides for itself (year / exam date = PYQ, none = practice)
     // Oct 1 2026: Excel/CSV run as a BACKGROUND job (any size, even 1 lakh
     // rows) — the request returns at once and we poll for progress, so
     // the browser/Cloudflare never time out on a long import.
@@ -532,7 +584,7 @@ export default function AdminUploadsPage() {
 
   // One file or many: files go one after another (a later file sees the questions of the earlier ones, so duplicates
   // between files are found too). One bad file never stops the others.
-  async function submitUpload(kind: "practice" | "pyq") {
+  async function submitUpload(kind: UploadKind) {
     if (uploadFiles.length === 0) {
       setError("Please select a file first (Excel / CSV / JSON / Text / Word)");
       return;
@@ -569,6 +621,16 @@ export default function AdminUploadsPage() {
           merged.queuedForReview = (merged.queuedForReview ?? 0) + (result.queuedForReview ?? 0);
           merged.updated = (merged.updated ?? 0) + (result.updated ?? 0);
           merged.unchanged = (merged.unchanged ?? 0) + (result.unchanged ?? 0);
+          merged.pyqRows = (merged.pyqRows ?? 0) + (result.pyqRows ?? 0);
+          merged.practiceRows = (merged.practiceRows ?? 0) + (result.practiceRows ?? 0);
+          merged.pyqWithoutQuestionNo = (merged.pyqWithoutQuestionNo ?? 0) + (result.pyqWithoutQuestionNo ?? 0);
+          if (result.papers?.length) merged.papers = [...(merged.papers ?? []), ...result.papers];
+          if (result.pending?.length) merged.pending = [...(merged.pending ?? []), ...result.pending].slice(0, 200);
+          merged.pendingTotal = (merged.pendingTotal ?? 0) + (result.pendingTotal ?? 0);
+          if (result.practicePlan?.length) merged.practicePlan = [...(merged.practicePlan ?? []), ...result.practicePlan];
+          if (result.practicePlanTruncated) merged.practicePlanTruncated = true;
+          if (result.unknownExams?.length) merged.unknownExams = [...(merged.unknownExams ?? []), ...result.unknownExams];
+          if (result.hindiMissingRows?.length) merged.hindiMissingRows = [...(merged.hindiMissingRows ?? []), ...result.hindiMissingRows];
           if (result.preview?.length) merged.preview = [...(merged.preview ?? []), ...result.preview].slice(0, 300);
           merged.queuedExact = (merged.queuedExact ?? 0) + (result.queuedExact ?? 0);
           merged.reviewAlready = (merged.reviewAlready ?? 0) + (result.reviewAlready ?? 0);
@@ -595,7 +657,7 @@ export default function AdminUploadsPage() {
       if (rejects.length === 1) setRejectedUrl(rejects[0].url);
       loadBatches(); // Phase 3 — refresh history so this upload shows up immediately
       if (merged.created > 0) {
-        setInfo(`${merged.created} ${kind === "practice" ? "Practice" : "PYQ"} question(s) uploaded${multi ? ` (${files.length - failedFiles}/${files.length} files)` : ""}`);
+        setInfo(`${merged.created} ${kind === "practice" ? "Practice" : kind === "mixed" ? "PYQ + Practice" : "PYQ"} question(s) uploaded${multi ? ` (${files.length - failedFiles}/${files.length} files)` : ""}`);
       }
       if (failedFiles > 0) setError(`${failedFiles} file(s) failed — see the file-wise reason and error list below.`);
       // one click: every duplicate -> keep the NEW one, then publish everything of these uploads
@@ -647,7 +709,7 @@ export default function AdminUploadsPage() {
   }
 
   // JSON upload as a background job (images/SVG inside the JSON make it slow, so never one long request).
-  async function submitJsonJob(kind: "practice" | "pyq", file: File): Promise<{ result: UploadResult; rejectedUrl: string | null }> {
+  async function submitJsonJob(kind: UploadKind, file: File): Promise<{ result: UploadResult; rejectedUrl: string | null }> {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("kind", kind);
@@ -678,7 +740,7 @@ export default function AdminUploadsPage() {
       setUploadJob({ status: j.status, phase: j.status === "DONE" ? "FINALIZING" : "SAVING", processed: j.processed, total: j.total, created: j.created, failed: j.failed });
       if (j.status === "FAILED") throw new Error(j.fatalError || "Upload failed");
       if (j.status === "DONE") {
-        const result = { success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors ?? [], warnings: j.warnings ?? [], queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted, uploadBatchId: j.uploadBatchId, updated: j.updated, unchanged: j.unchanged, preview: j.preview, papers: j.papers, pending: j.pending, pendingTotal: j.pendingTotal } as UploadResult;
+        const result = { success: j.failed === 0, total: j.total, created: j.created, failed: j.failed, errors: j.errors ?? [], warnings: j.warnings ?? [], queuedForReview: j.queuedForReview, queuedExact: j.queuedExact, reviewAlready: j.reviewAlready, unaccounted: j.unaccounted, uploadBatchId: j.uploadBatchId, updated: j.updated, unchanged: j.unchanged, preview: j.preview, papers: j.papers, pending: j.pending, pendingTotal: j.pendingTotal, pyqRows: j.pyqRows, practiceRows: j.practiceRows, pyqWithoutQuestionNo: j.pyqWithoutQuestionNo, practicePlan: j.practicePlan, practicePlanTruncated: j.practicePlanTruncated, unknownExams: j.unknownExams, hindiMissingRows: j.hindiMissingRows } as UploadResult;
         if (checkOnly) setInfo(`Check only (nothing was saved): ${j.created} new, ${j.updated ?? 0} would be updated, ${j.unchanged ?? 0} unchanged, ${j.failed} rejected.`);
         return { result, rejectedUrl: j.hasRejected ? `${API_BASE}/bank/admin/upload/job/${started.id}/rejected` : null };
       }
@@ -1181,6 +1243,14 @@ export default function AdminUploadsPage() {
               ⭐ Practice Excel Template (dropdown)
             </button>
             <button
+              onClick={downloadMixedTemplate}
+              disabled={templateDownloading}
+              className="rounded-lg border border-violet-500/50 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold hover:bg-violet-500/20 disabled:opacity-50"
+              title="One Excel for date-wise PYQ rows AND practice rows (34 columns, dropdowns, examples)"
+            >
+              🧩 PYQ + Practice Excel Template (ek file)
+            </button>
+            <button
               onClick={downloadBankExport}
               disabled={bankExportDownloading}
               className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/10 disabled:opacity-50 dark:text-emerald-400"
@@ -1252,6 +1322,17 @@ export default function AdminUploadsPage() {
           </label>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <button
+              onClick={() => submitUpload("mixed")}
+              disabled={uploading || !uploadFile || !access.can("QUESTIONS") || !access.can("PRACTICE")}
+              title={access.can("QUESTIONS") && access.can("PRACTICE") ? undefined : "Needs both PYQ and Practice upload access"}
+              className="flex flex-col items-center gap-1 rounded-xl border-2 border-violet-500 bg-violet-500/10 px-4 py-5 text-center font-semibold text-violet-700 transition hover:bg-violet-500/20 disabled:opacity-50 sm:col-span-2 dark:text-violet-400"
+            >
+              <span className="text-lg">🧩 Upload PYQ + PRACTICE (ek Excel)</span>
+              <span className="text-xs font-normal opacity-80">
+                Row me year / examDate hai to PYQ (date-wise mock me judega), nahi hai to Practice. Practice row ka shift / date / questionNo apne aap hat jata hai. Pehle &quot;Check only&quot; se plan dekhein.
+              </span>
+            </button>
+            <button
               onClick={() => submitUpload("practice")}
               disabled={uploading || !uploadFile || !access.can("PRACTICE")}
               title={access.can("PRACTICE") ? undefined : "You do not have access to Practice upload"}
@@ -1317,6 +1398,68 @@ export default function AdminUploadsPage() {
                 )}
                 {(uploadResult.reviewAlready ?? 0) > 0 && (
                   <span className="text-xs text-muted-foreground" title="Already in Duplicate Review, or you had already decided to keep the old one">+{uploadResult.reviewAlready} already in review / skipped</span>
+                )}
+                {((uploadResult.pyqRows ?? 0) > 0 || (uploadResult.practiceRows ?? 0) > 0) && (
+                  <div className="w-full rounded-lg border border-violet-500/30 bg-violet-500/5 p-2 text-xs">
+                    <p className="font-semibold text-violet-700 dark:text-violet-400">
+                      🧩 PYQ rows: {uploadResult.pyqRows ?? 0} · Practice rows: {uploadResult.practiceRows ?? 0}
+                      {(uploadResult.pyqWithoutQuestionNo ?? 0) > 0 ? ` · ${uploadResult.pyqWithoutQuestionNo} PYQ row(s) without questionNo (upload order)` : ""}
+                    </p>
+                  </div>
+                )}
+                {(uploadResult.unknownExams?.length ?? 0) > 0 && (
+                  <div className="w-full rounded-lg border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-800 dark:text-red-300">
+                    <p className="font-semibold">❌ Ye exam database me nahi hai — pehle banayein:</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {uploadResult.unknownExams!.map((u, i) => (
+                        <li key={i}>{u.value ? <code>{u.value}</code> : "(examId khali)"} — {u.count} row(s), pehli row {u.rows[0]}</li>
+                      ))}
+                    </ul>
+                    <a href="/admin/exams" className="mt-1 inline-block text-primary underline">Admin → Exams (Add common exams button) →</a>
+                  </div>
+                )}
+                {(uploadResult.hindiMissingRows?.length ?? 0) > 0 && (
+                  <div className="w-full rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-300">
+                    ⚠️ {uploadResult.hindiMissingRows!.length} row(s) me Hindi question nahi hai — students ko tab tak nahi dikhenge (rows: {uploadResult.hindiMissingRows!.slice(0, 15).join(", ")}{uploadResult.hindiMissingRows!.length > 15 ? " …" : ""}).
+                  </div>
+                )}
+                {(uploadResult.practicePlan?.length ?? 0) > 0 && (
+                  <details className="w-full rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2 text-xs" open>
+                    <summary className="cursor-pointer font-semibold text-emerald-700 dark:text-emerald-400">📚 Practice plan — har topic / sub-topic me kitne ({uploadResult.practicePlan![0].target} ka target)</summary>
+                    <div className="mt-2 overflow-auto">
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="text-muted-foreground"><th className="pr-2">Chapter</th><th className="pr-2">Topic</th><th className="pr-2">Sub-topic</th><th className="pr-2">File me</th><th className="pr-2">Pehle se</th><th className="pr-2">Baad me</th><th className="pr-2">Kam</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                          {uploadResult.practicePlan!.map((p, i) => (
+                            <tr key={i} className="border-t border-border/50">
+                              <td className="pr-2">{p.chapter}</td>
+                              <td className="pr-2">{p.topic || "—"}{p.topicNew ? " 🆕" : ""}</td>
+                              <td className="pr-2">{p.subTopic || "—"}{p.subTopicNew ? " 🆕" : ""}</td>
+                              <td className="pr-2">{p.count}</td>
+                              <td className="pr-2">{p.existing}</td>
+                              <td className="pr-2 font-semibold">{p.after}</td>
+                              <td className={`pr-2 ${p.missing > 0 ? "text-amber-700 dark:text-amber-400" : "text-emerald-600"}`}>{p.missing > 0 ? p.missing : "✓"}</td>
+                              <td>
+                                {p.chapterId && (
+                                  <a
+                                    href={`/admin/questions/manage?${new URLSearchParams({ ...(p.subjectId ? { subject: p.subjectId } : {}), chapter: p.chapterId, ...(p.topicId ? { topic: p.topicId } : {}), ...(p.subTopicId ? { subtopic: p.subTopicId } : {}) }).toString()}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-primary underline"
+                                  >
+                                    👁 pehle se
+                                  </a>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {uploadResult.practicePlanTruncated && <p className="mt-1 text-muted-foreground">Sirf pehli rows dikhayi gayi hain.</p>}
+                    </div>
+                  </details>
                 )}
                 {(uploadResult.papers?.length ?? 0) > 0 && (
                   <div className="w-full rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2 text-xs">

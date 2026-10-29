@@ -236,7 +236,8 @@ function AutoPublishCard({ onRan }: { onRan: () => void }) {
         <div className="min-w-[220px] flex-1 text-sm">
           <div className="font-bold">🤖 Auto-publish after {cfg.afterHours}h <span className={`ml-1 rounded px-1.5 py-0.5 text-[11px] ${cfg.enabled ? "bg-emerald-500/15 text-emerald-600" : "bg-muted text-muted-foreground"}`}>{cfg.enabled ? "ON" : "OFF"}</span></div>
           <div className="text-xs text-muted-foreground">
-            A duplicate nobody answered for {cfg.afterHours} hour(s) is decided by safe rules - same question in another paper: keep both; identical copy: keep the old one;
+            Same question in another paper (only shift / date / tier / year differ): kept in <b>both</b> papers <b>at once</b>. A duplicate nobody answered for {cfg.afterHours} hour(s) is decided by safe rules -
+            same exam + year, new copy has the exam date and the old one has none: the <b>dated copy replaces the old one</b>; identical copy: keep the old one;
             old one not live: publish the new one. If the question, options or answer differ, <b>you</b> decide, always. Every automatic decision is marked 🤖 Auto and can be undone.
           </div>
           {prev && (

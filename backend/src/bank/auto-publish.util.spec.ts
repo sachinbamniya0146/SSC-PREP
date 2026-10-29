@@ -54,6 +54,67 @@ describe('auto-publish rules', () => {
   });
 });
 
+describe('dated copy beats an undated copy (S38)', () => {
+  const undated = { year: 2024, examDate: null, live: true, shift: null, examTier: null, tierPaper: null, paperCode: null };
+  const dated = { year: 2024, examDate: '2024-06-20', live: true, shift: 'Shift 2', examTier: 'TIER_1', tierPaper: 'PAPER_1', paperCode: null };
+
+  it('new dated upload replaces the old undated copy of the same question', () => {
+    const d = decideAuto({ matchType: 'SIMILAR', differences: ['examDate', 'shift', 'examTier', 'tierPaper'], existing: undated, candidate: dated, includeSimilar: false });
+    expect(d?.action).toBe('KEEP_NEW');
+    expect(d?.immediate).toBeUndefined();
+  });
+
+  it('a solution / questionNo that also changed does not stop it', () => {
+    const d = decideAuto({ matchType: 'SIMILAR', differences: ['examDate', 'explanation', 'paperQuestionNo'], existing: undated, candidate: dated, includeSimilar: false });
+    expect(d?.action).toBe('KEEP_NEW');
+  });
+
+  it('the other way round: an undated upload does not replace the dated copy', () => {
+    const d = decideAuto({ matchType: 'SIMILAR', differences: ['examDate', 'shift', 'examTier'], existing: dated, candidate: undated, includeSimilar: false });
+    expect(d?.action).toBe('KEEP_EXISTING');
+  });
+
+  it('another YEAR, another EXAM, or a shift the old copy already had is a different paper: keep both', () => {
+    expect(decideAuto({ matchType: 'SIMILAR', differences: ['year', 'examDate'], existing: undated, candidate: { ...dated, year: 2025 }, includeSimilar: false })?.action).toBe('KEEP_BOTH');
+    expect(decideAuto({ matchType: 'SIMILAR', differences: ['examId', 'examDate'], existing: undated, candidate: dated, includeSimilar: false })?.action).toBe('KEEP_BOTH');
+    expect(decideAuto({ matchType: 'SIMILAR', differences: ['examDate', 'shift'], existing: { ...undated, shift: 'Shift 1' }, candidate: dated, includeSimilar: false })?.action).toBe('KEEP_BOTH');
+  });
+
+  it('a changed answer, options or text is never decided automatically', () => {
+    for (const f of ['correctAnswer', 'options', 'questionText']) {
+      const d = decideAuto({ matchType: 'SIMILAR', differences: ['examDate', f], existing: undated, candidate: dated, includeSimilar: true });
+      expect(d?.action === 'KEEP_NEW').toBe(false);
+    }
+    expect(decideAuto({ matchType: 'SIMILAR', differences: ['examDate', 'correctAnswer'], existing: undated, candidate: dated, includeSimilar: true })).toBeNull();
+  });
+
+  it('unknown paper details on the old side are not treated as blank', () => {
+    const unknown = { year: 2024, examDate: null, live: true };
+    expect(decideAuto({ matchType: 'SIMILAR', differences: ['examDate', 'shift'], existing: unknown, candidate: dated, includeSimilar: false })?.action).toBe('KEEP_BOTH');
+  });
+
+  it('a practice copy (no year) is not replaced by a PYQ: both stay', () => {
+    const practice = { year: null, examDate: null, live: true, shift: null, examTier: null, tierPaper: null, paperCode: null };
+    expect(decideAuto({ matchType: 'SIMILAR', differences: ['year', 'examDate'], existing: practice, candidate: dated, includeSimilar: false })?.action).toBe('KEEP_BOTH');
+  });
+});
+
+describe('cross-paper repeat is applied at once (S38)', () => {
+  it('only paper details differ -> immediate', () => {
+    const d = decideAuto({ matchType: 'SIMILAR', differences: ['shift', 'examDate'], existing: live(2024, '2024-06-20'), candidate: live(2024, '2024-06-21'), includeSimilar: false });
+    expect(d).toMatchObject({ action: 'KEEP_BOTH', immediate: true });
+  });
+  it('a changed question text on top still waits for the normal time', () => {
+    const d = decideAuto({ matchType: 'SIMILAR', differences: ['shift', 'questionText'], existing: live(), candidate: live(), includeSimilar: false });
+    expect(d?.action).toBe('KEEP_BOTH');
+    expect(d?.immediate).toBeUndefined();
+  });
+  it('identical copy and similar-copy decisions are never immediate', () => {
+    expect(decideAuto({ matchType: 'EXACT', differences: [], existing: live(), candidate: live(), includeSimilar: false })?.immediate).toBeUndefined();
+    expect(decideAuto({ matchType: 'SIMILAR', differences: ['explanation'], existing: live(), candidate: live(), includeSimilar: true })?.immediate).toBeUndefined();
+  });
+});
+
 describe('undo marker', () => {
   it('is a stable, non-empty value that cannot be mistaken for a rule reason', () => {
     expect(AUTO_UNDONE).toBe('UNDONE');

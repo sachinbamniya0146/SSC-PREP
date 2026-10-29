@@ -22,6 +22,11 @@ import { QuestionEditService } from './question-edit.service';
 import { buildUpdateBody, diffUpdate, isQuestionId } from './bank-template';
 import { parseJsonQuestions, shortDigest, mediaKey } from './question-media.util';
 import { pickQuestionsSheetName } from '../common/excel-sheet';
+import { UnknownExamGroup, buildExamAliasMap, groupUnknownExams, resolveExamRef, unknownExamMessage } from '../common/exam-ref';
+import { KindTally, isQuestionNoWarning, newKindTally, questionNoWarning, tallyRow } from '../common/row-kind';
+import { PRACTICE_QUESTION_WHERE } from '../common/question-visibility';
+import { parsePaperQuestionNo } from '../common/pyq-paper-key';
+import { PracticePlanRow, PreviewRow, TaxonomyLists, buildPracticePlan, previewKind, rowsWithoutHindi } from './upload-preview';
 
 export type JobErrorCategory =
   | 'MISSING_FIELD' | 'INVALID_REFERENCE' | 'DUPLICATE' | 'FORMAT' | 'OTHER'
@@ -51,6 +56,16 @@ export interface UploadJob {
   updated: number;     // updated (real run) / would be updated (check-only run)
   unchanged: number;   // id rows whose cells equal what is stored
   preview: Array<{ row: number; action: 'NEW' | 'UPDATE' | 'SAME'; changes?: string[]; text?: string }>;
+  // 29 Oct 2026 (S37): ONE file = PYQ rows + practice rows. Counts per kind, the practice groups (chapter > topic > sub-topic),
+  // the exams that do not exist yet and the rows that would be saved without Hindi (check-only run). Admin screens only.
+  mixed: boolean;
+  pyqRows: number;
+  practiceRows: number;
+  pyqWithoutQuestionNo: number;
+  practicePlan: PracticePlanRow[];
+  practicePlanTruncated: boolean;
+  unknownExams: UnknownExamGroup[];
+  hindiMissingRows: number[];
   // 26 Oct 2026: which real PYQ papers (exam+tier+paper+date+shift) this file feeds, and rows that join no date-wise mock
   papers: PaperPreview['papers'];
   pending: PaperPreview['pending'];
@@ -83,6 +98,14 @@ interface Item {
   hasStem: boolean;
   hasSolution: boolean;
   media: string;
+  /** S37: raw cells needed for the mixed-file preview */
+  yearRaw: string;
+  subject: string;
+  chapter: string;
+  topic: string;
+  subTopic: string;
+  hasHindi: boolean;
+  questionNoRaw: string;
 }
 
 const CHUNK = 100;
@@ -159,6 +182,13 @@ export class BankUploadJobService {
         hasStem: !!(get(r, 'questionText') || get(r, 'questionDiagramType') || get(r, 'questionImageUrl') || get(r, 'questionSvg')),
         hasSolution: !!(get(r, 'explanation') || get(r, 'explanationHindi') || get(r, 'explanationImageUrl') || get(r, 'explanationSvg')),
         media: `${stemMedia}#${optMedia}`,
+        yearRaw: get(r, 'year'),
+        subject: get(r, 'subjectId'),
+        chapter: get(r, 'chapterId'),
+        topic: get(r, 'topicId'),
+        subTopic: get(r, 'subTopicId'),
+        hasHindi: !!get(r, 'questionTextHindi'),
+        questionNoRaw: get(r, 'questionNo'),
       };
     });
   }
@@ -193,6 +223,13 @@ export class BankUploadJobService {
         hasStem: !!(String(q?.questionText ?? '').trim() || q?.questionDiagramType || q?.questionImageUrl || q?.questionSvg || q?.questionImageBase64),
         hasSolution: !!(String(q?.explanation ?? '').trim() || String(q?.explanationHindi ?? '').trim() || q?.explanationImageUrl || q?.explanationImageBase64 || q?.explanationSvg),
         media: `${stemMedia}#${optMedia}`,
+        yearRaw: String(q?.year ?? '').trim(),
+        subject: String(q?.subjectId ?? '').trim(),
+        chapter: String(q?.chapterId ?? '').trim(),
+        topic: String(q?.topicId ?? '').trim(),
+        subTopic: String(q?.subTopicId ?? '').trim(),
+        hasHindi: !!String(q?.questionTextHindi ?? '').trim(),
+        questionNoRaw: String(q?.questionNo ?? q?.paperQuestionNo ?? '').trim(),
       };
     });
   }
@@ -200,6 +237,8 @@ export class BankUploadJobService {
   // -------------------------------------------------------------------- start
   start(opts: {
     buffer: Buffer; filename: string; adminId: string; isPracticeOnly: boolean; requireSolution: boolean; dryRun: boolean;
+    /** S37: the "PYQ + Practice" button - each row decides by itself (year / examDate = PYQ, neither = practice) */
+    mixed?: boolean;
   }): UploadJob {
     this.gc();
     const looksJson = /\.json$/i.test(opts.filename) || /^\s*[\[{]/.test(opts.buffer.subarray(0, 64).toString('utf8').replace(/^\uFEFF/, ''));
@@ -221,7 +260,9 @@ export class BankUploadJobService {
     const job: UploadJob = {
       id: `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       adminId: opts.adminId, filename: opts.filename, kind, dryRun: opts.dryRun,
-      status: 'RUNNING', phase: 'Checking rows…', total: items.length, processed: 0, created: 0, failed: 0, queuedForReview: 0, queuedExact: 0, reviewAlready: 0, unaccounted: 0, updated: 0, unchanged: 0, preview: [], papers: [], pending: [], pendingTotal: 0,
+      status: 'RUNNING', phase: 'Checking rows…', total: items.length, processed: 0, created: 0, failed: 0, queuedForReview: 0, queuedExact: 0, reviewAlready: 0, unaccounted: 0, updated: 0, unchanged: 0, preview: [],
+      mixed: !!opts.mixed, pyqRows: 0, practiceRows: 0, pyqWithoutQuestionNo: 0, practicePlan: [], practicePlanTruncated: false, unknownExams: [], hindiMissingRows: [],
+      papers: [], pending: [], pendingTotal: 0,
       errors: [], warnings: [], headers, rejectedRows: [], startedAt: Date.now(),
     };
     this.jobs.set(job.id, job);
@@ -256,7 +297,47 @@ export class BankUploadJobService {
     return `${norm(it.text)}|${it.options.map(norm).join('|')}|${it.answer}|${it.media}`;
   }
 
-  private async run(job: UploadJob, items: Item[], opts: { adminId: string; filename: string; isPracticeOnly: boolean; requireSolution: boolean; dryRun: boolean }) {
+  /** S37: the raw cells the mixed-file preview needs, in the shape upload-preview.ts expects */
+  private previewRow(it: Item): PreviewRow {
+    return { row: it.rowNum, subject: it.subject, chapter: it.chapter, topic: it.topic, subTopic: it.subTopic, yearRaw: it.yearRaw, examDate: it.paper?.examDate ?? undefined, hasHindi: it.hasHindi };
+  }
+
+  /** S37: exams + taxonomy from the database. Best effort: when it fails the importer's own checks still run. */
+  private async loadLookups(): Promise<{ exams: Array<{ id: string; slug: string; name: string; code: string }>; lists: TaxonomyLists } | null> {
+    try {
+      const [exams, subjects, chapters, topics, subTopics] = await Promise.all([
+        this.prisma.exam.findMany({ select: { id: true, slug: true, name: true, code: true } }),
+        this.prisma.subject.findMany({ select: { id: true, slug: true, name: true } }),
+        this.prisma.chapter.findMany({ select: { id: true, slug: true, name: true, subjectId: true } }),
+        this.prisma.topic.findMany({ select: { id: true, slug: true, name: true, chapterId: true } }),
+        this.prisma.subTopic.findMany({ select: { id: true, slug: true, name: true, topicId: true } }),
+      ]);
+      return { exams, lists: { subjects, chapters, topics, subTopics } };
+    } catch (e: any) {
+      this.log.warn(`upload preview lookups failed: ${e?.message ?? e}`);
+      return null;
+    }
+  }
+
+  /** S37: live practice questions per chapter / topic / sub-topic (keys `c:` `t:` `s:`), for "already N / 100". */
+  private async existingPracticeCounts(): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    try {
+      const [bySub, byTopic, byChapter] = await Promise.all([
+        this.prisma.question.groupBy({ by: ['subTopicId'], where: { ...PRACTICE_QUESTION_WHERE, subTopicId: { not: null } }, _count: { _all: true } }),
+        this.prisma.question.groupBy({ by: ['topicId'], where: { ...PRACTICE_QUESTION_WHERE, topicId: { not: null } }, _count: { _all: true } }),
+        this.prisma.question.groupBy({ by: ['chapterId'], where: { ...PRACTICE_QUESTION_WHERE }, _count: { _all: true } }),
+      ]);
+      for (const r of bySub) if (r.subTopicId) out.set(`s:${r.subTopicId}`, r._count._all);
+      for (const r of byTopic) if (r.topicId) out.set(`t:${r.topicId}`, r._count._all);
+      for (const r of byChapter) if (r.chapterId) out.set(`c:${r.chapterId}`, r._count._all);
+    } catch (e: any) {
+      this.log.warn(`practice counts failed: ${e?.message ?? e}`);
+    }
+    return out;
+  }
+
+  private async run(job: UploadJob, items: Item[], opts: { adminId: string; filename: string; isPracticeOnly: boolean; requireSolution: boolean; dryRun: boolean; mixed?: boolean }) {
     // Oct 7 2026: the history row is created BEFORE any checking, so even a big file shows up (as "Chal raha hai")
     // right away and a file where every row is rejected still leaves a record of what happened.
     let batchId: string | null = null;
@@ -267,13 +348,29 @@ export class BankUploadJobService {
       await this.upload.updateBatchProgress(batchId, { totalRows: job.total });
     }
 
-    // ---------- Phase 1: quality gate (no DB) ----------
+    // ---------- Phase 1: quality gate ----------
+    // S37: an exam that does not exist is reported ONCE per exam value (with the way to create it), not as a vague per-row error
+    const lookups = await this.loadLookups();
+    const unknownExamRows = new Map<number, string>();
+    if (lookups && lookups.exams.length > 0) {
+      const candidates = items.filter((it) => !it.id).map((it) => ({ row: it.rowNum, examId: it.paper?.examId }));
+      job.unknownExams = groupUnknownExams(candidates, lookups.exams);
+      if (job.unknownExams.length) {
+        const slugs = lookups.exams.map((e) => e.slug);
+        const aliasMap = buildExamAliasMap(lookups.exams);
+        for (const c of candidates) {
+          if (!resolveExamRef(c.examId, lookups.exams, aliasMap)) unknownExamRows.set(c.row, unknownExamMessage(String(c.examId ?? '').trim(), slugs));
+        }
+      }
+    }
     const ok: Item[] = [];
     const idRows: Item[] = [];
     const seen = new Map<string, number>();
     for (const it of items) {
       // Task B: a row WITH an id is an update of that question — blank cells mean "keep", so it skips the new-question gate
       if (it.id) { idRows.push(it); continue; }
+      const unknownExam = unknownExamRows.get(it.rowNum);
+      if (unknownExam) { this.reject(job, it, 'INVALID_REFERENCE', unknownExam); continue; }
       if (!it.hasStem) { this.reject(job, it, 'MISSING_FIELD', 'Question text is empty'); continue; }
       if (!['A', 'B', 'C', 'D'].includes(it.answer)) {
         this.reject(job, it, 'MISSING_ANSWER', it.answer ? `The answer key is invalid ("${it.answer}") — it must be A/B/C/D` : 'The answer key (correctAnswer) is missing');
@@ -298,7 +395,23 @@ export class BankUploadJobService {
       if (job.preview.length < 300) job.preview.push({ row: it.rowNum, action: 'NEW', text: it.text.replace(/\s+/g, ' ').slice(0, 70) });
     }
     if (idRows.length) await this.handleIdRows(job, idRows, opts);
-    if (!opts.isPracticeOnly) this.previewPapers(job, ok);
+
+    // S37: PYQ rows vs practice rows (row by row: year / examDate = PYQ, neither = practice; "practice only" = all practice)
+    const kindTally: KindTally = newKindTally();
+    const pyqItems: Item[] = [];
+    const practiceItems: Item[] = [];
+    for (const it of ok) {
+      const kind = previewKind(this.previewRow(it), !!opts.isPracticeOnly);
+      tallyRow(kindTally, kind, { paperQuestionNo: parsePaperQuestionNo(it.questionNoRaw) ?? null });
+      (kind === 'PYQ' ? pyqItems : practiceItems).push(it);
+    }
+    job.pyqRows = kindTally.pyq;
+    job.practiceRows = kindTally.practice;
+    job.pyqWithoutQuestionNo = kindTally.pyqWithoutQuestionNo;
+    const qnWarn = questionNoWarning(kindTally);
+    if (qnWarn) job.warnings.push({ row: 0, message: qnWarn });
+    // papers (exam . tier . date . shift) come from the PYQ rows only: a practice row never creates a paper
+    this.previewPapers(job, pyqItems);
     job.processed = items.length - ok.length;
     if (batchId) await this.upload.updateBatchProgress(batchId, { failedCount: job.failed });
 
@@ -326,6 +439,24 @@ export class BankUploadJobService {
         else wouldCreate++;
       }
       job.created = wouldCreate;
+
+      // S37: where the practice rows will land (chapter > topic > sub-topic, already N / target 100) and the Hindi gap
+      if (lookups && practiceItems.length) {
+        const existingCounts = await this.existingPracticeCounts();
+        const built = buildPracticePlan(practiceItems.map((it) => this.previewRow(it)), lookups.lists, existingCounts);
+        job.practicePlan = built.plan;
+        job.practicePlanTruncated = built.truncated;
+      }
+      if (lookups) {
+        job.hindiMissingRows = rowsWithoutHindi(ok.map((it) => this.previewRow(it)), lookups.lists.subjects);
+        if (job.hindiMissingRows.length) {
+          const first = job.hindiMissingRows.slice(0, 15).join(', ');
+          job.warnings.push({
+            row: 0,
+            message: `${job.hindiMissingRows.length} row(s) have no Hindi question (questionTextHindi). They are saved but students will NOT see them until Hindi is added (English subject is exempt). Rows: ${first}${job.hindiMissingRows.length > 15 ? ' ...' : ''}`,
+          });
+        }
+      }
       job.processed = job.total;
       job.phase = 'Check complete (nothing was saved)';
       job.status = 'DONE';
@@ -368,7 +499,10 @@ export class BankUploadJobService {
         // the error LIST is capped (MAX_REPORTED_ERRORS per chunk); the true number of failed rows is res.failed
         if (res.failed > res.errors.length) job.failed += res.failed - res.errors.length;
         job.reviewAlready += res.reviewAlready ?? 0;
-        for (const w of res.warnings) job.warnings.push({ ...w, row: slice[w.row - base]?.rowNum ?? w.row });
+        for (const w of res.warnings) {
+          if (isQuestionNoWarning(w.message)) continue; // written once from the whole file (Phase 1)
+          job.warnings.push({ ...w, row: w.row === 0 ? 0 : slice[w.row - base]?.rowNum ?? w.row });
+        }
         // safety net: every row of the chunk must be saved, failed, or sent to Duplicate Review
         const gap = slice.length - (res.created + res.failed + (res.queuedForReview ?? 0) + (res.reviewAlready ?? 0));
         if (gap > 0) {
@@ -392,7 +526,7 @@ export class BankUploadJobService {
     total.errors = job.errors;
     total.warnings = job.warnings;
     try { await this.upload.endBatch(batch, total); } catch (e: any) { this.log.warn(`finalize batch failed: ${e?.message ?? e}`); }
-    if (opts.isPracticeOnly === false) {
+    if (opts.isPracticeOnly === false && !opts.mixed) {
       try { await this.upload.warnYearlessInPyqUpload({ ...total, uploadBatchId: batch }); } catch { /* best effort */ }
     }
     job.errors.sort((a, b) => a.row - b.row);

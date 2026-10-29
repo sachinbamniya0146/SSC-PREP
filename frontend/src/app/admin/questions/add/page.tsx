@@ -14,6 +14,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
 import DateField from "@/components/DateField";
+import ExistingQuestions from "@/components/ExistingQuestions";
 import { normalizeShift } from "@/lib/shift";
 
 type Kind = "pyq" | "practice";
@@ -344,6 +345,9 @@ export default function AddQuestionPage() {
             </div>
           )}
         </section>
+
+        {/* S39: what is already uploaded under the chosen chapter / topic / sub-topic (so the same question is not added twice) */}
+        <ExistingQuestions subjectId={subjectId || undefined} chapterId={chapterId || undefined} topicId={topicId || undefined} subTopicId={subTopicId || undefined} />
 
         {/* Question */}
         <section className="rounded-xl border border-border bg-card p-4">

@@ -81,6 +81,13 @@ export default function QuestionManagerPage() {
     const sp = new URLSearchParams(window.location.search);
     if (sp.get("batch")) setBatchId(sp.get("batch") || "");
     if (sp.get("q")) setQ(sp.get("q") || "");
+    // S39: the upload plan / add-question page link here with the chapter / topic / sub-topic already chosen
+    if (sp.get("subject")) setSubjectId(sp.get("subject") || "");
+    if (sp.get("chapter")) setChapterId(sp.get("chapter") || "");
+    if (sp.get("topic")) setTopicId(sp.get("topic") || "");
+    if (sp.get("subtopic")) setSubTopicId(sp.get("subtopic") || "");
+    const k = sp.get("kind");
+    if (k === "pyq" || k === "practice") setKind(k);
   }, []);
   const [opts, setOpts] = React.useState<{ years: { year: number; count: number }[]; shifts: { shift: string; count: number }[] }>({ years: [], shifts: [] });
   // bulk "details badlein"

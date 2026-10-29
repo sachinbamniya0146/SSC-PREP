@@ -13,6 +13,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, fetchAuth } from "@/lib/api";
+import PracticeGaugeTab from "@/components/PracticeGaugeTab";
 
 type CoverageRow = {
   examName: string | null;
@@ -131,7 +132,7 @@ export default function CoveragePage() {
   // NEW — year-wise tab state (kept separate from the exam×subject report
   // above; fetched lazily only when the admin actually opens this tab, so
   // the default page load stays exactly as fast as before).
-  const [activeTab, setActiveTab] = React.useState<"subject" | "year" | "drilldown">("subject");
+  const [activeTab, setActiveTab] = React.useState<"subject" | "year" | "drilldown" | "practice">("subject");
   // NEW ("chuninda questions ka Excel export jinme Hindi translation ya
   // solution ya answer key missing hai") — GET /bank/admin/upload/export-gaps
   // (BankUploadService.exportQuestionGaps()); same auth-header-needed blob
@@ -402,7 +403,14 @@ export default function CoveragePage() {
           >
             🕳️ Chapter → Topic → Sub-Topic (Gaps)
           </button>
+          <button
+            onClick={() => setActiveTab("practice")}
+            className={`border-b-2 px-4 py-2 text-sm font-semibold ${activeTab === "practice" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
+          >
+            📚 Practice 100 gauge
+          </button>
         </div>
+        {activeTab === "practice" && <PracticeGaugeTab />}
 
         {activeTab === "subject" && err && <p className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{err}</p>}
 

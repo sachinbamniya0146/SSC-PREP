@@ -5,7 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { cacheClearPrefix } from '../common/cache';
 import { findTaxonomyTwin } from '../common/taxonomy-key';
 import { TaxonomyDedupeService } from './taxonomy-dedupe.service';
-import { PUBLISHED_QUESTION_WHERE, QuestionKind, kindWhere, parseQuestionKind } from '../common/question-visibility';
+import { PRACTICE_QUESTION_WHERE, PUBLISHED_QUESTION_WHERE, PYQ_QUESTION_WHERE, QuestionKind, kindWhere, parseQuestionKind } from '../common/question-visibility';
+import { GaugeCounts, GaugeRow, buildPracticeGauge } from '../common/practice-gauge';
 
 // =============================================================================
 // BankAdminService  (NEW — Sep 21 2026)
@@ -335,6 +336,70 @@ export class BankAdminService {
         topic: r.topic,
         subTopic: r.subTopic,
       })),
+    };
+  }
+
+  /**
+   * S39 (29 Oct 2026): "chapter / topic / sub-topic chunte hi wahan pehle se upload hue questions dikhen, taaki duplicate na ho."
+   * One call for the add-question page and the upload page: how many PYQ / practice / live / hidden questions already sit under the
+   * selected node (exam + subject + chapter + topic + sub-topic only - the other filters do not change these totals), plus the same
+   * paged, searchable list the manager shows (admin only: it carries the exam date, which students never get).
+   */
+  async existing(f0: AdminQuestionFilter, skip = 0, take = 20) {
+    if (!(f0.subjectId || f0.chapterId || (f0.chapterIds && f0.chapterIds.length) || f0.topicId || f0.subTopicId)) {
+      throw new BadRequestException('Select a subject, chapter, topic or sub-topic first.');
+    }
+    const node: AdminQuestionFilter = { examId: f0.examId, subjectId: f0.subjectId, chapterId: f0.chapterId, chapterIds: f0.chapterIds, topicId: f0.topicId, subTopicId: f0.subTopicId };
+    const where = (k: QuestionKind | undefined) => this.buildWhere({ ...node, kind: k });
+    const [total, pyq, practice, live, list] = await Promise.all([
+      this.prisma.question.count({ where: where(undefined) }),
+      this.prisma.question.count({ where: where('pyq') }),
+      this.prisma.question.count({ where: where('practice') }),
+      this.prisma.question.count({ where: { AND: [where(undefined), PUBLISHED_QUESTION_WHERE] } }),
+      this.listQuestions(f0, skip, take),
+    ]);
+    return {
+      counts: { total, pyq, practice, live, hidden: Math.max(total - live, 0), practiceTarget: 100, practiceMissing: Math.max(100 - practice, 0) },
+      total: list.total,
+      visibleTotal: list.visibleTotal,
+      data: list.data,
+    };
+  }
+
+  /**
+   * S39: practice coverage gauge - live practice questions per sub-topic / topic / chapter against the 100 target, with the live PYQ
+   * count next to it, lowest first (see common/practice-gauge.ts). `subjectId` narrows it to one subject.
+   */
+  async practiceGauge(subjectId?: string): Promise<{ target: number; rows: GaugeRow[]; totals: { nodes: number; complete: number; practice: number; pyq: number } }> {
+    const chapterWhere = subjectId ? { subjectId } : {};
+    const [subjects, chapters, topics, subTopics] = await Promise.all([
+      this.prisma.subject.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      this.prisma.chapter.findMany({ where: chapterWhere, select: { id: true, name: true, subjectId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.topic.findMany({ where: { chapter: chapterWhere }, select: { id: true, name: true, chapterId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.subTopic.findMany({ where: { topic: { chapter: chapterWhere } }, select: { id: true, name: true, topicId: true }, orderBy: { name: 'asc' } }),
+    ]);
+    const group = async (by: 'chapterId' | 'topicId' | 'subTopicId', extra: Prisma.QuestionWhereInput) => {
+      const [pr, py] = await Promise.all([
+        this.prisma.question.groupBy({ by: [by], where: { AND: [PRACTICE_QUESTION_WHERE, extra] }, _count: { _all: true } }),
+        this.prisma.question.groupBy({ by: [by], where: { AND: [PYQ_QUESTION_WHERE, extra] }, _count: { _all: true } }),
+      ]);
+      const map = new Map<string, { practice: number; pyq: number }>();
+      for (const r of pr as any[]) if (r[by]) map.set(r[by], { practice: r._count._all, pyq: map.get(r[by])?.pyq ?? 0 });
+      for (const r of py as any[]) if (r[by]) map.set(r[by], { practice: map.get(r[by])?.practice ?? 0, pyq: r._count._all });
+      return map;
+    };
+    const [chapter, topic, subTopic, topicDirect] = await Promise.all([
+      group('chapterId', {}),
+      group('topicId', {}),
+      group('subTopicId', {}),
+      group('topicId', { subTopicId: null }),
+    ]);
+    const counts: GaugeCounts = { chapter, topic, subTopic, topicDirect };
+    const rows = buildPracticeGauge({ subjects, chapters, topics, subTopics }, counts);
+    return {
+      target: 100,
+      rows,
+      totals: { nodes: rows.length, complete: rows.filter((r) => r.missing === 0).length, practice: rows.reduce((a, r) => a + r.practice, 0), pyq: rows.reduce((a, r) => a + r.pyq, 0) },
     };
   }
 

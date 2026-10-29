@@ -56,11 +56,21 @@ export interface SideInfo {
   /** visible to students right now */
   live: boolean;
   createdAt?: string | Date | null;
+  /** Paper details. `undefined` = not known (the rules then stay careful); `null` / '' = known to be blank. */
+  shift?: string | null;
+  examTier?: string | null;
+  tierPaper?: string | null;
+  paperCode?: string | null;
 }
 
 export interface AutoDecision {
   action: AutoAction;
   reason: string;
+  /**
+   * true = nobody needs to look first, so the job applies it at once instead of after the waiting time.
+   * Only for "the very same question sits in another paper" where nothing but paper details / solution differ.
+   */
+  immediate?: boolean;
 }
 
 const PAPER_FIELDS = ['examId', 'year', 'shift', 'examDate', 'examTier', 'tierPaper', 'paperCode'];
@@ -68,6 +78,27 @@ const PAPER_FIELDS = ['examId', 'year', 'shift', 'examDate', 'examTier', 'tierPa
 const CONTENT_FIELDS = ['questionText', 'questionTextHindi', 'options', 'correctAnswer'];
 /** Differences that are only "better information" on the new copy. */
 const SAFE_FIELDS = ['explanation', 'explanationHindi', 'questionImageUrl', 'paperQuestionNo'];
+
+const blank = (v: string | null | undefined): boolean => v !== undefined && (v === null || String(v).trim() === '');
+const PAPER_DETAIL_FIELDS = ['shift', 'examTier', 'tierPaper', 'paperCode'] as const;
+
+/**
+ * Same exam, same year, same question - one copy has the exam DATE (and maybe shift / tier), the other does not.
+ * That is one paper's question once, with better paper details on one side, NOT a repeat in another paper.
+ * Returns which side is the dated one, or null when the pair is something else (other exam / other year / other shift
+ * / question text or answer differs).
+ */
+function datedVersusUndated(diffs: readonly string[], existing: SideInfo, candidate: SideInfo): 'candidate' | 'existing' | null {
+  if (diffs.includes('examId') || diffs.includes('year')) return null;
+  if (diffs.some((d) => CONTENT_FIELDS.includes(d))) return null;
+  if (!diffs.every((d) => PAPER_FIELDS.includes(d) || SAFE_FIELDS.includes(d))) return null;
+  const sideOf = candidate.examDate && !existing.examDate ? 'candidate' : existing.examDate && !candidate.examDate ? 'existing' : null;
+  if (!sideOf) return null;
+  const undated = sideOf === 'candidate' ? existing : candidate;
+  // a paper detail that differs may only be "filled in" on the dated side: the undated side must have it blank
+  for (const f of PAPER_DETAIL_FIELDS) if (diffs.includes(f) && !blank(undated[f])) return null;
+  return sideOf;
+}
 
 /** 1 = candidate is from a newer paper, -1 = older, 0 = same / cannot tell. */
 export function recency(candidate: Pick<SideInfo, 'year' | 'examDate'>, existing: Pick<SideInfo, 'year' | 'examDate'>): -1 | 0 | 1 {
@@ -82,7 +113,9 @@ export function recency(candidate: Pick<SideInfo, 'year' | 'examDate'>, existing
 
 /**
  * The decision for one pending review, or null when a human has to look at it.
- *  - same question in ANOTHER paper (shift / date / tier / year differs)  -> keep both (each paper needs its question)
+ *  - same exam + year, one copy has the exam date and the other has none  -> the dated copy wins (S38)
+ *  - same question in ANOTHER paper (shift / date / tier / year differs)  -> keep both (each paper needs its question);
+ *    applied at once when nothing else differs, after the waiting time otherwise
  *  - nothing live to compare with (the old one was hidden / deleted)       -> keep the new one
  *  - identical copy                                                        -> keep the existing one (students' bookmarks + history stay)
  *  - similar copy, only solution / picture / paper-number differ (optional) -> keep the newer paper's copy
@@ -99,10 +132,19 @@ export function decideAuto(args: {
   if (!args.existing || !args.existing.live) {
     return { action: 'KEEP_NEW', reason: 'the old copy is not live, so the new one is published' };
   }
+  const dv = datedVersusUndated(diffs, args.existing, args.candidate);
+  if (dv === 'candidate') {
+    return { action: 'KEEP_NEW', reason: 'the new copy has the exam date; it replaces the older copy that had none' };
+  }
+  if (dv === 'existing') {
+    return { action: 'KEEP_EXISTING', reason: 'the existing copy already has the exam date; the copy without a date is not needed' };
+  }
   if (diffs.some((d) => PAPER_FIELDS.includes(d))) {
     // a changed answer/options on top of a changed paper is still a real conflict
     if (diffs.some((d) => d === 'correctAnswer' || d === 'options')) return null;
-    return { action: 'KEEP_BOTH', reason: 'same question in a different paper - kept in both papers' };
+    // nothing but paper details / solution differ: it is certainly the same question in another paper - no need to wait
+    const onlyPaperDetails = diffs.every((d) => PAPER_FIELDS.includes(d) || SAFE_FIELDS.includes(d));
+    return { action: 'KEEP_BOTH', reason: 'same question in a different paper - kept in both papers', ...(onlyPaperDetails ? { immediate: true } : {}) };
   }
   if (args.matchType === 'EXACT' || diffs.length === 0) {
     return { action: 'KEEP_EXISTING', reason: 'identical copy - the existing question stays live' };

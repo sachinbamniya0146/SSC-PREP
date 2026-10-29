@@ -15,6 +15,7 @@ import { readPatternSections } from '../common/section-plan';
 import { cacheClearPrefix } from '../common/cache';
 import { EXAM_PRESETS, planPresetSync, type ExistingPattern } from '../common/exam-presets';
 import { MARKING_CACHE_PREFIX } from '../tests/marking-scheme';
+import { planCommonExams } from '../common/common-exams';
 
 // v1 §10 — Admin dashboards: revenue overview + audit log viewer + user management.
 // All endpoints are ADMIN-only (global JwtAuthGuard is on the module).
@@ -915,6 +916,32 @@ export class AdminController {
         isActive: body.isActive ?? true,
       },
     });
+  }
+
+  // S37: Railway / Selection Post / Delhi Police ... PYQ go in the same Excel, but the importer never invents an exam.
+  // GET shows what would be added; POST adds only the missing ones (an exam that exists by slug, code or name is skipped).
+  @Get('exams/common')
+  async listCommonExams() {
+    const existing = await this.prisma.exam.findMany({ select: { name: true, slug: true, code: true } });
+    return planCommonExams(existing);
+  }
+
+  @Post('exams/common')
+  async addCommonExams(@Body() body: { slugs?: string[] }) {
+    const existing = await this.prisma.exam.findMany({ select: { name: true, slug: true, code: true } });
+    const want = Array.isArray(body?.slugs) && body.slugs.length ? new Set(body.slugs.map((x) => String(x))) : null;
+    const plan = planCommonExams(existing).filter((p) => !want || want.has(p.slug));
+    const created: string[] = [];
+    const skipped: string[] = [];
+    for (const p of plan) {
+      if (p.status === 'EXISTS') {
+        skipped.push(`${p.name} (already there as ${p.existingSlug})`);
+        continue;
+      }
+      await this.prisma.exam.create({ data: { name: p.name, slug: p.slug, code: p.code, isActive: true } });
+      created.push(p.name);
+    }
+    return { created, skipped };
   }
 
   @Patch('exams/:id')

@@ -22,6 +22,8 @@ function makeDb(rows, settings, users) {
     if (w.createdAt?.lte && !(r.createdAt <= w.createdAt.lte)) return false;
     if (w.id?.in && !w.id.in.includes(r.id)) return false;
     if (w.OR && !w.OR.some(o => matchWhere(r, o))) return false;
+    if (w.AND && !w.AND.every(o => matchWhere(r, o))) return false;
+    if (w.differences?.array_contains && !w.differences.array_contains.every(f => (r.differences || []).includes(f))) return false;
     if ('autoReason' in w) {
       const c = w.autoReason;
       if (c === null) { if (r.autoReason !== null && r.autoReason !== undefined) return false; }
@@ -41,14 +43,14 @@ function makeDb(rows, settings, users) {
       },
       updateMany: async ({ where, data }) => { let n = 0; for (const r of rows) if (matchWhere(r, where)) { Object.assign(r, data); n++; } return { count: n }; },
     },
-    question: { findMany: async ({ where }) => where.id.in.map(id => ({ id, year: 2024, examDate: null, isActive: true, isApproved: true, autoSuspended: false, createdAt: new Date() })) },
+    question: { findMany: async ({ where }) => where.id.in.map(id => ({ id, year: 2024, examDate: null, shift: null, examTier: null, tierPaper: null, paperCode: null, isActive: true, isApproved: true, autoSuspended: false, createdAt: new Date(), ...((globalThis.__qdata || {})[id] || {}) })) },
     appSetting: { findUnique: async ({ where }) => settings[where.key] ?? null, upsert: async ({ where, create, update }) => { settings[where.key] = { key: where.key, valueJson: (settings[where.key] ? update : create).valueJson, updatedBy: (create || {}).updatedBy }; } },
     user: { findUnique: async () => ({ id: 'admin1', role: 'ADMIN' }), findFirst: async () => ({ id: 'admin1' }) },
   };
 }
 const DAY = 86400000, old = new Date(Date.now() - 3 * DAY);
 const mk = (i, kind, extra = {}) => ({ id: 'r' + String(i).padStart(5, '0'), status: 'PENDING', matchType: kind === 'human' ? 'SIMILAR' : 'EXACT', differences: kind === 'human' ? ['questionText'] : [], existingQuestionId: 'q' + i, candidateQuestionId: 'c' + i, candidateJson: null, createdAt: new Date(old.getTime() + i), autoResolved: false, autoReason: null, ...extra });
-let ok = true; const check = (name, cond, info = '') => { console.log((cond ? 'PASS ' : 'FAIL ') + name + (info ? '  ' + info : '')); if (!cond) ok = false; };
+let pv5; let ok = true; const check = (name, cond, info = '') => { console.log((cond ? 'PASS ' : 'FAIL ') + name + (info ? '  ' + info : '')); if (!cond) ok = false; };
 
 (async () => {
   // Scenario 1: 650 reviews that need a person come FIRST (oldest), then 40 decidable ones. Old code looked at 300 only.
@@ -83,5 +85,39 @@ let ok = true; const check = (name, cond, info = '') => { console.log((cond ? 'P
   rows = []; for (let i = 0; i < 3100; i++) rows.push(mk(i, 'human')); for (let i = 3100; i < 3105; i++) rows.push(mk(i, 'exact')); db = makeDb(rows, {}, {});
   svc = new AutoPublishService(db, reviews3);
   s = await svc.run('manual'); check('S4 stops after SCAN_MAX without crashing', s && s.keptExisting === 0 && s.needsHuman === 3000, JSON.stringify(s));
+  // Scenario 5 (S38): the same question in another paper is applied AT ONCE (not after 24h); everything else still waits
+  const fresh = new Date();
+  const mkNew = (i, kind, extra = {}) => mk(i, kind, { createdAt: new Date(fresh.getTime() + i), ...extra });
+  rows = [
+    mkNew(1, 'exact', { matchType: 'SIMILAR', differences: ['shift', 'examDate'] }),   // cross-paper, nothing else differs -> now
+    mkNew(2, 'exact', { matchType: 'SIMILAR', differences: ['shift', 'questionText'] }), // cross-paper but text differs -> waits
+    mkNew(3, 'exact'),                                                                   // identical copy -> waits 24h
+    mkNew(4, 'human'),                                                                   // person
+    mkNew(5, 'exact', { matchType: 'SIMILAR', differences: ['shift', 'correctAnswer'] }), // conflict -> person
+    mk(6, 'exact', { matchType: 'SIMILAR', differences: ['shift'] }),                    // old enough cross-paper -> decided by the due pass
+  ];
+  db = makeDb(rows, {}, {});
+  const reviews5 = { resolveDecided: async (items) => { for (const it of items) { const x = rows.find(y => y.id === it.id); x.status = it.action === 'KEEP_BOTH' ? 'KEPT_BOTH' : it.action === 'KEEP_NEW' ? 'KEPT_NEW' : 'KEPT_EXISTING'; } return { doneIds: items.map(i => i.id), failedIds: [] }; } };
+  svc = new AutoPublishService(db, reviews5);
+  const st = (n) => rows.find(x => x.id === 'r' + String(n).padStart(5, '0')).status;
+  pv5 = await svc.preview();
+  check('S5 preview counts the two cross-paper reviews as ready', pv5.keepBoth === 2 && pv5.dueByTime === 1, JSON.stringify(pv5));
+  s = await svc.run('manual');
+  check('S5 cross-paper (fresh) decided at once', st(1) === 'KEPT_BOTH' && st(6) === 'KEPT_BOTH', JSON.stringify(s));
+  check('S5 text-differs, identical-fresh, human and conflict reviews still wait', st(2) === 'PENDING' && st(3) === 'PENDING' && st(4) === 'PENDING' && st(5) === 'PENDING');
+  check('S5 each review decided once (keptBoth = 2)', s.keptBoth === 2 && s.keptExisting === 0, JSON.stringify(s));
+
+  // Scenario 6 (S38): dated upload vs old undated copy of the same question -> the dated one wins (after the normal wait)
+  globalThis.__qdata = { q10: { year: 2024 }, c10: { year: 2024, examDate: '2024-06-20', shift: 'Shift 2', examTier: 'TIER_1', tierPaper: 'PAPER_1' }, q11: { year: 2024 }, c11: { year: 2025, examDate: '2025-06-20' } };
+  rows = [
+    mk(10, 'exact', { matchType: 'SIMILAR', differences: ['examDate', 'shift', 'examTier', 'tierPaper'], existingQuestionId: 'q10', candidateQuestionId: 'c10' }),
+    mk(11, 'exact', { matchType: 'SIMILAR', differences: ['year', 'examDate'], existingQuestionId: 'q11', candidateQuestionId: 'c11' }),
+  ];
+  db = makeDb(rows, {}, {});
+  svc = new AutoPublishService(db, reviews5);
+  s = await svc.run('manual');
+  check('S6 dated copy replaces the undated one (KEEP_NEW)', rows[0].status === 'KEPT_NEW', JSON.stringify(s));
+  check('S6 another year stays a separate paper (KEEP_BOTH)', rows[1].status === 'KEPT_BOTH');
+  globalThis.__qdata = {};
   console.log(ok ? 'ALL OK' : 'SOME FAILED'); process.exitCode = ok ? 0 : 1;
 })();

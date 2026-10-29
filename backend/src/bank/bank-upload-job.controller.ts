@@ -34,6 +34,9 @@ export class BankUploadJobController {
       hasRejected: j.rejectedRows.length > 0, kind: j.kind,
       updated: j.updated, unchanged: j.unchanged, preview: j.preview,
       papers: j.papers, pending: j.pending, pendingTotal: j.pendingTotal,
+      // S37: PYQ + practice in one file (admin screens only - these carry exam dates)
+      mixed: j.mixed, pyqRows: j.pyqRows, practiceRows: j.practiceRows, pyqWithoutQuestionNo: j.pyqWithoutQuestionNo,
+      practicePlan: j.practicePlan, practicePlanTruncated: j.practicePlanTruncated, unknownExams: j.unknownExams, hindiMissingRows: j.hindiMissingRows.slice(0, 200),
     };
   }
 
@@ -48,12 +51,17 @@ export class BankUploadJobController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async start(@UploadedFile() file: any, @Req() req: any, @Body() body: any) {
     const practice = body?.kind === 'practice' || body?.isPracticeOnly === 'true';
+    // S37: kind=mixed is the "PYQ + Practice (one Excel)" button - each row decides by itself, so the uploader needs BOTH departments
+    const mixed = body?.kind === 'mixed' && !practice;
     if (!this.isAdmin(req)) {
-      const need = practice ? 'PRACTICE' : 'QUESTIONS';
-      if (!(req.user?.permissions ?? []).includes(need)) {
-        throw new ForbiddenException(practice
-          ? 'You do not have access to upload Practice Questions. Please contact the admin.'
-          : 'You do not have access to upload PYQ / Question Bank questions. Please contact the admin.');
+      const has: string[] = req.user?.permissions ?? [];
+      const need = mixed ? ['QUESTIONS', 'PRACTICE'] : [practice ? 'PRACTICE' : 'QUESTIONS'];
+      if (!need.every((n) => has.includes(n))) {
+        throw new ForbiddenException(mixed
+          ? 'A PYQ + Practice file needs both the Questions and the Practice access. Please contact the admin.'
+          : practice
+            ? 'You do not have access to upload Practice Questions. Please contact the admin.'
+            : 'You do not have access to upload PYQ / Question Bank questions. Please contact the admin.');
       }
     }
     if (!file) throw new BadRequestException('Multipart field "file" (.xlsx/.xls/.csv/.json) is required');
@@ -64,6 +72,7 @@ export class BankUploadJobController {
       isPracticeOnly: practice,
       requireSolution: body?.requireSolution !== 'false',
       dryRun: body?.dryRun === 'true',
+      mixed,
     });
     return this.view(job);
   }

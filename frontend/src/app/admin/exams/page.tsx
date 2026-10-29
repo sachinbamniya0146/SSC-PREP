@@ -45,6 +45,8 @@ export default function ExamManagementPage() {
   const [createErr, setCreateErr] = React.useState("");
 
   const [savingId, setSavingId] = React.useState<string>("");
+  const [commonBusy, setCommonBusy] = React.useState(false);
+  const [commonMsg, setCommonMsg] = React.useState("");
 
   // Tracks the last auto-computed slug/code so onNameChange() only
   // overwrites slug/code while they still match its own previous guess —
@@ -137,6 +139,35 @@ export default function ExamManagementPage() {
       setCreateErr(e instanceof Error ? e.message : "Could not create the exam");
     } finally {
       setCreating(false);
+    }
+  }
+
+  // S37: add Selection Post / Railway / Delhi Police ... in one click (only the missing ones are created).
+  async function addCommonExams() {
+    setCommonBusy(true);
+    setCommonMsg("");
+    try {
+      const r = await fetchAuth(`${API_BASE}/admin/exams/common`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setCommonMsg(d?.message || `HTTP ${r.status}`);
+        return;
+      }
+      const made: string[] = d.created ?? [];
+      const skip: string[] = d.skipped ?? [];
+      setCommonMsg(
+        (made.length ? `Created: ${made.join(", ")}. ` : "Nothing new to create. ") +
+          (skip.length ? `Already there: ${skip.join("; ")}.` : ""),
+      );
+      await loadExams();
+    } catch (e) {
+      setCommonMsg(e instanceof Error ? e.message : "Could not add the common exams");
+    } finally {
+      setCommonBusy(false);
     }
   }
 
@@ -243,6 +274,24 @@ export default function ExamManagementPage() {
               {createMsg}
             </p>
           )}
+        </div>
+
+        {/* ---- Common exams quick-add (S37) ---- */}
+        <div className="mt-6 rounded-xl border border-border bg-card p-5">
+          <h2 className="font-semibold">🚆 Add common exams (Selection Post, Railway, Delhi Police ...)</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            PYQ of other exams go in the same Excel, but the exam must exist first. One click adds SSC Selection Post, GD, Steno, JE,
+            Delhi Police, RRB NTPC / Group D / ALP / JE. Only the missing ones are created; an exam that already exists (same slug,
+            code or name) is skipped. Marking scheme (ExamPattern) is set separately.
+          </p>
+          <button
+            onClick={addCommonExams}
+            disabled={commonBusy}
+            className="btn mt-3 bg-primary px-5 py-2 text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {commonBusy ? "Adding..." : "Add common exams"}
+          </button>
+          {commonMsg && <p className="mt-3 rounded-lg border border-border bg-muted/40 p-3 text-sm">{commonMsg}</p>}
         </div>
 
         {/* ---- Existing exams ---- */}

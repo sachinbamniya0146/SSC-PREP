@@ -59,6 +59,7 @@ globalThis.expect = (a) => { const m = mk(a, false); m.not = mk(a, true); m.reje
   const RealDate = Date; let fixed = null;
   class FakeDate extends RealDate { constructor(...a) { if (a.length === 0 && fixed !== null) super(fixed); else super(...a); } static now() { return fixed !== null ? fixed : RealDate.now(); } }
   globalThis.jest = {
+    mock: () => {},
     useFakeTimers: () => { fixed = RealDate.now(); globalThis.Date = FakeDate; return globalThis.jest; },
     setSystemTime: (t) => { fixed = +new RealDate(t); },
     useRealTimers: () => { fixed = null; globalThis.Date = RealDate; return globalThis.jest; },

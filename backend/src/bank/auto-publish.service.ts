@@ -143,11 +143,11 @@ export class AutoPublishService implements OnModuleInit, OnModuleDestroy {
     const rows = ids.size
       ? await this.prisma.question.findMany({
           where: { id: { in: [...ids] } },
-          select: { id: true, year: true, examDate: true, isActive: true, isApproved: true, autoSuspended: true, createdAt: true },
+          select: { id: true, year: true, examDate: true, shift: true, examTier: true, tierPaper: true, paperCode: true, isActive: true, isApproved: true, autoSuspended: true, createdAt: true },
         })
       : [];
     const side = new Map<string, SideInfo>(
-      rows.map((q) => [q.id, { year: q.year ?? null, examDate: q.examDate ?? null, live: q.isActive && q.isApproved && !q.autoSuspended, createdAt: q.createdAt }]),
+      rows.map((q) => [q.id, { year: q.year ?? null, examDate: q.examDate ?? null, shift: q.shift ?? null, examTier: q.examTier ?? null, tierPaper: q.tierPaper ?? null, paperCode: q.paperCode ?? null, live: q.isActive && q.isApproved && !q.autoSuspended, createdAt: q.createdAt }]),
     );
 
     const out = new Map<string, AutoDecision | null>();
@@ -157,7 +157,16 @@ export class AutoPublishService implements OnModuleInit, OnModuleDestroy {
       let candidate: SideInfo | null;
       if (uploadMode) {
         const c = r.candidateJson as any;
-        candidate = { year: typeof c?.year === 'number' ? c.year : null, examDate: typeof c?.examDate === 'string' ? c.examDate : null, live: false };
+        const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null);
+        candidate = {
+          year: typeof c?.year === 'number' ? c.year : null,
+          examDate: str(c?.examDate),
+          shift: str(c?.shift),
+          examTier: str(c?.examTier),
+          tierPaper: str(c?.tierPaper),
+          paperCode: str(c?.paperCode),
+          live: false,
+        };
       } else {
         candidate = r.candidateQuestionId ? side.get(r.candidateQuestionId) ?? null : null;
       }
@@ -188,18 +197,34 @@ export class AutoPublishService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * Reviews whose differences are paper details (shift / date / tier / year ...). They are read regardless of their age,
+   * because the rules apply "the same question in another paper" at once (decision.immediate); every other decision
+   * on them still waits for `afterHours`.
+   */
+  private immediateWhere() {
+    const paperFields = ['examId', 'year', 'shift', 'examDate', 'examTier', 'tierPaper', 'paperCode'];
+    return {
+      status: 'PENDING',
+      OR: [{ autoReason: null }, { autoReason: { not: AUTO_UNDONE } }],
+      AND: [{ OR: paperFields.map((f) => ({ differences: { array_contains: [f] } })) }],
+    };
+  }
+
   /** What would happen if the job ran now: counts per decision, so the admin can see it before trusting it. */
   async preview() {
     const cfg = await this.config();
-    const [pending, dueRows] = await Promise.all([
+    const sel = { id: true, matchType: true, differences: true, existingQuestionId: true, candidateQuestionId: true, candidateJson: true } as const;
+    const [pending, dueList, paperList] = await Promise.all([
       this.prisma.duplicateReview.count({ where: { status: 'PENDING' } }),
-      this.prisma.duplicateReview.findMany({
-        where: this.dueWhere(cfg),
-        orderBy: { createdAt: 'asc' },
-        take: PREVIEW_MAX,
-        select: { id: true, matchType: true, differences: true, existingQuestionId: true, candidateQuestionId: true, candidateJson: true },
-      }),
+      this.prisma.duplicateReview.findMany({ where: this.dueWhere(cfg), orderBy: { createdAt: 'asc' }, take: PREVIEW_MAX, select: sel }),
+      this.prisma.duplicateReview.findMany({ where: this.immediateWhere(), orderBy: { createdAt: 'asc' }, take: PREVIEW_MAX, select: sel }),
     ]);
+    // the paper-detail reviews that are not due yet count only when their decision is "immediate"
+    const dueIds = new Set(dueList.map((r) => r.id));
+    const extra = paperList.filter((r) => !dueIds.has(r.id));
+    const extraDecisions = await this.decideBatch(extra, cfg);
+    const dueRows = [...dueList, ...extra.filter((r) => extraDecisions.get(r.id)?.immediate)];
     const decisions = await this.decideBatch(dueRows, cfg);
     let keepBoth = 0;
     let keepExisting = 0;
@@ -214,6 +239,7 @@ export class AutoPublishService implements OnModuleInit, OnModuleDestroy {
     return {
       pending,
       due: dueRows.length,
+      dueByTime: dueList.length,
       notDueYet: Math.max(pending - dueRows.length, 0),
       keepBoth,
       keepExisting,
@@ -243,33 +269,41 @@ export class AutoPublishService implements OnModuleInit, OnModuleDestroy {
       const reasonOf = new Map<string, string>();
       let needsHuman = 0;
       let scanned = 0;
-      let lastId: string | undefined;
-      while (items.length < MAX_PER_RUN && scanned < SCAN_MAX) {
-        const page = await this.prisma.duplicateReview.findMany({
-          where: this.dueWhere(cfg),
-          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-          take: PAGE_SIZE,
-          ...(lastId ? { cursor: { id: lastId }, skip: 1 } : {}),
-          select: { id: true, matchType: true, differences: true, existingQuestionId: true, candidateQuestionId: true, candidateJson: true },
-        });
-        if (page.length === 0) break;
-        lastId = page[page.length - 1].id;
-        scanned += page.length;
+      // pass 1: reviews that waited long enough. pass 2: "same question in another paper" reviews of any age (decision.immediate).
+      for (const pass of ['due', 'immediate'] as const) {
+        let lastId: string | undefined;
+        let passScanned = 0;
+        while (items.length < MAX_PER_RUN && passScanned < SCAN_MAX) {
+          const page = await this.prisma.duplicateReview.findMany({
+            where: pass === 'due' ? this.dueWhere(cfg) : this.immediateWhere(),
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            take: PAGE_SIZE,
+            ...(lastId ? { cursor: { id: lastId }, skip: 1 } : {}),
+            select: { id: true, matchType: true, differences: true, existingQuestionId: true, candidateQuestionId: true, candidateJson: true },
+          });
+          if (page.length === 0) break;
+          lastId = page[page.length - 1].id;
+          passScanned += page.length;
+          if (pass === 'due') scanned += page.length;
 
-        const decisions = await this.decideBatch(page, cfg);
-        for (const r of page) {
-          const d = decisions.get(r.id);
-          if (!d) {
-            needsHuman++;
-            continue;
+          const decisions = await this.decideBatch(page, cfg);
+          for (const r of page) {
+            const d = decisions.get(r.id);
+            if (pass === 'immediate') {
+              // only what needs no waiting; the due pass already handled (or counted) everything else
+              if (!d || !d.immediate || reasonOf.has(r.id)) continue;
+            } else if (!d) {
+              needsHuman++;
+              continue;
+            }
+            if (items.length >= MAX_PER_RUN) continue; // the rest waits for the next run
+            items.push({ id: r.id, action: d.action });
+            reasonOf.set(r.id, d.reason);
           }
-          if (items.length >= MAX_PER_RUN) continue; // the rest waits for the next run
-          items.push({ id: r.id, action: d.action });
-          reasonOf.set(r.id, d.reason);
+          if (page.length < PAGE_SIZE) break;
         }
-        if (page.length < PAGE_SIZE) break;
       }
-      if (scanned === 0) return null;
+      if (scanned === 0 && items.length === 0) return null;
 
       const { doneIds, failedIds } = items.length ? await this.reviews.resolveDecided(items, actor, { publish: false }) : { doneIds: [] as string[], failedIds: [] as string[] };
 

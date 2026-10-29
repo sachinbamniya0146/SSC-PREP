@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { stripAdminOnlyFields } from '../common/student-safe';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLISHED_QUESTION_WHERE } from '../common/question-visibility';
@@ -214,7 +215,9 @@ export class SearchService implements OnModuleInit {
       // must NOT be forwarded as-is to the client. Same reveal-gate principle as
       // practice mode / bookmarks: strip answer-revealing fields here before
       // they leave the service, since no attempt record exists to justify reveal.
-      const sanitizedHits = (result.hits || []).map((hit: any) => {
+      const sanitizedHits = (result.hits || []).map((hit0: any) => {
+        // paperCode / examDate carry the real exam date: admin only (S40, 29 Oct 2026)
+        const hit = stripAdminOnlyFields(hit0);
         const safeHit = { ...hit };
         delete safeHit.correctAnswer;
         delete safeHit.explanation;

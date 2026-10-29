@@ -29,6 +29,8 @@ import { studentMockTitle } from '../common/pyq-mock-title';
 import { setNumberForPaper } from './pyq-mock-titles';
 import { pickQuestionsSheetName } from '../common/excel-sheet';
 import { normalizeShiftOrUndefined } from '../common/shift';
+import { buildExamAliasMap, examAliasKey } from '../common/exam-ref';
+import { KindTally, clearPaperFields, newKindTally, questionNoWarning, rowKind, tallyRow } from '../common/row-kind';
 import { compareQuestions } from '../common/duplicate-compare';
 import { buildZip } from '../common/zip';
 import {
@@ -344,6 +346,11 @@ export interface UploadResult {
   errorsTruncated?: boolean;
   errorSummary?: Record<string, number>;
   warningsTotal?: number;
+  // 29 Oct 2026 (S37): one file can hold PYQ rows (year / examDate filled) AND practice rows (both empty) - the counts per kind
+  pyqRows?: number;
+  practiceRows?: number;
+  /** PYQ rows that carry no questionNo (their mock follows upload order) */
+  pyqWithoutQuestionNo?: number;
   // 26 Oct 2026: PYQ papers this upload feeds, and rows that join no date-wise mock (reason in `pending`)
   papers?: PaperPreview['papers'];
   pending?: PaperPreview['pending'];
@@ -482,6 +489,9 @@ export class BankUploadService {
     if (opt) return { field: opt[1].split(', ').map((k) => `option${k}`).join(', '), fix: 'Every option (A–D) needs text, a diagram or an image.' };
     if (/belongs to (chapter|topic)/i.test(m)) {
       return { field: ref?.[1], fix: 'This topic / sub-topic belongs to a different chapter / topic — write the id / name with the correct parent in the row (see the Reference IDs sheet).' };
+    }
+    if (/examId/.test(m) && /not found in database|cannot be empty/i.test(m)) {
+      return { field: 'examId', fix: 'Write the exam slug from the Reference IDs sheet. A new exam (Selection Post, Railway ...) must first be created in Admin -> Exams (/admin/exams) - the "Add common exams" button adds the usual ones.' };
     }
     if (/not found in database/i.test(m)) {
       return { field: ref?.[1], fix: `${ref?.[1] ?? 'Id'}: the name / slug does not match the database — copy the correct slug or name from the Reference IDs sheet (check spelling and extra spaces).` };
@@ -1582,7 +1592,7 @@ export class BankUploadService {
     if (n > 0) {
       this.pushUploadWarning(result, {
         row: 0,
-        message: `${n} question(s) had an empty 'year' column — they cannot become PYQs and were saved as Practice questions. If they were PYQs, fill in the year and upload again.`,
+        message: `${n} question(s) had no year / examDate - they were saved as Practice questions (correct for the practice rows of a PYQ + Practice file). If they were PYQs, fill in the year (or examDate) and upload again.`,
       });
     }
   }
@@ -2573,14 +2583,14 @@ export class BankUploadService {
     // an empty-but-reachable result (DB up, but zero exams/subjects
     // seeded) also gets its own clear message instead of silently
     // failing every row with "examId not found in database".
-    let exams: { id: string; name: string; slug: string }[];
+    let exams: { id: string; name: string; slug: string; code: string }[];
     let subjects: { id: string; name: string; slug: string }[];
     let chapters: { id: string; name: string; slug: string; subjectId: string }[];
     let topics: { id: string; name: string; slug: string; chapterId: string }[];
     let subTopics: { id: string; name: string; slug: string; topicId: string }[];
     try {
       [exams, subjects, chapters, topics, subTopics] = await Promise.all([
-        this.prisma.exam.findMany({ select: { id: true, name: true, slug: true } }),
+        this.prisma.exam.findMany({ select: { id: true, name: true, slug: true, code: true } }),
         this.prisma.subject.findMany({ select: { id: true, name: true, slug: true } }),
         this.prisma.chapter.findMany({ select: { id: true, name: true, slug: true, subjectId: true } }),
         this.prisma.topic.findMany({ select: { id: true, name: true, slug: true, chapterId: true } }),
@@ -2616,7 +2626,8 @@ export class BankUploadService {
     // as well as bare slug for the common case where a sheet's slugs
     // happen to be globally unique anyway (like Sachin's "chap-xxx-subject"
     // naming convention, which is already globally unique in practice).
-    const examSlugToId = new Map(exams.map(e => [e.slug, e.id]));
+    // 29 Oct 2026 (S37): the slug, the id, the exam code and the exam name (any case) all find the exam
+    const examSlugToId = buildExamAliasMap(exams);
     const subjectSlugToId = new Map(subjects.map(s => [s.slug, s.id]));
     const chapterSlugToId = new Map(chapters.map(c => [c.slug, c.id]));
     const chapterSlugInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${c.slug}`, c.id]));
@@ -2649,6 +2660,7 @@ export class BankUploadService {
     // resolve + validate together like before.
     const rawParsed: { rowNum: number; row: any[]; question: BulkUploadQuestion }[] = [];
     const paperInputs: import('../common/pyq-paper-preview').PaperRowInput[] = [];
+    const kindTally: KindTally = newKindTally(); // PYQ rows vs practice rows of this file (S37)
     const rawCell = (row: any[], key: string) => (headerMap[key] !== undefined ? String(row[headerMap[key]] ?? '').trim() : '');
     for (let i = 0; i < rows.length; i++) {
       if (i > 0 && i % 2000 === 0) {
@@ -2680,6 +2692,11 @@ export class BankUploadService {
           question.examTier = undefined;
           question.tierPaper = undefined;
           question.paperQuestionNo = undefined;
+        } else if (rowKind(question) === 'PRACTICE') {
+          // 29 Oct 2026 (S37): ONE file can hold PYQ and practice rows. A row with neither year nor examDate is a practice
+          // question: whatever paper columns it carries (shift, tier, paperCode, questionNo ...) are dropped, so a stray
+          // shift can never create a ghost paper.
+          clearPaperFields(question);
         }
         // Oct 2026: a question WITHOUT a solution is not uploaded — it is reported so the admin can add it.
         if (requireSolution && !hasSolution(question)) {
@@ -2693,7 +2710,7 @@ export class BankUploadService {
           });
           continue;
         }
-        if (!isPracticeOnly) {
+        if (rowKind(question) === 'PYQ') {
           paperInputs.push({ row: rowNum, examId: question.examId, examDate: question.examDate, shift: question.shift, rawTier: rawCell(row, 'examTier'), rawPaper: rawCell(row, 'tierPaper') });
         }
         rawParsed.push({ rowNum, row, question });
@@ -2732,6 +2749,7 @@ export class BankUploadService {
         );
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
+        tallyRow(kindTally, rowKind(question), question);
         parsedRows.push({ rowNum, row, question });
       } catch (error) {
         result.failed++;
@@ -2855,8 +2873,18 @@ export class BankUploadService {
       result.pendingTotal = prev.pendingTotal;
       for (const p of prev.pending) this.pushUploadWarning(result, { row: p.row, message: p.message });
     }
+    this.applyKindReport(result, kindTally);
     result.success = result.failed === 0;
     return result;
+  }
+
+  /** S37: "PYQ: n · Practice: m" counts + ONE warning when PYQ rows have no questionNo. */
+  private applyKindReport(result: UploadResult, tally: KindTally): void {
+    result.pyqRows = tally.pyq;
+    result.practiceRows = tally.practice;
+    result.pyqWithoutQuestionNo = tally.pyqWithoutQuestionNo;
+    const w = questionNoWarning(tally);
+    if (w) this.pushUploadWarning(result, { row: 0, message: w });
   }
 
   /**
@@ -2872,7 +2900,7 @@ export class BankUploadService {
     // BUGFIX (this session — same reasoning as processBulkQuestions()):
     // a DB-connectivity failure here used to bubble out as an opaque
     // Prisma error with no indication it wasn't a file/JSON problem.
-    let exams: { id: string; slug: string }[];
+    let exams: { id: string; name: string; slug: string; code: string }[];
     let subjects: { id: string; slug: string }[];
     // BUGFIX (see normalizeTaxonomyName() doc-comment above chapter's
     // `name` is now selected too — needed for the name-based fallback
@@ -2882,7 +2910,7 @@ export class BankUploadService {
     let subTopics: { id: string; slug: string; topicId: string }[];
     try {
       [exams, subjects, chapters, topics, subTopics] = await Promise.all([
-        this.prisma.exam.findMany({ select: { id: true, slug: true } }),
+        this.prisma.exam.findMany({ select: { id: true, name: true, slug: true, code: true } }),
         this.prisma.subject.findMany({ select: { id: true, slug: true } }),
         this.prisma.chapter.findMany({ select: { id: true, name: true, slug: true, subjectId: true } }),
         this.prisma.topic.findMany({ select: { id: true, slug: true, chapterId: true } }),
@@ -2912,7 +2940,8 @@ export class BankUploadService {
     const topicChapterMap = new Map(topics.map(t => [t.id, t.chapterId]));
     const subTopicTopicMap = new Map(subTopics.map(t => [t.id, t.topicId]));
 
-    const examSlugToId = new Map(exams.map(e => [e.slug, e.id]));
+    // 29 Oct 2026 (S37): the slug, the id, the exam code and the exam name (any case) all find the exam
+    const examSlugToId = buildExamAliasMap(exams);
     const subjectSlugToId = new Map(subjects.map(s => [s.slug, s.id]));
     const chapterSlugToId = new Map(chapters.map(c => [c.slug, c.id]));
     const chapterSlugInSubjectToId = new Map(chapters.map(c => [`${c.subjectId}::${c.slug}`, c.id]));
@@ -2949,6 +2978,7 @@ export class BankUploadService {
 
     const validRows: { rowNum: number; question: BulkUploadQuestion }[] = [];
     const paperInputs2: import('../common/pyq-paper-preview').PaperRowInput[] = [];
+    const kindTally2: KindTally = newKindTally();
     for (let i = 0; i < questions.length; i++) {
       const question = questions[i];
       const rowNum = i + 1;
@@ -2967,14 +2997,9 @@ export class BankUploadService {
         question.tierPaper = normalizeTierPaper(rawPaper).paper;
         question.paperQuestionNo = parsePaperQuestionNo(anyQ.paperQuestionNo ?? anyQ.questionNo);
         if (question.year == null && question.examDate) question.year = yearOfDate(question.examDate);
-        if (isPracticeOnly) {
-          question.year = undefined;
-          question.shift = undefined;
-          question.paperCode = undefined;
-          question.examDate = undefined;
-          question.examTier = undefined;
-          question.tierPaper = undefined;
-          question.paperQuestionNo = undefined;
+        if (isPracticeOnly || rowKind(question) === 'PRACTICE') {
+          // 29 Oct 2026 (S37): a row with neither year nor examDate is practice, even inside a PYQ upload
+          clearPaperFields(question);
         } else {
           paperInputs2.push({ row: rowNum, examId: question.examId, examDate: question.examDate, shift: question.shift, rawTier, rawPaper });
         }
@@ -2987,6 +3012,7 @@ export class BankUploadService {
         );
         this.validateReferences(question, examIds, subjectIds, chapterIds, topicIds, subTopicIds,
           chapterSubjectMap, topicChapterMap, subTopicTopicMap, result, rowNum);
+        tallyRow(kindTally2, rowKind(question), question);
         validRows.push({ rowNum, question });
       } catch (error) {
         result.failed++;
@@ -3078,6 +3104,7 @@ export class BankUploadService {
       result.pendingTotal = prev.pendingTotal;
       for (const p of prev.pending) this.pushUploadWarning(result, { row: p.row, message: p.message });
     }
+    this.applyKindReport(result, kindTally2);
     result.success = result.failed === 0;
     return result;
   }
@@ -3190,6 +3217,10 @@ export class BankUploadService {
     const examDate = normalizeExamDate(get('examDate') || get('date'));
     // date-wise mocks: year may be left blank when the exam date is given (year = year of examDate)
     const year = get('year') ? parseInt(get('year'), 10) : yearOfDate(examDate);
+    // 29 Oct 2026 (S37): a year that cannot be read must not silently turn the row into a practice question
+    if (get('year') && (!Number.isInteger(year) || (year as number) < 1990 || (year as number) > 2100)) {
+      throw new Error(`Invalid year "${get('year')}": write a 4-digit year such as 2024, or leave year / examDate empty for a practice question`);
+    }
     // unreadable tier / paper text does NOT fail the row — it just joins no mock (undefined)
     const examTier = normalizeExamTier(get('examTier')).tier;
     const tierPaper = normalizeTierPaper(get('tierPaper')).paper;
@@ -3278,8 +3309,9 @@ export class BankUploadService {
     chapterNameInSubjectToId: Map<string, string>,
     chapterNameToId: Map<string, string>,
   ): void {
-    if (question.examId && examSlugToId.has(question.examId)) {
-      question.examId = examSlugToId.get(question.examId)!;
+    if (question.examId) {
+      const examHit = examSlugToId.get(question.examId) ?? examSlugToId.get(examAliasKey(question.examId));
+      if (examHit) question.examId = examHit;
     }
     if (question.subjectId && subjectSlugToId.has(question.subjectId)) {
       question.subjectId = subjectSlugToId.get(question.subjectId)!;
@@ -3540,8 +3572,11 @@ export class BankUploadService {
     void result; // kept in the signature to avoid touching both call sites' argument lists
     void rowNum;
 
-    if (!question.examId || !examIds.has(question.examId)) {
-      throw new Error(`examId "${question.examId}" not found in database — so no question of this exam would ever appear in its tests / mocks; the row was rejected`);
+    if (!question.examId) {
+      throw new Error('examId cannot be empty - write the exam slug from the Reference IDs sheet; the row was rejected');
+    }
+    if (!examIds.has(question.examId)) {
+      throw new Error(`examId "${question.examId}" not found in database — create the exam first in Admin -> Exams (/admin/exams), or write the exact slug from the Reference IDs sheet; the row was rejected`);
     }
     if (!subjectIds.has(question.subjectId)) {
       throw new Error(`subjectId "${question.subjectId}" not found in database`);
