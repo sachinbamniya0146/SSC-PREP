@@ -48,8 +48,8 @@ export class TestBuilderService {
         },
         orderBy: { name: 'asc' },
       }),
-      this.prisma.question.groupBy({ by: ['chapterId', 'topicId'], where: this.bilingualPractice() as any, _count: { _all: true } }),
-      examId ? this.prisma.question.groupBy({ by: ['chapterId', 'topicId'], where: { ...PYQ_QUESTION_WHERE, examId }, _count: { _all: true } }) : Promise.resolve([] as any[]),
+      (this.prisma.question as any).groupBy({ by: ['chapterId', 'topicId'], where: this.bilingualPractice() as any, _count: { _all: true } }),
+      examId ? (this.prisma.question as any).groupBy({ by: ['chapterId', 'topicId'], where: { ...PYQ_QUESTION_WHERE, examId }, _count: { _all: true } }) : Promise.resolve([] as any[]),
     ]);
     const examHasPyq = pyq.length > 0;
     const topicP = new Map<string, number>();
@@ -117,7 +117,7 @@ export class TestBuilderService {
     if (total > MAX_TEST_QUESTIONS) throw new BadRequestException(`A test can have at most ${MAX_TEST_QUESTIONS} questions (you asked for ${total}).`);
 
     // the exam's own previous-year topics: a whole-chapter pick uses only topics the exam asked (when the exam has previous-year papers at all)
-    const pyqNodes = (await this.prisma.question.groupBy({ by: ['chapterId', 'topicId'], where: { ...PYQ_QUESTION_WHERE, examId }, _count: { _all: true } })) as any[];
+    const pyqNodes = (await (this.prisma.question as any).groupBy({ by: ['chapterId', 'topicId'], where: { ...PYQ_QUESTION_WHERE, examId }, _count: { _all: true } })) as any[];
     const examHasPyq = pyqNodes.length > 0;
     const askedTopics = new Map<string, Set<string>>();
     for (const g of pyqNodes) if (g.chapterId && g.topicId) (askedTopics.get(g.chapterId) ?? askedTopics.set(g.chapterId, new Set()).get(g.chapterId)!).add(g.topicId);
@@ -161,10 +161,10 @@ export class TestBuilderService {
     for (const sec of sections) {
       const subjectIds = subjectIdsFor(subjects as any, sec.subjectSlug);
       if (subjectIds.length === 0) { summary.push({ name: sec.name, asked: sec.questions, got: 0, note: 'subject not found' }); continue; }
-      const pyq = (await this.prisma.question.groupBy({ by: ['chapterId', 'topicId'], where: { ...PYQ_QUESTION_WHERE, examId, subjectId: { in: subjectIds } }, _count: { _all: true } })) as any[];
+      const pyq = (await (this.prisma.question as any).groupBy({ by: ['chapterId', 'topicId'], where: { ...PYQ_QUESTION_WHERE, examId, subjectId: { in: subjectIds } }, _count: { _all: true } })) as any[];
       // an exam with previous-year papers but none in this subject never asked it: the section is skipped, not invented
       if (examPyqTotal > 0 && pyq.length === 0) { summary.push({ name: sec.name, asked: sec.questions, got: 0, note: 'this exam has no previous-year question in this subject' }); continue; }
-      const practice = (await this.prisma.question.groupBy({ by: ['chapterId', 'topicId'], where: { ...this.bilingualPractice(), subjectId: { in: subjectIds } } as any, _count: { _all: true } })) as any[];
+      const practice = (await (this.prisma.question as any).groupBy({ by: ['chapterId', 'topicId'], where: { ...this.bilingualPractice(), subjectId: { in: subjectIds } } as any, _count: { _all: true } })) as any[];
       const topicAvail = new Map<string, number>();
       const chapterAvail = new Map<string, number>();
       for (const g of practice) {
