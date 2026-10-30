@@ -56,6 +56,8 @@ function match(q, where) {
   }
   return true;
 }
+global.__users = {};
+const attempts = [];
 const prisma = {
   subject: { findMany: async () => subjects.map((s) => ({ ...s, chapters: chapters.filter((c) => c.subjectId === s.id).map((c) => ({ ...c, topics: topics.filter((t) => t.chapterId === c.id) })) })) },
   exam: { findFirst: async ({ where }) => (where.id === 'gd' ? { id: 'gd', name: 'SSC GD' } : null) },
@@ -73,9 +75,13 @@ const prisma = {
     },
   },
   attemptAnswer: { findMany: async () => [] },
+  user: { findUnique: async ({ where }) => global.__users[where.id] || { role: 'STUDENT', subscriptions: [] } },
+  testAttempt: {
+    count: async ({ where }) => attempts.filter((a) => a.userId === where.userId && a.desc.startsWith(where.testTemplate.description.startsWith) && (!where.startedAt || a.startedAt >= where.startedAt.gte)).length,
+  },
   testTemplate: { create: async ({ data }) => { global.__template = data; return { id: 'tpl-1', ...data }; } },
 };
-const svc = new TestBuilderService(prisma, { startAttempt: async (u, t, o) => { global.__started = { u, t, o }; return { id: 'att-1', resumed: false }; } });
+const svc = new TestBuilderService(prisma, { startAttempt: async (u, t, o) => { global.__started = { u, t, o }; attempts.push({ userId: u, desc: global.__template.description, startedAt: new Date() }); return { id: 'att-1', resumed: false }; } });
 const byId = new Map(Q.map((q) => [q.id, q]));
 
 (async () => {
@@ -123,6 +129,30 @@ const byId = new Map(Q.map((q) => [q.id, q]));
   refused = '';
   try { await svc.start('u1', { mode: 'custom', examId: 'nope', items: [{ topicId: 't-pct', count: 1 }] }); } catch (e) { refused = e.message; }
   check('unknown exam is refused', /not available/.test(refused), refused);
+  // ---- S49 free limits: 10 smart mocks in total, 5 custom tests per day, plans unlimited
+  attempts.length = 0;
+  const q0 = await svc.quota('free1');
+  check('quota: a new free student has 10 smart mocks and 5 custom tests', q0.smart.left === 10 && q0.custom.leftToday === 5 && q0.premium === false);
+  for (let i = 0; i < 5; i++) await svc.start('free1', { mode: 'custom', examId: 'gd', items: [{ topicId: 't-pct', count: 3 }] });
+  let refusedCode = null;
+  try { await svc.start('free1', { mode: 'custom', examId: 'gd', items: [{ topicId: 't-pct', count: 3 }] }); } catch (e) { refusedCode = e.getResponse ? e.getResponse().code : e.code; }
+  check('free: the 6th custom test today is refused with PREMIUM_REQUIRED', refusedCode === 'PREMIUM_REQUIRED', String(refusedCode));
+  const smartStill = await svc.start('free1', { mode: 'smart', examId: 'gd' });
+  check('free: custom tests used up does not block a smart mock', !!smartStill.attemptId);
+  for (let i = 0; i < 9; i++) await svc.start('free1', { mode: 'smart', examId: 'gd' });
+  let smartCode = null;
+  try { await svc.start('free1', { mode: 'smart', examId: 'gd' }); } catch (e) { smartCode = e.getResponse ? e.getResponse().code : e.code; }
+  check('free: the 11th smart mock is refused with PREMIUM_REQUIRED', smartCode === 'PREMIUM_REQUIRED', String(smartCode));
+  check('quota numbers after use', (await svc.quota('free1')).smart.left === 0 && (await svc.quota('free1')).custom.leftToday === 0);
+  check('another free student is not affected', (await svc.quota('free2')).smart.left === 10);
+  global.__users['paid'] = { role: 'STUDENT', subscriptions: [{ endsAt: new Date(Date.now() + 86400000) }] };
+  for (let i = 0; i < 12; i++) await svc.start('paid', { mode: 'smart', examId: 'gd' });
+  check('plan holder: unlimited smart mocks', (await svc.quota('paid')).premium === true && (await svc.quota('paid')).smart.left === null);
+  global.__users['lapsed'] = { role: 'STUDENT', subscriptions: [{ endsAt: new Date(Date.now() - 86400000) }] };
+  check('lapsed plan is a free student again', (await svc.quota('lapsed')).premium === false);
+  global.__users['adm'] = { role: 'ADMIN', subscriptions: [] };
+  check('admin is never limited', (await svc.quota('adm')).premium === true);
+
   console.log(fails ? `\n${fails} FAIL` : '\nALL OK');
   process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(2); });

@@ -374,6 +374,14 @@ export default function TestPage() {
     totalQuestions: number;
     totalMarks: number;
   } | null>(null);
+  // S49: a practice set (stashed by Question-Bank-Practice, timed on this device) lets the student choose the time:
+  // the standard 30 seconds per question, or their own minutes. Server-timed exams never offer this.
+  const [clientTimed, setClientTimed] = React.useState(false);
+  const [customMin, setCustomMin] = React.useState("");
+  const customMinutes = (() => {
+    const n = Math.floor(Number(customMin));
+    return clientTimed && customMin !== "" && Number.isFinite(n) && n >= 1 && n <= 300 ? n : null;
+  })();
   // If the Daily Test is locked (no study plan yet, or already taken today),
   // we show that inline instead of a generic instructions form that would
   // just fail with a browser alert() once "Start Test" was clicked.
@@ -489,6 +497,7 @@ export default function TestPage() {
             const sd = JSON.parse(raw);
             const sq: any[] = Array.isArray(sd?.questions) ? sd.questions : [];
             if (sq.length > 0) {
+              setClientTimed(true);
               setPreMeta({
                 title: sd?.title || "Practice Test",
                 durationMinutes: Math.max(1, Math.round(sq.length * 0.5)),
@@ -641,9 +650,15 @@ export default function TestPage() {
         });
         const bd = await br.json().catch(() => ({}));
         if (!br.ok) {
-          alert(`⚠️ ${bd?.message || "Could not build this test."}`);
           setLoading(false);
           setStarting(false);
+          if (bd?.code === "PREMIUM_REQUIRED") {
+            // free limit reached: say so in plain words and offer the plans (the page the student came from stays one tap away)
+            const text = (typeof navigator !== "undefined" && /^hi/i.test(navigator.language) ? bd?.messages?.hi : null) || bd?.messages?.en || bd?.message || "Free limit reached.";
+            window.location.href = confirm(`${text}\n\nOpen the plans now?`) ? "/premium" : "/build-test";
+            return;
+          }
+          alert(`⚠️ ${bd?.message || "Could not build this test."}`);
           window.location.href = "/build-test";
           return;
         }
@@ -847,7 +862,7 @@ export default function TestPage() {
       setStatus({});
       setVisited({ [qs[0].id]: true });
       // server-authoritative style: compute end from now + duration
-      const durationSecFinal = durationSec > 0 ? durationSec : Math.max(60, qs.length * 30); // ~30s/question, min 1 min
+      const durationSecFinal = customMinutes != null && durationSec <= 0 && !attemptId ? customMinutes * 60 : durationSec > 0 ? durationSec : Math.max(60, qs.length * 30); // student's own minutes, else ~30s/question, min 1 min
       startClock(durationSecFinal);
       setPhase("exam");
     } catch (e) {
@@ -1597,7 +1612,7 @@ export default function TestPage() {
   if (phase === "instructions") {
     // No hooks in this branch (all hooks live at the top of TestPage).
     const patMin = patternMeta ? (scribe && patternMeta.scribeAvailable ? totalMinutes(patternMeta.sections.map((x) => ({ minutes: x.scribeMinutes }))) : totalMinutes(patternMeta.sections)) : 0;
-    const durMin = patMin || preMeta?.durationMinutes || Math.max(1, Math.round((total || 10) * 0.5));
+    const durMin = customMinutes ?? (patMin || preMeta?.durationMinutes || Math.max(1, Math.round((total || 10) * 0.5)));
     const totalQ = preMeta?.totalQuestions || total || 10;
     const maxMarks = preMeta?.totalMarks || questions.reduce((s, q) => s + (q.marks ?? 1), 0) || totalQ;
     // Marking comes from the exam pattern when there is one; otherwise from the loaded questions. When neither is known
@@ -1648,6 +1663,25 @@ export default function TestPage() {
                   </div>
                 ))}
               </div>
+
+              {clientTimed && (
+                <div className="card mt-3 flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
+                  <span className="font-semibold">{tr("Time for this set", "Is set ka time")}</span>
+                  <span className="flex items-center gap-2">
+                    <button type="button" className={`btn btn-sm ${customMin === "" ? "btn-primary" : "btn-outline"}`} onClick={() => setCustomMin("")}>
+                      {tr("Standard", "Standard")} ({Math.max(1, Math.round((preMeta?.totalQuestions || 10) * 0.5))} {tr("min", "min")})
+                    </button>
+                    <input
+                      inputMode="numeric"
+                      aria-label={tr("Your own minutes", "Apne minute")}
+                      placeholder={tr("my minutes", "mere minute")}
+                      className="h-9 w-24 rounded-md border border-border bg-background px-2 text-center text-sm"
+                      value={customMin}
+                      onChange={(e) => setCustomMin(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                    />
+                  </span>
+                </div>
+              )}
 
               <div className="card mt-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-3 text-sm">
                 <span className="font-semibold">{tr("Marking", "Marking")}</span>

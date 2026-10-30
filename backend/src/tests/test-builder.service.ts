@@ -8,6 +8,7 @@ import { resolveMarking, totalMarksFor } from '../common/marking';
 import { loadMarkingScheme } from './marking-scheme';
 import { TestsService } from './tests.service';
 import { readPaperSnapshot } from './attempt-paper';
+import { freeCustomTestsPerDay, freeSmartMocks, planPriceInr } from '../common/free-limits';
 import { Candidate, allocateWithCaps, chosenMinutes, pickQuestions, shuffled } from './test-blueprint';
 
 const MAX_TEST_QUESTIONS = 100;
@@ -85,6 +86,42 @@ export class TestBuilderService {
       })
       .filter((s) => s.chapters.length > 0);
     return { examId: examId ?? null, pyqBased: !!examId && examHasPyq, subjects: tree };
+  }
+
+  // --------------------------------------------------------------------------------------------- free limits
+  /** Start of today in IST, as a UTC instant. */
+  private istDayStart(now = new Date()): Date {
+    const ist = new Date(now.getTime() + 5.5 * 3_600_000);
+    return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()) - 5.5 * 3_600_000);
+  }
+
+  /** Staff and students with a running plan are never limited. */
+  private async isUnlimited(userId: string): Promise<boolean> {
+    const u: any = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true, subscriptions: { where: { status: 'ACTIVE' }, select: { endsAt: true }, take: 1 } },
+    });
+    if (!u) return false;
+    if (u.role === 'ADMIN' || u.role === 'MODERATOR') return true;
+    const sub = u.subscriptions?.[0];
+    return !!sub && new Date(sub.endsAt) > new Date();
+  }
+
+  /** What this student may still start for free: smart mocks in total, custom tests today. Premium = unlimited. */
+  async quota(userId: string) {
+    const unlimited = await this.isUnlimited(userId);
+    const smartLimit = freeSmartMocks();
+    const customLimit = freeCustomTestsPerDay();
+    const [smartUsed, customUsed] = await Promise.all([
+      this.prisma.testAttempt.count({ where: { userId, testTemplate: { description: { startsWith: 'Smart mock' } } } }),
+      this.prisma.testAttempt.count({ where: { userId, startedAt: { gte: this.istDayStart() }, testTemplate: { description: { startsWith: 'Custom test' } } } }),
+    ]);
+    return {
+      premium: unlimited,
+      smart: { limit: unlimited ? null : smartLimit, used: smartUsed, left: unlimited ? null : Math.max(0, smartLimit - smartUsed) },
+      custom: { limit: unlimited ? null : customLimit, usedToday: customUsed, leftToday: unlimited ? null : Math.max(0, customLimit - customUsed) },
+      priceInr: planPriceInr(),
+    };
   }
 
   // --------------------------------------------------------------------------------------------- pool
@@ -230,6 +267,24 @@ export class TestBuilderService {
     if (!examId) throw new BadRequestException('Choose your exam first.');
     const exam = await this.prisma.exam.findFirst({ where: { id: examId, isActive: true }, select: { id: true, name: true } });
     if (!exam) throw new BadRequestException('This exam is not available.');
+
+    // free limits (checked before any question is picked, so a refused start costs nothing)
+    const q = await this.quota(userId);
+    if (!q.premium) {
+      const out = mode === 'smart' ? (q.smart.left ?? 0) <= 0 : (q.custom.leftToday ?? 0) <= 0;
+      if (out) {
+        const price = q.priceInr;
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'PREMIUM_REQUIRED',
+          message: mode === 'smart' ? `You have used your ${q.smart.limit} free smart mocks. Get the plan (from ₹${price}) for unlimited.` : `You have used today's ${q.custom.limit} free custom tests. Come back tomorrow, or get the plan (from ₹${price}) for unlimited.`,
+          messages: {
+            en: mode === 'smart' ? `You have used your ${q.smart.limit} free smart mocks. Get the plan (from ₹${price}) for unlimited.` : `You have used today's ${q.custom.limit} free custom tests. Come back tomorrow, or get the plan (from ₹${price}) for unlimited.`,
+            hi: mode === 'smart' ? `आपके ${q.smart.limit} फ्री स्मार्ट मॉक पूरे हो गए। अनलिमिटेड के लिए प्लान लें (₹${price} से)।` : `आज के ${q.custom.limit} फ्री कस्टम टेस्ट पूरे हो गए। कल फिर आइए, या अनलिमिटेड के लिए प्लान लें (₹${price} से)।`,
+          },
+        });
+      }
+    }
 
     let ids: string[] = [];
     let summary: any = null;

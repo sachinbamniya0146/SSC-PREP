@@ -54,6 +54,17 @@ export default function BuildTestPage() {
   const [minutes, setMinutes] = React.useState("");
   const [starting, setStarting] = React.useState(false);
   const [savedTarget, setSavedTarget] = React.useState(false);
+  type Quota = { premium: boolean; smart: { limit: number | null; left: number | null }; custom: { limit: number | null; leftToday: number | null }; priceInr: number };
+  const [quota, setQuota] = React.useState<Quota | null>(null);
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/tests/builder/quota`);
+        if (r.ok) setQuota(await r.json());
+      } catch { /* the page works without the counter; the server still enforces the limit */ }
+    })();
+  }, []);
+  const outOfFree = !!quota && !quota.premium && (mode === "smart" ? (quota.smart.left ?? 1) <= 0 : (quota.custom.leftToday ?? 1) <= 0);
 
   React.useEffect(() => {
     (async () => {
@@ -110,7 +121,7 @@ export default function BuildTestPage() {
   const setPick = (key: string, v: number) => setPicks((p) => { const n = { ...p }; if (v <= 0) delete n[key]; else n[key] = v; return n; });
 
   const start = async () => {
-    if (!examId || starting) return;
+    if (!examId || starting || outOfFree) return;
     if (mode === "custom" && (total <= 0 || total > MAX_Q)) return;
     setStarting(true);
     setError("");
@@ -139,6 +150,22 @@ export default function BuildTestPage() {
         title={t("Build a test", "Apna test banao")}
         subtitle={t("A smart mock for your exam, or your own test from the topics you choose.", "Apne exam ka smart mock, ya apne chune hue topics se apna test.")}
       />
+
+      {quota && (
+        <div className={`card mb-4 flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm ${outOfFree ? "border-warning/40 bg-warning/5" : ""}`} role="status">
+          {quota.premium ? (
+            <span className="font-semibold text-success">{t("Your plan: unlimited smart mocks and custom tests", "Aapka plan: unlimited smart mock aur custom test")}</span>
+          ) : (
+            <>
+              <span>
+                {t("Free: ", "Free: ")}
+                <b>{quota.smart.left}</b> {t("of", "me se")} {quota.smart.limit} {t("smart mocks left", "smart mock bache")} · <b>{quota.custom.leftToday}</b> {t("of", "me se")} {quota.custom.limit} {t("custom tests left today", "custom test aaj bache")}
+              </span>
+              <a className="btn btn-outline btn-sm" href="/premium">{t(`Unlimited from ₹${quota.priceInr}`, `Unlimited ₹${quota.priceInr} se`)}</a>
+            </>
+          )}
+        </div>
+      )}
 
       {needsLogin ? (
         <EmptyState title={t("Please log in", "Pehle login karein")} action={<a className="btn btn-primary" href="/login">{t("Log in", "Login")}</a>} />
@@ -186,7 +213,7 @@ export default function BuildTestPage() {
                     <span className="font-medium">{t("Minutes (optional)", "Minutes (optional)")}</span>
                     <input inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value.replace(/\D/g, "").slice(0, 3))} placeholder={t("exam's own time", "exam ka apna time")} className="h-9 w-32 rounded-md border border-border bg-background px-2" />
                   </label>
-                  <button type="button" className="btn btn-primary" onClick={start} disabled={starting}>{starting ? t("Starting…", "Shuru ho raha hai…") : t("Start smart mock", "Smart mock shuru karein")}</button>
+                  <button type="button" className="btn btn-primary" onClick={start} disabled={starting || outOfFree}>{starting ? t("Starting…", "Shuru ho raha hai…") : t("Start smart mock", "Smart mock shuru karein")}</button>
                 </div>
               ) : (
                 <div className="mt-4">
@@ -245,7 +272,7 @@ export default function BuildTestPage() {
                           <span>{t("Minutes", "Minutes")}</span>
                           <input inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value.replace(/\D/g, "").slice(0, 3))} placeholder={String(total ? defaultMin : 0)} className="h-9 w-20 rounded-md border border-border bg-background px-2" />
                         </label>
-                        <button type="button" className="btn btn-primary" onClick={start} disabled={starting || total <= 0 || total > MAX_Q}>
+                        <button type="button" className="btn btn-primary" onClick={start} disabled={starting || outOfFree || total <= 0 || total > MAX_Q}>
                           {starting ? t("Starting…", "Shuru ho raha hai…") : t("Start test", "Test shuru karein")}
                         </button>
                       </div>

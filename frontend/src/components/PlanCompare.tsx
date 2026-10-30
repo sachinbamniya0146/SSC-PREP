@@ -11,7 +11,7 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
 type Benefits = {
-  free: { practiceSetsPerDay: number; practiceSetQuestions: number; bookmarks: number; triesPerPremiumMock: number; chapterPdfPriceInr: number };
+  free: { practiceSetsPerDay: number; practiceSetQuestions: number; bookmarks: number; triesPerPremiumMock: number; chapterPdfPriceInr: number; smartMocks?: number; customTestsPerDay?: number };
   premiumMockCount: number;
 };
 
@@ -72,6 +72,17 @@ export default function PlanCompare({ id = "compare" }: { id?: string }) {
       label: tr("Chapter / topic practice sets", "Chapter / topic practice sets"),
       hint: f ? tr(`One set = ${f.practiceSetQuestions} questions`, `1 set = ${f.practiceSetQuestions} sawal`) : undefined,
       free: f ? <span className="font-semibold">{f.practiceSetsPerDay} {tr("sets / day", "sets / din")}</span> : <span className="text-muted-foreground">…</span>,
+      premium: <Yes label={tr("Unlimited", "Unlimited")} />,
+    },
+    {
+      label: tr("Smart mocks (exam-wise, PYQ weightage)", "Smart mock (exam-wise, PYQ weightage)"),
+      hint: tr("Built from the practice bank in the pattern of your exam", "Practice bank se, aapke exam ke pattern me"),
+      free: f && f.smartMocks ? <span className="font-semibold">{f.smartMocks} {tr("free", "free")}</span> : <span className="text-muted-foreground">…</span>,
+      premium: <Yes label={tr("Unlimited", "Unlimited")} />,
+    },
+    {
+      label: tr("Custom tests (your topics, your time)", "Custom test (apne topic, apna time)"),
+      free: f && f.customTestsPerDay ? <span className="font-semibold">{f.customTestsPerDay} {tr("per day", "per din")}</span> : <span className="text-muted-foreground">…</span>,
       premium: <Yes label={tr("Unlimited", "Unlimited")} />,
     },
     {

@@ -38,3 +38,15 @@ export function chapterPdfPriceInr(env: Record<string, string | undefined> = pro
   const n = Number(env.CHAPTER_PDF_PRICE_INR);
   return n > 0 ? n : 1;
 }
+
+/** Smart mocks (built from the practice bank, one exam) a free student may take in total; Premium has no limit (env FREE_SMART_MOCKS, default 10, never below 1). */
+export function freeSmartMocks(env: Record<string, string | undefined> = process.env): number {
+  const n = parseInt(env.FREE_SMART_MOCKS || '10', 10);
+  return Math.max(1, Number.isFinite(n) ? n : 10);
+}
+
+/** Custom tests (the student picks the topics) a free student may start per IST day; Premium has no limit (env FREE_CUSTOM_TESTS_PER_DAY, default 5, never below 1). */
+export function freeCustomTestsPerDay(env: Record<string, string | undefined> = process.env): number {
+  const n = parseInt(env.FREE_CUSTOM_TESTS_PER_DAY || '5', 10);
+  return Math.max(1, Number.isFinite(n) ? n : 5);
+}

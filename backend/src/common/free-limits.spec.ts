@@ -1,4 +1,4 @@
-import { FREE_BOOKMARK_LIMIT, FREE_MOCKS_PER_PREMIUM_MOCK, PRACTICE_SET_QUESTIONS, chapterPdfPriceInr, freeDailyPracticeLimit, planPriceInr } from './free-limits';
+import { FREE_BOOKMARK_LIMIT, FREE_MOCKS_PER_PREMIUM_MOCK, PRACTICE_SET_QUESTIONS, chapterPdfPriceInr, freeCustomTestsPerDay, freeDailyPracticeLimit, freeSmartMocks, planPriceInr } from './free-limits';
 import { RANKABLE_USER, isRankableRole } from './rankable';
 
 describe('free limits', () => {
@@ -42,5 +42,17 @@ describe('who is ranked', () => {
   it('the Prisma filter asks for active students', () => {
     expect(RANKABLE_USER.role).toBe('STUDENT');
     expect(RANKABLE_USER.isSuspended).toBe(false);
+  });
+});
+
+describe('S49 free test-builder limits', () => {
+  it('defaults: 10 smart mocks in total, 5 custom tests a day', () => {
+    expect(freeSmartMocks({})).toBe(10);
+    expect(freeCustomTestsPerDay({})).toBe(5);
+  });
+  it('env overrides, never below 1, junk falls back', () => {
+    expect(freeSmartMocks({ FREE_SMART_MOCKS: '3' })).toBe(3);
+    expect(freeCustomTestsPerDay({ FREE_CUSTOM_TESTS_PER_DAY: '0' })).toBe(1);
+    expect(freeSmartMocks({ FREE_SMART_MOCKS: 'abc' })).toBe(10);
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import PlanTestBanner from "@/components/PlanTestBanner";
+import { UnfinishedTests } from "@/components/UnfinishedTests";
 import PremiumStatus, { type PlanState } from "@/components/PremiumStatus";
 import * as React from "react";
 import { AppHeader } from "@/components/AppHeader";
@@ -198,6 +199,7 @@ export default function DashboardPage() {
 
       <main className="container-page py-8 sm:py-10">
         <PlanTestBanner />
+        <UnfinishedTests className="mb-6" />
 
         {/* Greeting + live stats */}
         <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-6 sm:p-8">

@@ -33,7 +33,7 @@ import { VOCAB_UNLOCK_ALL_PRICE_INR, VOCAB_WORD_UNLOCK_PRICE_INR, skipFeeForStre
 import { grantOrExtendSubscription } from './subscription.util';
 import { couponAmounts, couponProblem, planPricing } from './pricing.util';
 import { FeaturesService } from '../features/features.service';
-import { FREE_BOOKMARK_LIMIT, FREE_MOCKS_PER_PREMIUM_MOCK, PRACTICE_SET_QUESTIONS, chapterPdfPriceInr, freeDailyPracticeLimit } from '../common/free-limits';
+import { FREE_BOOKMARK_LIMIT, FREE_MOCKS_PER_PREMIUM_MOCK, PRACTICE_SET_QUESTIONS, chapterPdfPriceInr, freeCustomTestsPerDay, freeDailyPracticeLimit, freeSmartMocks } from '../common/free-limits';
 import { cacheGet, cacheSet } from '../common/cache';
 
 interface CashfreeConfig {
@@ -64,6 +64,8 @@ export interface PlanBenefits {
     bookmarks: number;
     triesPerPremiumMock: number;
     chapterPdfPriceInr: number;
+    smartMocks: number;
+    customTestsPerDay: number;
   };
   premiumMockCount: number;
 }
@@ -227,6 +229,8 @@ export class MonetizationService implements OnModuleInit, OnModuleDestroy {
         bookmarks: FREE_BOOKMARK_LIMIT,
         triesPerPremiumMock: FREE_MOCKS_PER_PREMIUM_MOCK,
         chapterPdfPriceInr: CHAPTER_PDF_PRICE_INR,
+        smartMocks: freeSmartMocks(),
+        customTestsPerDay: freeCustomTestsPerDay(),
       },
       premiumMockCount,
     };

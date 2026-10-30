@@ -174,6 +174,11 @@ export class TestsController {
   }
 
   // S48 — Test builder: what can be asked (only topics that have questions; for an exam only topics its previous-year papers asked).
+  @Get('builder/quota')
+  builderQuota(@CurrentUser() user: { userId: string }) {
+    return this.builder.quota(user.userId);
+  }
+
   @Get('builder/catalog')
   builderCatalog(@Query('examId') examId?: string) {
     return this.builder.catalog(examId || undefined);

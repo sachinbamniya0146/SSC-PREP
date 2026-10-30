@@ -1,7 +1,8 @@
 // Preload for specs / scripts that import real Nest services in a sandbox without node_modules: stubs @nestjs/common, @prisma/client and heavy services.
 // Use: cd backend && tsx --require ../scripts/audit/nest-stubs.cjs ../scripts/audit/runspecs.cjs src/tests/tests.marking.spec.ts
 const Module = require('module');
-class E extends Error {}
+// like Nest's HttpException: keeps the response object (a string message or { code, message, ... }) so scripts can read getResponse()
+class E extends Error { constructor(r) { super(typeof r === 'string' ? r : (r && r.message) || ''); this.response = r; } getResponse() { return this.response; } }
 const noop = () => () => {};
 const nestStub = new Proxy({ BadRequestException: class extends E {}, NotFoundException: class extends E {}, ForbiddenException: class extends E {}, ConflictException: class extends E {}, Logger: class { log() {} warn() {} error() {} } }, { get: (t, k) => (k in t ? t[k] : noop) });
 const origLoad = Module._load;
