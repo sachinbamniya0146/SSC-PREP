@@ -190,6 +190,15 @@ export class PushService {
     return { sent, failed };
   }
 
+  /** For the admin screen: keys set? how many phones / students can get a notification? */
+  async status() {
+    const [devices, students] = await Promise.all([
+      this.prisma.pushSubscription.count({ where: { user: { role: 'STUDENT' } } }),
+      this.prisma.pushSubscription.findMany({ where: { user: { role: 'STUDENT' } }, distinct: ['userId'], select: { userId: true } }),
+    ]);
+    return { enabled: this.enabled, publicKeySet: Boolean(process.env.VAPID_PUBLIC_KEY), devices, students: students.length };
+  }
+
   get pushEnabled(): boolean {
     return this.enabled;
   }

@@ -94,3 +94,26 @@ export async function unsubscribeFromPush(): Promise<void> {
 
   await subscription.unsubscribe();
 }
+
+/**
+ * Called on every app start of a signed-in user who ALREADY allowed notifications: makes sure this device is registered for THIS account.
+ * A browser can drop or rotate its push subscription, and one phone can be used by two accounts; without this the server keeps pushing to a
+ * stale endpoint (or to the previous account) and the student sees nothing. Never asks for permission, never throws.
+ */
+export async function syncPushSubscription(): Promise<void> {
+  try {
+    if (!pushSupported() || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    const { endpoint, keys } = subscription.toJSON();
+    await api("/push/subscribe", { method: "POST", body: JSON.stringify({ endpoint, keys }) });
+  } catch {
+    /* silent: the Notifications page has a manual Turn on button */
+  }
+}

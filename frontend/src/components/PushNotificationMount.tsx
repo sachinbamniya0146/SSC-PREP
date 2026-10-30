@@ -7,6 +7,7 @@ import {
   pushSupported,
   registerServiceWorker,
   subscribeToPush,
+  syncPushSubscription,
 } from "@/lib/push";
 
 const DISMISSED_KEY = "ssc_push_prompt_dismissed";
@@ -48,6 +49,17 @@ export function PushNotificationMount() {
   React.useEffect(() => {
     registerServiceWorker();
   }, []);
+
+  // already allowed on this device: keep the device registered for the signed-in account (silent, once per page load / route group)
+  React.useEffect(() => {
+    if (hideOnThisRoute) return;
+    try {
+      if (!localStorage.getItem("ssc_access_token")) return;
+    } catch {
+      return;
+    }
+    void syncPushSubscription();
+  }, [hideOnThisRoute]);
 
   React.useEffect(() => {
     if (hideOnThisRoute || !pushSupported()) return;

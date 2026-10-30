@@ -103,7 +103,7 @@ const byId = new Map(Q.map((q) => [q.id, q]));
   check('smart mock: never uses the topic the exam never asked', picked.every((q) => q.topicId !== 't-geo'));
   const pct = quant.filter((q) => q.topicId === 't-pct').length;
   const ratio = quant.filter((q) => q.topicId === 't-ratio').length;
-  check('smart mock: Percentage (60 PYQ) gets twice Ratio (30 PYQ)', pct === 7 && ratio === 3, `pct ${pct} ratio ${ratio}`);
+  check('smart mock: every asked topic is covered, Percentage (60 PYQ) still gets more than Ratio (30 PYQ)', pct + ratio === 10 && ratio >= 1 && pct > ratio, `pct ${pct} ratio ${ratio}`);
   check('smart mock: uses the test half first (all reserved)', picked.every((q) => q.testReserved === true));
   check('smart mock: no question twice', new Set(sm.questions.map((x) => x.id)).size === sm.questions.length);
   check('smart mock: only practice questions (no PYQ)', picked.every((q) => q.year == null));

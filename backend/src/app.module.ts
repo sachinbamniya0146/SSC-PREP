@@ -21,6 +21,7 @@ import { BookmarksModule } from './bookmarks/bookmarks.module';
 import { VocabModule } from './vocab/vocab.module';
 import { PushModule } from './push/push.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { StudyStatsModule } from './study-stats/study-stats.module';
 import { StaffModule } from './staff/staff.module';
 import { MocksModule } from './mocks/mocks.module';
 import { BankModule } from './bank/bank.module';
@@ -83,6 +84,7 @@ import { envValidationSchema } from './config/env.validation';
     VocabModule,
     PushModule,
     NotificationsModule,
+    StudyStatsModule,
     StaffModule,
     QuizModule,
     MocksModule,

@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { logoutAndClear } from "@/lib/session-cache";
 import { useAccess } from "@/lib/permissions";
 import { useFeatures } from "@/lib/features";
+import { openStudentMenu } from "@/components/StudentDrawer";
 
 const NAV_FLAG: Record<string, string> = { "/vocabulary": "vocabulary", "/leaderboard": "leaderboard" };
 const nav = [
@@ -44,7 +45,17 @@ export function AppHeader({ name }: { name?: string }) {
   return (
     <header className="sticky top-0 z-50 border-b border-border/70 bg-background/85 backdrop-blur-xl">
       <div className="container-page flex h-16 items-center justify-between gap-4">
-        <div className="flex items-center gap-8">
+        <div className="flex items-center gap-3 lg:gap-8">
+          {/* phones: menu button at the top-left opens the left drawer with every option */}
+          <button
+            type="button"
+            onClick={openStudentMenu}
+            aria-label="Open menu"
+            aria-haspopup="dialog"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card md:hidden"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+          </button>
           <a href="/dashboard" aria-label="Dashboard" data-shell="logo">
             <Logo size={32} />
           </a>
@@ -111,7 +122,7 @@ export function AppHeader({ name }: { name?: string }) {
             aria-label="Toggle menu"
             aria-expanded={open}
             data-shell="menu-btn"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card lg:hidden"
+            className="hidden h-9 w-9 items-center justify-center rounded-lg border border-border bg-card md:inline-flex lg:hidden"
           >
             <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               {open ? <path d="M6 6l12 12M18 6L6 18" /> : <path d="M4 7h16M4 12h16M4 17h16" />}

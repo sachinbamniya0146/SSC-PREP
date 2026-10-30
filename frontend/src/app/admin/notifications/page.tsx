@@ -39,6 +39,7 @@ export default function AdminNotificationsPage() {
   const [days, setDays] = React.useState(3);
   const [exams, setExams] = React.useState<{ id: string; name: string }[]>([]);
   const [preview, setPreview] = React.useState<Preview | null>(null);
+  const [pushState, setPushState] = React.useState<{ enabled: boolean; devices: number; students: number } | null>(null);
   const [err, setErr] = React.useState("");
 
   const headers = React.useCallback(() => {
@@ -75,6 +76,16 @@ export default function AdminNotificationsPage() {
         const d = await r.json().catch(() => ({}));
         setExams(Array.isArray(d?.exams) ? d.exams.map((e: { id: string; name: string }) => ({ id: e.id, name: e.name })) : []);
       } catch { /* the exam list simply stays empty */ }
+    })();
+  }, [authChecked, headers]);
+
+  React.useEffect(() => {
+    if (!authChecked) return;
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/push/admin/status`, { headers: headers() });
+        if (r.ok) setPushState(await r.json());
+      } catch { /* the banner just stays hidden */ }
     })();
   }, [authChecked, headers]);
 
@@ -153,6 +164,19 @@ export default function AdminNotificationsPage() {
           A message sent from here lands in the Notifications inbox of every student in the group you choose, and also on their phone
           if they turned phone alerts on. Smart reminders (unfinished test, streak, weak topics, come-back) go out by themselves.
         </p>
+
+        {pushState && (
+          <div className={`card mb-4 p-4 text-sm ${pushState.enabled ? "border-success/40 bg-success/5" : "border-warning/40 bg-warning/5"}`} role="status">
+            {pushState.enabled ? (
+              <p><b>Phone alerts: ON.</b> {pushState.students} students ({pushState.devices} phones) can get alerts in the notification bar right now.</p>
+            ) : (
+              <p>
+                <b>Phone alerts: OFF</b> — the server has no VAPID keys, so messages reach only the in-app inbox. To switch them on: create the keys once
+                (command in UPDATE_S50 file), put <code>VAPID_PUBLIC_KEY</code> and <code>VAPID_PRIVATE_KEY</code> in the server <code>.env</code>, then deploy again.
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="card space-y-4 p-5">
           <div>

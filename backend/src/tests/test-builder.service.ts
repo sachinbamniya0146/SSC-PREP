@@ -224,7 +224,7 @@ export class TestBuilderService {
           if (!nodes.find((n) => n.key === key)) nodes.push({ key, weight: 1, available: g._count._all, chapterId: g.chapterId ?? null, topicId: g.topicId ?? null });
         }
       }
-      const { alloc } = allocateWithCaps(sec.questions, nodes);
+      const { alloc } = allocateWithCaps(sec.questions, nodes, true);
       const secIds: string[] = [];
       for (const n of nodes) {
         const want = alloc[n.key] ?? 0;

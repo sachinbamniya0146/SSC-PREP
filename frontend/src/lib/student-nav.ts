@@ -17,6 +17,7 @@ export const SIDEBAR_ROUTES = [
   "/vocabulary",
   "/review",
   "/weak-topics",
+  "/progress",
   "/study-plan",
   "/bookmarks",
   "/leaderboard",
@@ -89,6 +90,7 @@ export const STUDENT_NAV: StudentNavGroup[] = [
     hi: "Sudhar",
     items: [
       { href: "/review", en: "Revision", hi: "Revision", icon: "repeat" },
+      { href: "/progress", en: "My progress", hi: "Meri progress", icon: "rank" },
       { href: "/weak-topics", en: "Weak topics", hi: "Kamzor topics", icon: "target" },
       { href: "/study-plan", en: "Study plan", hi: "Study plan", icon: "plan" },
       { href: "/bookmarks", en: "Bookmarks", hi: "Bookmarks", icon: "star" },

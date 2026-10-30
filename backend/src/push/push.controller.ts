@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Post } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { PushService } from './push.service';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -33,6 +33,14 @@ export class PushController {
   // Admin-only broadcast: "admin chahe to kuch new notification sbh
   // students ke mobile pr send kr ske" — sends one message to every
   // subscribed STUDENT device.
+  // Admin: is phone push really switched on, and how many devices / students can be reached right now.
+  @Roles('ADMIN')
+  @Get('admin/status')
+  @ApiOperation({ summary: 'Admin: push configuration and reachable devices' })
+  status() {
+    return this.push.status();
+  }
+
   @Roles('ADMIN')
   @Post('admin/broadcast')
   @ApiOperation({ summary: 'Admin: send a push notification to all students' })

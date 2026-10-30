@@ -67,3 +67,37 @@ describe('test builder rules (S48)', () => {
     expect(chosenMinutes(null, 20)).toBe(12);
   });
 });
+
+describe('allocateWithCaps coverAll', () => {
+  const nodes = [
+    { key: 'a', weight: 90, available: 50 },
+    { key: 'b', weight: 5, available: 50 },
+    { key: 'c', weight: 5, available: 50 },
+    { key: 'd', weight: 0, available: 50 }, // never asked: still nothing
+    { key: 'e', weight: 10, available: 0 }, // nothing to ask: still nothing
+  ];
+  it('without coverAll a tiny topic can get nothing', () => {
+    const r = allocateWithCaps(10, nodes);
+    expect(r.alloc.b + r.alloc.c).toBeLessThan(3);
+  });
+  it('with coverAll every asked topic that has questions gets at least one, the rest follows the weights', () => {
+    const r = allocateWithCaps(10, nodes, true);
+    expect(r.alloc.b).toBeGreaterThanOrEqual(1);
+    expect(r.alloc.c).toBeGreaterThanOrEqual(1);
+    expect(r.alloc.a).toBeGreaterThan(r.alloc.b);
+    expect(r.alloc.d).toBe(0);
+    expect(r.alloc.e).toBe(0);
+    expect(r.alloc.a + r.alloc.b + r.alloc.c).toBe(10);
+    expect(r.short).toBe(0);
+  });
+  it('with fewer questions than topics the weights decide', () => {
+    const r = allocateWithCaps(2, nodes, true);
+    expect(r.alloc.a + r.alloc.b + r.alloc.c).toBe(2);
+    expect(r.alloc.a).toBe(2);
+  });
+  it('a one-question topic is not over-filled', () => {
+    const r = allocateWithCaps(10, [{ key: 'x', weight: 1, available: 1 }, { key: 'y', weight: 1, available: 100 }], true);
+    expect(r.alloc.x).toBe(1);
+    expect(r.alloc.y).toBe(9);
+  });
+});

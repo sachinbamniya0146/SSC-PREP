@@ -14,6 +14,7 @@ import LanguageSync from "@/components/LanguageSync";
 import NavTracker from "@/components/NavTracker";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { StudentSidebar } from "@/components/StudentSidebar";
+import { StudentDrawer } from "@/components/StudentDrawer";
 import { SIDEBAR_BOOT_SCRIPT } from "@/lib/student-nav";
 import AppStatus from "@/components/AppStatus";
 import { ReferralCapture } from "@/components/ReferralCapture";
@@ -117,6 +118,7 @@ export default function RootLayout({
           <NavTracker />
           <StudentSidebar />
           <MobileTabBar />
+          <StudentDrawer />
           <AppStatus />
           <ReferralCapture />
         </ThemeProvider>

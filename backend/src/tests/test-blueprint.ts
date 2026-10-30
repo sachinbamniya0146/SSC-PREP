@@ -31,11 +31,18 @@ export function largestRemainder(total: number, weights: number[]): number[] {
  * Topics with no weight or no questions get nothing (an exam never asked it, or there is nothing to ask). `short` > 0 only when ALL topics together
  * cannot cover `total`.
  */
-export function allocateWithCaps(total: number, nodes: WeightNode[]): { alloc: Record<string, number>; short: number } {
+export function allocateWithCaps(total: number, nodes: WeightNode[], coverAll = false): { alloc: Record<string, number>; short: number } {
   const alloc: Record<string, number> = {};
   for (const n of nodes) alloc[n.key] = 0;
   let remaining = Math.max(0, Math.floor(total));
   let active = nodes.filter((n) => n.weight > 0 && n.available > 0);
+  // coverAll: when there is room, every topic the exam asked gets at least ONE question before the weights split the rest,
+  // so a test touches all chapters / topics of the subject. With fewer questions than topics the weights decide (as in the real paper).
+  if (coverAll && active.length > 0 && remaining >= active.length) {
+    for (const n of active) alloc[n.key] = 1;
+    remaining -= active.length;
+    active = active.filter((n) => n.available - alloc[n.key] > 0);
+  }
   for (let guard = 0; guard < 50 && remaining > 0 && active.length > 0; guard++) {
     const share = largestRemainder(remaining, active.map((n) => n.weight));
     let gave = 0;
