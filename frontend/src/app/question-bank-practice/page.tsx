@@ -22,6 +22,9 @@ type TopicNode = { id: string; name: string; nameHindi?: string | null; question
 type ChapterNode = { id: string; name: string; nameHindi?: string | null; questionCount: number; unassignedCount: number; topics: TopicNode[] };
 type SubjectNode = { id: string; name: string; nameHindi?: string | null; questionCount: number; chapters: ChapterNode[] };
 
+// S48: English and Hindi name together ("Percentage · प्रतिशत") so a Hindi-medium student can find the chapter too.
+const bi = (n: { name: string; nameHindi?: string | null }) => (n.nameHindi && n.nameHindi.trim() && n.nameHindi.trim() !== n.name.trim() ? `${n.name} · ${n.nameHindi.trim()}` : n.name);
+
 type InProgressSet = {
   id: string;
   setNumber: number;
@@ -303,7 +306,7 @@ export default function QuestionBankPracticePage() {
                   }}
                   className="flex w-full items-center justify-between px-4 py-3 text-left"
                 >
-                  <span className="font-semibold">{s.name}</span>
+                  <span className="font-semibold">{bi(s)}</span>
                   <span className="text-xs text-muted-foreground">
                     {s.questionCount} question{s.questionCount === 1 ? "" : "s"} {openSubject === s.id ? "▾" : "▸"}
                   </span>
@@ -321,7 +324,7 @@ export default function QuestionBankPracticePage() {
                             }}
                             className="flex-1 text-left text-sm font-medium"
                           >
-                            {c.name} <span className="text-xs text-muted-foreground">({c.questionCount})</span>{" "}
+                            {bi(c)} <span className="text-xs text-muted-foreground">({c.questionCount})</span>{" "}
                             {openChapter === c.id ? "▾" : "▸"}
                           </button>
                           <button
@@ -350,7 +353,7 @@ export default function QuestionBankPracticePage() {
                                     className="flex-1 text-left text-sm"
                                   >
                                     {t.isWeak && <span title="Weak — unlimited free practice">🔥 </span>}
-                                    {t.name} <span className="text-xs text-muted-foreground">({t.questionCount})</span>{" "}
+                                    {bi(t)} <span className="text-xs text-muted-foreground">({t.questionCount})</span>{" "}
                                     {t.subTopics.length > 0 && (openTopic === t.id ? "▾" : "▸")}
                                   </button>
                                   <button
@@ -371,7 +374,7 @@ export default function QuestionBankPracticePage() {
                                       <div key={st.id} className="flex items-center justify-between py-0.5 text-xs">
                                         <span>
                                           {st.isWeak && <span title="Weak — unlimited free practice">🔥 </span>}
-                                          {st.name} <span className="text-muted-foreground">({st.questionCount})</span>
+                                          {bi(st)} <span className="text-muted-foreground">({st.questionCount})</span>
                                         </span>
                                         <button
                                           onClick={() =>

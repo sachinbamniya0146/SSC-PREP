@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ATTEMPT_DONE } from '../common/attempt-status';
 import { istDateKey } from '../gamification/gamification.service';
 import { markChapterFromPractice } from '../study-plan/study-plan-progress.util';
-import { PUBLISHED_QUESTION_WHERE, PRACTICE_QUESTION_WHERE, PYQ_QUESTION_WHERE } from '../common/question-visibility';
+import { PUBLISHED_QUESTION_WHERE, STUDENT_PRACTICE_QUESTION_WHERE, PYQ_QUESTION_WHERE } from '../common/question-visibility';
 import { freeDailyPracticeLimit, planPriceInr } from '../common/free-limits';
 
 export interface PracticeQuestion {
@@ -137,7 +137,7 @@ export class QuestionBankPracticeService {
   //     approve step already enforces the bilingual rule — see
   //     isHindiExemptSubjectSlug()).
   //  2. PYQ questions leaked into Practice: the pool now only takes year-less
-  //     (practice) questions (PRACTICE_QUESTION_WHERE).
+  //     (practice) questions (STUDENT_PRACTICE_QUESTION_WHERE).
   //  3. The "existing incomplete set" lookup passed `chapterId: undefined` to
   //     Prisma, which means "no filter" — so clicking a NEW topic returned an
   //     OLD in-progress set of some other scope. Scope is now matched exactly
@@ -319,7 +319,7 @@ export class QuestionBankPracticeService {
     size: number = this.QUESTIONS_PER_SET,
     allowPyqFallback: boolean = false,
   ): Promise<any[]> {
-    const where: any = { ...PRACTICE_QUESTION_WHERE };
+    const where: any = { ...STUDENT_PRACTICE_QUESTION_WHERE };
     if (scope.subjectId) where.subjectId = scope.subjectId;
     if (scope.chapterId) where.chapterId = scope.chapterId;
     if (scope.topicId) where.topicId = scope.topicId;
@@ -528,7 +528,7 @@ export class QuestionBankPracticeService {
     for (const r of rows) {
       const available = await this.prisma.question.count({
         where: {
-          ...PRACTICE_QUESTION_WHERE,
+          ...STUDENT_PRACTICE_QUESTION_WHERE,
           ...(r.subTopicId ? { subTopicId: r.subTopicId } : r.topicId ? { topicId: r.topicId } : { chapterId: r.chapterId! }),
         },
       });
@@ -1027,7 +1027,7 @@ export class QuestionBankPracticeService {
   // FIXED (Sep 21 2026): only PRACTICE (year-less) questions count, and the
   // extra Hindi-text filter is gone (isApproved is the single gate).
   async getAvailableSubjects(userId: string, examId?: string): Promise<any[]> {
-    const qWhere: any = { ...PRACTICE_QUESTION_WHERE };
+    const qWhere: any = { ...STUDENT_PRACTICE_QUESTION_WHERE };
     if (examId) qWhere.examId = examId;
     const subjects = await this.prisma.subject.findMany({
       where: { questions: { some: qWhere } },
@@ -1074,7 +1074,7 @@ export class QuestionBankPracticeService {
   // by anyone; everything is picked from this list.
   // ---------------------------------------------------------------------------
   async getPracticeTaxonomy(userId: string, examId?: string) {
-    const qWhere: any = { ...PRACTICE_QUESTION_WHERE };
+    const qWhere: any = { ...STUDENT_PRACTICE_QUESTION_WHERE };
     if (examId) qWhere.examId = examId;
     else qWhere.examId = { not: null };
 
@@ -1114,7 +1114,7 @@ export class QuestionBankPracticeService {
       }),
       this.prisma.question.groupBy({
         by: ['examId'],
-        where: { ...PRACTICE_QUESTION_WHERE, examId: { not: null } },
+        where: { ...STUDENT_PRACTICE_QUESTION_WHERE, examId: { not: null } },
         _count: { _all: true },
       }),
       this.weakScopeRows(userId),
@@ -1164,23 +1164,27 @@ export class QuestionBankPracticeService {
             nameHindi: c.nameHindi,
             questionCount: chapterCount.get(c.id) ?? 0,
             unassignedCount: chapterUnassigned.get(c.id) ?? 0,
-            topics: c.topics.map((t) => ({
-              id: t.id,
-              name: t.name,
-              nameHindi: t.nameHindi,
-              questionCount: topicCount.get(t.id) ?? 0,
-              isWeak: weakTopics.has(t.id),
-              subTopics: t.subTopics.map((st) => ({
-                id: st.id,
-                name: st.name,
-                nameHindi: st.nameHindi,
-                questionCount: subTopicCount.get(st.id) ?? 0,
-                isWeak: weakSubTopics.has(st.id),
-              })),
-            })),
+            topics: c.topics
+              .map((t) => ({
+                id: t.id,
+                name: t.name,
+                nameHindi: t.nameHindi,
+                questionCount: topicCount.get(t.id) ?? 0,
+                isWeak: weakTopics.has(t.id),
+                subTopics: t.subTopics
+                  .map((st) => ({
+                    id: st.id,
+                    name: st.name,
+                    nameHindi: st.nameHindi,
+                    questionCount: subTopicCount.get(st.id) ?? 0,
+                    isWeak: weakSubTopics.has(st.id),
+                  }))
+                  // S48: a sub-topic / topic / chapter without a single question the student can practise is not shown at all
+                  .filter((st) => st.questionCount > 0),
+              }))
+              .filter((t) => t.questionCount > 0),
           }))
-          // chapters that actually have practice questions first, then the rest of the syllabus
-          .sort((a, b) => (b.questionCount > 0 ? 1 : 0) - (a.questionCount > 0 ? 1 : 0)),
+          .filter((c) => c.questionCount > 0),
       }))
       // a subject with no chapters at all (empty duplicate) is just noise for a student. S45: so is a subject with chapters but
       // no practice question at all (old syllabus-import copies like "General Intelligence & Reasoning", or a new subject whose

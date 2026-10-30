@@ -413,6 +413,13 @@ export class BankController {
     return this.bank.attempt(userId, body);
   }
 
+  // S47: score a whole practice test in one request (see BankService.attemptBatch). Nothing is recorded here.
+  @Post('attempt/batch')
+  attemptBatch(@Req() req: any, @Body() body: { answers?: { questionId: string; selectedOption: string }[] }) {
+    const userId = req.user?.userId ?? req.user?.id;
+    return this.bank.attemptBatch(userId, body);
+  }
+
   // ---- Video Solution Endpoints ----
   // BUG FIX (audit round 3): add/removeVideoSolution had only the
   // class-level @UseGuards(JwtAuthGuard) — i.e. ANY logged-in student

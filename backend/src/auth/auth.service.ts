@@ -519,6 +519,7 @@ export class AuthService implements OnModuleInit {
           avatarUrl: true,
           preferredLanguage: true,
           state: true,
+          targetExamId: true,
           createdAt: true,
           _count: { select: { testAttempts: true, bookmarks: true } },
           subscriptions: {

@@ -215,7 +215,20 @@ export class SearchService implements OnModuleInit {
       // must NOT be forwarded as-is to the client. Same reveal-gate principle as
       // practice mode / bookmarks: strip answer-revealing fields here before
       // they leave the service, since no attempt record exists to justify reveal.
-      const sanitizedHits = (result.hits || []).map((hit0: any) => {
+      // S48: the half of the practice questions kept for tests is never shown - the index does not know that flag, so the hits are checked here
+      // (one indexed query for at most 100 ids). If this lookup fails the search still works (the reserved half then shows, which is
+      // better than no search) and the failure is logged.
+      let reservedIds = new Set<string>();
+      try {
+        const ids = (result.hits || []).map((h: any) => h?.id).filter((x: any) => typeof x === 'string');
+        if (ids.length) {
+          const rows = await this.prisma.question.findMany({ where: { id: { in: ids }, testReserved: true }, select: { id: true } });
+          reservedIds = new Set(rows.map((r: { id: string }) => r.id));
+        }
+      } catch (e: any) {
+        this.logger.warn(`reserve filter on search failed: ${e?.message ?? e}`);
+      }
+      const sanitizedHits = (result.hits || []).filter((h: any) => !reservedIds.has(h?.id)).map((hit0: any) => {
         // paperCode / examDate carry the real exam date: admin only (S40, 29 Oct 2026)
         const hit = stripAdminOnlyFields(hit0);
         const safeHit = { ...hit };

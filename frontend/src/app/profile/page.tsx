@@ -16,6 +16,7 @@ interface UserProfile {
   avatarUrl?: string | null;
   preferredLanguage?: string;
   state?: string | null;
+  targetExamId?: string | null;
   isEmailVerified: boolean;
   createdAt: string;
   _count: { testAttempts: number; bookmarks: number };
@@ -38,6 +39,9 @@ export default function ProfilePage() {
   const [saving, setSaving] = React.useState(false);
   const [fullName, setFullName] = React.useState("");
   const [stateSel, setStateSel] = React.useState("");
+  // S48: the exam the student prepares for; every screen that needs an exam starts from it
+  const [targetSel, setTargetSel] = React.useState("");
+  const [examOptions, setExamOptions] = React.useState<{ id: string; name: string }[]>([]);
   const [savingDetails, setSavingDetails] = React.useState(false);
   const [savingLang, setSavingLang] = React.useState(false);
   const [avatarBroken, setAvatarBroken] = React.useState(false);
@@ -65,6 +69,15 @@ export default function ProfilePage() {
     { key: "announcements", label: "📢 Announcements" },
   ] as const;
 
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const d = await api<{ exams?: { id: string; name: string }[] }>("/bank/meta");
+        setExamOptions(Array.isArray(d?.exams) ? d.exams.map((e) => ({ id: e.id, name: e.name })) : []);
+      } catch { /* the picker simply stays empty */ }
+    })();
+  }, []);
+
   async function loadProfile() {
     try {
       const token = localStorage.getItem("ssc_access_token");
@@ -74,6 +87,7 @@ export default function ProfilePage() {
       if (data.user.phone) setPhone(data.user.phone);
       setFullName(data.user.fullName || "");
       setStateSel(data.user.state || "");
+      setTargetSel(data.user.targetExamId || "");
       // account language wins (set on another device); keep this device in step
       const serverLang = data.user.preferredLanguage === "hinglish" ? "hinglish" : "en";
       if (serverLang !== getStoredLang()) setStoredLang(serverLang);
@@ -195,7 +209,7 @@ export default function ProfilePage() {
       await api("/users/me/profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fullName: name, state: stateSel, ...(phone ? { phone: phone.replace(/[\s-]/g, "") } : {}) }),
+        body: JSON.stringify({ fullName: name, state: stateSel, targetExamId: targetSel, ...(phone ? { phone: phone.replace(/[\s-]/g, "") } : {}) }),
       });
       try {
         const raw = localStorage.getItem("ssc_user");
@@ -356,6 +370,20 @@ export default function ProfilePage() {
                 placeholder="+91 9876543210"
                 className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-1.5 block text-sm font-medium">Target exam</label>
+              <select
+                value={targetSel}
+                onChange={(e) => setTargetSel(e.target.value)}
+                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
+              >
+                <option value="">Not selected</option>
+                {examOptions.map((e) => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted-foreground">The exam you are preparing for. Build-a-test, Smart mock and Practice start from it. You can change it any time.</p>
             </div>
             <div className="sm:col-span-2">
               <label className="mb-1.5 block text-sm font-medium">State</label>

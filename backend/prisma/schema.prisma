@@ -141,8 +141,11 @@ model User {
   // NEW (29 Oct 2026): home state of the student (one of common/indian-states.ts). Optional - only used for the
   // "State rank" on results and the State leaderboard. Null = not chosen yet.
   state            String?
+  // S48 (30 Oct 2026): the exam the student is preparing for. Sets the default exam of Practice, Test builder, Smart mock and the
+  // dashboard. Plain id (no FK) so deleting an exam never blocks; the API ignores an id that no longer exists. Null = not chosen yet.
+  targetExamId     String?
   
-  // User's personal OpenRouter API key for AI explanations
+  // User's personal OpenRouter API key API key for AI explanations
   openrouterApiKey String?         @map("openrouterapikey") // Encrypted API key for personal AI usage
 
   // Referral
@@ -176,6 +179,8 @@ model User {
   studyPlanChapters  StudyPlanChapter[]
   studyPlanTests     StudyPlanTest[]
   pushSubscriptions  PushSubscription[]
+  notifications      UserNotification[]
+  notificationPref   NotificationPref?
   referralsMade     Referral[]      @relation("Referrer")
   referralsReceived Referral[]      @relation("Referee")
   referralWallet     ReferralWallet?
@@ -609,6 +614,11 @@ model Question {
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
+  // S48 (30 Oct 2026): practice questions are split in two halves per topic. testReserved = true -> the half kept for tests (custom test,
+  // smart mock): NEVER shown in Practice, search or the question bank. false -> shown to students in Practice. PYQ rows (year set) ignore it.
+  // Kept up to date by bank/test-reserve.service.ts (only ever ADDS reserved rows, never flips one back, so a student's history stays true).
+  testReserved       Boolean           @default(false)
+
   sourcePdf          SourcePdf?        @relation(fields: [sourcePdfId], references: [id])
   importBatch        ImportBatch?      @relation(fields: [importBatchId], references: [id])
   uploadBatch        QuestionUploadBatch? @relation(fields: [uploadBatchId], references: [id])
@@ -633,6 +643,7 @@ model Question {
   @@index([errorReportCount])
   @@index([examId, subjectId, isApproved, isActive]) // CGL/compose hot path
   @@index([examId, examTier, examDate, shift]) // date-wise PYQ paper lookup
+  @@index([year, testReserved, chapterId]) // practice pool vs test reserve (S48)
   @@map("questions")
 }
 
@@ -2138,4 +2149,40 @@ model AiChange {
   @@index([jobId, undoneAt])
   @@index([questionId, createdAt])
   @@map("ai_changes")
+}
+
+
+// S48 - in-app notification inbox (works even when phone push is off) + each student's reminder switches.
+model UserNotification {
+  id        String    @id @default(uuid())
+  userId    String
+  kind      String // RESUME | STREAK | WEAK | COMEBACK | ADMIN
+  title     String
+  body      String
+  url       String?
+  // one message per (student, key): the nudge ticker and admin sends can safely run twice
+  dedupeKey String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, readAt, createdAt])
+  @@map("user_notifications")
+}
+
+model NotificationPref {
+  userId        String    @id
+  weakTopic     Boolean   @default(true)
+  streak        Boolean   @default(true)
+  tests         Boolean   @default(true)
+  news          Boolean   @default(true)
+  remindHourIst Int       @default(19)
+  pausedUntil   DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_prefs")
 }

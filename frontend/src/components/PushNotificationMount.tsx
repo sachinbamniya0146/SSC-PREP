@@ -10,6 +10,19 @@ import {
 } from "@/lib/push";
 
 const DISMISSED_KEY = "ssc_push_prompt_dismissed";
+// "Not now" used to hide the prompt for ever; now it comes back after a week (the Notifications page also has a Turn on button).
+const DISMISS_DAYS = 7;
+function recentlyDismissed(): boolean {
+  try {
+    const raw = localStorage.getItem(DISMISSED_KEY);
+    if (!raw) return false;
+    const at = Number(raw);
+    if (!Number.isFinite(at) || at < 1e12) return false; // the old permanent value "1": ask again once
+    return Date.now() - at < DISMISS_DAYS * 86_400_000;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Mounted once in the root layout (mirrors SupportChatMount's pattern):
@@ -39,7 +52,7 @@ export function PushNotificationMount() {
   React.useEffect(() => {
     if (hideOnThisRoute || !pushSupported()) return;
     if (typeof Notification === "undefined" || Notification.permission !== "default") return;
-    if (localStorage.getItem(DISMISSED_KEY)) return;
+    if (recentlyDismissed()) return;
 
     const token = localStorage.getItem("ssc_access_token");
     if (!token) return;
@@ -66,7 +79,7 @@ export function PushNotificationMount() {
   if (!showBanner) return null;
 
   const dismiss = () => {
-    localStorage.setItem(DISMISSED_KEY, "1");
+    try { localStorage.setItem(DISMISSED_KEY, String(Date.now())); } catch { /* ignore */ }
     setShowBanner(false);
   };
 

@@ -23,4 +23,10 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(60)
   state?: string;
+
+  // S48: the exam the student is preparing for ("" clears it). Checked against the active exams in UserService.updateProfile.
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  targetExamId?: string;
 }

@@ -9,6 +9,7 @@ import { RankService } from './rank.service';
 import { RankController } from './rank.controller';
 import { DailyTestService } from './daily-test.service';
 import { DailyTestController } from './daily-test.controller';
+import { TestBuilderService } from './test-builder.service';
 import { GamificationModule } from '../gamification/gamification.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { BankModule } from '../bank/bank.module';
@@ -27,7 +28,7 @@ import { WeakTopicModule } from '../weak-topics/weak-topic.module';
   // getWeakAreasPractice) so it inherits the no-repeat-until-exhausted +
   // configurable-size fix built there, instead of duplicating that logic.
   imports: [GamificationModule, forwardRef(() => TelegramModule), BankModule, WeakTopicModule],
-  providers: [TestsService, DailyTestService, TestStatsService, RankService, AttemptSweeperService, AttemptRescoreService],
+  providers: [TestsService, TestBuilderService, DailyTestService, TestStatsService, RankService, AttemptSweeperService, AttemptRescoreService],
   controllers: [TestsController, DailyTestController, RankController, AttemptRescoreController],
   // BUGFIX (bonus grep — module-registration gap, same family as the
   // missing meilisearch-index worker found earlier in this audit):

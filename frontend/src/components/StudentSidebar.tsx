@@ -15,6 +15,7 @@ import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { useFeatures } from "@/lib/features";
 import { useT } from "@/lib/i18n";
+import { api } from "@/lib/api";
 import {
   NAV_ICONS,
   RAIL_BELOW_PX,
@@ -38,6 +39,7 @@ export function StudentSidebar() {
   const t = useT();
   const { on } = useFeatures();
   const [rail, setRail] = React.useState(false);
+  const [unread, setUnread] = React.useState(0);
 
   // Keep <html class="has-sidebar sidebar-rail"> right for this route / window size (the boot script did the first pass).
   const apply = React.useCallback(() => {
@@ -66,6 +68,20 @@ export function StudentSidebar() {
       window.removeEventListener("storage", apply);
     };
   }, [apply]);
+
+  // unread count for the Notifications item; quiet on failure (the badge just stays hidden)
+  React.useEffect(() => {
+    let live = true;
+    try {
+      if (!localStorage.getItem("ssc_access_token") || !isSidebarRoute(path)) return;
+    } catch {
+      return;
+    }
+    api<{ unread?: number }>("/notifications/unread-count")
+      .then((d) => { if (live) setUnread(Number(d?.unread) || 0); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [path]);
 
   const toggle = () => {
     const next = !rail;
@@ -116,6 +132,11 @@ export function StudentSidebar() {
                       >
                         <NavIcon name={item.icon} />
                         <span className="sb-label truncate">{label}</span>
+                        {item.href === "/notifications" && unread > 0 && (
+                          <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-bold leading-none text-primary-foreground" aria-label={`${unread} unread`}>
+                            {unread > 99 ? "99+" : unread}
+                          </span>
+                        )}
                       </a>
                     </li>
                   );

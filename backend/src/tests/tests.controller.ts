@@ -2,6 +2,8 @@
 import { Controller, Get, Post, Put, Body, Query, Param, BadRequestException } from '@nestjs/common';
 import { SECTIONAL_FAMILIES, SectionalFamily, TestsService } from './tests.service';
 import { TestStatsService } from './test-stats.service';
+import { TestBuilderService } from './test-builder.service';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { normalizeExamTier, normalizeTierPaper } from '../common/pyq-paper-key';
 
@@ -10,6 +12,7 @@ export class TestsController {
   constructor(
     private readonly testsService: TestsService,
     private readonly statsService: TestStatsService,
+    private readonly builder: TestBuilderService,
   ) {}
 
   @Get()
@@ -74,6 +77,19 @@ export class TestsController {
   }
 
   // P1 — student results history
+  // S48 — unfinished tests of this student that are still inside their time: the "Continue your test" pop-up reads this.
+  // MUST stay above @Get('attempts/:attemptId') or "active" would be taken for an attempt id.
+  @Get('attempts/active')
+  activeAttempts(@CurrentUser() user: { userId: string }) {
+    return this.builder.activeAttempts(user.userId);
+  }
+
+  // S48 — reopen an unfinished ad-hoc test (custom test, smart mock, year-wise) with the same questions and the saved answers.
+  @Get('attempts/:attemptId/resume')
+  resumeAttempt(@CurrentUser() user: { userId: string }, @Param('attemptId') attemptId: string) {
+    return this.builder.resumeAttempt(user.userId, attemptId);
+  }
+
   @Get('attempts')
   myAttempts(@CurrentUser() user: { userId: string }, @Query('take') take?: string) {
     return this.testsService.myAttempts(user.userId, take ? Number(take) : 50);
@@ -155,6 +171,23 @@ export class TestsController {
       topicIds: body.topicIds,
       full: !!body.full,
     });
+  }
+
+  // S48 — Test builder: what can be asked (only topics that have questions; for an exam only topics its previous-year papers asked).
+  @Get('builder/catalog')
+  builderCatalog(@Query('examId') examId?: string) {
+    return this.builder.catalog(examId || undefined);
+  }
+
+  // S48 — Custom test (student picks topics + counts + minutes) or Smart mock (exam-wise, weighted by its previous-year papers).
+  // Returns the same shape as year-wise/start, so /test runs it like every other server-timed attempt.
+  @Post('builder/start')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  builderStart(
+    @CurrentUser() user: { userId: string },
+    @Body() body: { mode?: string; examId?: string; items?: { chapterId?: string; topicId?: string; count?: number }[]; durationMinutes?: number | string; tier?: string },
+  ) {
+    return this.builder.start(user.userId, { ...body, tier: body?.tier ? normalizeExamTier(body.tier).tier ?? undefined : undefined });
   }
 
   // v7 §NEW — Wrong/Skipped Auto-Practice: practice from weak chapters

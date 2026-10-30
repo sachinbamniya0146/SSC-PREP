@@ -50,6 +50,15 @@ export const PRACTICE_QUESTION_WHERE = {
   year: null,
 } as const;
 
+/**
+ * S48: what a STUDENT may see in Practice = live practice questions minus the half kept for tests (Question.testReserved).
+ * Admin screens, counts for uploads and the test builder keep using PRACTICE_QUESTION_WHERE (all of them).
+ */
+export const STUDENT_PRACTICE_QUESTION_WHERE = {
+  ...PRACTICE_QUESTION_WHERE,
+  testReserved: false,
+} as const;
+
 /** Only APPROVED, live, year-tagged (previous-year) questions. */
 export const PYQ_QUESTION_WHERE = {
   ...PUBLISHED_QUESTION_WHERE,

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD, Reflector } from '@nestjs/core';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { UserThrottlerGuard, limitResolver } from './common/guards/user-throttler.guard';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from './prisma/prisma.module';
@@ -19,6 +20,7 @@ import { GamificationModule } from './gamification/gamification.module';
 import { BookmarksModule } from './bookmarks/bookmarks.module';
 import { VocabModule } from './vocab/vocab.module';
 import { PushModule } from './push/push.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { StaffModule } from './staff/staff.module';
 import { MocksModule } from './mocks/mocks.module';
 import { BankModule } from './bank/bank.module';
@@ -48,12 +50,14 @@ import { envValidationSchema } from './config/env.validation';
     ThrottlerModule.forRootAsync({
       inject: [ConfigService, Reflector],
       useFactory: (_config: ConfigService, _reflector: Reflector) => ({
-        // NOTE: no skipIf — even @Public() routes are throttled (global 60/min).
+        // NOTE: no skipIf — even @Public() routes are throttled (anonymous: 60/min per IP).
+        // S47: a logged-in student is counted per account (UserThrottlerGuard) with a larger budget (THROTTLE_USER_LIMIT, default 300/min),
+        // so classmates sharing one IP can no longer lock each other out of scoring / autosave.
         // Auth routes get stricter per-route @Throttle overrides (signup 5/min, login 10/min).
         throttlers: [
           {
             ttl: 60_000,
-            limit: 60,
+            limit: limitResolver,
           },
         ],
       }),
@@ -78,6 +82,7 @@ import { envValidationSchema } from './config/env.validation';
     BookmarksModule,
     VocabModule,
     PushModule,
+    NotificationsModule,
     StaffModule,
     QuizModule,
     MocksModule,
@@ -102,7 +107,7 @@ import { envValidationSchema } from './config/env.validation';
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
-    { provide: APP_GUARD, useClass: ThrottlerGuard }, // global rate limit 60 req/min/IP
+    { provide: APP_GUARD, useClass: UserThrottlerGuard }, // global rate limit: 60/min per IP (anonymous), 300/min per student (logged in)
   ],
 })
 export class AppModule {}

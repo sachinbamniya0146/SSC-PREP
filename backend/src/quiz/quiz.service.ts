@@ -200,8 +200,8 @@ export class QuizService {
         year: q.year,
         shift: q.shift,
         options: (q.optionsJson as Array<{ key: string; text: string }>) ?? [],
-        correctAnswer: q.correctAnswer,
-        submittedAnswer: submitted,
+        correctAnswer: String(q.correctAnswer ?? '').trim().toUpperCase(), // S47: the page compares keys, so send the plain letter
+        submittedAnswer: submitted ? submitted.trim().toUpperCase() : submitted,
         isCorrect: isCorrect ?? false,
         wasSkipped: !submitted,
         explanation: q.explanation,

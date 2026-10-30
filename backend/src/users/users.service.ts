@@ -21,6 +21,7 @@ const PUBLIC_USER_SELECT = {
   darkMode: true,
   preferredLanguage: true,
   state: true,
+  targetExamId: true,
   referralCode: true,
   createdAt: true,
 } as const;
@@ -169,8 +170,18 @@ export class UserService {
   }
 
   /** Student-editable profile fields. Email stays fixed (it is the login identity); the Google photo is read-only. */
-  async updateProfile(userId: string, body: { fullName?: string; phone?: string; preferredLanguage?: string; state?: string | null }) {
-    const data: { fullName?: string; state?: string | null } = {};
+  async updateProfile(userId: string, body: { fullName?: string; phone?: string; preferredLanguage?: string; state?: string | null; targetExamId?: string | null }) {
+    const data: { fullName?: string; state?: string | null; targetExamId?: string | null } = {};
+    // S48: the exam the student is preparing for. "" / null clears it; otherwise it must be an exam that exists and is switched on.
+    if (body.targetExamId !== undefined) {
+      const id = body.targetExamId === null ? '' : String(body.targetExamId).trim();
+      if (id === '') data.targetExamId = null;
+      else {
+        const exam = await this.prisma.exam.findFirst({ where: { id, isActive: true }, select: { id: true } });
+        if (!exam) throw new BadRequestException('Please choose your exam from the list.');
+        data.targetExamId = exam.id;
+      }
+    }
     // Home state (for the State rank). "" / null clears it; anything else must be one of the listed states.
     if (body.state !== undefined) {
       if (body.state === null || String(body.state).trim() === '') data.state = null;

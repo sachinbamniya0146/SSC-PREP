@@ -10,6 +10,9 @@ import { findTaxonomyTwin, makeTaxonomySlug } from '../common/taxonomy-key';
 import { uniqueSlug } from '../common/taxonomy-merge';
 import { HINDI_EXEMPT_SUBJECT_FILTER } from '../common/slug-core';
 import { examCategoryOf } from '../common/common-exams';
+import { loadMarkingScheme } from '../tests/marking-scheme';
+import { resolveMarking } from '../common/marking';
+import { scoreBatchAnswers } from './attempt-batch';
 
 export interface QuestionCard {
   id: string;
@@ -1278,7 +1281,7 @@ export class BankService implements OnModuleInit {
     const skip = f.skip ?? 0;
     // FIX Error #6: was { isApproved: true } only — auto-suspended /
     // deactivated questions could still be served here.
-    const where: any = { ...PUBLISHED_QUESTION_WHERE };
+    const where: any = { ...PUBLISHED_QUESTION_WHERE, testReserved: false }; // S48: the half kept for tests is not browsable
     if (f.examId) where.examId = f.examId;
     if (f.chapterId) where.chapterId = f.chapterId;
     else if (f.subjectId) where.subjectId = f.subjectId;
@@ -1492,6 +1495,32 @@ export class BankService implements OnModuleInit {
     };
   }
 
+  /**
+   * S47 — score a whole practice test in ONE request (was: one POST /bank/attempt per question, 100 at once, which the rate limit
+   * answered with 429 for the surplus; the page then showed those right answers as wrong).
+   * Same rules as attempt(): normalized comparison, published questions only, nothing is recorded here (the page saves the session
+   * once through POST /tests/attempts). Marks follow the exam's preset like the saved attempt does, so the number on the result
+   * screen equals the number in history. A question that cannot be found comes back in `missing` — never as "wrong".
+   */
+  async attemptBatch(userId: string, dto: { answers?: { questionId: string; selectedOption: string }[] }) {
+    const input = Array.isArray(dto?.answers) ? dto.answers : [];
+    if (input.length === 0) throw new BadRequestException('answers required');
+    if (input.length > 300) throw new BadRequestException('At most 300 answers per request.');
+    const ids = Array.from(new Set(input.map((a) => String(a?.questionId ?? '')).filter(Boolean)));
+    const rows = await this.prisma.question.findMany({
+      where: { id: { in: ids }, ...PUBLISHED_QUESTION_WHERE },
+      select: {
+        id: true, correctAnswer: true, marks: true, negativeMarks: true, explanation: true, explanationHindi: true,
+        videoUrl: true, videoSource: true, videoTitle: true, examId: true, examTier: true, tierPaper: true,
+        subject: { select: { slug: true } },
+      },
+    });
+    const scheme = await loadMarkingScheme(this.prisma as any, null, rows);
+    const out = scoreBatchAnswers(input, rows as any, (q: any) => resolveMarking({ scheme, subjectSlug: q.subject?.slug, question: q }));
+    void userId;
+    return out;
+  }
+
   // Chapter-wise PYQ: get all questions for a chapter, with year filters
   //
   // NOTE (bonus-grep pass): unlike browse()/getById() above, this endpoint's
@@ -1682,7 +1711,7 @@ export class BankService implements OnModuleInit {
     // bilingual gate (v3 §3): empty/NULL dono exclude — EXCEPT subject
     // "english", which needs no Hindi translation (the question itself IS
     // the English-language test).
-    const where: any = { ...PUBLISHED_QUESTION_WHERE, OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER] };
+    const where: any = { ...PUBLISHED_QUESTION_WHERE, testReserved: false, OR: [{ questionTextHindi: { not: '' } }, HINDI_EXEMPT_SUBJECT_FILTER] }; // S48: not the half kept for tests
     if (f.examId) where.examId = f.examId;
     else where.examId = { not: null }; // spec §3: exam badge har question par
     if (f.subjectId) where.subjectId = f.subjectId;

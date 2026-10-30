@@ -619,6 +619,77 @@ export default function TestPage() {
         setAttemptId(attemptId);
         if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
       }
+      // S48 — Test builder: /test?built=1, config stashed by /build-test. Custom test (the student's topics + counts + minutes) or Smart
+      // mock (exam-wise). The server composes the paper from the practice bank AND opens a server-timed attempt in one call, exactly
+      // like the year-wise branch above.
+      const isBuilt =
+        typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("built") === "1" : false;
+      if (isBuilt && qs.length === 0) {
+        const cfgRaw = typeof window !== "undefined" ? sessionStorage.getItem("ssc_built_config") : null;
+        const cfg = cfgRaw ? JSON.parse(cfgRaw) : null;
+        if (!cfg) {
+          alert("⚠️ Test setup expired — please choose again.");
+          setLoading(false);
+          setStarting(false);
+          window.location.href = "/build-test";
+          return;
+        }
+        const br = await fetchAuth(`${apiBase()}/tests/builder/start`, {
+          method: "POST",
+          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(cfg),
+        });
+        const bd = await br.json().catch(() => ({}));
+        if (!br.ok) {
+          alert(`⚠️ ${bd?.message || "Could not build this test."}`);
+          setLoading(false);
+          setStarting(false);
+          window.location.href = "/build-test";
+          return;
+        }
+        sessionStorage.removeItem("ssc_built_config");
+        qs = Array.isArray(bd?.questions) ? bd.questions : [];
+        durationSec = (bd?.durationMinutes || 60) * 60;
+        attemptId = bd?.attemptId ?? null;
+        setAttemptId(attemptId);
+        if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
+      }
+      // S48 — /test?resume=<attemptId>: continue an unfinished custom test / smart mock / year-wise test. Same questions, saved answers,
+      // and the clock counts down to the attempt's own deadline (the server clock never stopped).
+      const resumeId =
+        typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("resume") : null;
+      if (resumeId && qs.length === 0) {
+        const rr = await fetchAuth(`${apiBase()}/tests/attempts/${encodeURIComponent(resumeId)}/resume`, { headers: getAuthHeaders() });
+        const rd = await rr.json().catch(() => ({}));
+        if (!rr.ok) {
+          alert(`⚠️ ${rd?.message || "This test can no longer be continued."}`);
+          window.location.href = "/dashboard";
+          return;
+        }
+        qs = Array.isArray(rd?.questions) ? rd.questions : [];
+        attemptId = rd?.attemptId ?? null;
+        setAttemptId(attemptId);
+        if (attemptId) { sessionStorage.setItem("ssc_active_attempt", attemptId); setIsExamMode(true); }
+        if (rd?.serverNow) skewRef.current = Number(rd.serverNow) - Date.now();
+        if (rd?.expiresAt) {
+          deadlineRef.current = new Date(rd.expiresAt).getTime();
+          durationSec = Math.max(1, Math.ceil((deadlineRef.current - skewRef.current - Date.now()) / 1000));
+        }
+        if (Number(rd?.tabSwitches) > 0) setTabAways((n) => Math.max(n, Number(rd.tabSwitches)));
+        const savedMap: { [qid: string]: string } = {};
+        savedOnServerRef.current = new Map();
+        if (Array.isArray(rd?.answers)) for (const a of rd.answers) { if (a.selectedOption) savedMap[a.questionId] = a.selectedOption; savedOnServerRef.current.set(a.questionId, a.selectedOption ?? null); }
+        const draft = attemptId ? loadDraft(attemptId) : null;
+        if (draft) Object.assign(savedMap, draft.answers);
+        if (Object.keys(savedMap).length > 0) {
+          setAnswers(savedMap);
+          setStatus((p) => {
+            const n = { ...p };
+            for (const qid of Object.keys(savedMap)) n[qid] = "answered";
+            return n;
+          });
+        }
+      }
       // v6 §2a — full shift paper: /test?template=<id> composes the template's paper
       // server-side (real exam blueprint, no answer key) + opens a server-authoritative
       // timed attempt.
@@ -918,6 +989,21 @@ export default function TestPage() {
     window.addEventListener("beforeunload", guard);
     return () => window.removeEventListener("beforeunload", guard);
   }, [phase, attemptId, offlinePending]);
+
+  // ---- S48: the Back button (phone back key, browser back) must not throw a student out of a running test. It opens a small box instead:
+  // continue, submit, or leave for now (the box says plainly that the clock of a timed test keeps running). Not armed while a submit runs.
+  const [leaveOpen, setLeaveOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (phase !== "exam") return;
+    try { window.history.pushState({ sscExam: 1 }, "", window.location.href); } catch { /* history may be blocked: the beforeunload guard still protects */ }
+    const onPop = () => {
+      if (navigatingRef.current || submittingRef.current) return;
+      try { window.history.pushState({ sscExam: 1 }, "", window.location.href); } catch { /* ignore */ }
+      setLeaveOpen(true);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [phase]);
 
   // ---- Soft tab-switch notice: counts how often the student left this tab for more than 1.5 s and tells them. No penalty.
   React.useEffect(() => {
@@ -1308,69 +1394,54 @@ export default function TestPage() {
     // together with Promise.all cuts this to the time of the single
     // slowest request, typically <1s.
     const answeredQs = qs.filter((q) => !!answers[q.id]);
-    await Promise.all(
-      answeredQs.map(async (q) => {
-        const ans = answers[q.id];
+    // S47 ("sahi answer bhi wrong dikhata hai"): this used to send ONE request per answered question, all at once. The server allows
+    // 60 requests a minute per IP, so for a 100-question test about 40 answers came back as HTTP 429 - and a failed call was then
+    // shown as a WRONG answer. Now the whole test is scored by ONE request, retried a few times, and if it still cannot be scored
+    // the student stays on the exam screen (nothing is ever shown as wrong because a request failed).
+    const scoreAll = async (): Promise<{ results: { [qid: string]: any }; missing: string[] } | null> => {
+      if (answeredQs.length === 0) return { results: {}, missing: [] };
+      for (let attemptNo = 0; attemptNo < 3; attemptNo++) {
         try {
-          const r = await fetchAuth(`${apiBase()}/bank/attempt`, {
+          const r = await fetchAuth(`${apiBase()}/bank/attempt/batch`, {
             method: "POST",
             headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify({
-              questionId: q.id,
-              selectedOption: ans,
-              templateId: "tpl-mock-live",
-              // BUGFIX: the aggregate POST /tests/attempts below already
-              // records this whole practice session as one real TestAttempt
-              // once submission finishes — record: false stops this
-              // per-question call from ALSO creating its own single-question
-              // TestAttempt, which used to duplicate/pollute every
-              // un-templated analytics query (myAttempts, getWeakChapters,
-              // getStrengthChapters, getSubjectWiseAnalytics,
-              // getAccuracyTrend) for every sectional/chapter-wise/random-set
-              // practice test taken. question-bank/page.tsx's standalone
-              // instant-feedback browser is unaffected — it never sends this
-              // flag, so it keeps recording each answer as its own attempt
-              // (its intended, only recording mechanism).
-              record: false,
-            }),
+            body: JSON.stringify({ answers: answeredQs.map((q) => ({ questionId: q.id, selectedOption: answers[q.id] })) }),
           });
-          const d = await r.json();
-          // normalize both sides before comparing/storing — some legacy
-          // rows have correctAnswer with stray whitespace/case, which used
-          // to silently fail the o.key === correctAnswer match later and
-          // show a dead "(see solution)" placeholder instead of the answer.
-          const normalizedCorrect = String(d.correctAnswer ?? "").trim().toUpperCase();
-          // BUGFIX (Sachin report, Sep 2026 — "practice questions aa rahe
-          // hain, solution/badi wali explanation nahi aati"): bank.service.ts's
-          // attempt() has always returned explanation/explanationHindi in
-          // its response (d.explanation / d.explanationHindi below), but this
-          // was the one path in this file that never read it off the
-          // response — every OTHER path (authoritative attemptDetail(),
-          // chapter-wise-PYQ's ungated q.explanation) carried it through.
-          // Question-Bank-Practice / Sectional / random-set /bank/set all
-          // route through here, and Question-Bank-Practice's questions start
-          // with q.explanation deliberately blank (no answer-key leak before
-          // answering — see getOrCreateSet()/formatSet() in
-          // question-bank-practice.service.ts), so the results screen's
-          // fallback chain (`ex?.explanation ?? q.explanation`) had nothing
-          // left to fall back to and "View Solution" showed nothing for
-          // every practice-mode question, however detailed the uploaded
-          // Excel's explanation column was.
-          const a: Attempt = {
-            correct: !!d.correct,
-            correctAnswer: normalizedCorrect,
-            selectedOption: ans,
-            scoreDelta: Number(d.scoreDelta || 0),
-            explanation: d.explanation ?? null,
-            explanationHindi: d.explanationHindi ?? null,
-          };
-          res[q.id] = a;
-          score += a.scoreDelta; // server-side: correct→+marks, wrong→−negativeMarks
+          if (r.ok) {
+            const d = await r.json();
+            if (d && typeof d.results === "object" && d.results) return { results: d.results, missing: Array.isArray(d.missing) ? d.missing : [] };
+          } else if (r.status !== 429 && r.status < 500) {
+            return null; // a refusal that retrying cannot fix
+          }
         } catch {
-          // if scoring endpoint fails mid-test, keep going for other Qs
+          // network hiccup - retry below
         }
-      }),
-    );
+        await new Promise((resolve) => setTimeout(resolve, 800 * (attemptNo + 1)));
+      }
+      return null;
+    };
+    const scored = await scoreAll();
+    if (!scored) {
+      alert("⚠️ Your answers could not be checked right now (network / server busy). Nothing is lost - tap Submit again in a moment.");
+      setRunning(true); // resume the clock - the student retries Submit
+      setStarting(false);
+      setLoading(false);
+      return;
+    }
+    for (const q of answeredQs) {
+      const d = scored.results[q.id];
+      if (!d) continue; // a question that is no longer published is simply not scored - never counted as wrong
+      const a: Attempt = {
+        correct: d.correct === true,
+        correctAnswer: String(d.correctAnswer ?? "").trim().toUpperCase(),
+        selectedOption: answers[q.id],
+        scoreDelta: Number(d.scoreDelta || 0),
+        explanation: d.explanation ?? null,
+        explanationHindi: d.explanationHindi ?? null,
+      };
+      res[q.id] = a;
+      score += a.scoreDelta; // server-side: correct -> +marks, wrong -> -negativeMarks
+    }
     setResult(res);
     setFinalScore(score);
     setPhase("results");
@@ -1475,7 +1546,7 @@ export default function TestPage() {
   const total = questions.length;
   const attempted = Object.keys(answers).length;
   const correct = Object.values(result).filter((a) => a.correct).length;
-  const wrong = attempted - correct;
+  const wrong = Object.values(result).filter((a) => !a.correct).length; // S47: only questions that WERE scored and are wrong
   const skipped = total - attempted;
   const accPct = attempted ? Math.round((correct / attempted) * 100) : 0;
   const notAnswered = total - attempted;
@@ -2497,6 +2568,27 @@ export default function TestPage() {
             <button onClick={() => { setReviewOpen(true); setPaletteOpen(false); }} disabled={submitBusy} className="btn btn-primary mt-4 w-full disabled:opacity-50">
               Submit Test
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* S48: BACK pressed during a running test */}
+      {leaveOpen && phase === "exam" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label={tr("Leave the test?", "Test chhodna hai?")}>
+          <div className="card w-full max-w-sm p-5">
+            <h2 className="text-lg font-bold">{tr("Your test is still running", "Aapka test abhi chal raha hai")}</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {isExamMode
+                ? tr("The Back button does not end the test. Your answers are saved and the timer keeps running. Continue now, submit, or leave and come back from the pop-up on your dashboard.", "Back se test band nahi hota. Aapke jawab save hain aur timer chalta rehta hai. Abhi continue karein, submit karein, ya dashboard par jaakar pop-up se wapas aayein.")
+                : tr("The Back button does not end the test. Continue, or submit it to leave.", "Back se test band nahi hota. Continue karein, ya submit karke bahar jaayein.")}
+            </p>
+            <div className="mt-4 space-y-2">
+              <button onClick={() => setLeaveOpen(false)} className="btn btn-primary w-full">{tr("Continue test", "Test jaari rakhein")}</button>
+              <button onClick={() => { setLeaveOpen(false); setReviewOpen(true); }} disabled={submitBusy} className="btn btn-outline w-full disabled:opacity-50">{tr("Submit test", "Test submit karein")}</button>
+              {isExamMode && attemptId && (
+                <button onClick={() => { navigatingRef.current = true; window.location.href = "/dashboard"; }} className="w-full rounded-lg px-3 py-2 text-sm text-muted-foreground underline">{tr("Leave for now (timer keeps running)", "Abhi chhodein (timer chalta rahega)")}</button>
+              )}
+            </div>
           </div>
         </div>
       )}

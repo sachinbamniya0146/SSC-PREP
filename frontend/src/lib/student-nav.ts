@@ -11,6 +11,7 @@ export const SIDEBAR_ROUTES = [
   "/mocks",
   "/sectional",
   "/year-wise",
+  "/build-test",
   "/question-bank",
   "/question-bank-practice",
   "/vocabulary",
@@ -20,6 +21,7 @@ export const SIDEBAR_ROUTES = [
   "/bookmarks",
   "/leaderboard",
   "/referral",
+  "/notifications",
   "/help",
   "/profile",
   "/premium",
@@ -31,7 +33,7 @@ export function isSidebarRoute(path: string): boolean {
 }
 
 export type NavIconName =
-  | "home" | "mock" | "book" | "pencil" | "abc" | "repeat" | "target" | "plan" | "star" | "rank" | "gift" | "help" | "user";
+  | "home" | "mock" | "book" | "pencil" | "abc" | "repeat" | "target" | "plan" | "star" | "rank" | "gift" | "help" | "user" | "bell";
 
 export const NAV_ICONS: Record<NavIconName, string> = {
   home: "M3 11l9-8 9 8v9a2 2 0 0 1-2 2h-4v-6H9v6H5a2 2 0 0 1-2-2z",
@@ -46,6 +48,7 @@ export const NAV_ICONS: Record<NavIconName, string> = {
   rank: "M18 20V10M12 20V4M6 20v-6",
   gift: "M20 12v10H4V12M2 7h20v5H2zM12 22V7M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z",
   help: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01",
+  bell: "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0",
   user: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
 };
 
@@ -74,6 +77,7 @@ export const STUDENT_NAV: StudentNavGroup[] = [
     items: [
       { href: "/dashboard", en: "Dashboard", hi: "Dashboard", icon: "home" },
       { href: "/mocks", en: "Mock tests", hi: "Mock test", icon: "mock", also: ["/sectional", "/year-wise"] },
+      { href: "/build-test", en: "Build a test", hi: "Test banao", icon: "target" },
       { href: "/question-bank", en: "PYQ bank", hi: "PYQ bank", icon: "book" },
       { href: "/question-bank-practice", en: "Practice", hi: "Practice", icon: "pencil" },
       { href: "/vocabulary", en: "Vocabulary", hi: "Vocabulary", icon: "abc", flag: "vocabulary" },
@@ -97,6 +101,7 @@ export const STUDENT_NAV: StudentNavGroup[] = [
     hi: "Account",
     items: [
       { href: "/referral", en: "Refer & earn", hi: "Refer & earn", icon: "gift", flag: "referral" },
+      { href: "/notifications", en: "Notifications", hi: "Notifications", icon: "bell" },
       { href: "/help", en: "Help", hi: "Madad", icon: "help" },
       { href: "/profile", en: "Profile", hi: "Profile", icon: "user" },
     ],

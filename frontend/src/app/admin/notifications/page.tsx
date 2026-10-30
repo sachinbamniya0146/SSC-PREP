@@ -16,7 +16,9 @@ import { API_BASE, fetchAuth } from "@/lib/api";
 import { BackButton } from "@/components/BackButton";
 import { Logo } from "@/components/Logo";
 
-type BroadcastResult = { sent: number; failed: number; total?: number; disabled?: boolean };
+type SendResult = { students: number; pushed: number; failed: number; pushAvailable: boolean };
+type AudienceType = "ALL" | "TARGET_EXAM" | "INACTIVE" | "HAS_WEAK";
+type Preview = { students: number; devices: number; pushAvailable: boolean };
 
 const PRESETS = [
   { title: "New Mock Test Live! 🎯", body: "A fresh SSC CGL mock test is now available. Attempt it now!", url: "/mocks" },
@@ -31,7 +33,12 @@ export default function AdminNotificationsPage() {
   const [body, setBody] = React.useState("");
   const [url, setUrl] = React.useState("/dashboard");
   const [sending, setSending] = React.useState(false);
-  const [result, setResult] = React.useState<BroadcastResult | null>(null);
+  const [result, setResult] = React.useState<SendResult | null>(null);
+  const [aType, setAType] = React.useState<AudienceType>("ALL");
+  const [examId, setExamId] = React.useState("");
+  const [days, setDays] = React.useState(3);
+  const [exams, setExams] = React.useState<{ id: string; name: string }[]>([]);
+  const [preview, setPreview] = React.useState<Preview | null>(null);
   const [err, setErr] = React.useState("");
 
   const headers = React.useCallback(() => {
@@ -55,32 +62,66 @@ export default function AdminNotificationsPage() {
     setAuthChecked(true);
   }, [router]);
 
+  const audience = React.useMemo(
+    () => ({ type: aType, ...(aType === "TARGET_EXAM" ? { examId } : {}), ...(aType === "INACTIVE" ? { days } : {}) }),
+    [aType, examId, days],
+  );
+
+  React.useEffect(() => {
+    if (!authChecked) return;
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/bank/meta`, { headers: headers() });
+        const d = await r.json().catch(() => ({}));
+        setExams(Array.isArray(d?.exams) ? d.exams.map((e: { id: string; name: string }) => ({ id: e.id, name: e.name })) : []);
+      } catch { /* the exam list simply stays empty */ }
+    })();
+  }, [authChecked, headers]);
+
+  // live "this reaches N students" count for the chosen group
+  React.useEffect(() => {
+    if (!authChecked) return;
+    if (aType === "TARGET_EXAM" && !examId) { setPreview(null); return; }
+    let live = true;
+    (async () => {
+      try {
+        const r = await fetchAuth(`${API_BASE}/notifications/admin/audience`, {
+          method: "POST",
+          headers: { ...headers(), "Content-Type": "application/json" },
+          body: JSON.stringify(audience),
+        });
+        const d = await r.json().catch(() => null);
+        if (live) setPreview(r.ok && d ? d : null);
+      } catch { if (live) setPreview(null); }
+    })();
+    return () => { live = false; };
+  }, [authChecked, audience, aType, examId, headers]);
+
   const send = async () => {
     if (!title.trim() || !body.trim()) {
       setErr("Both a title and a message are required.");
       return;
     }
-    const ok = confirm(`This notification will be sent to ALL students:\n\n"${title}"\n${body}\n\nContinue?`);
+    if (aType === "TARGET_EXAM" && !examId) {
+      setErr("Choose the exam first.");
+      return;
+    }
+    const who = preview ? `${preview.students} students` : "the chosen students";
+    const ok = confirm(`This message will be sent to ${who}:\n\n"${title}"\n${body}\n\nContinue?`);
     if (!ok) return;
 
     setSending(true);
     setErr("");
     setResult(null);
     try {
-      const r = await fetchAuth(`${API_BASE}/push/admin/broadcast`, {
+      const r = await fetchAuth(`${API_BASE}/notifications/admin/send`, {
         method: "POST",
         headers: { ...headers(), "Content-Type": "application/json" },
-        body: JSON.stringify({ title, body, url }),
+        body: JSON.stringify({ title, body, url, audience }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         setErr(d?.message || "Something went wrong while sending.");
-        return;
-      }
-      if (d?.disabled) {
-        setErr(
-          "Push notifications are not configured on the server yet — set the VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY environment variables and restart the backend (see .env.example).",
-        );
         return;
       }
       setResult(d);
@@ -102,19 +143,46 @@ export default function AdminNotificationsPage() {
           <BackButton />
           <Logo size={32} withWordmark={false} />
           <span className="text-lg font-bold tracking-tight">
-            🔔 Send Notification <span className="text-muted-foreground">to All Students</span>
+            🔔 Call students <span className="text-muted-foreground">— notifications</span>
           </span>
         </div>
       </header>
 
       <main className="mx-auto max-w-3xl px-4 py-8">
         <p className="mb-6 text-sm text-muted-foreground">
-          A message sent from here reaches the phone / laptop of every student
-          as a push notification — only the students who have
-          enabled notifications.
+          A message sent from here lands in the Notifications inbox of every student in the group you choose, and also on their phone
+          if they turned phone alerts on. Smart reminders (unfinished test, streak, weak topics, come-back) go out by themselves.
         </p>
 
         <div className="card space-y-4 p-5">
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-muted-foreground">Who should get it?</label>
+            <div className="flex flex-wrap gap-2">
+              <select value={aType} onChange={(e) => setAType(e.target.value as AudienceType)} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary">
+                <option value="ALL">All students</option>
+                <option value="TARGET_EXAM">Students preparing for one exam</option>
+                <option value="INACTIVE">Students who stopped practising</option>
+                <option value="HAS_WEAK">Students with weak topics</option>
+              </select>
+              {aType === "TARGET_EXAM" && (
+                <select value={examId} onChange={(e) => setExamId(e.target.value)} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary">
+                  <option value="">Choose exam…</option>
+                  {exams.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+              )}
+              {aType === "INACTIVE" && (
+                <label className="flex items-center gap-2 text-sm">
+                  no practice for
+                  <input type="number" min={1} max={365} value={days} onChange={(e) => setDays(Math.max(1, Math.min(365, Number(e.target.value) || 1)))} className="w-20 rounded-lg border border-border bg-background px-2 py-2 text-sm" />
+                  days
+                </label>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground" role="status">
+              {preview ? `Reaches ${preview.students} students (${preview.devices} phones with alerts on).` : aType === "TARGET_EXAM" && !examId ? "Choose an exam to see the count." : "Counting…"}
+              {preview && !preview.pushAvailable ? " Phone alerts are not configured on the server (VAPID keys), so the message will only show in the inbox." : ""}
+            </p>
+          </div>
           <div>
             <label className="mb-1 block text-xs font-semibold text-muted-foreground">Title</label>
             <input
@@ -167,8 +235,9 @@ export default function AdminNotificationsPage() {
           {err && <p className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{err}</p>}
           {result && (
             <p className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
-              Bhej diya — {result.sent} devices ko successfully mila
-              {result.failed ? `, ${result.failed} failed` : ""}.
+              Bhej diya — {result.students} students ke inbox me, {result.pushed} phones par alert
+              {result.failed ? `, ${result.failed} phones failed` : ""}.
+              {!result.pushAvailable ? " (Phone alerts server par configured nahi hain, isliye sirf inbox me gaya.)" : ""}
             </p>
           )}
 
@@ -177,7 +246,7 @@ export default function AdminNotificationsPage() {
             disabled={sending}
             className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
           >
-            {sending ? "Sending..." : "Send to All Students"}
+            {sending ? "Sending..." : "Send"}
           </button>
         </div>
       </main>

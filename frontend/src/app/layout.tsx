@@ -9,6 +9,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { SupportChatMount } from "@/components/SupportChatMount";
 import { PushNotificationMount } from "@/components/PushNotificationMount";
 import SessionSync from "@/components/SessionSync";
+import { ResumeTestPrompt } from "@/components/ResumeTestPrompt";
 import LanguageSync from "@/components/LanguageSync";
 import NavTracker from "@/components/NavTracker";
 import { MobileTabBar } from "@/components/MobileTabBar";
@@ -111,6 +112,7 @@ export default function RootLayout({
           <SupportChatMount />
           <PushNotificationMount />
           <SessionSync />
+          <ResumeTestPrompt />
           <LanguageSync />
           <NavTracker />
           <StudentSidebar />

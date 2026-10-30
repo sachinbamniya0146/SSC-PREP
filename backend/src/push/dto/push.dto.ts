@@ -68,4 +68,10 @@ export class BroadcastDto {
   @IsString()
   @MaxLength(200)
   url?: string;
+
+  // Same tag = the phone replaces the earlier message instead of stacking (used by the smart nudges).
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  tag?: string;
 }

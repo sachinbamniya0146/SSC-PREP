@@ -153,4 +153,44 @@ export class PushService {
       return { sent: 0, failed: 0, error: true };
     }
   }
+  /**
+   * S48: push to the devices of specific students (smart nudges, targeted admin sends). Never throws; prunes dead devices.
+   * Returns how many devices were reached. Silent no-op when VAPID keys are not set (the in-app inbox still has the message).
+   */
+  async sendToUsers(userIds: string[], dto: BroadcastDto): Promise<{ sent: number; failed: number; disabled?: boolean }> {
+    if (!this.enabled || userIds.length === 0) return { sent: 0, failed: 0, disabled: !this.enabled };
+    let sent = 0;
+    let failed = 0;
+    try {
+      const payload = JSON.stringify({ title: dto.title, body: dto.body, url: dto.url || '/dashboard', tag: dto.tag });
+      for (let i = 0; i < userIds.length; i += 500) {
+        const subs = await this.prisma.pushSubscription.findMany({
+          where: { userId: { in: userIds.slice(i, i + 500) } },
+          select: { id: true, endpoint: true, p256dh: true, auth: true },
+        });
+        const dead: string[] = [];
+        await Promise.all(
+          subs.map(async (sub) => {
+            try {
+              await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload);
+              sent += 1;
+            } catch (err) {
+              failed += 1;
+              const code = (err as { statusCode?: number }).statusCode;
+              if (code === 404 || code === 410) dead.push(sub.id);
+              else this.logger.warn(`Push to user device ${sub.id} failed: ${err}`);
+            }
+          }),
+        );
+        if (dead.length) await this.prisma.pushSubscription.deleteMany({ where: { id: { in: dead } } });
+      }
+    } catch (err) {
+      this.logger.warn(`sendToUsers failed: ${err}`);
+    }
+    return { sent, failed };
+  }
+
+  get pushEnabled(): boolean {
+    return this.enabled;
+  }
 }
